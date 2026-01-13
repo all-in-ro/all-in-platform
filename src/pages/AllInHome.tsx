@@ -1,6 +1,5 @@
-
 import { Button } from "@/components/ui/button";
-import { Package, Truck, History } from "lucide-react";
+import { Package, Truck, History, Bookmark, ArrowLeftRight, ClipboardList, Settings } from "lucide-react";
 
 export default function AllInHome() {
   const mainBtn =
@@ -9,7 +8,6 @@ export default function AllInHome() {
   return (
     <div className="min-h-screen w-screen grid place-items-center" style={{ backgroundColor: "#474c59" }}>
       <div className="w-full max-w-lg px-4">
-
         <div className="rounded-lg border border-white/20 bg-white/5 shadow-sm px-6 py-8">
           <h1 className="text-center text-2xl text-white mb-6">ALL IN</h1>
 
@@ -24,13 +22,32 @@ export default function AllInHome() {
               <Truck className="h-4 w-4" />
             </Button>
 
-            <div className="pt-4 mt-2 border-t border-white/15">
+            <div className="pt-4 mt-2 border-t border-white/15 space-y-3">
               <Button className={mainBtn} onClick={() => (window.location.hash = "#allinorderhistory")}>
                 <span>RENDELÉS – HISTORY</span>
                 <History className="h-4 w-4" />
               </Button>
-            </div>
 
+              <Button className={mainBtn} onClick={() => (window.location.hash = "#allinreserved")}>
+                <span>LEFOGLALT TERMÉKEK</span>
+                <Bookmark className="h-4 w-4" />
+              </Button>
+
+              <Button className={mainBtn} onClick={() => (window.location.hash = "#allinstockmovement")}>
+                <span>RAKTÁRMOZGÁS</span>
+                <ArrowLeftRight className="h-4 w-4" />
+              </Button>
+
+              <Button className={mainBtn} onClick={() => (window.location.hash = "#allininventory")}>
+                <span>LELTÁR</span>
+                <ClipboardList className="h-4 w-4" />
+              </Button>
+
+              <Button className={mainBtn} onClick={() => (window.location.hash = "#allinadmin")}>
+                <span>ADMINISZTRÁCIÓ</span>
+                <Settings className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       </div>
