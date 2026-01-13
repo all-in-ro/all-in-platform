@@ -10,10 +10,12 @@ export default function AllInStockMoves() {
             <Button
               className="h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40"
               onClick={() => (window.location.hash = "#allin")}
+              type="button"
             >
               Vissza
             </Button>
           </div>
+
           <div className="mt-6 text-white/80 text-sm">
             Ide jön a raktármozgások rögzítése és visszanézése (logolással).
           </div>
