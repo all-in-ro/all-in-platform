@@ -7,20 +7,7 @@ import AllInOrderHistory from "./pages/AllInOrderHistory";
 import AllInWarehouse from "./pages/AllInWarehouse";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
-
-/**
- * We accept multiple hash spellings, because the buttons/pages may use:
- *  - #home / #incoming / #orders / #warehouse
- *  - #allin / #allinincoming / #allinorderhistory / #allinwarehouse
- *  - legacy aliases like #allin-incoming etc.
- */
-type ScreenName =
-  | "login"
-  | "home"
-  | "incoming"
-  | "orders"
-  | "warehouse";
-
+type ScreenName = "login" | "home" | "incoming" | "orders" | "warehouse";
 type Screen = { name: ScreenName };
 
 type Session =
@@ -38,25 +25,24 @@ function normalizeHash(raw: string): string {
 function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
-  // direct
+  // canonical
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
   if (key === "warehouse") return { name: "warehouse" };
 
-  // all-in aliases (CUPE style)
+  // aliases (CUPE-style)
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
   if (key === "allinwarehouse" || key === "allin-warehouse") return { name: "warehouse" };
 
-  // empty/unknown -> login
   return { name: "login" };
 }
 
 function go(name: ScreenName) {
   if (name === "login") window.location.hash = "";
-  else window.location.hash = name; // canonical hashes are: home/incoming/orders/warehouse
+  else window.location.hash = name;
 }
 
 export default function App() {
@@ -64,7 +50,6 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo(() => "/api", []);
 
-  // hash router
   useEffect(() => {
     const onHash = () => setScreen(hashToScreen(window.location.hash));
     window.addEventListener("hashchange", onHash);
@@ -72,7 +57,6 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // session check: only redirect to home if hash is empty/unknown (login screen)
   useEffect(() => {
     fetch(`${api}/auth/me`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
@@ -104,21 +88,23 @@ export default function App() {
     );
   }
 
-  return (
-    <div style={{ fontFamily: "system-ui", padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontWeight: 700 }}>
-          ALL IN – {session.role === "admin" ? "ADMIN" : `ÜZLET (${session.shopId})`} – {session.actor}
-        </div>
-        <button onClick={logout} style={{ padding: "8px 12px" }}>
-          Kilépés
-        </button>
-      </div>
+  // IMPORTANT: No top header here.
+  // The ALL IN pages (copied from CUPE) already render their own header/topbar.
+  // This avoids the "double header" problem.
+  const commonProps = {
+    apiBase: api,
+    actor: session.actor,
+    role: session.role,
+    shopId: session.role === "shop" ? session.shopId : undefined,
+    onLogout: logout
+  };
 
-      {screen.name === "home" && <AllInHome />}
-      {screen.name === "incoming" && <AllInIncoming />}
-      {screen.name === "orders" && <AllInOrderHistory />}
-      {screen.name === "warehouse" && <AllInWarehouse />}
-    </div>
+  return (
+    <>
+      {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
+      {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
+      {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
+      {screen.name === "warehouse" && <AllInWarehouse {...(commonProps as any)} />}
+    </>
   );
-}
+} 
