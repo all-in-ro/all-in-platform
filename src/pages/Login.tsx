@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Shield, Store } from "lucide-react";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
@@ -72,20 +71,20 @@ export default function Login({
 
           {!mode && (
             <div className="space-y-3">
-              <Button className={mainBtn} onClick={() => setMode("admin")}>
+              <button className={mainBtn} onClick={() => setMode("admin")}>
                 <span>ADMIN</span>
                 <Shield className="h-4 w-4" />
-              </Button>
+              </button>
 
-              <Button className={mainBtn} onClick={() => setMode("csik")}>
+              <button className={mainBtn} onClick={() => setMode("csik")}>
                 <span>ÜZLET – Csíkszereda</span>
                 <Store className="h-4 w-4" />
-              </Button>
+              </button>
 
-              <Button className={mainBtn} onClick={() => setMode("kezdi")}>
+              <button className={mainBtn} onClick={() => setMode("kezdi")}>
                 <span>ÜZLET – Kézdivásárhely</span>
                 <Store className="h-4 w-4" />
-              </Button>
+              </button>
             </div>
           )}
 
@@ -99,12 +98,12 @@ export default function Login({
                 onKeyDown={(e) => e.key === "Enter" && submit()}
               />
 
-              <Button className={mainBtn} onClick={submit} disabled={busy}>
+              <button className={mainBtn} onClick={submit} disabled={busy}>
                 <span>{busy ? "Beléptetés..." : "BELÉPÉS"}</span>
                 <Shield className="h-4 w-4" />
-              </Button>
+              </button>
 
-              <Button
+              <button
                 className={mainBtn}
                 onClick={() => {
                   setMode(null);
@@ -114,7 +113,7 @@ export default function Login({
               >
                 <span>VISSZA</span>
                 <span className="text-white/70">↩</span>
-              </Button>
+              </button>
 
               {err && (
                 <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-red-100 text-sm whitespace-pre-wrap">
