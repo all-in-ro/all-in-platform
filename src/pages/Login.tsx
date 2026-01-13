@@ -36,7 +36,11 @@ export default function Login({
     const body =
       mode === "admin"
         ? { kind: "admin", password: secret }
-        : { kind: "shop", shopId: mode === "csik" ? "csikszereda" : "kezdivasarhely", code: secret };
+        : {
+            kind: "shop",
+            shopId: mode === "csik" ? "csikszereda" : "kezdivasarhely",
+            code: secret
+          };
 
     try {
       const r = await fetch(`${api}/auth/login`, {
@@ -66,7 +70,6 @@ export default function Login({
       <div className="w-full max-w-lg px-4">
         <div className="rounded-lg border border-white/20 bg-white/5 shadow-sm px-6 py-8">
           <h1 className="text-center text-2xl text-white mb-6">ALL IN</h1>
-
           <div className="text-center text-white/80 mb-5">{title}</div>
 
           {!mode && (
@@ -122,7 +125,7 @@ export default function Login({
               )}
 
               <div className="pt-4 mt-2 border-t border-white/15 text-white/60 text-xs">
-                Üzlet belépőkódokat később az ADMIN fog kiadni (műszakok / felhasználók szerint).
+                Üzlet belépőkódokat az ADMIN fog kiadni (műszakok / felhasználók szerint).
               </div>
             </div>
           )}
