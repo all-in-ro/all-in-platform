@@ -9,7 +9,12 @@ import AllInWarehouse from "./pages/AllInWarehouse";
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
 import AllInInventory from "./pages/AllInInventory";
+
 import AllInAdmin from "./pages/AllInAdmin";
+import AllInProductMoves from "./pages/AllInProductMoves";
+import AllInVacations from "./pages/AllInVacations";
+import AllInUsers from "./pages/AllInUsers";
+import AllInCars from "./pages/AllInCars";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
 type ScreenName =
@@ -21,7 +26,11 @@ type ScreenName =
   | "reserved"
   | "stockmoves"
   | "inventory"
-  | "admin";
+  | "admin"
+  | "productmoves"
+  | "vacations"
+  | "users"
+  | "cars";
 
 type Screen = { name: ScreenName };
 
@@ -40,7 +49,6 @@ function normalizeHash(raw: string): string {
 function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
-  // canonical
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
@@ -49,20 +57,25 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "stockmoves") return { name: "stockmoves" };
   if (key === "inventory") return { name: "inventory" };
   if (key === "admin") return { name: "admin" };
+  if (key === "productmoves") return { name: "productmoves" };
+  if (key === "vacations") return { name: "vacations" };
+  if (key === "users") return { name: "users" };
+  if (key === "cars") return { name: "cars" };
 
-  // ALL IN aliases used by buttons/pages
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
   if (key === "allinwarehouse" || key === "allin-warehouse") return { name: "warehouse" };
 
   if (key === "allinreserved") return { name: "reserved" };
-
-  // ✅ this is the one that often gets misspelled; accept a few variants
   if (key === "allinstockmoves" || key === "allin-stockmoves" || key === "allin-stock-moves") return { name: "stockmoves" };
-
   if (key === "allininventory") return { name: "inventory" };
+
   if (key === "allinadmin") return { name: "admin" };
+  if (key === "allinproductmoves") return { name: "productmoves" };
+  if (key === "allinvacations") return { name: "vacations" };
+  if (key === "allinusers") return { name: "users" };
+  if (key === "allincars") return { name: "cars" };
 
   return { name: "login" };
 }
@@ -90,7 +103,6 @@ export default function App() {
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
-          // Only redirect to home if hash is empty/unknown (login screen)
           const current = hashToScreen(window.location.hash);
           if (current.name === "login") go("home");
         }
@@ -134,7 +146,12 @@ export default function App() {
       {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
       {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
       {screen.name === "inventory" && <AllInInventory {...(commonProps as any)} />}
+
       {screen.name === "admin" && <AllInAdmin {...(commonProps as any)} />}
+      {screen.name === "productmoves" && <AllInProductMoves {...(commonProps as any)} />}
+      {screen.name === "vacations" && <AllInVacations {...(commonProps as any)} />}
+      {screen.name === "users" && <AllInUsers {...(commonProps as any)} />}
+      {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
     </>
   );
-}
+} 
