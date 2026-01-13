@@ -9,9 +9,20 @@ html, body, #root {
 
 body {
   background: #474c59;
-  overflow: hidden; /* no scroll on centered pages */
+  /* Desktopon maradhat a "no scroll" érzet, mobilon viszont kell a pull-to-refresh */
+  overflow-x: hidden;
+  overflow-y: hidden;
 }
 
+/* Mobil: engedjük a böngésző scrollt (pull-to-refresh-hez kell) */
+@media (max-width: 768px) {
+  body {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Ha egy oldalon tényleg kell belső scroll, erre tedd */
 .scrollable {
-  overflow: auto; /* enable scrolling only where needed */
-} 
+  overflow: auto;
+}
