@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Login from "./pages/Login";
 
 import AllInHome from "./pages/AllInHome";
@@ -38,6 +38,8 @@ type Session =
   | { role: "admin"; actor: string }
   | { role: "shop"; shopId: ShopId; actor: string };
 
+const LAST_HASH_KEY = "allin:last_hash";
+
 function normalizeHash(raw: string): string {
   const h = (raw || "").trim();
   const noHash = h.startsWith("#") ? h.slice(1) : h;
@@ -46,9 +48,15 @@ function normalizeHash(raw: string): string {
   return noLeading.toLowerCase();
 }
 
+function isNonLoginHash(hash: string) {
+  const key = normalizeHash(hash);
+  return key.length > 0; // anything non-empty is a "real" screen in our app
+}
+
 function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
+  // canonical
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
@@ -62,6 +70,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "users") return { name: "users" };
   if (key === "cars") return { name: "cars" };
 
+  // ALL IN aliases used by buttons/pages
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
@@ -77,12 +86,13 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allinusers") return { name: "users" };
   if (key === "allincars") return { name: "cars" };
 
+  // empty/unknown -> login
   return { name: "login" };
 }
 
 function go(name: ScreenName) {
   if (name === "login") window.location.hash = "";
-  else window.location.hash = name;
+  else window.location.hash = name; // canonical hashes
 }
 
 export default function App() {
@@ -90,21 +100,50 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo(() => "/api", []);
 
+  const restoredRef = useRef(false);
+
+  // Restore last hash on hard refresh (mobile pull-to-refresh can sometimes reset to base URL)
   useEffect(() => {
-    const onHash = () => setScreen(hashToScreen(window.location.hash));
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+
+    const current = window.location.hash || "";
+    if (!isNonLoginHash(current)) {
+      const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
+      if (last && isNonLoginHash(last)) {
+        window.location.hash = last;
+        setScreen(hashToScreen(last));
+      }
+    }
+  }, []);
+
+  // hash router + remember last visited screen (so refresh does NOT drop to start)
+  useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash || "";
+      if (isNonLoginHash(h)) sessionStorage.setItem(LAST_HASH_KEY, h);
+      setScreen(hashToScreen(h));
+    };
     window.addEventListener("hashchange", onHash);
     onHash();
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // session check: NEVER force home if user is on a deeper screen
   useEffect(() => {
     fetch(`${api}/auth/me`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
+
+          // If we are on login (empty hash), prefer last saved hash, otherwise go home.
           const current = hashToScreen(window.location.hash);
-          if (current.name === "login") go("home");
+          if (current.name === "login") {
+            const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
+            if (last && isNonLoginHash(last)) window.location.hash = last;
+            else go("home");
+          }
         }
       })
       .catch(() => {});
@@ -113,6 +152,8 @@ export default function App() {
   const logout = async () => {
     await fetch(`${api}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
     setSession(null);
+    // Clear saved hash so we don't "jump back" after logout
+    sessionStorage.removeItem(LAST_HASH_KEY);
     go("login");
   };
 
@@ -122,7 +163,10 @@ export default function App() {
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
-          go("home");
+          // after login: go back to last page if it exists, else home
+          const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
+          if (last && isNonLoginHash(last)) window.location.hash = last;
+          else go("home");
         }}
       />
     );
