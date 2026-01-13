@@ -7,54 +7,79 @@ import AllInOrderHistory from "./pages/AllInOrderHistory";
 import AllInWarehouse from "./pages/AllInWarehouse";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
-type ScreenName = "login" | "home" | "incoming" | "orders" | "warehouse";
+
+/**
+ * We accept multiple hash spellings, because the buttons/pages may use:
+ *  - #home / #incoming / #orders / #warehouse
+ *  - #allin / #allinincoming / #allinorderhistory / #allinwarehouse
+ *  - legacy aliases like #allin-incoming etc.
+ */
+type ScreenName =
+  | "login"
+  | "home"
+  | "incoming"
+  | "orders"
+  | "warehouse";
+
 type Screen = { name: ScreenName };
 
 type Session =
   | { role: "admin"; actor: string }
   | { role: "shop"; shopId: ShopId; actor: string };
 
-function parseHash(): Screen {
-  const h = (window.location.hash || "").replace("#", "");
-  // Accept both styles: "#incoming" and "#/incoming"
-  const key = h.startsWith("/") ? h.slice(1) : h;
+function normalizeHash(raw: string): string {
+  const h = (raw || "").trim();
+  const noHash = h.startsWith("#") ? h.slice(1) : h;
+  const pathOnly = noHash.split("?")[0];
+  const noLeading = pathOnly.replace(/^\/+/, "");
+  return noLeading.toLowerCase();
+}
 
+function hashToScreen(rawHash: string): Screen {
+  const key = normalizeHash(rawHash);
+
+  // direct
+  if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
   if (key === "warehouse") return { name: "warehouse" };
-  if (key === "home") return { name: "home" };
 
-  // default (empty or unknown) -> login screen (will be redirected to home if already logged in)
+  // all-in aliases (CUPE style)
+  if (key === "allin" || key === "allin-home") return { name: "home" };
+  if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
+  if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
+  if (key === "allinwarehouse" || key === "allin-warehouse") return { name: "warehouse" };
+
+  // empty/unknown -> login
   return { name: "login" };
 }
 
 function go(name: ScreenName) {
   if (name === "login") window.location.hash = "";
-  else window.location.hash = name;
+  else window.location.hash = name; // canonical hashes are: home/incoming/orders/warehouse
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>(() => parseHash());
+  const [screen, setScreen] = useState<Screen>(() => hashToScreen(window.location.hash));
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo(() => "/api", []);
 
   // hash router
   useEffect(() => {
-    const onHash = () => setScreen(parseHash());
+    const onHash = () => setScreen(hashToScreen(window.location.hash));
     window.addEventListener("hashchange", onHash);
+    onHash();
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // session check: DO NOT force home if user already navigated to a deep link
+  // session check: only redirect to home if hash is empty/unknown (login screen)
   useEffect(() => {
     fetch(`${api}/auth/me`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
-
-          // Only redirect to home if there is no valid screen in hash (login/empty/unknown)
-          const current = parseHash();
+          const current = hashToScreen(window.location.hash);
           if (current.name === "login") go("home");
         }
       })
@@ -67,14 +92,12 @@ export default function App() {
     go("login");
   };
 
-  // If not logged in OR hash still on login: show login
   if (!session || screen.name === "login") {
     return (
       <Login
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
-          // After login, go home (user can navigate further from home)
           go("home");
         }}
       />
