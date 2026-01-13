@@ -61,11 +61,16 @@ export default function AllInHome(props: Props) {
               </Button>
             </div>
 
-            <div className="pt-4 mt-2 border-t border-white/15">
-              <Button className={mainBtn} onClick={logout}>
-                <span>KILÉPÉS</span>
+            {/* logout: separated, smaller, not menu-like */}
+            <div className="pt-6 mt-4 border-t border-white/10 flex justify-center">
+              <button
+                onClick={logout}
+                className="flex items-center gap-2 text-sm px-4 py-2 rounded-md border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition"
+                type="button"
+              >
                 <LogOut className="h-4 w-4" />
-              </Button>
+                Kilépés
+              </button>
             </div>
           </div>
         </div>
