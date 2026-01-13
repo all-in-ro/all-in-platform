@@ -7,7 +7,8 @@ import AllInOrderHistory from "./pages/AllInOrderHistory";
 import AllInWarehouse from "./pages/AllInWarehouse";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
-type Screen = { name: "login" } | { name: "home" } | { name: "incoming" } | { name: "orders" } | { name: "warehouse" };
+type ScreenName = "login" | "home" | "incoming" | "orders" | "warehouse";
+type Screen = { name: ScreenName };
 
 type Session =
   | { role: "admin"; actor: string }
@@ -15,16 +16,21 @@ type Session =
 
 function parseHash(): Screen {
   const h = (window.location.hash || "").replace("#", "");
-  if (h === "incoming") return { name: "incoming" };
-  if (h === "orders") return { name: "orders" };
-  if (h === "warehouse") return { name: "warehouse" };
-  if (h === "home") return { name: "home" };
+  // Accept both styles: "#incoming" and "#/incoming"
+  const key = h.startsWith("/") ? h.slice(1) : h;
+
+  if (key === "incoming") return { name: "incoming" };
+  if (key === "orders") return { name: "orders" };
+  if (key === "warehouse") return { name: "warehouse" };
+  if (key === "home") return { name: "home" };
+
+  // default (empty or unknown) -> login screen (will be redirected to home if already logged in)
   return { name: "login" };
 }
 
-function go(screen: Screen) {
-  if (screen.name === "login") window.location.hash = "";
-  else window.location.hash = screen.name;
+function go(name: ScreenName) {
+  if (name === "login") window.location.hash = "";
+  else window.location.hash = name;
 }
 
 export default function App() {
@@ -32,19 +38,24 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo(() => "/api", []);
 
+  // hash router
   useEffect(() => {
     const onHash = () => setScreen(parseHash());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // session check: DO NOT force home if user already navigated to a deep link
   useEffect(() => {
     fetch(`${api}/auth/me`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
-          go({ name: "home" });
+
+          // Only redirect to home if there is no valid screen in hash (login/empty/unknown)
+          const current = parseHash();
+          if (current.name === "login") go("home");
         }
       })
       .catch(() => {});
@@ -53,16 +64,18 @@ export default function App() {
   const logout = async () => {
     await fetch(`${api}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
     setSession(null);
-    go({ name: "login" });
+    go("login");
   };
 
+  // If not logged in OR hash still on login: show login
   if (!session || screen.name === "login") {
     return (
       <Login
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
-          go({ name: "home" });
+          // After login, go home (user can navigate further from home)
+          go("home");
         }}
       />
     );
