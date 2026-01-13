@@ -2,19 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
-/* === ALL IN base === */
 html, body, #root {
   height: 100%;
   margin: 0;
 }
 
-/* FIX: no scroll on centered card pages */
 body {
   background: #474c59;
-  overflow: hidden;
+  overflow: hidden; /* no scroll on centered pages */
 }
 
-/* allow scroll ONLY where explicitly needed */
 .scrollable {
-  overflow: auto;
+  overflow: auto; /* enable scrolling only where needed */
 } 
