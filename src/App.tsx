@@ -1,31 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
 import Login from "./pages/Login";
-import Admin from "./pages/Admin";
-import Shop from "./pages/Shop";
+import AllInHome from "./pages/AllInHome";
+import AllInIncoming from "./pages/AllInIncoming";
+import AllInOrderHistory from "./pages/AllInOrderHistory";
+import AllInWarehouse from "./pages/AllInWarehouse";
 
-type ShopId = "csikszereda" | "kezdivasarhely";
 type Screen =
   | { name: "login" }
-  | { name: "admin" }
-  | { name: "shop"; shopId: ShopId };
+  | { name: "home" }
+  | { name: "incoming" }
+  | { name: "orders" }
+  | { name: "warehouse" };
 
 type Session =
   | { role: "admin"; actor: string }
-  | { role: "shop"; shopId: ShopId; actor: string };
+  | { role: "shop"; shopId: string; actor: string };
 
 function parseHash(): Screen {
   const h = (window.location.hash || "").replace("#", "");
-  if (h === "admin") return { name: "admin" };
-  if (h === "shop-csikszereda") return { name: "shop", shopId: "csikszereda" };
-  if (h === "shop-kezdivasarhely") return { name: "shop", shopId: "kezdivasarhely" };
+  if (h === "incoming") return { name: "incoming" };
+  if (h === "orders") return { name: "orders" };
+  if (h === "warehouse") return { name: "warehouse" };
+  if (h === "home") return { name: "home" };
   return { name: "login" };
 }
 
 function go(screen: Screen) {
   if (screen.name === "login") window.location.hash = "";
-  if (screen.name === "admin") window.location.hash = "admin";
-  if (screen.name === "shop" && screen.shopId === "csikszereda") window.location.hash = "shop-csikszereda";
-  if (screen.name === "shop" && screen.shopId === "kezdivasarhely") window.location.hash = "shop-kezdivasarhely";
+  else window.location.hash = screen.name;
 }
 
 export default function App() {
@@ -45,8 +47,7 @@ export default function App() {
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
-          if (data.session.role === "admin") go({ name: "admin" });
-          if (data.session.role === "shop") go({ name: "shop", shopId: data.session.shopId });
+          go({ name: "home" });
         }
       })
       .catch(() => {});
@@ -64,8 +65,7 @@ export default function App() {
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
-          if (s.role === "admin") go({ name: "admin" });
-          else go({ name: "shop", shopId: s.shopId });
+          go({ name: "home" });
         }}
       />
     );
@@ -75,15 +75,17 @@ export default function App() {
     <div style={{ fontFamily: "system-ui", padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontWeight: 700 }}>
-          ALL IN – {session.role === "admin" ? "ADMIN" : `ÜZLET (${session.shopId})`} – {session.actor}
+          ALL IN – {session.actor}
         </div>
         <button onClick={logout} style={{ padding: "8px 12px" }}>
           Kilépés
         </button>
       </div>
 
-      {session.role === "admin" && <Admin api={api} actor={session.actor} />}
-      {session.role === "shop" && <Shop api={api} shopId={session.shopId} actor={session.actor} />}
+      {screen.name === "home" && <AllInHome />}
+      {screen.name === "incoming" && <AllInIncoming />}
+      {screen.name === "orders" && <AllInOrderHistory />}
+      {screen.name === "warehouse" && <AllInWarehouse />}
     </div>
   );
 }
