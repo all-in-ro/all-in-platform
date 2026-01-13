@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ALL IN</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui; background:#0f172a; color:#e5e7eb; padding:40px }
+      pre { background:#020617; padding:16px; border-radius:8px }
+    </style>
+  </head>
+  <body>
+    <h1>ALL IN</h1>
+    <p>Backend status:</p>
+    <pre id="out">loading…</pre>
+    <script>
+      fetch("/")
+        .then(r => r.json())
+        .then(d => out.textContent = JSON.stringify(d, null, 2))
+        .catch(e => out.textContent = e.toString());
+    </script>
+  </body>
+</html>
