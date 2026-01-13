@@ -1,26 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import Login from "./pages/Login";
+import Admin from "./pages/Admin";
 import AllInHome from "./pages/AllInHome";
 import AllInIncoming from "./pages/AllInIncoming";
 import AllInOrderHistory from "./pages/AllInOrderHistory";
 import AllInWarehouse from "./pages/AllInWarehouse";
 
+type ShopId = "csikszereda" | "kezdivasarhely";
 type Screen =
   | { name: "login" }
   | { name: "home" }
   | { name: "incoming" }
   | { name: "orders" }
-  | { name: "warehouse" };
+  | { name: "warehouse" }
+  | { name: "admin" };
 
 type Session =
   | { role: "admin"; actor: string }
-  | { role: "shop"; shopId: string; actor: string };
+  | { role: "shop"; shopId: ShopId; actor: string };
 
 function parseHash(): Screen {
   const h = (window.location.hash || "").replace("#", "");
   if (h === "incoming") return { name: "incoming" };
   if (h === "orders") return { name: "orders" };
   if (h === "warehouse") return { name: "warehouse" };
+  if (h === "admin") return { name: "admin" };
   if (h === "home") return { name: "home" };
   return { name: "login" };
 }
@@ -47,6 +51,7 @@ export default function App() {
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
+          // belépve mindig HOME
           go({ name: "home" });
         }
       })
@@ -65,6 +70,7 @@ export default function App() {
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
+          // ADMIN és ÜZLET is Home-ra megy
           go({ name: "home" });
         }}
       />
@@ -75,7 +81,7 @@ export default function App() {
     <div style={{ fontFamily: "system-ui", padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontWeight: 700 }}>
-          ALL IN – {session.actor}
+          ALL IN – {session.role === "admin" ? "ADMIN" : `ÜZLET (${session.shopId})`} – {session.actor}
         </div>
         <button onClick={logout} style={{ padding: "8px 12px" }}>
           Kilépés
@@ -86,6 +92,9 @@ export default function App() {
       {screen.name === "incoming" && <AllInIncoming />}
       {screen.name === "orders" && <AllInOrderHistory />}
       {screen.name === "warehouse" && <AllInWarehouse />}
+
+      {/* Admin panel később menübe kerül, addig hash-sel elérhető */}
+      {session.role === "admin" && screen.name === "admin" && <Admin api={api} actor={session.actor} />}
     </div>
   );
 }
