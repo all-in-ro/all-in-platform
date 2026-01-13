@@ -1,9 +1,21 @@
 import { Button } from "@/components/ui/button";
-import { Package, Truck, History, Bookmark, ArrowLeftRight, ClipboardList, Settings } from "lucide-react";
+import { Package, Truck, History, Bookmark, Repeat, ClipboardList, Settings, LogOut } from "lucide-react";
 
-export default function AllInHome() {
+type Props = {
+  onLogout?: () => void;
+};
+
+export default function AllInHome(props: Props) {
   const mainBtn =
     "w-full h-12 rounded-xl px-4 bg-[#354153] text-white hover:bg-[#3c5069] flex items-center justify-between border border-white/40";
+
+  const logout = async () => {
+    try {
+      await props.onLogout?.();
+    } finally {
+      window.location.hash = "";
+    }
+  };
 
   return (
     <div className="min-h-screen w-screen grid place-items-center" style={{ backgroundColor: "#474c59" }}>
@@ -33,9 +45,9 @@ export default function AllInHome() {
                 <Bookmark className="h-4 w-4" />
               </Button>
 
-              <Button className={mainBtn} onClick={() => (window.location.hash = "#allinstockmovement")}>
+              <Button className={mainBtn} onClick={() => (window.location.hash = "#allinstockmoves")}>
                 <span>RAKTÁRMOZGÁS</span>
-                <ArrowLeftRight className="h-4 w-4" />
+                <Repeat className="h-4 w-4" />
               </Button>
 
               <Button className={mainBtn} onClick={() => (window.location.hash = "#allininventory")}>
@@ -46,6 +58,13 @@ export default function AllInHome() {
               <Button className={mainBtn} onClick={() => (window.location.hash = "#allinadmin")}>
                 <span>ADMINISZTRÁCIÓ</span>
                 <Settings className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="pt-4 mt-2 border-t border-white/15">
+              <Button className={mainBtn} onClick={logout}>
+                <span>KILÉPÉS</span>
+                <LogOut className="h-4 w-4" />
               </Button>
             </div>
           </div>
