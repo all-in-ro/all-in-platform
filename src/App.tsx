@@ -40,6 +40,7 @@ function normalizeHash(raw: string): string {
 function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
+  // canonical
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
@@ -49,13 +50,17 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "inventory") return { name: "inventory" };
   if (key === "admin") return { name: "admin" };
 
+  // ALL IN aliases used by buttons/pages
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
   if (key === "allinwarehouse" || key === "allin-warehouse") return { name: "warehouse" };
 
   if (key === "allinreserved") return { name: "reserved" };
-  if (key === "allinstockmoves") return { name: "stockmoves" };
+
+  // ✅ this is the one that often gets misspelled; accept a few variants
+  if (key === "allinstockmoves" || key === "allin-stockmoves" || key === "allin-stock-moves") return { name: "stockmoves" };
+
   if (key === "allininventory") return { name: "inventory" };
   if (key === "allinadmin") return { name: "admin" };
 
@@ -85,6 +90,7 @@ export default function App() {
       .then((data) => {
         if (data?.session) {
           setSession(data.session);
+          // Only redirect to home if hash is empty/unknown (login screen)
           const current = hashToScreen(window.location.hash);
           if (current.name === "login") go("home");
         }
@@ -131,4 +137,4 @@ export default function App() {
       {screen.name === "admin" && <AllInAdmin {...(commonProps as any)} />}
     </>
   );
-} 
+}
