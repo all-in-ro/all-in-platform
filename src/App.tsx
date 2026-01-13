@@ -6,8 +6,23 @@ import AllInIncoming from "./pages/AllInIncoming";
 import AllInOrderHistory from "./pages/AllInOrderHistory";
 import AllInWarehouse from "./pages/AllInWarehouse";
 
+import AllInReserved from "./pages/AllInReserved";
+import AllInStockMoves from "./pages/AllInStockMoves";
+import AllInInventory from "./pages/AllInInventory";
+import AllInAdmin from "./pages/AllInAdmin";
+
 type ShopId = "csikszereda" | "kezdivasarhely";
-type ScreenName = "login" | "home" | "incoming" | "orders" | "warehouse";
+type ScreenName =
+  | "login"
+  | "home"
+  | "incoming"
+  | "orders"
+  | "warehouse"
+  | "reserved"
+  | "stockmoves"
+  | "inventory"
+  | "admin";
+
 type Screen = { name: ScreenName };
 
 type Session =
@@ -25,17 +40,24 @@ function normalizeHash(raw: string): string {
 function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
-  // canonical
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
   if (key === "warehouse") return { name: "warehouse" };
+  if (key === "reserved") return { name: "reserved" };
+  if (key === "stockmoves") return { name: "stockmoves" };
+  if (key === "inventory") return { name: "inventory" };
+  if (key === "admin") return { name: "admin" };
 
-  // aliases (CUPE-style)
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
   if (key === "allinwarehouse" || key === "allin-warehouse") return { name: "warehouse" };
+
+  if (key === "allinreserved") return { name: "reserved" };
+  if (key === "allinstockmoves") return { name: "stockmoves" };
+  if (key === "allininventory") return { name: "inventory" };
+  if (key === "allinadmin") return { name: "admin" };
 
   return { name: "login" };
 }
@@ -88,9 +110,6 @@ export default function App() {
     );
   }
 
-  // IMPORTANT: No top header here.
-  // The ALL IN pages (copied from CUPE) already render their own header/topbar.
-  // This avoids the "double header" problem.
   const commonProps = {
     apiBase: api,
     actor: session.actor,
@@ -105,6 +124,11 @@ export default function App() {
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
       {screen.name === "warehouse" && <AllInWarehouse {...(commonProps as any)} />}
+
+      {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
+      {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
+      {screen.name === "inventory" && <AllInInventory {...(commonProps as any)} />}
+      {screen.name === "admin" && <AllInAdmin {...(commonProps as any)} />}
     </>
   );
 } 
