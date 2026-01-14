@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Clipboard, Trash2 } from "lucide-react";
 
-type ShopId = "Csikszereda" | "Kezdivasarhely";
+type ShopId = "csikszereda" | "kezdivasarhely";
 
 type CodeItem = {
   id: string;
@@ -108,6 +108,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       if (!r.ok) throw new Error(txt || `HTTP ${r.status}`);
 
       setOutText(txt);
+      setName("");
       await fetchList();
     } catch (e: any) {
       setErr(String(e?.message || e || "Hiba"));
@@ -258,19 +259,6 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               </div>
 
               <div className="flex gap-3 md:items-end">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={btn + " bg-transparent"}
-                  onClick={() => {
-                    setName("");
-                    setOutText("");
-                    setErr("");
-                  }}
-                >
-                  Törlés
-                </Button>
-
                 <Button type="button" className={btn + " font-semibold !bg-[#208d8b] hover:!bg-[#1b7a78] border-transparent"} disabled={busy} onClick={createCode}>
                   {busy ? "Generálás…" : "Kód generálás"}
                 </Button>
