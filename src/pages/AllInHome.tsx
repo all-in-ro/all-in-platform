@@ -5,6 +5,9 @@ type Props = {
   onLogout?: () => void;
 };
 
+const LOGO_URL =
+  "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
+
 export default function AllInHome(props: Props) {
   const mainBtn =
     "w-full h-12 rounded-xl px-4 bg-[#354153] text-white hover:bg-[#3c5069] flex items-center justify-between border border-white/40";
@@ -21,7 +24,16 @@ export default function AllInHome(props: Props) {
     <div className="min-h-screen w-screen grid place-items-center" style={{ backgroundColor: "#474c59" }}>
       <div className="w-full max-w-lg px-4">
         <div className="rounded-lg border border-white/20 bg-white/5 shadow-sm px-6 py-8">
-          <h1 className="text-center text-2xl text-white mb-6">ALL IN</h1>
+          
+          {/* logo */}
+          <div className="grid place-items-center mb-5">
+            <img
+              src={LOGO_URL}
+              alt="ALL IN"
+              className="h-10 sm:h-12 w-auto object-contain"
+              loading="eager"
+            />
+          </div>
 
           <div className="space-y-3">
             <Button className={mainBtn} onClick={() => (window.location.hash = "#allinwarehouse")}>
@@ -61,7 +73,7 @@ export default function AllInHome(props: Props) {
               </Button>
             </div>
 
-            {/* logout: separated, smaller, not menu-like */}
+            {/* logout */}
             <div className="pt-6 mt-4 border-t border-white/10 flex justify-center">
               <button
                 onClick={logout}
