@@ -42,26 +42,10 @@ const pool = new Pool({
 const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
 const R2_API_TOKEN = process.env.R2_API_TOKEN || "";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || ""; // R2 token id (Access Key ID)
 const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
 
-const r2HttpEnabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_API_TOKEN && R2_ACCESS_KEY_ID);
+const r2HttpEnabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_API_TOKEN);
 const r2Base = R2_ENDPOINT.replace(/\/+$/, "");
-// --- R2 S3 client (AWS4-HMAC-SHA256) ---
-// Cloudflare R2 expects AWS Signature V4. For R2 API tokens:
-// - Access Key ID: token `id`
-// - Secret Access Key: SHA-256 hash of token `value`
-const r2Secret = crypto.createHash("sha256").update(String(R2_API_TOKEN)).digest("hex");
-const r2S3 = new S3Client({
-  region: "auto",
-  endpoint: r2Base,
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: R2_ACCESS_KEY_ID,
-    secretAccessKey: r2Secret
-  }
-});
-
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
 
@@ -496,15 +480,28 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
     const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
 
-    // Upload via AWS4-HMAC-SHA256 signed S3 request
-await r2S3.send(new PutObjectCommand({
-  Bucket: R2_BUCKET,
-  Key: key,
-  Body: req.file.buffer,
-  ContentType: req.file.mimetype || "application/octet-stream"
-}));
-);
-    }
+    // PUT https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
+    const putUrl = `${r2Base}/${R2_BUCKET}/${key}`;
+
+    // S3-compatible date header required by R2
+    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+
+    const r = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+  Authorization: `Bearer ${R2_API_TOKEN}`,
+  "Content-Type": req.file.mimetype || "application/octet-stream",
+  "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+  "x-amz-date": amzDate
+},
+body: req.file.buffer
+    });
+
+    if (!r.ok) {
+      const msg = await r.text().catch(() => "");
+      console.error("R2 upload failed:", r.status, msg);
+      return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
+}
 
     const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
     const url = basePub ? `${basePub}/${key}` : key;
@@ -513,7 +510,7 @@ await r2S3.send(new PutObjectCommand({
   } catch (e) {
     console.error("R2 upload failed:", e);
     return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
-  }
+}
 });
 
 // --- health ---
