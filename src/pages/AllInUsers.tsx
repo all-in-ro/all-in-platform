@@ -100,11 +100,11 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [placeErr, setPlaceErr] = useState("");
   const [placeBusy, setPlaceBusy] = useState(false);
 
-  const btn = "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30";
+  const btn = "h-9 sm:h-10 px-3 sm:px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30 text-xs sm:text-sm whitespace-nowrap";
   const btnPrimary = btn + " font-semibold !bg-[#208d8b] hover:!bg-[#1b7a78] border-transparent";
   const input =
     "w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20";
-  const card = "rounded-lg border border-white/30 bg-white/5 shadow-sm px-6 py-8";
+  const card = "rounded-lg border border-white/30 bg-white/5 shadow-sm px-4 sm:px-6 py-6 sm:py-8";
   const label = "text-white/80 text-sm";
 
   const closeDropdownsOnOutside = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -301,13 +301,13 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     <div className="min-h-screen w-screen grid place-items-center" style={{ backgroundColor: "#474c59" }} onMouseDown={closeDropdownsOnOutside}>
       <div className="w-full max-w-5xl px-4">
         <div className={card}>
-          <div className="flex items-center justify-between gap-4 flex-nowrap">
+          <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
             <div>
               <h1 className="text-white text-xl font-semibold">FELHASZNÁLÓK</h1>
               <div className="text-white/60 text-sm">Belépőkódok (ADMIN)</div>
             </div>
 
-            <div className="flex items-center gap-2 flex-nowrap">
+            <div className="flex items-center gap-2 flex-nowrap ml-auto">
               <Button type="button" className={btn} onClick={openPlaceModal}>
                 Helység létrehozása / törlése...
               </Button>
@@ -325,7 +325,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             {shopsErr ? <div className="text-red-400 text-sm whitespace-pre-wrap">{shopsErr}</div> : null}
 
             {/* Filters */}
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 grid-cols-1 md:grid-cols-2">
               <div className="grid gap-2">
                 <div className={label}>Üzlet</div>
                 <div className="relative" ref={shopRef}>
@@ -410,14 +410,14 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             </div>
 
             {/* Create */}
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
               <div className="md:col-span-2 grid gap-2">
                 <div className={label}>Dolgozó neve (opcionális)</div>
                 <input value={name} onChange={(e) => setName(e.target.value)} className={input} placeholder="Pl. Elek" />
               </div>
 
-              <div className="flex gap-3 md:items-end">
-                <Button type="button" className={btnPrimary} disabled={busy} onClick={createCode}>
+              <div className="flex gap-3 md:items-end w-full">
+                <Button type="button" className={btnPrimary + " w-full md:w-auto"} disabled={busy} onClick={createCode}>
                   {busy ? "Generálás…" : "Kód generálás"}
                 </Button>
               </div>
@@ -434,7 +434,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
             {/* List */}
             <div className="grid gap-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <div className="text-white/80 text-sm">Kód lista</div>
                 <Button type="button" className={btn} disabled={listBusy} onClick={fetchList}>
                   {listBusy ? "Frissítés…" : "Frissítés"}
@@ -457,7 +457,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           <div className="text-white/70 text-xs mt-1">Létrehozva: {fmt(it.createdAt)}</div>
                         </div>
 
-                        <div className="flex items-center gap-2 flex-nowrap">
+                        <div className="flex items-center gap-2 flex-nowrap ml-auto">
                           <button
                             type="button"
                             aria-label={it.revokedAt ? "Aktiválás" : "Inaktiválás"}
