@@ -488,6 +488,8 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
       headers: {
         Authorization: `Bearer ${R2_API_TOKEN}`,
         "Content-Type": req.file.mimetype || "application/octet-stream"
+      ,
+        "x-amz-content-sha256": "UNSIGNED-PAYLOAD"
       },
       body: req.file.buffer
     });
@@ -495,7 +497,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     if (!r.ok) {
       const msg = await r.text().catch(() => "");
       console.error("R2 upload failed:", r.status, msg);
-      return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
+      return res.status(500).json({ error: "Upload failed", status: 500, details: String(e?.message || e).slice(0, 800) });
     }
 
     const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
@@ -504,7 +506,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     return res.json({ key, url });
   } catch (e) {
     console.error("R2 upload failed:", e);
-    return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
+    return res.status(500).json({ error: "Upload failed", status: 500, details: String(e?.message || e).slice(0, 800) });
   }
 });
 
