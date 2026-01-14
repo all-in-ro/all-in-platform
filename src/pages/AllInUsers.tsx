@@ -46,7 +46,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [items, setItems] = useState<CodeItem[]>([]);
   const [listBusy, setListBusy] = useState(false);
   const [listErr, setListErr] = useState("");
-  const [status, setStatus] = useState<"active" | "used" | "all">("active");
+  const [status, setStatus] = useState<"active" | "inactive" | "all">("active");
 
   // custom dropdown (no OS-blue select)
   const [openShop, setOpenShop] = useState(false);
@@ -55,7 +55,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const statusRef = useRef<HTMLDivElement | null>(null);
 
   const shopLabel = shopId === "csikszereda" ? "Csíkszereda" : "Kézdivásárhely";
-  const statusLabel = status === "active" ? "Aktív" : status === "used" ? "Felhasznált" : "Összes";
+  const statusLabel = status === "active" ? "Aktív" : status === "inactive" ? "Inaktív" : "Összes";
 
   const btn = "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30";
   const input =
@@ -129,6 +129,23 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       await fetchList();
     } catch (e: any) {
       setListErr(String(e?.message || e || "Hiba törlésnél"));
+    }
+  };
+
+  const setActive = async (id: string, active: boolean) => {
+    setListErr("");
+    try {
+      const r = await fetch(`${apiBase}/admin/codes/${encodeURIComponent(id)}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", Accept: "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ active })
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
+      await fetchList();
+    } catch (e: any) {
+      setListErr(String(e?.message || e || "Hiba"));
     }
   };
 
@@ -227,13 +244,13 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                       </button>
                       <button
                         type="button"
-                        className={"w-full px-4 py-3 text-left text-white hover:bg-white/10 " + (status === "used" ? "bg-white/10" : "")}
+                        className={"w-full px-4 py-3 text-left text-white hover:bg-white/10 " + (status === "inactive" ? "bg-white/10" : "")}
                         onClick={() => {
-                          setStatus("used");
+                          setStatus("inactive");
                           setOpenStatus(false);
                         }}
                       >
-                        Felhasznált
+                        Inaktív
                       </button>
                       <button
                         type="button"
@@ -321,6 +338,24 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                     </div>
                     <div className="col-span-3 text-white/70 text-xs">{fmt(it.createdAt)}</div>
                     <div className="col-span-2 text-right">
+                      <button
+                        type="button"
+                        aria-label={it.revokedAt ? "Aktiválás" : "Inaktiválás"}
+                        title={it.revokedAt ? "Aktiválás" : "Inaktiválás"}
+                        className={
+                          it.revokedAt
+                            ? "mr-2 inline-flex items-center justify-center rounded-md px-2 py-1 text-xs bg-[#208d8b] hover:bg-[#1b7a78] text-white"
+                            : "mr-2 inline-flex items-center justify-center rounded-md px-2 py-1 text-xs bg-white/10 hover:bg-white/15 text-white/90"
+                        }
+                        onClick={() => {
+                          // eslint-disable-next-line no-alert
+                          const ok = window.confirm(it.revokedAt ? "Aktiválod újra a felhasználót?" : "Inaktiválod a felhasználót?");
+                          if (ok) setActive(it.id, Boolean(it.revokedAt));
+                        }}
+                      >
+                        {it.revokedAt ? "Aktivál" : "Inaktivál"}
+                      </button>
+
                       <button
                         type="button"
                         aria-label="Végleges törlés"
