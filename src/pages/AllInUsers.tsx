@@ -79,7 +79,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState("");
   const [confirmMsg, setConfirmMsg] = useState("");
-  const [confirmAction, setConfirmAction] = useState<null | { kind: "delete" | "toggle"; id: string; active?: boolean }>(null);
+  const [confirmAction, setConfirmAction] = useState<null | { kind: "delete" | "toggle" | "delete-shop"; id: string; active?: boolean }>(null);
 
   // Create place modal
   const [placeOpen, setPlaceOpen] = useState(false);
@@ -232,6 +232,13 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
     if (a.kind === "delete") return deleteCode(a.id);
     if (a.kind === "toggle") return setActive(a.id, Boolean(a.active));
+    if (a.kind === "delete-shop") {
+      try {
+        await fetch(`${apiBase}/admin/shops/${encodeURIComponent(a.id)}`, { method: "DELETE", credentials: "include" });
+        await fetchShops();
+      } catch {}
+      return;
+    }
   };
 
   const openPlaceModal = () => {
@@ -567,31 +574,33 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
 
-            <div className="mt-5 flex items-center justify-between gap-2">
+            
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <div className="text-white/80 text-sm mb-2">Meglévő helységek</div>
+              <div className="grid gap-2 max-h-48 overflow-y-auto">
+                {shops.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/10 px-3 py-2">
+                    <div className="text-white text-sm">{s.name}</div>
+                    <button
+                      type="button"
+                      title="Helység törlése"
+                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                      onClick={() => {
+                        setConfirmTitle("Helység törlése");
+                        setConfirmMsg(`Biztos törlöd a helységet: ${s.name}? Ez nem visszavonható.`);
+                        setConfirmAction({ kind: "delete-shop", id: s.id });
+                        setConfirmOpen(true);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                {shops.length === 0 && <div className="text-white/50 text-sm">Nincs helység.</div>}
+              </div>
+            </div>
 
-              <button
-                type="button"
-                aria-label="Helység törlése"
-                title="Helység törlése"
-                className="mr-auto inline-flex items-center justify-center rounded-md p-2 bg-red-600 hover:bg-red-700 text-white"
-                onClick={async () => {
-                  // eslint-disable-next-line no-alert
-                  const ok = window.confirm("Biztos törlöd a helységet? A hozzá tartozó kódok megmaradnak, de nem lesz hova belépni.");
-                  if (!ok) return;
-                  try {
-                    await fetch(`${apiBase}/admin/shops/${encodeURIComponent(shopId)}`, {
-                      method: "DELETE",
-                      credentials: "include"
-                    });
-                    setPlaceOpen(false);
-                    await fetchShops();
-                  } catch (e) {
-                    setPlaceErr("Nem sikerült törölni a helységet.");
-                  }
-                }}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+            <div className="mt-5 flex items-center justify-end gap-2">
 
               <button
                 type="button"
@@ -602,7 +611,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               </button>
               <button
                 type="button"
-                className="h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
+                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
                 onClick={runConfirm}
               >
                 OK
@@ -646,31 +655,33 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
             {placeErr ? <div className="text-red-300 text-sm mt-3 whitespace-pre-wrap">{placeErr}</div> : null}
 
-            <div className="mt-5 flex items-center justify-between gap-2">
+            
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <div className="text-white/80 text-sm mb-2">Meglévő helységek</div>
+              <div className="grid gap-2 max-h-48 overflow-y-auto">
+                {shops.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/10 px-3 py-2">
+                    <div className="text-white text-sm">{s.name}</div>
+                    <button
+                      type="button"
+                      title="Helység törlése"
+                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                      onClick={() => {
+                        setConfirmTitle("Helység törlése");
+                        setConfirmMsg(`Biztos törlöd a helységet: ${s.name}? Ez nem visszavonható.`);
+                        setConfirmAction({ kind: "delete-shop", id: s.id });
+                        setConfirmOpen(true);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                {shops.length === 0 && <div className="text-white/50 text-sm">Nincs helység.</div>}
+              </div>
+            </div>
 
-              <button
-                type="button"
-                aria-label="Helység törlése"
-                title="Helység törlése"
-                className="mr-auto inline-flex items-center justify-center rounded-md p-2 bg-red-600 hover:bg-red-700 text-white"
-                onClick={async () => {
-                  // eslint-disable-next-line no-alert
-                  const ok = window.confirm("Biztos törlöd a helységet? A hozzá tartozó kódok megmaradnak, de nem lesz hova belépni.");
-                  if (!ok) return;
-                  try {
-                    await fetch(`${apiBase}/admin/shops/${encodeURIComponent(shopId)}`, {
-                      method: "DELETE",
-                      credentials: "include"
-                    });
-                    setPlaceOpen(false);
-                    await fetchShops();
-                  } catch (e) {
-                    setPlaceErr("Nem sikerült törölni a helységet.");
-                  }
-                }}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+            <div className="mt-5 flex items-center justify-end gap-2">
 
               <button
                 type="button"
