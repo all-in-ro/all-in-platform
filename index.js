@@ -3,6 +3,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import pg from "pg";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const { Pool } = pg;
 
@@ -27,6 +29,26 @@ const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
 });
+
+// --- R2 (S3 compatible) ---
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_BUCKET = process.env.R2_BUCKET || "";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
+
+const r2Enabled = Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET);
+
+const r2 = r2Enabled
+  ? new S3Client({
+      region: "auto",
+      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: R2_ACCESS_KEY_ID,
+        secretAccessKey: R2_SECRET_ACCESS_KEY
+      }
+    })
+  : null;
 
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
@@ -76,6 +98,32 @@ function decryptCode(packed) {
   decipher.setAuthTag(tag);
   const plain = Buffer.concat([decipher.update(enc), decipher.final()]);
   return plain.toString("utf8");
+}
+
+// --- app settings (for branding, etc.) ---
+let settingsReady = false;
+async function ensureSettings() {
+  if (settingsReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key text PRIMARY KEY,
+      value text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  settingsReady = true;
+}
+async function setSetting(key, value) {
+  await ensureSettings();
+  await pool.query(
+    "INSERT INTO app_settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    [key, value]
+  );
+}
+async function getSetting(key) {
+  await ensureSettings();
+  const r = await pool.query("SELECT value FROM app_settings WHERE key = $1 LIMIT 1", [key]);
+  return r.rowCount ? r.rows[0].value : null;
 }
 
 // --- ensure shops table exists + defaults ---
@@ -200,6 +248,39 @@ app.delete("/api/admin/shops/:id", requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- admin: R2 presign + set login logo ---
+app.get("/api/admin/r2/presign", requireAdmin, async (req, res) => {
+  if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
+  if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
+
+  const key = String(req.query.key || "").trim();
+  const contentType = String(req.query.contentType || "application/octet-stream").trim();
+
+  if (!key) return res.status(400).json({ error: "key required" });
+  if (!key.startsWith("branding/")) return res.status(400).json({ error: "Csak branding/ alá engedélyezett" });
+
+  const cmd = new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    ContentType: contentType
+  });
+
+  const uploadUrl = await getSignedUrl(r2, cmd, { expiresIn: 60 * 5 });
+  const publicUrl = `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}`;
+  return res.json({ uploadUrl, publicUrl, key });
+});
+
+app.post("/api/admin/branding/logo", requireAdmin, async (req, res) => {
+  if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
+  const body = req.body || {};
+  const key = String(body.key || "").trim();
+  if (!key) return res.status(400).json({ error: "key required" });
+  if (!key.startsWith("branding/")) return res.status(400).json({ error: "Csak branding/ alá engedélyezett" });
+
+  await setSetting("login_logo_key", key);
+  return res.json({ ok: true, url: `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}` });
+});
+
 // --- admin: create shop codes (DB-backed) ---
 app.post("/api/admin/codes", requireAdmin, async (req, res) => {
   await ensureShops();
@@ -312,6 +393,19 @@ app.delete("/api/admin/codes/:id", requireAdmin, async (req, res) => {
   if (r.rowCount === 0) return res.status(404).send("Not found");
 
   res.json({ ok: true });
+});
+
+// --- public: branding (login logo) ---
+app.get("/api/branding/logo", async (req, res) => {
+  try {
+    await ensureSettings();
+    const key = await getSetting("login_logo_key");
+    if (!key) return res.json({ url: null });
+    if (!R2_PUBLIC_BASE_URL) return res.json({ url: null });
+    return res.json({ url: `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}` });
+  } catch {
+    return res.json({ url: null });
+  }
 });
 
 // --- health ---
