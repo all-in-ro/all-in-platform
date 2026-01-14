@@ -563,11 +563,36 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       {/* Confirm modal */}
       {confirmOpen && (
         <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#354153] p-5 shadow-xl">
+          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
             <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex items-center justify-between gap-2">
+
+              <button
+                type="button"
+                aria-label="Helység törlése"
+                title="Helység törlése"
+                className="mr-auto inline-flex items-center justify-center rounded-md p-2 bg-red-600 hover:bg-red-700 text-white"
+                onClick={async () => {
+                  // eslint-disable-next-line no-alert
+                  const ok = window.confirm("Biztos törlöd a helységet? A hozzá tartozó kódok megmaradnak, de nem lesz hova belépni.");
+                  if (!ok) return;
+                  try {
+                    await fetch(`${apiBase}/admin/shops/${encodeURIComponent(shopId)}`, {
+                      method: "DELETE",
+                      credentials: "include"
+                    });
+                    setPlaceOpen(false);
+                    await fetchShops();
+                  } catch (e) {
+                    setPlaceErr("Nem sikerült törölni a helységet.");
+                  }
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+
               <button
                 type="button"
                 className="h-10 px-4 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10"
@@ -590,7 +615,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       {/* Create place modal */}
       {placeOpen && (
         <div className="fixed inset-0 z-[110] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#354153] p-5 shadow-xl">
+          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
             <div className="text-white font-semibold">Helység létrehozása</div>
             <div className="text-white/70 text-sm mt-2">Adj meg egy nevet és egy azonosítót (pl. csikszereda).</div>
 
@@ -621,7 +646,32 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
             {placeErr ? <div className="text-red-300 text-sm mt-3 whitespace-pre-wrap">{placeErr}</div> : null}
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex items-center justify-between gap-2">
+
+              <button
+                type="button"
+                aria-label="Helység törlése"
+                title="Helység törlése"
+                className="mr-auto inline-flex items-center justify-center rounded-md p-2 bg-red-600 hover:bg-red-700 text-white"
+                onClick={async () => {
+                  // eslint-disable-next-line no-alert
+                  const ok = window.confirm("Biztos törlöd a helységet? A hozzá tartozó kódok megmaradnak, de nem lesz hova belépni.");
+                  if (!ok) return;
+                  try {
+                    await fetch(`${apiBase}/admin/shops/${encodeURIComponent(shopId)}`, {
+                      method: "DELETE",
+                      credentials: "include"
+                    });
+                    setPlaceOpen(false);
+                    await fetchShops();
+                  } catch (e) {
+                    setPlaceErr("Nem sikerült törölni a helységet.");
+                  }
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+
               <button
                 type="button"
                 className="h-10 px-4 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10"
