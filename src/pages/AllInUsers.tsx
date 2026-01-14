@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Clipboard, Trash2 } from "lucide-react";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
 
@@ -319,22 +320,31 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                     <div className="col-span-3 text-white text-sm font-mono">
                       {it.code ? it.code : it.codeHint ? `****${it.codeHint}` : "-"}
                       {it.code ? (
-                        <button className="ml-2 text-white/60 hover:text-white underline" onClick={() => copy(it.code!)}>
-                          másol
+                        <button
+                          type="button"
+                          aria-label="Kód másolása"
+                          title="Másolás"
+                          className="ml-2 inline-flex items-center justify-center rounded-md p-1 text-white/60 hover:text-white hover:bg-white/10"
+                          onClick={() => copy(it.code!)}
+                        >
+                          <Clipboard className="h-4 w-4" />
                         </button>
                       ) : null}
                     </div>
                     <div className="col-span-3 text-white/70 text-xs">{fmt(it.createdAt)}</div>
                     <div className="col-span-2 text-right">
                       <button
-                        className="text-red-300 hover:text-red-200 underline text-sm"
+                        type="button"
+                        aria-label="Végleges törlés"
+                        title="Törlés"
+                        className="inline-flex items-center justify-center rounded-md p-1 text-red-300 hover:text-red-200 hover:bg-red-500/10"
                         onClick={() => {
                           // eslint-disable-next-line no-alert
                           const ok = window.confirm("Biztos törlöd véglegesen?");
                           if (ok) deleteCode(it.id);
                         }}
                       >
-                        törlés
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
