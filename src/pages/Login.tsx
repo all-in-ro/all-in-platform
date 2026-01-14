@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Shield, Store } from "lucide-react";
 
@@ -9,6 +9,14 @@ type Session =
 
 type Mode = "admin" | "csik" | "kezdi" | null;
 
+function inferInitialModeFromHash(): Mode {
+  // If the app routes directly to an admin-only hash (like #allinusers),
+  // we still want a "Mégse" escape hatch that can take the user back to #home.
+  const h = (typeof window !== "undefined" ? window.location.hash : "") || "";
+  if (h === "#allinusers" || h === "#admin" || h === "#users") return "admin";
+  return null;
+}
+
 export default function Login({
   api,
   onLoggedIn
@@ -16,10 +24,21 @@ export default function Login({
   api: string;
   onLoggedIn: (s: Session) => void;
 }) {
-  const [mode, setMode] = useState<Mode>(null);
+  const [mode, setMode] = useState<Mode>(() => inferInitialModeFromHash());
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState<string>("");
   const [busy, setBusy] = useState(false);
+
+  // If someone navigates between hashes without remounting, keep it consistent.
+  useEffect(() => {
+    const onHash = () => {
+      const next = inferInitialModeFromHash();
+      // Only auto-set when we're currently at the chooser screen.
+      if (mode === null && next !== null) setMode(next);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [mode]);
 
   const mainBtn =
     "w-full h-12 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 flex items-center justify-between";
@@ -31,10 +50,14 @@ export default function Login({
     return "BELÉPÉS";
   }, [mode]);
 
-  const cancel = () => {
+  const cancelToChooser = () => {
     setMode(null);
     setSecret("");
     setErr("");
+    // Make sure the URL also reflects the chooser state.
+    if (typeof window !== "undefined") {
+      if (window.location.hash !== "#home") window.location.hash = "#home";
+    }
   };
 
   const submit = async () => {
@@ -121,10 +144,11 @@ export default function Login({
                   type="button"
                   variant="outline"
                   className="flex-1 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40"
-                  onClick={cancel}
+                  onClick={cancelToChooser}
                 >
                   Mégse
                 </Button>
+
                 <Button
                   type="button"
                   disabled={busy}
