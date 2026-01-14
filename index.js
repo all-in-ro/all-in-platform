@@ -446,7 +446,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
 
       const resp = await fetch(url);
       if (!resp.ok) {
-        return res.status(400).json({ error: "failed to fetch url" });
+        return res.status(400).json({ error: "failed to fetch url", status: resp.status });
       }
 
       const contentLength = resp.headers.get("content-length");
@@ -495,7 +495,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     if (!r.ok) {
       const msg = await r.text().catch(() => "");
       console.error("R2 upload failed:", r.status, msg);
-      return res.status(500).json({ error: "Upload failed" });
+      return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
     }
 
     const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
@@ -504,7 +504,7 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     return res.json({ key, url });
   } catch (e) {
     console.error("R2 upload failed:", e);
-    return res.status(500).json({ error: "Upload failed" });
+    return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
   }
 });
 
