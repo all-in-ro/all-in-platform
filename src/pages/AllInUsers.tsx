@@ -88,11 +88,11 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [placeErr, setPlaceErr] = useState("");
   const [placeBusy, setPlaceBusy] = useState(false);
 
-  const btn = "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/20";
+  const btn = "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30 ring-1 ring-white/20";
   const btnPrimary = btn + " font-semibold !bg-[#208d8b] hover:!bg-[#1b7a78] border-transparent";
   const input =
-    "w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20";
-  const card = "rounded-lg border border-white/20 bg-white/5 shadow-sm px-6 py-8";
+    "w-full h-11 rounded-xl px-4 border border-white/30 ring-1 ring-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20";
+  const card = "rounded-lg border border-white/30 ring-1 ring-white/20 bg-white/5 shadow-sm px-6 py-8";
   const label = "text-white/80 text-sm";
 
   const closeDropdownsOnOutside = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -141,6 +141,18 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     // only fetch list after shops loaded or if the current id is still valid
     if (!shopId) return;
     fetchList();
+  useEffect(() => {
+    if (!confirmOpen && !placeOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (confirmOpen) setConfirmOpen(false);
+        if (placeOpen) setPlaceOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen, placeOpen]);
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId, status, apiBase]);
 
@@ -319,7 +331,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="relative" ref={shopRef}>
                   <button
                     type="button"
-                    className="w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white text-left outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
+                    className="w-full h-11 rounded-xl px-4 border border-white/30 ring-1 ring-white/20 bg-white/5 text-white text-left outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
                     onClick={() => setOpenShop((v) => !v)}
                   >
                     <span>{shopLabel}</span>
@@ -327,7 +339,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                   </button>
 
                   {openShop && (
-                    <div className="absolute z-50 mt-2 w-full rounded-xl border border-white/20 bg-[#354153] overflow-hidden shadow-lg max-h-72 overflow-y-auto">
+                    <div className="absolute z-50 mt-2 w-full rounded-xl border border-white/30 ring-1 ring-white/20 bg-[#354153] overflow-hidden shadow-lg max-h-72 overflow-y-auto">
                       {shops.map((s) => (
                         <button
                           key={s.id}
@@ -352,7 +364,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="relative" ref={statusRef}>
                   <button
                     type="button"
-                    className="w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white text-left outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
+                    className="w-full h-11 rounded-xl px-4 border border-white/30 ring-1 ring-white/20 bg-white/5 text-white text-left outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
                     onClick={() => setOpenStatus((v) => !v)}
                   >
                     <span>{statusLabel}</span>
@@ -360,7 +372,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                   </button>
 
                   {openStatus && (
-                    <div className="absolute z-50 mt-2 w-full rounded-xl border border-white/20 bg-[#354153] overflow-hidden shadow-lg">
+                    <div className="absolute z-50 mt-2 w-full rounded-xl border border-white/30 ring-1 ring-white/20 bg-[#354153] overflow-hidden shadow-lg">
                       <button
                         type="button"
                         className={"w-full px-4 py-3 text-left text-white hover:bg-white/10 " + (status === "active" ? "bg-white/10" : "")}
@@ -416,7 +428,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             {outText && (
               <div>
                 <div className="text-white/80 text-sm mb-2">Generált kód</div>
-                <pre className="rounded-xl border border-white/20 bg-black/40 text-green-200 p-4 overflow-auto">{outText}</pre>
+                <pre className="rounded-xl border border-white/30 ring-1 ring-white/20 bg-black/40 text-green-200 p-4 overflow-auto">{outText}</pre>
               </div>
             )}
 
@@ -437,7 +449,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                   {items.length === 0 && <div className="px-3 py-6 text-white/60 text-sm">Nincs találat.</div>}
 
                   {items.map((it) => (
-                    <div key={it.id} className="rounded-xl border border-white/20 bg-white/5 p-3">
+                    <div key={it.id} className="rounded-xl border border-white/30 ring-1 ring-white/20 bg-white/5 p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-white text-sm font-semibold">{shopName(it.shopId)}</div>
@@ -492,7 +504,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 </div>
 
                 {/* Desktop table */}
-                <div className="hidden md:block rounded-xl border border-white/20 overflow-hidden">
+                <div className="hidden md:block rounded-xl border border-white/30 ring-1 ring-white/20 overflow-hidden">
                   <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
                     <div className="col-span-2">Üzlet</div>
                     <div className="col-span-2">Név</div>
@@ -570,14 +582,14 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       {/* Confirm modal */}
       {confirmOpen && (
         <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/20 bg-[#354153] p-5 shadow-xl">
+          <div className="w-full max-w-md rounded-xl border border-white/30 ring-1 ring-white/20 bg-[#354153] p-5 shadow-xl">
             <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
 
               <button
                 type="button"
-                className="h-10 px-4 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10"
+                className="h-10 px-4 rounded-xl border border-white/30 ring-1 ring-white/20 bg-white/5 text-white hover:bg-white/10"
                 onClick={() => setConfirmOpen(false)}
               >
                 Mégse
@@ -597,14 +609,14 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       {/* Create place modal */}
       {placeOpen && (
         <div className="fixed inset-0 z-[110] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/20 bg-[#354153] p-5 shadow-xl">
+          <div className="w-full max-w-md rounded-xl border border-white/30 ring-1 ring-white/20 bg-[#354153] p-5 shadow-xl">
             <div className="text-white font-semibold">Helység létrehozása</div>
             <div className="text-white/70 text-sm mt-2">Adj meg egy nevet és egy azonosítót (pl. csikszereda).</div>
 
             <div className="mt-4 grid gap-2">
               <div className="text-white/80 text-sm">Név</div>
               <input
-                className="w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20"
+                className="w-full h-11 rounded-xl px-4 border border-white/30 ring-1 ring-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20"
                 value={placeName}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -619,7 +631,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             <div className="mt-3 grid gap-2">
               <div className="text-white/80 text-sm">Azonosító</div>
               <input
-                className="w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20"
+                className="w-full h-11 rounded-xl px-4 border border-white/30 ring-1 ring-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20"
                 value={placeId}
                 onChange={(e) => setPlaceId(e.target.value)}
                 placeholder="pl. marosvasarhely"
@@ -633,7 +645,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               <div className="text-white/80 text-sm mb-2">Meglévő helységek</div>
               <div className="grid gap-2 max-h-48 overflow-y-auto">
                 {shops.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/20 px-3 py-2">
+                  <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/30 ring-1 ring-white/20 px-3 py-2">
                     <div className="text-white text-sm">{s.name}</div>
                     <button
                       type="button"
@@ -658,7 +670,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
               <button
                 type="button"
-                className="h-10 px-4 rounded-xl border border-white/20 bg-white/5 text-white hover:bg-white/10"
+                className="h-10 px-4 rounded-xl border border-white/30 ring-1 ring-white/20 bg-white/5 text-white hover:bg-white/10"
                 onClick={() => setPlaceOpen(false)}
                 disabled={placeBusy}
               >
