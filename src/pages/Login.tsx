@@ -23,9 +23,18 @@ export default function Login({
   onLoggedIn: (s: Session) => void;
 }) {
   const [mode, setMode] = useState<Mode>(() => inferInitialModeFromHash());
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState<string>("");
   const [busy, setBusy] = useState(false);
+
+  // load login logo (optional)
+  useEffect(() => {
+    fetch(`${api}/branding/logo`, { credentials: "include" })
+      .then((r) => r.json())
+      .then((j) => setLogoUrl(j?.url || null))
+      .catch(() => setLogoUrl(null));
+  }, [api]);
 
   // keep hash changes consistent without remount
   useEffect(() => {
@@ -38,7 +47,7 @@ export default function Login({
   }, [mode]);
 
   const mainBtn =
-    "w-full h-11 sm:h-12 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 flex items-center justify-between text-sm sm:text-base";
+    "w-full h-11 sm:h-12 rounded-xl px-4 text-white font-medium bg-[#354153] hover:bg-[#3c5069] border border-white/40 flex items-center justify-between text-sm sm:text-base";
 
   const title = useMemo(() => {
     if (mode === "admin") return "ADMIN belépés";
@@ -98,23 +107,29 @@ export default function Login({
     <div className="min-h-screen w-screen grid place-items-center px-4" style={{ backgroundColor: "#474c59" }}>
       <div className="w-full max-w-sm">
         <div className="rounded-lg border border-white/30 bg-white shadow-sm px-5 sm:px-6 py-7 sm:py-8">
-          <h1 className="text-center text-2xl font-extrabold tracking-wide">ALL IN</h1>
+          {logoUrl ? (
+            <div className="grid place-items-center">
+              <img src={logoUrl} alt="ALL IN" className="w-full max-w-[220px] sm:max-w-[280px] h-auto" />
+            </div>
+          ) : (
+            <h1 className="text-center text-2xl font-semibold sm:font-medium tracking-wide">ALL IN</h1>
+          )}
 
           <div className="mt-5 text-center text-sm text-slate-600">{title}</div>
 
           {!mode && (
             <div className="mt-5 space-y-3">
-              <Button onClick={() => setMode("admin")} className={mainBtn} type="button">
+              <Button onClick={() => setMode("admin")} className={mainBtn.replace("text-sm sm:text-base", "text-sm sm:text-base font-medium")} type="button">
                 <span>ADMIN</span>
                 <Shield className="h-4 w-4" />
               </Button>
 
-              <Button onClick={() => setMode("csik")} className={mainBtn} type="button">
+              <Button onClick={() => setMode("csik")} className={mainBtn.replace("text-sm sm:text-base", "text-sm sm:text-base font-medium")} type="button">
                 <span>ÜZLET – Csíkszereda</span>
                 <Store className="h-4 w-4" />
               </Button>
 
-              <Button onClick={() => setMode("kezdi")} className={mainBtn} type="button">
+              <Button onClick={() => setMode("kezdi")} className={mainBtn.replace("text-sm sm:text-base", "text-sm sm:text-base font-medium")} type="button">
                 <span>ÜZLET – Kézdivásárhely</span>
                 <Store className="h-4 w-4" />
               </Button>
