@@ -573,8 +573,6 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
           <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
             <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
-
-            
             <div className="mt-5 flex items-center justify-end gap-2">
 
               <button
@@ -631,6 +629,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             {placeErr ? <div className="text-red-300 text-sm mt-3 whitespace-pre-wrap">{placeErr}</div> : null}
 
             
+            <div className="mt-4 border-t border-white/10 pt-4">
               <div className="text-white/80 text-sm mb-2">Meglévő helységek</div>
               <div className="grid gap-2 max-h-48 overflow-y-auto">
                 {shops.map((s) => (
