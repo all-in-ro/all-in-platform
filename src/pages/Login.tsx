@@ -31,6 +31,12 @@ export default function Login({
     return "BELÉPÉS";
   }, [mode]);
 
+  const cancel = () => {
+    setMode(null);
+    setSecret("");
+    setErr("");
+  };
+
   const submit = async () => {
     if (!mode) return;
     setErr("");
@@ -115,15 +121,10 @@ export default function Login({
                   type="button"
                   variant="outline"
                   className="flex-1 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40"
-                  onClick={() => {
-                    setMode(null);
-                    setSecret("");
-                    setErr("");
-                  }}
+                  onClick={cancel}
                 >
                   Mégse
                 </Button>
-
                 <Button
                   type="button"
                   disabled={busy}
