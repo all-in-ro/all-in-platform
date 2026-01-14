@@ -354,7 +354,7 @@ export default function AllInWarehouse() {
     <div className="min-h-screen" style={{ backgroundColor: BG }}>
       {/* Top bar */}
       <div className="sticky top-0 z-20 border-b border-white/20" style={{ backgroundColor: HEADER }}>
-        <div className="mx-auto w-full max-w-[1400px] px-4 py-3 flex items-center justify-between">
+        <div className="mx-auto w-full max-w-[1440px] px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 text-white">
             <div className="h-9 w-9 rounded-xl grid place-items-center border border-white/25 bg-white/5">
               <Package className="h-5 w-5" />
@@ -365,45 +365,45 @@ export default function AllInWarehouse() {
             </div>
           </div>
 
-          <Button
-            variant="outline"
-            className="rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 h-9"
-            onClick={() => (window.location.hash = "#allin")}
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Vissza
-          </Button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowBuyPrice((v) => !v)}
+              title={showBuyPrice ? "Bevételi ár elrejtése" : "Bevételi ár mutatása"}
+              className="h-7 w-7 rounded-md grid place-items-center bg-red-600 hover:bg-red-700 text-white"
+            >
+              {showBuyPrice ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => (window.location.hash = "#allin")}
+              className="h-9 px-4 rounded-xl bg-[#354153] hover:bg-[#3c5069] text-white border border-white/40 inline-flex items-center"
+              title="Vissza"
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Vissza
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-[1400px] px-4 py-4 space-y-3">
-        {/* Search + toggle */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3 flex flex-wrap items-center gap-3">
-          <div className="flex-1 min-w-[280px]">
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Keresés: márka, kód, név, méret, szín, kategória, nem…"
-              className="h-9 text-[12px]"
-            />
-          </div>
+      <div className="mx-auto w-full max-w-[1440px] px-4 py-4 space-y-3">
 
-          <Button
-            type="button"
-            className="rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 h-9"
-            onClick={() => setShowBuyPrice((v) => !v)}
-            title="Bevételi ár mutatása/elrejtése"
-          >
-            {showBuyPrice ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
-            {showBuyPrice ? "Bevételi ár elrejtése" : "Bevételi ár mutatása"}
-          </Button>
+        {/* Gyorsszűrő */}
+        <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Gyorsszűrő: bármi (márka, kód, név, szín, színkód, kategória, méret...)"
+            className="h-9 text-[12px]"
+          />
         </div>
-
         {/* Filters */}
         <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3">
           <div
             className="grid gap-2 items-end"
-            style={{ gridTemplateColumns: "160px 160px 1fr 160px 160px 220px 160px" }}
+            style={{ gridTemplateColumns: "160px 140px 180px 160px 180px 1fr 140px" }}
           >
             <div>
               <div className="text-[11px] text-slate-500 mb-1">Márka</div>
@@ -419,42 +419,6 @@ export default function AllInWarehouse() {
                   </option>
                 ))}
               </select>
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-500 mb-1">Szín</div>
-              <select
-                value={fColor}
-                onChange={(e) => setFColor(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
-              >
-                <option value="">Összes</option>
-                {colorOptions.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-500 mb-1">Terméknév</div>
-              <Input
-                value={fName}
-                onChange={(e) => setFName(e.target.value)}
-                placeholder="szűrő…"
-                className="h-9 text-[12px]"
-              />
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-500 mb-1">Termékkód</div>
-              <Input
-                value={fSku}
-                onChange={(e) => setFSku(e.target.value)}
-                placeholder="szűrő…"
-                className="h-9 text-[12px]"
-              />
             </div>
 
             <div>
@@ -489,11 +453,45 @@ export default function AllInWarehouse() {
               </select>
             </div>
 
+            <div>
+              <div className="text-[11px] text-slate-500 mb-1">Szín</div>
+              <select
+                value={fColor}
+                onChange={(e) => setFColor(e.target.value)}
+                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
+              >
+                <option value="">Összes</option>
+                {colorOptions.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <div className="text-[11px] text-slate-500 mb-1">Termékkód</div>
+              <Input
+                value={fSku}
+                onChange={(e) => setFSku(e.target.value)}
+                placeholder="szűrő…"
+                className="h-9 text-[12px]"
+              />
+            </div>
+
+            <div>
+              <div className="text-[11px] text-slate-500 mb-1">Terméknév</div>
+              <Input
+                value={fName}
+                onChange={(e) => setFName(e.target.value)}
+                placeholder="szűrő…"
+                className="h-9 text-[12px]"
+              />
+            </div>
+
             <div className="flex items-end justify-end">
-              <Button
+              <button
                 type="button"
-                variant="outline"
-                className="h-9 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                 onClick={() => {
                   setFBrand("");
                   setFSku("");
@@ -502,10 +500,11 @@ export default function AllInWarehouse() {
                   setFGender("");
                   setFCategory("");
                 }}
+                className="h-9 px-3 rounded-md border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 text-[12px]"
                 title="Szűrők törlése"
               >
                 Szűrők törlése
-              </Button>
+              </button>
             </div>
           </div>
         </div>
@@ -528,9 +527,9 @@ export default function AllInWarehouse() {
                   <th className={th + " w-[140px]"}>Szín</th>
                   <th className={th + " w-[72px]"}>Méret</th>
 
-                  <th className={th + " w-[105px] border-l-2 border-white/20 text-center"}>Csíkszereda</th>
-                  <th className={th + " w-[115px] text-center"}>Kézdivásárhely</th>
-                                    <th className={th + " w-[82px] text-center"}>Raktár</th>
+                  <th className={th + " w-[105px] border-l border-white/10 text-center bg-white/5"}>Csíkszereda</th>
+                  <th className={th + " w-[115px] text-center bg-white/5"}>Kézdivásárhely</th>
+                                    <th className={th + " w-[82px] text-center bg-white/5"}>Raktár</th>
 
                   <th className={th + " w-[82px] text-center"}>Bejövő</th>
                   <th className={th + " w-[86px] text-center"}>Összesen</th>
@@ -595,13 +594,13 @@ export default function AllInWarehouse() {
                         </span>
                       </td>
 
-                      <td className={td + " text-center border-l-2 border-slate-200"}>
+                      <td className={td + " text-center border-l border-slate-200 bg-slate-50"}>
                         <QtyPill qty={n(r.byStore?.["Csíkszereda"])} />
                       </td>
-                      <td className={td + " text-center"}>
+                      <td className={td + " text-center bg-slate-50"}>
                         <QtyPill qty={n(r.byStore?.["Kézdivásárhely"])} />
                       </td>
-                                            <td className={td + " text-center"}>
+                                            <td className={td + " text-center bg-slate-50"}>
                         <QtyPill qty={n(r.byStore?.["Raktár"])} />
                       </td>
 
@@ -625,7 +624,14 @@ export default function AllInWarehouse() {
 
                       <td className={td + " text-right"}>
                         {showBuyPrice ? (
-                          <span className="font-semibold text-slate-800">{money(r.buyPrice)}</span>
+                          <div className="flex flex-col items-end leading-[1.1]">
+                            <span className="font-semibold text-slate-800">{money(r.buyPrice)}</span>
+                            {typeof r.buyPrice === "number" && typeof r.sellPrice === "number" && r.sellPrice > 0 && (
+                              <span className="text-[10px] text-slate-400">
+                                {Math.round((r.buyPrice / r.sellPrice) * 100)}%
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-slate-400 select-none">••••</span>
                         )}
@@ -636,28 +642,28 @@ export default function AllInWarehouse() {
                           <button
                             type="button"
                             onClick={() => goView(r.id)}
-                            className="h-8 w-8 rounded-lg grid place-items-center bg-teal-600 hover:bg-teal-700 text-white"
+                            className="h-7 w-7 rounded-md grid place-items-center bg-teal-600 hover:bg-teal-700 text-white"
                             title="Megtekintés"
                           >
-                            <Eye className="h-4 w-4" />
+                            <Eye className="h-3.5 w-3.5" />
                           </button>
 
                           <button
                             type="button"
                             onClick={() => goEdit(r.id)}
-                            className="h-8 w-8 rounded-lg grid place-items-center bg-slate-700 hover:bg-slate-800 text-white"
+                            className="h-7 w-7 rounded-md grid place-items-center bg-slate-700 hover:bg-slate-800 text-white"
                             title="Szerkesztés"
                           >
-                            <Pencil className="h-4 w-4" />
+                            <Pencil className="h-3.5 w-3.5" />
                           </button>
 
                           <button
                             type="button"
                             onClick={() => doDelete(r.id)}
-                            className="h-8 w-8 rounded-lg grid place-items-center bg-red-600 hover:bg-red-700 text-white"
+                            className="h-7 w-7 rounded-md grid place-items-center bg-red-600 hover:bg-red-700 text-white"
                             title="Törlés"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </td>
