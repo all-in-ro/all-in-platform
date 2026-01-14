@@ -7,7 +7,7 @@ export default function AllInUsers({
   api,
   actor
 }: {
-  api?: string;
+  api: string;
   actor?: string;
 }) {
   const [shopId, setShopId] = useState<ShopId>("csikszereda");
@@ -16,20 +16,13 @@ export default function AllInUsers({
   const [err, setErr] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
-  const apiBase = api || "";
-
   const createCode = async () => {
     setErr("");
     setOutText("");
 
-    if (!apiBase) {
-      setErr("Hiányzik az API base (api prop).");
-      return;
-    }
-
     setBusy(true);
     try {
-      const r = await fetch(`${apiBase}/admin/codes`, {
+      const r = await fetch(`${api}/admin/codes`, {
         method: "POST",
         headers: { "content-type": "application/json", Accept: "application/json" },
         credentials: "include",
@@ -47,44 +40,38 @@ export default function AllInUsers({
     }
   };
 
-  const mainBtn =
-    "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40";
+  const btn =
+    "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30";
 
-  const inputCls =
-    "w-full h-11 rounded-xl px-4 border border-white/20 bg-white/10 text-white placeholder:text-white/50 outline-none focus:ring-2 focus:ring-white/20";
+  const input =
+    "w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20";
 
-  const selectCls =
-    "w-full h-11 rounded-xl px-4 border border-white/20 bg-white/10 text-white outline-none focus:ring-2 focus:ring-white/20";
+  const select =
+    "w-full h-11 rounded-xl px-4 border border-white/20 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20";
 
   return (
     <div className="min-h-screen w-screen grid place-items-center" style={{ backgroundColor: "#474c59" }}>
       <div className="w-full max-w-3xl px-4">
         <div className="rounded-lg border border-white/20 bg-white/5 shadow-sm px-6 py-8">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between">
             <div>
               <h1 className="text-white text-xl font-semibold">FELHASZNÁLÓK</h1>
-              <div className="text-white/60 text-sm mt-1">Belépőkód generálás (ADMIN)</div>
+              <div className="text-white/60 text-sm">Belépőkód generálás (ADMIN)</div>
             </div>
 
-            <Button className={mainBtn} onClick={() => (window.location.hash = "#allinadmin")} type="button">
+            <Button className={btn} onClick={() => (window.location.hash = "#home")} type="button">
               Vissza
             </Button>
           </div>
 
           <div className="mt-6 grid gap-4">
             <div className="text-white/80 text-sm">
-              {actor ? (
-                <>
-                  Belépve mint: <span className="text-white font-semibold">{actor}</span>
-                </>
-              ) : (
-                <>Belépve mint: <span className="text-white/60">ismeretlen</span></>
-              )}
+              Belépve mint: <span className="text-white font-semibold">{actor || "ADMIN"}</span>
             </div>
 
             <div className="grid gap-2">
               <div className="text-white/80 text-sm">Üzlet</div>
-              <select value={shopId} onChange={(e) => setShopId(e.target.value as ShopId)} className={selectCls}>
+              <select value={shopId} onChange={(e) => setShopId(e.target.value as ShopId)} className={select}>
                 <option value="csikszereda">Csíkszereda</option>
                 <option value="kezdivasarhely">Kézdivásárhely</option>
               </select>
@@ -95,7 +82,7 @@ export default function AllInUsers({
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className={inputCls}
+                className={input}
                 placeholder="Pl. Pista"
               />
             </div>
@@ -104,7 +91,7 @@ export default function AllInUsers({
               <Button
                 type="button"
                 variant="outline"
-                className={mainBtn + " bg-transparent"}
+                className={btn + " bg-transparent"}
                 onClick={() => {
                   setName("");
                   setOutText("");
@@ -114,24 +101,24 @@ export default function AllInUsers({
                 Törlés
               </Button>
 
-              <Button type="button" className={mainBtn + " font-semibold"} disabled={busy} onClick={createCode}>
+              <Button type="button" className={btn + " font-semibold"} disabled={busy} onClick={createCode}>
                 {busy ? "Generálás…" : "Kód generálás"}
               </Button>
             </div>
 
-            {err && <div className="text-red-300 text-sm">{err}</div>}
+            {err && <div className="text-red-400 text-sm">{err}</div>}
 
             {outText && (
-              <div className="mt-2">
+              <div>
                 <div className="text-white/80 text-sm mb-2">Generált kód</div>
-                <pre className="rounded-xl border border-white/15 bg-black/40 text-green-200 p-4 overflow-auto">
+                <pre className="rounded-xl border border-white/15 bg-black/40 text-green-200 p-4">
                   {outText}
                 </pre>
               </div>
             )}
 
-            <div className="pt-4 mt-2 border-t border-white/10 text-xs text-white/60">
-              Tipp: a kódot add ki műszak / dolgozó szerint, és ha kell, a név mező később loghoz is jó lesz.
+            <div className="pt-4 border-t border-white/10 text-xs text-white/60">
+              Tipp: a kódot add ki műszak / dolgozó szerint.
             </div>
           </div>
         </div>
