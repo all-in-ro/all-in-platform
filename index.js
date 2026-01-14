@@ -13,7 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- config ---
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "allinboss-123";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "allinboss-123"; // ideiglenes default
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev-secret-change-me";
 const DATABASE_URL = process.env.DATABASE_URL;
 
@@ -102,22 +102,18 @@ app.post("/api/auth/login", async (req, res) => {
       FROM login_codes
       WHERE shop_id = $1
         AND revoked_at IS NULL
-        AND used_at IS NULL
         AND (expires_at IS NULL OR expires_at > now())
         AND crypt($2, code_hash) = code_hash
       LIMIT 1
     `;
     const r = await pool.query(q, [shopId, code]);
-    if (r.rowCount === 0) return res.status(401).send("Hibás vagy lejárt belépőkód");
+    if (r.rowCount === 0) return res.status(401).send("Hibás vagy inaktív belépőkód");
 
     const row = r.rows[0];
 
+    // last-used tracking
     await pool.query("UPDATE login_codes SET used_at = now(), used_by = $1 WHERE id = $2", ["SHOP", row.id]);
-
-    await pool.query("INSERT INTO login_events (code_id, event_type, actor) VALUES ($1,'used',$2)", [
-      row.id,
-      "SHOP"
-    ]);
+    await pool.query("INSERT INTO login_events (code_id, event_type, actor) VALUES ($1,'used',$2)", [row.id, "SHOP"]);
 
     const sid = newId("s");
     const actor = row.name ? row.name : "SHOP USER";
@@ -174,7 +170,7 @@ app.post("/api/admin/codes", requireAdmin, async (req, res) => {
 // --- admin: list codes (for resend) ---
 app.get("/api/admin/codes", requireAdmin, async (req, res) => {
   const shopId = req.query.shopId ? String(req.query.shopId) : null;
-  const status = req.query.status ? String(req.query.status) : "active"; // active | used | all
+  const status = req.query.status ? String(req.query.status) : "active"; // active | inactive | all
 
   const where = [];
   const params = [];
@@ -187,10 +183,9 @@ app.get("/api/admin/codes", requireAdmin, async (req, res) => {
 
   if (status === "active") {
     where.push("revoked_at IS NULL");
-    where.push("used_at IS NULL");
     where.push("(expires_at IS NULL OR expires_at > now())");
-  } else if (status === "used") {
-    where.push("used_at IS NOT NULL");
+  } else if (status === "inactive") {
+    where.push("revoked_at IS NOT NULL");
   } // all -> no extra filter
 
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -215,10 +210,38 @@ app.get("/api/admin/codes", requireAdmin, async (req, res) => {
     usedAt: x.used_at,
     revokedAt: x.revoked_at,
     codeHint: x.code_hint,
-    code: decryptCode(x.code_enc) // plaintext for admin resend
+    code: decryptCode(x.code_enc)
   }));
 
   res.json({ items: rows });
+});
+
+// --- admin: activate / inactivate code (toggle revoked_at) ---
+app.patch("/api/admin/codes/:id/status", requireAdmin, async (req, res) => {
+  const id = String(req.params.id || "");
+  const body = req.body || {};
+  const active = Boolean(body.active);
+
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  if (active) {
+    const r = await pool.query("UPDATE login_codes SET revoked_at = NULL, revoked_by = NULL WHERE id = $1", [id]);
+    if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+    return res.json({ ok: true, active: true });
+  }
+
+  const r = await pool.query("UPDATE login_codes SET revoked_at = now(), revoked_by = $2 WHERE id = $1", [
+    id,
+    req.session.actor || "ADMIN"
+  ]);
+  if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+
+  await pool.query("INSERT INTO login_events (code_id, event_type, actor) VALUES ($1,'revoked',$2)", [
+    id,
+    req.session.actor || "ADMIN"
+  ]);
+
+  return res.json({ ok: true, active: false });
 });
 
 // --- admin: delete code permanently ---
