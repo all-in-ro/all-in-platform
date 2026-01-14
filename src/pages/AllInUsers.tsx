@@ -297,7 +297,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
             <div className="flex items-center gap-2">
               <Button type="button" className={btn} onClick={openPlaceModal}>
-                Helység létrehozása
+                Helység létrehozása / törlése...
               </Button>
               <Button className={btn} onClick={() => (window.location.hash = "#home")} type="button">
                 Vissza
@@ -569,7 +569,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
       {/* Confirm modal */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 px-4">
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
           <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
             <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
