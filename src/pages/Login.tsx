@@ -10,8 +10,6 @@ type Session =
 type Mode = "admin" | "csik" | "kezdi" | null;
 
 function inferInitialModeFromHash(): Mode {
-  // If the app routes directly to an admin-only hash (like #allinusers),
-  // we still want a "Mégse" escape hatch that can take the user back to #home.
   const h = (typeof window !== "undefined" ? window.location.hash : "") || "";
   if (h === "#allinusers" || h === "#admin" || h === "#users") return "admin";
   return null;
@@ -29,11 +27,10 @@ export default function Login({
   const [err, setErr] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
-  // If someone navigates between hashes without remounting, keep it consistent.
+  // keep hash changes consistent without remount
   useEffect(() => {
     const onHash = () => {
       const next = inferInitialModeFromHash();
-      // Only auto-set when we're currently at the chooser screen.
       if (mode === null && next !== null) setMode(next);
     };
     window.addEventListener("hashchange", onHash);
@@ -41,7 +38,7 @@ export default function Login({
   }, [mode]);
 
   const mainBtn =
-    "w-full h-12 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 flex items-center justify-between";
+    "w-full h-11 sm:h-12 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 flex items-center justify-between text-sm sm:text-base";
 
   const title = useMemo(() => {
     if (mode === "admin") return "ADMIN belépés";
@@ -54,7 +51,6 @@ export default function Login({
     setMode(null);
     setSecret("");
     setErr("");
-    // Make sure the URL also reflects the chooser state.
     if (typeof window !== "undefined") {
       if (window.location.hash !== "#home") window.location.hash = "#home";
     }
@@ -99,15 +95,15 @@ export default function Login({
   };
 
   return (
-    <div className="min-h-screen w-screen grid place-items-center" style={{ backgroundColor: "#474c59" }}>
+    <div className="min-h-screen w-screen grid place-items-center px-4" style={{ backgroundColor: "#474c59" }}>
       <div className="w-full max-w-sm">
-        <div className="rounded-lg border border-slate-300 bg-white shadow-sm px-6 py-8">
+        <div className="rounded-lg border border-white/30 bg-white shadow-sm px-5 sm:px-6 py-7 sm:py-8">
           <h1 className="text-center text-2xl font-extrabold tracking-wide">ALL IN</h1>
 
-          <div className="mt-6 text-center text-sm text-slate-600">{title}</div>
+          <div className="mt-5 text-center text-sm text-slate-600">{title}</div>
 
           {!mode && (
-            <div className="mt-6 space-y-3">
+            <div className="mt-5 space-y-3">
               <Button onClick={() => setMode("admin")} className={mainBtn} type="button">
                 <span>ADMIN</span>
                 <Shield className="h-4 w-4" />
@@ -126,9 +122,9 @@ export default function Login({
           )}
 
           {mode && (
-            <div className="mt-6 space-y-3">
+            <div className="mt-5 space-y-3">
               <input
-                className="w-full h-12 rounded-xl px-4 border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full h-11 sm:h-12 rounded-xl px-4 border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-slate-300 text-sm sm:text-base"
                 type={mode === "admin" ? "password" : "text"}
                 placeholder={mode === "admin" ? "Admin jelszó…" : "Belépőkód…"}
                 value={secret}
@@ -139,11 +135,11 @@ export default function Login({
 
               {err && <div className="text-red-700 text-sm">{err}</div>}
 
-              <div className="flex justify-between gap-3">
+              <div className="flex gap-3">
                 <Button
                   type="button"
                   variant="outline"
-                  className="flex-1 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40"
+                  className="flex-1 h-11 sm:h-12 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 text-sm sm:text-base"
                   onClick={cancelToChooser}
                 >
                   Mégse
@@ -152,7 +148,7 @@ export default function Login({
                 <Button
                   type="button"
                   disabled={busy}
-                  className="flex-1 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40"
+                  className="flex-1 h-11 sm:h-12 rounded-xl px-4 text-white bg-[#354153] hover:bg-[#3c5069] border border-white/40 text-sm sm:text-base"
                   onClick={submit}
                 >
                   {busy ? "Belépés…" : "Belépés"}
