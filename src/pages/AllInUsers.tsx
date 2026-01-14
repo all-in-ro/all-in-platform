@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Clipboard, Trash2 } from "lucide-react";
 
-type ShopId = "csikszereda" | "kezdivasarhely";
+type ShopId = "Csikszereda" | "Kezdivasarhely";
 
 type CodeItem = {
   id: string;
@@ -271,7 +271,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                   Törlés
                 </Button>
 
-                <Button type="button" className={btn + " font-semibold"} disabled={busy} onClick={createCode}>
+                <Button type="button" className={btn + " font-semibold !bg-[#208d8b] hover:!bg-[#1b7a78] border-transparent"} disabled={busy} onClick={createCode}>
                   {busy ? "Generálás…" : "Kód generálás"}
                 </Button>
               </div>
@@ -337,7 +337,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                         type="button"
                         aria-label="Végleges törlés"
                         title="Törlés"
-                        className="inline-flex items-center justify-center rounded-md p-1 text-red-300 hover:text-red-200 hover:bg-red-500/10"
+                        className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
                         onClick={() => {
                           // eslint-disable-next-line no-alert
                           const ok = window.confirm("Biztos törlöd véglegesen?");
