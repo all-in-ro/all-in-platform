@@ -55,6 +55,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const statusRef = useRef<HTMLDivElement | null>(null);
 
   const shopLabel = shopId === "csikszereda" ? "Csíkszereda" : "Kézdivásárhely";
+  const shopName = (s: ShopId) => (s === "csikszereda" ? "Csíkszereda" : "Kézdivásárhely");
   const statusLabel = status === "active" ? "Aktív" : status === "inactive" ? "Inaktív" : "Összes";
 
   const btn = "h-10 px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30";
@@ -167,9 +168,18 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               <div className="text-white/60 text-sm">Belépőkódok (ADMIN)</div>
             </div>
 
-            <Button className={btn} onClick={() => (window.location.hash = "#home")} type="button">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                className={btn}
+                onClick={() => (window.location.hash = "#allinnewplace")}
+              >
+                Helység létrehozása
+              </Button>
+              <Button className={btn} onClick={() => (window.location.hash = "#home")} type="button">
               Vissza
             </Button>
+            </div>
           </div>
 
           <div className="mt-6 grid gap-6">
@@ -318,7 +328,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 {items.map((it) => (
                   <div key={it.id} className="grid grid-cols-12 gap-0 px-3 py-3 border-t border-white/10 items-center">
                     <div className="col-span-2 text-white text-sm">
-                      {it.shopId === "csikszereda" ? "Csík" : "Kézdi"}
+                      {it.shopId === "csikszereda" ? "Csíkszereda" : "Kézdivásárhely"}
                       {it.usedAt ? <span className="ml-2 text-white/50">(használt)</span> : null}
                     </div>
                     <div className="col-span-2 text-white/80 text-sm">{it.name || "-"}</div>
