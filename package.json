@@ -14,18 +14,19 @@
     "postinstall": "echo skip-patch-package"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.600.0",
-    "@zxing/browser": "^0.1.5",
-    "@zxing/library": "^0.21.0",
-    "cookie-parser": "^1.4.6",
-    "jsonwebtoken": "^9.0.2",
-    "lucide-react": "^0.433.0",
-    "react": "^18.3.1",
-    "pg": "^8.12.0",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.0",
-    "express": "^4.19.2"
-  },
+  "@aws-sdk/client-s3": "^3.600.0",
+  "@aws-sdk/s3-request-presigner": "^3.968.0",
+  "@zxing/browser": "^0.1.5",
+  "@zxing/library": "^0.21.0",
+  "cookie-parser": "^1.4.6",
+  "jsonwebtoken": "^9.0.2",
+  "lucide-react": "^0.433.0",
+  "react": "^18.3.1",
+  "pg": "^8.12.0",
+  "react-dom": "^18.3.1",
+  "react-router-dom": "^6.28.0",
+  "express": "^4.19.2"
+},
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.20",
