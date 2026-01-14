@@ -443,7 +443,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
               {listErr && <div className="text-red-400 text-sm whitespace-pre-wrap">{listErr}</div>}
 
-              <div>
+              <div className="max-h-[65vh] overflow-y-auto pr-1">
                 {/* Mobile cards */}
                 <div className="md:hidden grid gap-3">
                   {items.length === 0 && <div className="px-3 py-6 text-white/60 text-sm">Nincs találat.</div>}
