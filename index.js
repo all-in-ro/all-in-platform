@@ -187,6 +187,19 @@ app.post("/api/admin/shops", requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+
+// --- admin: delete shop (place) ---
+app.delete("/api/admin/shops/:id", requireAdmin, async (req, res) => {
+  const id = String(req.params.id || "");
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  // prevent deleting default shops if you want (optional)
+  // await pool.query("DELETE FROM shops WHERE id = $1", [id]);
+
+  await pool.query("DELETE FROM shops WHERE id = $1", [id]);
+  res.json({ ok: true });
+});
+
 // --- admin: create shop codes (DB-backed) ---
 app.post("/api/admin/codes", requireAdmin, async (req, res) => {
   await ensureShops();
