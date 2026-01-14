@@ -121,8 +121,9 @@ export default function Login({
                     setErr("");
                   }}
                 >
-                  Vissza
+                  Mégse
                 </Button>
+
                 <Button
                   type="button"
                   disabled={busy}
