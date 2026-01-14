@@ -576,30 +576,6 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
 
             
             <div className="mt-4 border-t border-white/10 pt-4">
-              <div className="text-white/80 text-sm mb-2">Meglévő helységek</div>
-              <div className="grid gap-2 max-h-48 overflow-y-auto">
-                {shops.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/10 px-3 py-2">
-                    <div className="text-white text-sm">{s.name}</div>
-                    <button
-                      type="button"
-                      title="Helység törlése"
-                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
-                      onClick={() => {
-                        setConfirmTitle("Helység törlése");
-                        setConfirmMsg(`Biztos törlöd a helységet: ${s.name}? Ez nem visszavonható.`);
-                        setConfirmAction({ kind: "delete-shop", id: s.id });
-                        setConfirmOpen(true);
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-                {shops.length === 0 && <div className="text-white/50 text-sm">Nincs helység.</div>}
-              </div>
-            </div>
-
             <div className="mt-5 flex items-center justify-end gap-2">
 
               <button
