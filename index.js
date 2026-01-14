@@ -32,12 +32,18 @@ const pool = new Pool({
 });
 
 // --- R2 (S3 compatible) ---
+// NOTE: Cloudflare R2 in this setup is authenticated with an Account API Token (Bearer).
+// We keep the AWS SDK client around for legacy/presign routes (if you later add real S3 keys),
+// but the main upload route uses HTTP PUT + Bearer token.
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
 const R2_ENDPOINT = process.env.R2_ENDPOINT || ""; // preferred (full URL), e.g. https://<accountid>.r2.cloudflarestorage.com
+const R2_API_TOKEN = process.env.R2_API_TOKEN || ""; // Cloudflare Account API token with Account.Workers R2 Storage permission
+// Backward-compat: if you still use these envs, we accept them as token too (optional)
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
 const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
+
 
 // Allow both styles:
 // - R2_ENDPOINT provided directly (recommended)
@@ -46,6 +52,7 @@ const R2_EFFECTIVE_ENDPOINT =
   R2_ENDPOINT || (R2_ACCOUNT_ID ? `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : "");
 
 const r2Enabled = Boolean(R2_EFFECTIVE_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET);
+const r2HttpEnabled = Boolean(R2_EFFECTIVE_ENDPOINT && R2_BUCKET && (R2_API_TOKEN || R2_ACCESS_KEY_ID || R2_SECRET_ACCESS_KEY));
 
 const r2 = r2Enabled
   ? new S3Client({
@@ -445,7 +452,50 @@ app.get("/api/branding/logo", async (req, res) => {
 // - name (optional): e.g. main.jpg
 app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
   try {
-    if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
+    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
+    if (!req.file) return res.status(400).json({ error: "file required" });
+
+    const folder = String(req.body?.folder || "uploads").replace(/^\/+/, "").replace(/\/+$/, "");
+    const nameRaw = String(req.body?.name || req.file?.originalname || "file.bin");
+    const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
+
+    // Cloudflare R2 S3 endpoint is base: https://<accountid>.r2.cloudflarestorage.com
+    // Some UIs show a bucket-scoped URL; normalize to base endpoint.
+    const base = String(R2_EFFECTIVE_ENDPOINT).replace(/\/+$/, "");
+    const baseNoBucket = base.endsWith(`/${R2_BUCKET}`) ? base.slice(0, -(R2_BUCKET.length + 1)) : base;
+
+    const putUrl = `${baseNoBucket}/${R2_BUCKET}/${key}`;
+
+    // Prefer explicit token, otherwise fall back to legacy envs (if present)
+    const token = (R2_API_TOKEN || R2_ACCESS_KEY_ID || R2_SECRET_ACCESS_KEY || "").trim();
+    if (!token) return res.status(400).json({ error: "R2 token hiányzik" });
+
+    const r = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": req.file.mimetype || "application/octet-stream"
+      },
+      body: req.file.buffer
+    });
+
+    if (!r.ok) {
+      const msg = await r.text().catch(() => "");
+      console.error("R2 upload failed:", r.status, msg);
+      return res.status(500).json({ error: "Upload failed" });
+    }
+
+    const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
+    const url = basePub ? `${basePub}/${key}` : key;
+
+    return res.json({ key, url });
+  } catch (e) {
+    console.error("R2 upload failed:", e);
+    return res.status(500).json({ error: "Upload failed" });
+  }
+});
+
 
     const folder = String(req.body?.folder || "uploads").replace(/^\/+/, "").replace(/\/+$/, "");
     const nameRaw = String(req.body?.name || req.file?.originalname || "file.bin");
