@@ -15,6 +15,9 @@ function inferInitialModeFromHash(): Mode {
   return null;
 }
 
+const LOGO_URL =
+  "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo.png";
+
 export default function Login({
   api,
   onLoggedIn
@@ -23,20 +26,10 @@ export default function Login({
   onLoggedIn: (s: Session) => void;
 }) {
   const [mode, setMode] = useState<Mode>(() => inferInitialModeFromHash());
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
-  // load login logo (optional)
-  useEffect(() => {
-    fetch(`${api}/branding/logo`, { credentials: "include" })
-      .then((r) => r.json())
-      .then((j) => setLogoUrl(j?.url || null))
-      .catch(() => setLogoUrl(null));
-  }, [api]);
-
-  // keep hash changes consistent without remount
   useEffect(() => {
     const onHash = () => {
       const next = inferInitialModeFromHash();
@@ -107,29 +100,30 @@ export default function Login({
     <div className="min-h-screen w-screen grid place-items-center px-4" style={{ backgroundColor: "#474c59" }}>
       <div className="w-full max-w-sm">
         <div className="rounded-lg border border-white/30 bg-white shadow-sm px-5 sm:px-6 py-7 sm:py-8">
-          {logoUrl ? (
-            <div className="grid place-items-center">
-              <img src={logoUrl} alt="ALL IN" className="w-full max-w-[220px] sm:max-w-[280px] h-auto" />
-            </div>
-          ) : (
-            <h1 className="text-center text-2xl font-semibold sm:font-medium tracking-wide">ALL IN</h1>
-          )}
+          <div className="grid place-items-center mb-3">
+            <img
+              src={LOGO_URL}
+              alt="ALL IN"
+              className="h-10 sm:h-12 w-auto object-contain"
+              loading="eager"
+            />
+          </div>
 
-          <div className="mt-5 text-center text-sm text-slate-600">{title}</div>
+          <div className="mt-2 text-center text-sm text-slate-600">{title}</div>
 
           {!mode && (
             <div className="mt-5 space-y-3">
-              <Button onClick={() => setMode("admin")} className={mainBtn.replace("text-sm sm:text-base", "text-sm sm:text-base font-medium")} type="button">
+              <Button onClick={() => setMode("admin")} className={mainBtn} type="button">
                 <span>ADMIN</span>
                 <Shield className="h-4 w-4" />
               </Button>
 
-              <Button onClick={() => setMode("csik")} className={mainBtn.replace("text-sm sm:text-base", "text-sm sm:text-base font-medium")} type="button">
+              <Button onClick={() => setMode("csik")} className={mainBtn} type="button">
                 <span>ÜZLET – Csíkszereda</span>
                 <Store className="h-4 w-4" />
               </Button>
 
-              <Button onClick={() => setMode("kezdi")} className={mainBtn.replace("text-sm sm:text-base", "text-sm sm:text-base font-medium")} type="button">
+              <Button onClick={() => setMode("kezdi")} className={mainBtn} type="button">
                 <span>ÜZLET – Kézdivásárhely</span>
                 <Store className="h-4 w-4" />
               </Button>
