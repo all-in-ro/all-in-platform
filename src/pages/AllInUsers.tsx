@@ -308,7 +308,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
             </div>
 
             <div className="flex items-center gap-2 flex-nowrap ml-auto">
-              <Button type="button" className={btn} onClick={openPlaceModal}>
+              <Button type="button" className={btnPrimary} onClick={openPlaceModal}>
                 Helység létrehozása / törlése...
               </Button>
               <Button className={btn} onClick={() => (window.location.hash = "#home")} type="button">
