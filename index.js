@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import multer from "multer";
 import pg from "pg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -32,17 +33,24 @@ const pool = new Pool({
 
 // --- R2 (S3 compatible) ---
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+const R2_ENDPOINT = process.env.R2_ENDPOINT || ""; // preferred (full URL), e.g. https://<accountid>.r2.cloudflarestorage.com
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
 const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
 
-const r2Enabled = Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET);
+// Allow both styles:
+// - R2_ENDPOINT provided directly (recommended)
+// - or derive from R2_ACCOUNT_ID for backward compatibility
+const R2_EFFECTIVE_ENDPOINT =
+  R2_ENDPOINT || (R2_ACCOUNT_ID ? `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : "");
+
+const r2Enabled = Boolean(R2_EFFECTIVE_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET);
 
 const r2 = r2Enabled
   ? new S3Client({
       region: "auto",
-      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      endpoint: R2_EFFECTIVE_ENDPOINT,
       credentials: {
         accessKeyId: R2_ACCESS_KEY_ID,
         secretAccessKey: R2_SECRET_ACCESS_KEY
@@ -50,10 +58,30 @@ const r2 = r2Enabled
     })
   : null;
 
+
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
 
 app.use(express.json());
+
+// --- file uploads (multipart) ---
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+function requireAdminOrSecret(req, res, next) {
+  // allow either admin session cookie OR x-admin-secret header (for server-to-server / curl)
+  const sid = getSid(req);
+  const s = sid ? sessions.get(sid) : null;
+  if (s && s.role === "admin") {
+    req.session = s;
+    return next();
+  }
+  const secret = String(req.headers["x-admin-secret"] || "").trim();
+  if (secret && secret === ADMIN_PASSWORD) return next();
+  return res.status(401).send("Not authorized");
+}
 
 // --- helpers ---
 function newId(prefix) {
@@ -405,6 +433,43 @@ app.get("/api/branding/logo", async (req, res) => {
     return res.json({ url: `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}` });
   } catch {
     return res.json({ url: null });
+  }
+});
+
+
+
+// --- uploads: R2 direct upload (admin only) ---
+// Expects multipart/form-data with:
+// - file: the binary
+// - folder (optional): e.g. products/123
+// - name (optional): e.g. main.jpg
+app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
+  try {
+    if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
+
+    const folder = String(req.body?.folder || "uploads").replace(/^\/+/, "").replace(/\/+$/, "");
+    const nameRaw = String(req.body?.name || req.file?.originalname || "file.bin");
+    const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
+
+    if (!req.file) return res.status(400).json({ error: "file required" });
+
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype || "application/octet-stream"
+      })
+    );
+
+    const base = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
+    const url = base ? `${base}/${key}` : key;
+
+    return res.json({ key, url });
+  } catch (e) {
+    console.error("R2 upload failed:", e);
+    return res.status(500).json({ error: "Upload failed" });
   }
 });
 
