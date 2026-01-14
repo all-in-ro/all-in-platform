@@ -437,7 +437,23 @@ app.get("/api/branding/logo", async (req, res) => {
 // - name (optional): e.g. main.jpg
 app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
   try {
-    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
+    const token = process.env.R2_API_TOKEN || "";
+    const endpoint = (process.env.R2_ENDPOINT || "").replace(/\/+$/, "");
+    const bucket = process.env.R2_BUCKET || "";
+    const accountId =
+      process.env.R2_ACCOUNT_ID ||
+      (() => {
+        try {
+          // endpoint: https://<accountid>.r2.cloudflarestorage.com
+          return new URL(endpoint).hostname.split(".")[0];
+        } catch {
+          return "";
+        }
+      })();
+
+    if (!token || !bucket || !accountId) {
+      return res.status(400).json({ error: "R2 nincs beállítva" });
+    }
     if (!req.file) return res.status(400).json({ error: "file required" });
 
     const folder = String(req.body?.folder || "uploads").replace(/^\/+/, "").replace(/\/+$/, "");
@@ -445,30 +461,32 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
     const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
 
-    // PUT https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
-    const putUrl = `${r2Base}/${R2_BUCKET}/${key}`;
+    // Cloudflare R2 REST API (uses API token, no SigV4):
+    // PUT https://api.cloudflare.com/client/v4/accounts/:accountId/r2/buckets/:bucket/objects/:object
+    const obj = encodeURIComponent(key);
+    const putUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${bucket}/objects/${obj}`;
 
     const r = await fetch(putUrl, {
       method: "PUT",
       headers: {
-        Authorization: `Bearer ${R2_API_TOKEN}`,
-        "Content-Type": req.file.mimetype || "application/octet-stream"
+        Authorization: `Bearer ${token}`,
+        "Content-Type": req.file.mimetype || "application/octet-stream",
       },
-      body: req.file.buffer
+      body: req.file.buffer,
     });
 
     if (!r.ok) {
-      const msg = await r.text().catch(() => "");
-      console.error("R2 upload failed:", r.status, msg);
+      const t = await r.text().catch(() => "");
+      console.error("R2 API PUT failed:", r.status, t);
       return res.status(500).json({ error: "Upload failed" });
     }
 
-    const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
+    const basePub = (process.env.R2_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
     const url = basePub ? `${basePub}/${key}` : key;
 
     return res.json({ key, url });
-  } catch (e) {
-    console.error("R2 upload failed:", e);
+  } catch (err) {
+    console.error("R2 upload error:", err);
     return res.status(500).json({ error: "Upload failed" });
   }
 });
