@@ -437,23 +437,42 @@ app.get("/api/branding/logo", async (req, res) => {
 // - name (optional): e.g. main.jpg
 app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
   try {
-    const token = process.env.R2_API_TOKEN || "";
-    const endpoint = (process.env.R2_ENDPOINT || "").replace(/\/+$/, "");
-    const bucket = process.env.R2_BUCKET || "";
-    const accountId =
-      process.env.R2_ACCOUNT_ID ||
-      (() => {
-        try {
-          // endpoint: https://<accountid>.r2.cloudflarestorage.com
-          return new URL(endpoint).hostname.split(".")[0];
-        } catch {
-          return "";
-        }
-      })();
+    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
 
-    if (!token || !bucket || !accountId) {
-      return res.status(400).json({ error: "R2 nincs beállítva" });
+    // URL-based upload: allow providing a remote image URL instead of a multipart file.
+    // Expects multipart/form-data field: url=https://...
+    if (!req.file && req.body?.url) {
+      const url = String(req.body.url);
+
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return res.status(400).json({ error: "failed to fetch url" });
+      }
+
+      const contentLength = resp.headers.get("content-length");
+      if (contentLength && Number(contentLength) > 10 * 1024 * 1024) {
+        return res.status(413).json({ error: "file too large" });
+      }
+
+      const contentType = resp.headers.get("content-type") || "application/octet-stream";
+      const ab = await resp.arrayBuffer();
+      const buffer = Buffer.from(ab);
+
+      // Derive a filename from the URL path (fallback to 'file.bin')
+      let originalname = "file.bin";
+      try {
+        const u = new URL(url);
+        const last = u.pathname.split("/").filter(Boolean).pop();
+        if (last) originalname = last;
+      } catch {}
+
+      req.file = {
+        buffer,
+        mimetype: contentType,
+        originalname,
+      };
     }
+
     if (!req.file) return res.status(400).json({ error: "file required" });
 
     const folder = String(req.body?.folder || "uploads").replace(/^\/+/, "").replace(/\/+$/, "");
@@ -461,32 +480,30 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
     const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
 
-    // Cloudflare R2 REST API (uses API token, no SigV4):
-    // PUT https://api.cloudflare.com/client/v4/accounts/:accountId/r2/buckets/:bucket/objects/:object
-    const obj = encodeURIComponent(key);
-    const putUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/${bucket}/objects/${obj}`;
+    // PUT https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
+    const putUrl = `${r2Base}/${R2_BUCKET}/${key}`;
 
     const r = await fetch(putUrl, {
       method: "PUT",
       headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": req.file.mimetype || "application/octet-stream",
+        Authorization: `Bearer ${R2_API_TOKEN}`,
+        "Content-Type": req.file.mimetype || "application/octet-stream"
       },
-      body: req.file.buffer,
+      body: req.file.buffer
     });
 
     if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      console.error("R2 API PUT failed:", r.status, t);
+      const msg = await r.text().catch(() => "");
+      console.error("R2 upload failed:", r.status, msg);
       return res.status(500).json({ error: "Upload failed" });
     }
 
-    const basePub = (process.env.R2_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+    const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
     const url = basePub ? `${basePub}/${key}` : key;
 
     return res.json({ key, url });
-  } catch (err) {
-    console.error("R2 upload error:", err);
+  } catch (e) {
+    console.error("R2 upload failed:", e);
     return res.status(500).json({ error: "Upload failed" });
   }
 });
