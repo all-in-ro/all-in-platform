@@ -1,687 +1,510 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Eye, EyeOff, ArrowLeft, Package, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Package, Pencil, Trash2, Plus, Save, X } from "lucide-react";
 
 /**
- * ALL IN – Raktár (mock UI)
+ * ALL IN – Raktár (API)
  *
- * Új logika (méret = külön termék):
- * - NINCS "S/M/L" összevonás egy terméken belül.
- * - Minden méret külön SKU (külön termék sor).
- * - Üzletenkénti készlet marad külön (nem piszkáljuk egymást).
- * - Van "Bejövő" (incoming) mennyiség, ami csak az ÖSSZESÍTETT db-hoz adódik hozzá,
- *   de nem módosítja az üzletekben meglévő készleteket.
- *
- * Később: MOCK → API/DB. (incoming majd az allinincoming CSV importból jön)
+ * - Szerver az igazság: termékek + lokációk + lokációs készlet mind backendből jön.
+ * - Készletet beállítani (SET) lehet lokációnként.
+ * - Incoming/Transfer commit később fogja automatán mozgatni a készletet.
  */
 
-type StoreKey = "Csíkszereda" | "Kézdivásárhely" | "Raktár";
+type Store = { id: string; name: string };
 
-type AllInProductRow = {
-  id: number;
-  imageUrl?: string;
-
-  brand: string;
-  sku: string; // egyedi, méret szerint is
+type WarehouseItem = {
+  product_key: string;
+  brand: string | null;
+  code: string;
   name: string;
-
-  size: string; // S/M/L/XL vagy 21/22 stb. (külön termék)
-  colorName: string;
-  colorCode?: string; // pl. 001 / S10 (rendeléshez)
-  colorHex?: string;
-
-  // Készlet üzletenként (ez a "szentírás" az adott üzlethez)
-  byStore: Partial<Record<StoreKey, number>>;
-
-  // Bejövő készlet (CSV-ből) -> csak a totálhoz adódik, nem írja át az üzleteket
-  incomingQty?: number;
-
-  sellPrice: number; // RON
-  buyPrice?: number; // RON (elrejthető)
-
-  gender: string;
-  category: string;
+  size: string;
+  color_name: string | null;
+  color_code: string | null;
+  category: string | null;
+  image_url: string | null;
+  byLocation: Record<string, number>;
 };
 
-const BG = "#474c59";
 const HEADER = "#354153";
-// Public logo (Cloudflare R2) – works in all deployments
-const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
+const BORDER = "#d7dde6";
 
-const STORES: StoreKey[] = ["Csíkszereda", "Kézdivásárhely", "Raktár"];
-
-// MOCK: ugyanaz a termék több sorban, külön méret + külön SKU
-const MOCK: AllInProductRow[] = [
-  {
-    id: 101,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Malfini",
-    sku: "MLF-TSH-001-S",
-    name: "Póló basic (kereknyak)",
-    size: "S",
-    colorName: "Fekete",
-    colorCode: "001",
-    colorHex: "#111827",
-    byStore: { "Csíkszereda": 5, "Kézdivásárhely": 2, Raktár: 8 },
-    incomingQty: 6,
-    sellPrice: 59.9,
-    buyPrice: 29.5,
-    gender: "Férfi",
-    category: "Pólók" },
-  {
-    id: 102,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Malfini",
-    sku: "MLF-TSH-001-M",
-    name: "Póló basic (kereknyak)",
-    size: "M",
-    colorName: "Fekete",
-    colorCode: "001",
-    colorHex: "#111827",
-    byStore: { "Csíkszereda": 3, Raktár: 6 },
-    incomingQty: 0,
-    sellPrice: 59.9,
-    buyPrice: 29.5,
-    gender: "Férfi",
-    category: "Pólók" },
-  {
-    id: 103,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Malfini",
-    sku: "MLF-TSH-001-L",
-    name: "Póló basic (kereknyak)",
-    size: "L",
-    colorName: "Fekete",
-    colorCode: "001",
-    colorHex: "#111827",
-    byStore: { "Kézdivásárhely": 1, Raktár: 4, "Sepsiszentgyörgy": 2 },
-    incomingQty: 3,
-    sellPrice: 59.9,
-    buyPrice: 29.5,
-    gender: "Férfi",
-    category: "Pólók" },
-
-  {
-    id: 201,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-21-22",
-    name: "Gyerek csizma téli – MORO",
-    size: "21/22",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { "Csíkszereda": 0, Raktár: 1 },
-    incomingQty: 8,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-  {
-    id: 202,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-23-24",
-    name: "Gyerek csizma téli – MORO",
-    size: "23/24",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { "Kézdivásárhely": 2, Raktár: 4 },
-    incomingQty: 0,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-  {
-    id: 203,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-25-26",
-    name: "Gyerek csizma téli – MORO",
-    size: "25/26",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { "Csíkszereda": 1, Raktár: 3 },
-    incomingQty: 2,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-  {
-    id: 204,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-27-28",
-    name: "Gyerek csizma téli – MORO",
-    size: "27/28",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { Raktár: 2 },
-    incomingQty: 0,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-
-  {
-    id: 301,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-S",
-    name: "Kapucnis pulóver (unisex)",
-    size: "S",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { "Csíkszereda": 1, "Kézdivásárhely": 1, Raktár: 7 },
-    incomingQty: 10,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-  {
-    id: 302,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-M",
-    name: "Kapucnis pulóver (unisex)",
-    size: "M",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { "Csíkszereda": 2, Raktár: 4 },
-    incomingQty: 0,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-  {
-    id: 303,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-L",
-    name: "Kapucnis pulóver (unisex)",
-    size: "L",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { Raktár: 3 },
-    incomingQty: 1,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-  {
-    id: 304,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-XL",
-    name: "Kapucnis pulóver (unisex)",
-    size: "XL",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { Raktár: 2 },
-    incomingQty: 0,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-];
-
-function money(v?: number) {
-  if (typeof v !== "number" || Number.isNaN(v)) return "—";
-  return `${v.toFixed(2)} RON`;
-}
-
-function n(v?: number) {
-  if (typeof v !== "number" || Number.isNaN(v)) return 0;
-  return v;
-}
-
-function sumStore(byStore: Partial<Record<StoreKey, number>>) {
-  return STORES.reduce((acc, k) => acc + n(byStore?.[k]), 0);
-}
-
-function ColorDot({ hex }: { hex?: string }) {
-  return (
-    <span
-      className="inline-block h-3 w-3 rounded-full border border-white/40"
-      style={{ backgroundColor: hex || "#cbd5e1" }}
-      aria-label="Szín"
-      title={hex || ""}
-    />
-  );
+function n(v: unknown) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
 }
 
 function QtyPill({ qty, muted }: { qty: number; muted?: boolean }) {
-  const isZero = qty === 0;
+  const q = Math.max(0, Math.floor(qty || 0));
+  const base = muted ? "bg-slate-100 text-slate-600 border-slate-200" : "bg-white text-slate-800 border-slate-200";
   return (
-    <span
-      className={
-        "inline-flex w-[56px] justify-center self-start px-3 py-1 rounded-lg text-[13px] border " +
-        (muted || isZero
-          ? "bg-white text-slate-400 border-slate-200"
-          : "bg-[#dde4ef] text-slate-700 border-[#dde4ef]")
-      }
-      title={String(qty)}
-    >
-      {qty}
+    <span className={`inline-flex min-w-[44px] justify-center px-2 py-1 rounded-md text-sm border ${base}`}>
+      {q}
     </span>
   );
 }
 
+function apiBase() {
+  // same-origin API on Cloudflare Pages / Vercel, fallback to relative
+  return "";
+}
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(apiBase() + url, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    ...init
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data as T;
+}
+
 export default function AllInWarehouse() {
   const [q, setQ] = useState("");
-  const [showBuyPrice, setShowBuyPrice] = useState(false);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [items, setItems] = useState<WarehouseItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string>("");
 
-  const goView = (id: number) => {
-    window.location.hash = `#allinproduct/${id}`;
-  };
+  // product modal
+  const [productOpen, setProductOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
 
-  const goEdit = (id: number) => {
-    window.location.hash = `#allinproductedit/${id}`;
-  };
+  const [pBrand, setPBrand] = useState("");
+  const [pCode, setPCode] = useState("");
+  const [pName, setPName] = useState("");
+  const [pSize, setPSize] = useState("");
+  const [pColorName, setPColorName] = useState("");
+  const [pColorCode, setPColorCode] = useState("");
+  const [pCategory, setPCategory] = useState("");
+  const [pImageUrl, setPImageUrl] = useState("");
 
-  const doDelete = (id: number) => {
-    // Mock: később API delete + refresh
-    // Itt csak jelzünk, hogy van gomb.
-    // eslint-disable-next-line no-alert
-    alert(`Törlés (mock): ${id}`);
-  };
+  // stock modal
+  const [stockOpen, setStockOpen] = useState(false);
+  const [stockKey, setStockKey] = useState<string | null>(null);
+  const [stockDraft, setStockDraft] = useState<Record<string, string>>({});
+  const [stockSaving, setStockSaving] = useState(false);
 
-  // Szűrők (árakra NINCS szűrés)
-  const [fBrand, setFBrand] = useState("");
-  const [fSku, setFSku] = useState("");
-  const [fName, setFName] = useState("");
-  const [fColor, setFColor] = useState("");
-  const [fGender, setFGender] = useState("");
-  const [fCategory, setFCategory] = useState("");
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    if (!qq) return items;
+    return items.filter((it) => {
+      const hay = [
+        it.brand || "",
+        it.code || "",
+        it.name || "",
+        it.size || "",
+        it.color_name || "",
+        it.color_code || "",
+        it.category || "",
+        it.product_key || ""
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [items, q]);
 
-  const brandOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.brand))).sort(), []);
-  const colorOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.colorName))).sort(), []);
-  const genderOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.gender))).sort(), []);
-  const categoryOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.category))).sort(), []);
+  async function reload() {
+    setLoading(true);
+    setErr("");
+    try {
+      const data = await apiJson<{ stores: Store[]; items: WarehouseItem[] }>("/api/allin/warehouse");
+      setStores(data.stores || []);
+      setItems(data.items || []);
+    } catch (e: any) {
+      setErr(e?.message || "Hiba");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const rows = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    const sku = fSku.trim().toLowerCase();
-    const name = fName.trim().toLowerCase();
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    return MOCK.filter((r) => {
-      // kereső
-      if (s) {
-        const ok =
-          r.brand.toLowerCase().includes(s) ||
-          r.sku.toLowerCase().includes(s) ||
-          r.name.toLowerCase().includes(s) ||
-          r.category.toLowerCase().includes(s) ||
-          r.gender.toLowerCase().includes(s) ||
-          r.size.toLowerCase().includes(s) ||
-          r.colorName.toLowerCase().includes(s);
-        if (!ok) return false;
+  function openNewProduct() {
+    setEditingKey(null);
+    setPBrand("");
+    setPCode("");
+    setPName("");
+    setPSize("");
+    setPColorName("");
+    setPColorCode("");
+    setPCategory("");
+    setPImageUrl("");
+    setProductOpen(true);
+  }
+
+  function openEditProduct(it: WarehouseItem) {
+    setEditingKey(it.product_key);
+    setPBrand(it.brand || "");
+    setPCode(it.code || "");
+    setPName(it.name || "");
+    setPSize(it.size || "");
+    setPColorName(it.color_name || "");
+    setPColorCode(it.color_code || "");
+    setPCategory(it.category || "");
+    setPImageUrl(it.image_url || "");
+    setProductOpen(true);
+  }
+
+  async function saveProduct() {
+    setErr("");
+    const payload: any = {
+      brand: pBrand.trim(),
+      code: pCode.trim(),
+      name: pName.trim(),
+      size: pSize.trim(),
+      color_name: pColorName.trim(),
+      color_code: pColorCode.trim(),
+      category: pCategory.trim(),
+      image_url: pImageUrl.trim()
+    };
+
+    try {
+      if (!payload.code || !payload.name || !payload.size) {
+        setErr("Hiányzik: Kód, Terméknév, Méret");
+        return;
       }
 
-      // szűrők
-      if (fBrand && r.brand !== fBrand) return false;
-      if (sku && !r.sku.toLowerCase().includes(sku)) return false;
-      if (name && !r.name.toLowerCase().includes(name)) return false;
-      if (fColor && r.colorName !== fColor) return false;
-      if (fGender && r.gender !== fGender) return false;
-      if (fCategory && r.category !== fCategory) return false;
+      if (editingKey) {
+        // product_key from code|color_code|size is immutable in v1 (különben stock kulcs is változna).
+        // ezért csak a nem-kulcs mezőket engedjük frissíteni.
+        await apiJson("/api/allin/products/" + encodeURIComponent(editingKey), {
+          method: "PATCH",
+          body: JSON.stringify({
+            brand: payload.brand,
+            name: payload.name,
+            category: payload.category,
+            image_url: payload.image_url,
+            color_name: payload.color_name
+          })
+        });
+      } else {
+        await apiJson("/api/allin/products", { method: "POST", body: JSON.stringify(payload) });
+      }
 
-      return true;
-    });
-  }, [q, fBrand, fSku, fName, fColor, fGender, fCategory]);
+      setProductOpen(false);
+      await reload();
+    } catch (e: any) {
+      setErr(e?.message || "Mentési hiba");
+    }
+  }
 
-  const th = "px-1.5 py-1.5 text-left font-normal text-[11px] whitespace-nowrap";
-  const td = "px-1.5 py-1.5 align-top text-[11px] leading-[1.15]";
+  async function deleteProduct(product_key: string) {
+    // eslint-disable-next-line no-alert
+    if (!confirm("Biztos törlöd? (A készlet sorok is törlődnek)")) return;
+    setErr("");
+    try {
+      await apiJson("/api/allin/products/" + encodeURIComponent(product_key), { method: "DELETE" });
+      await reload();
+    } catch (e: any) {
+      setErr(e?.message || "Törlési hiba");
+    }
+  }
+
+  function openStock(it: WarehouseItem) {
+    setStockKey(it.product_key);
+    const next: Record<string, string> = {};
+    for (const s of stores) next[s.id] = String(n(it.byLocation?.[s.id]));
+    setStockDraft(next);
+    setStockOpen(true);
+  }
+
+  async function saveStock() {
+    if (!stockKey) return;
+    setStockSaving(true);
+    setErr("");
+    try {
+      for (const s of stores) {
+        const raw = stockDraft[s.id];
+        const qty = Math.max(0, Math.floor(Number(raw)));
+        if (!Number.isFinite(qty)) continue;
+
+        await apiJson("/api/allin/stock/set", {
+          method: "POST",
+          body: JSON.stringify({
+            location_id: s.id,
+            product_key: stockKey,
+            qty,
+            reason: "warehouse_set"
+          })
+        });
+      }
+      setStockOpen(false);
+      await reload();
+    } catch (e: any) {
+      setErr(e?.message || "Készlet mentési hiba");
+    } finally {
+      setStockSaving(false);
+    }
+  }
+
+  const th = "text-left text-[12px] font-semibold tracking-wide px-3 py-2 border-b border-slate-200 bg-slate-50";
+  const td = "px-3 py-2 border-b border-slate-100 text-[13px] text-slate-700";
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: BG }}>
-      {/* Top bar */}
-      <div className="sticky top-0 z-20 border-b border-white/20" style={{ backgroundColor: HEADER }}>
-        <div className="mx-auto w-full max-w-[1440px] px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 text-white">
-            <div className="h-9 w-9 rounded-xl grid place-items-center border border-white/25 bg-white/5">
-              <Package className="h-5 w-5" />
-            </div>
-            <div className="leading-tight flex items-center gap-2">
-              <img
-                src={ALLIN_LOGO_URL}
-                alt="ALL IN"
-                className="h-6 w-auto"
-              />
-              <div className="text-xs text-white/70">Raktár</div>
-            </div>
+    <div className="min-h-screen bg-white">
+      {/* Header */}
+      <div className="sticky top-0 z-40" style={{ backgroundColor: HEADER }}>
+        <div className="max-w-[1400px] mx-auto px-4 py-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => (window.location.hash = "#home")}
+            className="h-9 w-9 rounded-md grid place-items-center bg-white/10 hover:bg-white/15 text-white"
+            title="Vissza"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+
+          <div className="flex items-center gap-2 text-white">
+            <Package className="h-5 w-5" />
+            <div className="text-[14px] tracking-wide">RAKTÁR</div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setShowBuyPrice((v) => !v)}
-              title={showBuyPrice ? "Bevételi ár elrejtése" : "Bevételi ár mutatása"}
-              className="h-7 w-7 rounded-md grid place-items-center bg-red-600 hover:bg-red-700 text-white"
-            >
-              {showBuyPrice ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => (window.location.hash = "#allin")}
-              className="h-9 px-4 rounded-xl bg-[#354153] hover:bg-[#3c5069] text-white border border-white/40 inline-flex items-center"
-              title="Vissza"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Vissza
-            </button>
+          <div className="ml-auto flex items-center gap-2">
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Keresés: kód, név, szín, méret, kategória…"
+              className="h-9 w-[320px] bg-white"
+            />
+            <Button onClick={openNewProduct} className="h-9 px-3 bg-teal-600 hover:bg-teal-700 text-white">
+              <Plus className="h-4 w-4 mr-2" />
+              Új termék
+            </Button>
           </div>
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-[1440px] px-4 py-4 space-y-3">
+      <div className="max-w-[1400px] mx-auto px-4 py-4">
+        {err ? (
+          <div className="mb-3 px-3 py-2 rounded-md border text-sm bg-rose-50 border-rose-200 text-rose-700">{err}</div>
+        ) : null}
 
-        {/* Gyorsszűrő */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3">
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Gyorsszűrő: bármi (márka, kód, név, szín, színkód, kategória, méret...)"
-            className="h-9 text-[12px] bg-slate-100 border border-slate-300 text-slate-700 placeholder:text-slate-400"
-          />
-        </div>
-        {/* Filters */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm p-3">
-          <div
-            className="grid gap-2 items-end"
-            style={{ gridTemplateColumns: "160px 140px 180px 160px 180px 1fr 140px" }}
-          >
-            <div>
-              <div className="text-[11px] text-slate-600 mb-1 font-medium">Márka</div>
-              <select
-                value={fBrand}
-                onChange={(e) => setFBrand(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
-              >
-                <option value="">Összes</option>
-                {brandOptions.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-600 mb-1 font-medium">Nem</div>
-              <select
-                value={fGender}
-                onChange={(e) => setFGender(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
-              >
-                <option value="">Összes</option>
-                {genderOptions.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-600 mb-1 font-medium">Kategória</div>
-              <select
-                value={fCategory}
-                onChange={(e) => setFCategory(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
-              >
-                <option value="">Összes</option>
-                {categoryOptions.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-600 mb-1 font-medium">Szín</div>
-              <select
-                value={fColor}
-                onChange={(e) => setFColor(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
-              >
-                <option value="">Összes</option>
-                {colorOptions.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-600 mb-1 font-medium">Termékkód</div>
-              <Input
-                value={fSku}
-                onChange={(e) => setFSku(e.target.value)}
-                placeholder="szűrő…"
-                className="h-9 text-[12px] bg-slate-100 border border-slate-300 text-slate-700 placeholder:text-slate-400"
-              />
-            </div>
-
-            <div>
-              <div className="text-[11px] text-slate-600 mb-1 font-medium">Terméknév</div>
-              <Input
-                value={fName}
-                onChange={(e) => setFName(e.target.value)}
-                placeholder="szűrő…"
-                className="h-9 text-[12px] bg-slate-100 border border-slate-300 text-slate-700 placeholder:text-slate-400"
-              />
-            </div>
-
-            <div className="flex items-end justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setFBrand("");
-                  setFSku("");
-                  setFName("");
-                  setFColor("");
-                  setFGender("");
-                  setFCategory("");
-                }}
-                className="h-9 px-3 rounded-md border border-slate-300 text-slate-600 bg-white hover:bg-slate-50 text-[12px]"
-                title="Szűrők törlése"
-              >
-                Szűrők törlése
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              
-<thead>
-                <tr className="text-white" style={{ backgroundColor: HEADER }}>
-                  <th className={th + " w-[44px]"}>#</th>
-                  <th className={th + " w-[56px]"}>Kép</th>
-                  <th className={th + " w-[140px]"}>Márka</th>
-                  <th className={th + " w-[190px]"}>Termékkód</th>
-                  <th className={th + " min-w-[220px]"}>Terméknév</th>
-
-                  <th className={th + " w-[110px]"}>Nem</th>
+        <div className="rounded-lg border" style={{ borderColor: BORDER }}>
+          <div className="overflow-auto">
+            <table className="w-full border-separate border-spacing-0">
+              <thead>
+                <tr>
+                  <th className={th + " w-[120px]"}>Márka</th>
+                  <th className={th + " w-[120px]"}>Kód</th>
+                  <th className={th}>Termék</th>
+                  <th className={th + " w-[84px] text-center"}>Méret</th>
+                  <th className={th + " w-[160px]"}>Szín</th>
                   <th className={th + " w-[140px]"}>Kategória</th>
-                  <th className={th + " w-[140px]"}>Szín</th>
-                  <th className={th + " w-[72px]"}>Méret</th>
 
-                  <th className={th + " w-[105px] border-l border-white/10 text-center bg-white/5"}>Csíkszereda</th>
-                  <th className={th + " w-[115px] text-center bg-white/5"}>Kézdivásárhely</th>
-                                    <th className={th + " w-[82px] text-center bg-white/5"}>Raktár</th>
+                  {stores.map((s) => (
+                    <th key={s.id} className={th + " w-[120px] text-center"}>
+                      {s.name}
+                    </th>
+                  ))}
 
-                  <th className={th + " w-[82px] text-center"}>Bejövő</th>
-                  <th className={th + " w-[86px] text-center"}>Összesen</th>
+                  <th className={th + " w-[96px] text-center"}>Összesen</th>
 
-                  <th className={th.replace("text-left", "text-right") + " w-[110px]"}>Eladási ár</th>
-                  <th className={th.replace("text-left", "text-right") + " w-[110px]"}>Bevételi ár</th>
-
-                  <th className={th + " w-[140px] text-center sticky right-0 z-30"} style={{ backgroundColor: HEADER }}>
+                  <th className={th + " w-[150px] text-center sticky right-0 z-30"} style={{ backgroundColor: "#f8fafc" }}>
                     Műveletek
                   </th>
                 </tr>
               </thead>
 
-
               <tbody>
-                {rows.map((r, idx) => {
-                  const storeSum = sumStore(r.byStore || {});
-                  const incoming = n(r.incomingQty);
-                  const total = storeSum + incoming;
-
-                  return (
-                    <tr key={r.id} className="border-t border-slate-200 hover:bg-slate-50">
-                      <td className={td + " text-slate-700"}>{idx + 1}</td>
-
-                      <td className={td}>
-                        <div className="h-11 w-11 rounded-lg border border-slate-200 overflow-hidden bg-white">
-                          {r.imageUrl ? (
-                            <img src={r.imageUrl} alt={r.name} className="h-full w-full object-cover" />
-                          ) : (
-                            <div className="h-full w-full grid place-items-center text-[11px] text-slate-400">—</div>
-                          )}
-                        </div>
-                      </td>
-
-                      <td className={td + " text-slate-800 font-medium"}>{r.brand}</td>
-
-                      <td className={td + " text-slate-700"}>
-                        <span className="inline-flex px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[11px]">
-                          {r.sku}
-                        </span>
-                      </td>
-
-                      <td className={td + " text-slate-800"}>{r.name}</td>
-
-                      <td className={td + " text-slate-700"}>{r.gender}</td>
-
-                      <td className={td + " text-slate-700"}>{r.category}</td>
-
-                      <td className={td}>
-                        <div className="flex items-center gap-2">
-                          <ColorDot hex={r.colorHex} />
-                          <div className="leading-[1.1]">
-                            <div className="text-slate-700">{r.colorName}</div>
-                            <div className="text-[10px] text-slate-400">{r.colorCode || "—"}</div>
-                          </div>
-                        </div>
-                      </td>
-
-                      <td className={td}>
-                        <span className="inline-flex min-w-[44px] justify-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-teal-600 text-white border border-teal-600">{r.size}</span>
-                      </td>
-
-                      <td className={td + " text-center border-l border-slate-200 bg-slate-50"}>
-                        <QtyPill qty={n(r.byStore?.["Csíkszereda"])} />
-                      </td>
-                      <td className={td + " text-center bg-slate-50"}>
-                        <QtyPill qty={n(r.byStore?.["Kézdivásárhely"])} />
-                      </td>
-                                            <td className={td + " text-center bg-slate-50"}>
-                        <QtyPill qty={n(r.byStore?.["Raktár"])} />
-                      </td>
-
-                      <td className={td + " text-center"}>
-                        <QtyPill qty={incoming} muted />
-                      </td>
-
-                      <td className={td + " text-center"}>
-                        <span
-                          className={
-                            "inline-flex w-[62px] justify-center px-2.5 py-1 rounded-md text-[12px] border " +
-                            (total === 0 ? "bg-white text-slate-400 border-slate-200" : "bg-teal-600 text-white border-teal-600")
-                          }
-                          title="Üzletek összege + bejövő"
-                        >
-                          {total}
-                        </span>
-                      </td>
-
-                      <td className={td + " text-right font-semibold text-slate-800"}>{money(r.sellPrice)}</td>
-
-                      <td className={td + " text-right"}>
-                        {showBuyPrice ? (
-                          <div className="flex flex-col items-end leading-[1.1]">
-                            <span className="font-semibold text-slate-800">{money(r.buyPrice)}</span>
-                            {typeof r.buyPrice === "number" && typeof r.sellPrice === "number" && r.sellPrice > 0 && (
-                              <span className="text-[10px] text-slate-400">
-                                {Math.round((r.buyPrice / r.sellPrice) * 100)}%
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 select-none">••••</span>
-                        )}
-                      </td>
-
-                      <td className={td + " text-center sticky right-0 bg-white z-10"}>
-                        <div className="inline-flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => goView(r.id)}
-                            className="h-7 w-7 rounded-md grid place-items-center bg-teal-600 hover:bg-teal-700 text-white"
-                            title="Megtekintés"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => goEdit(r.id)}
-                            className="h-7 w-7 rounded-md grid place-items-center bg-slate-700 hover:bg-slate-800 text-white"
-                            title="Szerkesztés"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => doDelete(r.id)}
-                            className="h-7 w-7 rounded-md grid place-items-center bg-red-600 hover:bg-red-700 text-white"
-                            title="Törlés"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-
-                    </tr>
-                  );
-                })}
-
-                {!rows.length && (
+                {loading ? (
                   <tr>
-                    <td colSpan={18} className="px-4 py-10 text-center text-[12px] text-slate-500">
+                    <td className={td} colSpan={7 + stores.length}>
+                      Betöltés…
+                    </td>
+                  </tr>
+                ) : filtered.length === 0 ? (
+                  <tr>
+                    <td className={td} colSpan={7 + stores.length}>
                       Nincs találat.
                     </td>
                   </tr>
+                ) : (
+                  filtered.map((it) => {
+                    const total = stores.reduce((sum, s) => sum + n(it.byLocation?.[s.id]), 0);
+                    return (
+                      <tr key={it.product_key} className="hover:bg-slate-50">
+                        <td className={td}>{it.brand || "—"}</td>
+                        <td className={td}>
+                          <div className="leading-[1.1]">
+                            <div className="text-slate-800">{it.code}</div>
+                            <div className="text-[10px] text-slate-400">{it.product_key}</div>
+                          </div>
+                        </td>
+                        <td className={td}>{it.name}</td>
+                        <td className={td + " text-center"}>
+                          <span className="inline-flex min-w-[44px] justify-center px-2 py-1 rounded-md text-sm border bg-teal-600 text-white border-teal-600">
+                            {it.size}
+                          </span>
+                        </td>
+                        <td className={td}>
+                          <div className="leading-[1.1]">
+                            <div className="text-slate-700">{it.color_name || "—"}</div>
+                            <div className="text-[10px] text-slate-400">{it.color_code || "—"}</div>
+                          </div>
+                        </td>
+                        <td className={td}>{it.category || "—"}</td>
+
+                        {stores.map((s) => (
+                          <td key={s.id} className={td + " text-center bg-slate-50"}>
+                            <QtyPill qty={n(it.byLocation?.[s.id])} />
+                          </td>
+                        ))}
+
+                        <td className={td + " text-center"}>
+                          <QtyPill qty={total} />
+                        </td>
+
+                        <td className={td + " text-center sticky right-0 z-30 bg-white"}>
+                          <div className="flex justify-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openStock(it)}
+                              className="h-7 px-2 rounded-md inline-flex items-center gap-1 bg-teal-600 hover:bg-teal-700 text-white"
+                              title="Készlet beállítás"
+                            >
+                              <Save className="h-3.5 w-3.5" />
+                              Készlet
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => openEditProduct(it)}
+                              className="h-7 w-7 rounded-md grid place-items-center bg-slate-700 hover:bg-slate-800 text-white"
+                              title="Szerkesztés"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => deleteProduct(it.product_key)}
+                              className="h-7 w-7 rounded-md grid place-items-center bg-rose-600 hover:bg-rose-700 text-white"
+                              title="Törlés"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
-
-          <div className="px-4 py-3 text-[11px] text-slate-500 border-t border-slate-200">
-            Megjegyzés: a “Bejövő” oszlop a CSV importból (allinincoming) fog jönni és csak az “Összesen” értéket növeli.
-            Az üzletek készleteit nem módosítja.
-          </div>
         </div>
       </div>
+
+      {/* Product modal */}
+      {productOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-[720px] rounded-lg bg-white border" style={{ borderColor: BORDER }}>
+            <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: BORDER }}>
+              <div className="font-semibold text-slate-800">{editingKey ? "Termék szerkesztése" : "Új termék"}</div>
+              <button type="button" onClick={() => setProductOpen(false)} className="ml-auto h-8 w-8 rounded-md grid place-items-center hover:bg-slate-100">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Márka</div>
+                <Input value={pBrand} onChange={(e) => setPBrand(e.target.value)} className="h-9" />
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Kategória</div>
+                <Input value={pCategory} onChange={(e) => setPCategory(e.target.value)} className="h-9" />
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Kód *</div>
+                <Input value={pCode} onChange={(e) => setPCode(e.target.value)} className="h-9" disabled={!!editingKey} />
+                {editingKey ? <div className="text-[11px] text-slate-400 mt-1">A kód + színkód + méret a kulcs része (v1-ben nem módosítható).</div> : null}
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Méret *</div>
+                <Input value={pSize} onChange={(e) => setPSize(e.target.value)} className="h-9" disabled={!!editingKey} />
+              </div>
+
+              <div className="col-span-2">
+                <div className="text-xs text-slate-500 mb-1">Terméknév *</div>
+                <Input value={pName} onChange={(e) => setPName(e.target.value)} className="h-9" />
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Szín megnevezés</div>
+                <Input value={pColorName} onChange={(e) => setPColorName(e.target.value)} className="h-9" />
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Színkód</div>
+                <Input value={pColorCode} onChange={(e) => setPColorCode(e.target.value)} className="h-9" disabled={!!editingKey} />
+              </div>
+
+              <div className="col-span-2">
+                <div className="text-xs text-slate-500 mb-1">Kép URL</div>
+                <Input value={pImageUrl} onChange={(e) => setPImageUrl(e.target.value)} className="h-9" />
+              </div>
+            </div>
+
+            <div className="px-4 py-3 border-t flex items-center gap-2 justify-end" style={{ borderColor: BORDER }}>
+              <Button variant="outline" onClick={() => setProductOpen(false)} className="h-9">
+                Mégse
+              </Button>
+              <Button onClick={saveProduct} className="h-9 bg-teal-600 hover:bg-teal-700 text-white">
+                Mentés
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Stock modal */}
+      {stockOpen && stockKey ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-[640px] rounded-lg bg-white border" style={{ borderColor: BORDER }}>
+            <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: BORDER }}>
+              <div className="font-semibold text-slate-800">Készlet beállítás</div>
+              <div className="text-xs text-slate-400">{stockKey}</div>
+              <button type="button" onClick={() => setStockOpen(false)} className="ml-auto h-8 w-8 rounded-md grid place-items-center hover:bg-slate-100">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {stores.map((s) => (
+                <div key={s.id} className="flex items-center gap-3">
+                  <div className="w-[160px] text-sm text-slate-700">{s.name}</div>
+                  <Input
+                    value={stockDraft[s.id] ?? "0"}
+                    onChange={(e) => setStockDraft((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                    className="h-9 w-[160px] text-right"
+                    inputMode="numeric"
+                  />
+                </div>
+              ))}
+              <div className="text-[11px] text-slate-400">Mentéskor lokációnként beállítjuk a készletet (SET). Negatív érték nem engedett.</div>
+            </div>
+
+            <div className="px-4 py-3 border-t flex items-center gap-2 justify-end" style={{ borderColor: BORDER }}>
+              <Button variant="outline" onClick={() => setStockOpen(false)} className="h-9">
+                Mégse
+              </Button>
+              <Button disabled={stockSaving} onClick={saveStock} className="h-9 bg-teal-600 hover:bg-teal-700 text-white">
+                Mentés
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
