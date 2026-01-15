@@ -1,211 +1,177 @@
-import type { IncomingItemDraft } from "./types";
-
-export type ParsedCsv = {
-  headers: string[];
-  rows: Record<string, string>[];
-};
-
 export type SupplierProfile = {
   key: string;
   label: string;
-  delimiter?: string; // preferred delimiter
-  // header -> field mapping (loose). We'll also do fuzzy matching via synonyms.
-  fields: Partial<Record<IncomingFieldKey, string[]>>;
+  // expected column names (case-insensitive) for each field
+  columns: {
+    sku: string[];
+    name: string[];
+    colorCode: string[];
+    colorName: string[];
+    size: string[];
+    qty: string[];
+    category: string[];
+  };
 };
 
-export type IncomingFieldKey =
-  | "sku"
-  | "name"
-  | "brand"
-  | "category"
-  | "colorName"
-  | "colorCode"
-  | "size"
-  | "qty";
-
-export const SUPPLIER_PROFILES: Record<string, SupplierProfile> = {
-  generic: {
+export const SUPPLIER_PROFILES: SupplierProfile[] = [
+  {
     key: "generic",
-    label: "Általános (auto felismerés)",
-    fields: {
-      sku: ["sku", "code", "productcode", "termekkod", "cikkszam", "artikel", "cod", "cód", "cod produs"],
-      name: ["name", "product", "termeknev", "megnevezes", "denumire", "produs"],
-      brand: ["brand", "marka", "márka", "marca"],
-      category: ["category", "kategoria", "categorii", "categorie"],
-      colorName: ["color", "szin", "culoare"],
-      colorCode: ["colorcode", "szinkod", "culoarecod", "culoare cod", "cod culoare", "cod culoare"],
-      size: ["size", "meret", "mărime", "marime", "marimea"],
-      qty: ["qty", "quantity", "darab", "db", "cantitate", "cant."]
-    }
+    label: "Generic",
+    columns: {
+      sku: ["sku", "code", "cod", "kód", "product_code", "product code", "cod produs"],
+      name: ["name", "product", "product_name", "denumire", "megnevezés", "terméknév"],
+      colorCode: ["colorcode", "color_code", "színkód", "cod culoare", "cod color"],
+      colorName: ["color", "color_name", "szín", "culoare", "megnevezés szín"],
+      size: ["size", "méret", "marime"],
+      qty: ["qty", "quantity", "darab", "darabszám", "cantitate", "buc"],
+      category: ["category", "kategória", "categorie"],
+    },
   },
-  malfini: {
+  {
     key: "malfini",
-    label: "Malfini (tippelt)",
-    delimiter: ";",
-    fields: {
-      sku: ["code", "cikkszam", "artikel"],
-      name: ["name", "product"],
-      colorCode: ["colorcode", "szinkod", "variant"],
-      size: ["size", "meret"],
-      qty: ["qty", "darab", "db", "quantity"],
-      brand: ["brand", "márka"],
-      category: ["category", "kategoria"]
-    }
+    label: "Malfini (általános minta)",
+    columns: {
+      sku: ["code", "product code", "kod", "sku"],
+      name: ["name", "product name", "denumire"],
+      colorCode: ["color code", "cod culoare", "colorcode"],
+      colorName: ["color", "culoare", "color name"],
+      size: ["size", "marime", "méret"],
+      qty: ["qty", "quantity", "cantitate", "buc"],
+      category: ["category", "categorie", "kategória"],
+    },
   },
-  renbut: {
+  {
     key: "renbut",
-    label: "Renbut (tippelt)",
-    delimiter: ";",
-    fields: {
-      sku: ["sku", "code", "cikkszam"],
-      name: ["name", "termeknev"],
-      size: ["size", "meret"],
-      qty: ["qty", "darab", "db", "cantitate"],
-      colorName: ["color", "szin", "culoare"],
-      colorCode: ["colorcode", "szinkod"]
-    }
-  }
-};
+    label: "Renbut (általános minta)",
+    columns: {
+      sku: ["sku", "code", "kod"],
+      name: ["name", "denumire", "product"],
+      colorCode: ["colorcode", "cod culoare", "color code"],
+      colorName: ["color", "culoare"],
+      size: ["size", "marime"],
+      qty: ["qty", "cantitate", "buc", "quantity"],
+      category: ["category", "categorie", "kategória"],
+    },
+  },
+];
 
-function norm(s: string) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[._-]+/g, "");
-}
-
-export function guessDelimiter(text: string): string | null {
-  const firstLine = (text || "").split(/\r?\n/).find((l) => l.trim().length) || "";
-  const commas = (firstLine.match(/,/g) || []).length;
-  const semis = (firstLine.match(/;/g) || []).length;
+export function guessDelimiter(text: string): "," | ";" | "\t" {
+  const sample = text.split(/\r?\n/).slice(0, 5).join("\n");
+  const commas = (sample.match(/,/g) || []).length;
+  const semis = (sample.match(/;/g) || []).length;
+  const tabs = (sample.match(/\t/g) || []).length;
+  if (tabs > commas && tabs > semis) return "\t";
   if (semis > commas) return ";";
-  if (commas > semis) return ",";
-  return null;
+  return ",";
 }
 
-export function parseCsvText(text: string, opts?: { delimiter?: string }): ParsedCsv {
-  const delimiter = (opts?.delimiter || ",").slice(0, 1);
+function splitCsvLine(line: string, delim: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQ = !inQ;
+      }
+      continue;
+    }
+    if (!inQ && ch === delim) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
 
-  // Minimal CSV parser (quotes supported). Humans love edge-cases; we pretend they don't exist.
-  const lines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter((l) => l.trim().length);
+export function parseCsvText(text: string, delim: "," | ";" | "\t"): { headers: string[]; rows: string[][] } {
+  const lines = text
+    .replace(/\uFEFF/g, "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
   if (!lines.length) return { headers: [], rows: [] };
 
-  const parseLine = (line: string): string[] => {
-    const out: string[] = [];
-    let cur = "";
-    let inQ = false;
-
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-
-      if (ch === '"') {
-        if (inQ && line[i + 1] === '"') {
-          cur += '"';
-          i++;
-        } else {
-          inQ = !inQ;
-        }
-        continue;
-      }
-
-      if (!inQ && ch === delimiter) {
-        out.push(cur.trim());
-        cur = "";
-        continue;
-      }
-      cur += ch;
-    }
-    out.push(cur.trim());
-    return out;
-  };
-
-  const headersRaw = parseLine(lines[0]);
-  const headers = headersRaw.map((h, i) => (h ? h : `col${i + 1}`));
-
-  const rows: Record<string, string>[] = [];
-  for (let li = 1; li < lines.length; li++) {
-    const cells = parseLine(lines[li]);
-    const row: Record<string, string> = {};
-    for (let i = 0; i < headers.length; i++) row[headers[i]] = cells[i] ?? "";
-    rows.push(row);
-  }
-
+  const headers = splitCsvLine(lines[0], delim).map((h) => h.replace(/^"|"$/g, "").trim());
+  const rows = lines.slice(1).map((ln) => splitCsvLine(ln, delim).map((c) => c.replace(/^"|"$/g, "").trim()));
   return { headers, rows };
 }
 
-function findHeader(headers: string[], candidates: string[]): string | null {
-  const hNorm = headers.map((h) => ({ h, n: norm(h) }));
-  for (const c of candidates) {
-    const cn = norm(c);
-    const exact = hNorm.find((x) => x.n === cn);
-    if (exact) return exact.h;
-  }
-  // contains match (loose)
-  for (const c of candidates) {
-    const cn = norm(c);
-    const partial = hNorm.find((x) => x.n.includes(cn) || cn.includes(x.n));
-    if (partial) return partial.h;
-  }
-  return null;
+function norm(s: string) {
+  return (s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function toInt(v: string): number {
-  const s = String(v || "").trim().replace(",", ".");
-  const n = Number(s);
-  if (!Number.isFinite(n)) return 0;
-  return Math.round(n);
+function pickColumnIndex(headers: string[], candidates: string[]): number {
+  const h = headers.map(norm);
+  for (const c of candidates) {
+    const idx = h.indexOf(norm(c));
+    if (idx >= 0) return idx;
+  }
+  // fallback: contains match
+  for (const c of candidates) {
+    const cc = norm(c);
+    const idx = h.findIndex((x) => x.includes(cc));
+    if (idx >= 0) return idx;
+  }
+  return -1;
 }
 
-export function mapCsvRowsToIncoming(parsed: ParsedCsv, profile: SupplierProfile): { items: IncomingItemDraft[]; issues: string[] } {
-  const issues: string[] = [];
-  const headers = parsed.headers || [];
+export function mapCsvRowsToIncoming(opts: {
+  headers: string[];
+  rows: string[][];
+  profile: SupplierProfile;
+}): Array<{
+  sku: string;
+  name: string;
+  colorCode: string;
+  colorName: string;
+  size: string;
+  qty: number;
+  category: string;
+  raw: Record<string, string>;
+  issues: string[];
+}> {
+  const { headers, rows, profile } = opts;
 
-  const mapKeyToHeader: Partial<Record<IncomingFieldKey, string>> = {};
-  const fields = profile.fields || ({} as any);
+  const idxSku = pickColumnIndex(headers, profile.columns.sku);
+  const idxName = pickColumnIndex(headers, profile.columns.name);
+  const idxColorCode = pickColumnIndex(headers, profile.columns.colorCode);
+  const idxColorName = pickColumnIndex(headers, profile.columns.colorName);
+  const idxSize = pickColumnIndex(headers, profile.columns.size);
+  const idxQty = pickColumnIndex(headers, profile.columns.qty);
+  const idxCategory = pickColumnIndex(headers, profile.columns.category);
 
-  (Object.keys(fields) as IncomingFieldKey[]).forEach((k) => {
-    const h = findHeader(headers, fields[k] || []);
-    if (h) mapKeyToHeader[k] = h;
+  return rows.map((r) => {
+    const raw: Record<string, string> = {};
+    headers.forEach((h, i) => (raw[h] = r[i] ?? ""));
+
+    const issues: string[] = [];
+    const sku = idxSku >= 0 ? (r[idxSku] || "").trim() : "";
+    const name = idxName >= 0 ? (r[idxName] || "").trim() : "";
+    const colorCode = idxColorCode >= 0 ? (r[idxColorCode] || "").trim() : "";
+    const colorName = idxColorName >= 0 ? (r[idxColorName] || "").trim() : "";
+    const size = idxSize >= 0 ? (r[idxSize] || "").trim() : "";
+    const category = idxCategory >= 0 ? (r[idxCategory] || "").trim() : "";
+
+    let qty = 0;
+    if (idxQty >= 0) {
+      const q = (r[idxQty] || "").toString().replace(",", ".").trim();
+      qty = Math.round(Number(q));
+      if (!Number.isFinite(qty)) qty = 0;
+    }
+
+    if (!sku) issues.push("Hiányzó kód/SKU");
+    if (!name) issues.push("Hiányzó terméknév");
+    if (!qty || qty <= 0) issues.push("Hibás darabszám");
+
+    return { sku, name, colorCode, colorName, size, qty, category, raw, issues };
   });
-
-  // minimum requirements: qty + (sku or name)
-  if (!mapKeyToHeader.qty) issues.push("Nem találtam mennyiség oszlopot (qty/db/cantitate).");
-  if (!mapKeyToHeader.sku && !mapKeyToHeader.name) issues.push("Nem találtam termékkód vagy terméknév oszlopot.");
-
-  const items: IncomingItemDraft[] = [];
-
-  for (let i = 0; i < parsed.rows.length; i++) {
-    const r = parsed.rows[i];
-
-    const sku = mapKeyToHeader.sku ? String(r[mapKeyToHeader.sku] || "").trim() : "";
-    const name = mapKeyToHeader.name ? String(r[mapKeyToHeader.name] || "").trim() : "";
-    const brand = mapKeyToHeader.brand ? String(r[mapKeyToHeader.brand] || "").trim() : "";
-    const category = mapKeyToHeader.category ? String(r[mapKeyToHeader.category] || "").trim() : "";
-    const colorName = mapKeyToHeader.colorName ? String(r[mapKeyToHeader.colorName] || "").trim() : "";
-    const colorCode = mapKeyToHeader.colorCode ? String(r[mapKeyToHeader.colorCode] || "").trim() : "";
-    const size = mapKeyToHeader.size ? String(r[mapKeyToHeader.size] || "").trim() : "";
-
-    const qtyRaw = mapKeyToHeader.qty ? String(r[mapKeyToHeader.qty] || "").trim() : "0";
-    const qty = toInt(qtyRaw);
-
-    if (!qty || qty <= 0) continue;
-    if (!sku && !name) continue;
-
-    items.push({
-      sku,
-      name,
-      brand,
-      category,
-      colorName,
-      colorCode,
-      size,
-      qty,
-      sourceMetaId: ""
-    });
-  }
-
-  if (!items.length) issues.push("Nem lett egyetlen értelmezhető tétel sem (qty>0 és (sku vagy név)).");
-
-  return { items, issues };
 }
