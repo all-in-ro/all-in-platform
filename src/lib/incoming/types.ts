@@ -78,4 +78,32 @@ export type DocDraft = {
   partnerName: string;
   notes: string;
   items: DocDraftItem[];
+};
+
+
+export type TransferItemDraft = {
+  sku: string;
+  name: string;
+  colorCode: string;
+  colorName: string;
+  size: string;
+  category: string;
+  qty: number;
+  matchedProductId?: string | null;
+  raw?: any;
+};
+
+export type TransferSummary = {
+  id: string;
+  createdAtISO: string;
+  status: "draft" | "committed" | "cancelled";
+  fromLocationId: string;
+  toLocationId: string;
+  note?: string | null;
+  createdBy: string;
+  actor: string;
+};
+
+export type TransferDetail = TransferSummary & {
+  items: TransferItemDraft[];
 }; 
