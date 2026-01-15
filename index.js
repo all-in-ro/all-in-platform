@@ -895,8 +895,12 @@ app.get("/api/allin/warehouse", requireAuthed, async (req, res) => {
   try {
     const shops = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
     const products = await pool.query(
-      `SELECT product_key, brand, code, name, size, color_name, color_code, category, image_url
+      `SELECT product_key, brand, code, name, size,
+              color_name, color_code, color_hex,
+              gender, category,
+              image_url, sell_price, buy_price, incoming_qty
        FROM allin_products
+       WHERE is_deleted = false
        ORDER BY name ASC, brand ASC, code ASC, color_code ASC, size ASC`
     );
     const stock = await pool.query(
@@ -935,6 +939,11 @@ app.post("/api/allin/products", requireAuthed, express.json(), async (req, res) 
     const color_code = String(body.color_code || body.colorCode || "").trim();
     const category = String(body.category || "").trim();
     const image_url = String(body.image_url || body.imageUrl || "").trim();
+    const gender = String(body.gender || "").trim() || null;
+    const color_hex = String(body.color_hex || body.colorHex || "").trim() || null;
+    const sell_price = body.sell_price ?? body.sellPrice;
+    const buy_price = body.buy_price ?? body.buyPrice;
+    const incoming_qty = body.incoming_qty ?? body.incomingQty;
 
     if (!code || !name || !size) {
       return res.status(400).json({ error: "Missing required fields: code, name, size" });
@@ -943,15 +952,26 @@ app.post("/api/allin/products", requireAuthed, express.json(), async (req, res) 
     const product_key = makeProductKey({ code, colorCode: color_code, size });
 
     await pool.query(
-      `INSERT INTO allin_products (product_key, brand, code, name, size, color_name, color_code, category, image_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO allin_products (
+          product_key, brand, code, name, size,
+          color_name, color_code, color_hex,
+          gender, category, image_url,
+          sell_price, buy_price, incoming_qty
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (product_key) DO UPDATE
          SET brand=EXCLUDED.brand,
              name=EXCLUDED.name,
              color_name=EXCLUDED.color_name,
+             color_hex=EXCLUDED.color_hex,
+             gender=EXCLUDED.gender,
              category=EXCLUDED.category,
-             image_url=EXCLUDED.image_url`,
-      [product_key, brand, code, name, size, color_name, color_code, category, image_url]
+             image_url=EXCLUDED.image_url,
+             sell_price=EXCLUDED.sell_price,
+             buy_price=EXCLUDED.buy_price,
+             incoming_qty=EXCLUDED.incoming_qty,
+             is_deleted=false`,
+      [product_key, brand, code, name, size, color_name, color_code, color_hex, gender, category, image_url, sell_price, buy_price, incoming_qty]
     );
 
     res.json({ ok: true, product_key });
@@ -971,7 +991,13 @@ app.patch("/api/allin/products/:product_key", requireAuthed, express.json(), asy
       name: body.name,
       category: body.category,
       image_url: body.image_url ?? body.imageUrl,
-      color_name: body.color_name ?? body.colorName
+      color_name: body.color_name ?? body.colorName,
+      color_code: body.color_code ?? body.colorCode,
+      color_hex: body.color_hex ?? body.colorHex,
+      gender: body.gender,
+      sell_price: body.sell_price ?? body.sellPrice,
+      buy_price: body.buy_price ?? body.buyPrice,
+      incoming_qty: body.incoming_qty ?? body.incomingQty
     };
 
     const sets = [];
