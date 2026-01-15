@@ -65,15 +65,19 @@ export default function IncomingImport(props: {
     };
 
     const items: IncomingItemDraft[] = mapped.map((m) => ({
-      sku: m.sku,
-      name: m.name,
-      colorCode: m.colorCode,
-      colorName: m.colorName,
-      size: m.size,
-      category: m.category,
-      qty: m.qty,
-      sourceMetaId: metaId,
-    }));
+  sku: m.sku,
+  brand: (m as any).brand ?? "",
+  name: m.name,
+  gender: (m as any).gender ?? "",
+  colorCode: m.colorCode,
+  colorName: m.colorName,
+  size: m.size,
+  category: m.category,
+  buyPrice: (m as any).buyPrice ?? (m as any).buy_price ?? null,
+  qty: m.qty,
+  sourceMetaId: metaId,
+})) as any;
+
 
     onAddBatch(items, meta);
     setPreview(null);
@@ -184,38 +188,55 @@ export default function IncomingImport(props: {
             <div className="max-h-[340px] overflow-auto">
               <table className="w-full text-[12px]">
                 <thead className="bg-slate-50 text-slate-600 sticky top-0">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-semibold">Kód</th>
-                    <th className="text-left px-3 py-2 font-semibold">Termék</th>
-                    <th className="text-left px-3 py-2 font-semibold">Szín</th>
-                    <th className="text-left px-3 py-2 font-semibold">Méret</th>
-                    <th className="text-right px-3 py-2 font-semibold">Db</th>
-                    <th className="text-left px-3 py-2 font-semibold">Kategória</th>
-                    <th className="text-left px-3 py-2 font-semibold">Állapot</th>
-                  </tr>
-                </thead>
+  <tr>
+    <th className="text-left px-3 py-2 font-semibold">Kód</th>
+    <th className="text-left px-3 py-2 font-semibold">Márka</th>
+    <th className="text-left px-3 py-2 font-semibold">Terméknév</th>
+    <th className="text-left px-3 py-2 font-semibold">Nem</th>
+    <th className="text-left px-3 py-2 font-semibold">Szín</th>
+    <th className="text-left px-3 py-2 font-semibold">Méret</th>
+    <th className="text-left px-3 py-2 font-semibold">Kategória</th>
+    <th className="text-right px-3 py-2 font-semibold">Beszerzési ár</th>
+    <th className="text-right px-3 py-2 font-semibold">Db</th>
+    <th className="text-left px-3 py-2 font-semibold">Állapot</th>
+  </tr>
+</thead>
                 <tbody>
                   {mapped.slice(0, 200).map((r, i) => (
                     <tr key={i} className="border-t border-slate-200">
-                      <td className="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">{r.sku}</td>
-                      <td className="px-3 py-2 text-slate-800">{r.name}</td>
-                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
-                        {r.colorCode ? <span className="font-semibold">{r.colorCode}</span> : <span className="text-slate-400">-</span>}
-                        {r.colorName ? <span className="text-slate-500"> · {r.colorName}</span> : null}
-                      </td>
-                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.size || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.qty}</td>
-                      <td className="px-3 py-2 text-slate-700">{r.category || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2">
-                        {r.issues.length ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-red-700">
-                            <AlertTriangle className="w-3.5 h-3.5" /> {r.issues[0]}
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-emerald-700">OK</span>
-                        )}
-                      </td>
-                    </tr>
+  <td className="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">{r.sku}</td>
+  <td className="px-3 py-2 text-slate-800 whitespace-nowrap">
+    {(r as any).brand ? <span className="font-semibold">{(r as any).brand}</span> : <span className="text-slate-400">-</span>}
+  </td>
+  <td className="px-3 py-2 text-slate-800">{r.name}</td>
+  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
+    {(r as any).gender ? <span className="font-semibold">{(r as any).gender}</span> : <span className="text-slate-400">-</span>}
+  </td>
+  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
+    {r.colorCode ? <span className="font-semibold">{r.colorCode}</span> : <span className="text-slate-400">-</span>}
+    {r.colorName ? <span className="text-slate-500"> · {r.colorName}</span> : null}
+  </td>
+  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.size || <span className="text-slate-400">-</span>}</td>
+  <td className="px-3 py-2 text-slate-700">{r.category || <span className="text-slate-400">-</span>}</td>
+  <td className="px-3 py-2 text-right font-semibold text-slate-900 whitespace-nowrap">
+    {(() => {
+      const bp = (r as any).buyPrice ?? (r as any).buy_price ?? null;
+      if (bp === null || bp === undefined || String(bp).trim() === "") return <span className="text-slate-400">-</span>;
+      const n = Number(String(bp).replace(",", "."));
+      return Number.isFinite(n) ? n.toFixed(2) : <span className="text-slate-400">-</span>;
+    })()}
+  </td>
+  <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.qty}</td>
+  <td className="px-3 py-2">
+    {r.issues.length ? (
+      <span className="inline-flex items-center gap-1 text-[11px] text-red-700">
+        <AlertTriangle className="w-3.5 h-3.5" /> {r.issues[0]}
+      </span>
+    ) : (
+      <span className="text-[11px] text-emerald-700">OK</span>
+    )}
+  </td>
+</tr>
                   ))}
                 </tbody>
               </table>
