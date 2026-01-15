@@ -391,7 +391,7 @@ export default function AllInWarehouse() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Gyorsszűrő: bármi (márka, kód, név, szín, színkód, kategória, méret...)"
-            className="h-9 text-[12px] bg-white text-slate-700 placeholder:text-slate-400"
+            className="h-9 text-[12px] bg-slate-100 border border-slate-300 text-slate-700 placeholder:text-slate-400"
           />
         </div>
         {/* Filters */}
@@ -470,7 +470,7 @@ export default function AllInWarehouse() {
                 value={fSku}
                 onChange={(e) => setFSku(e.target.value)}
                 placeholder="szűrő…"
-                className="h-9 text-[12px] bg-white text-slate-700 placeholder:text-slate-400"
+                className="h-9 text-[12px] bg-slate-100 border border-slate-300 text-slate-700 placeholder:text-slate-400"
               />
             </div>
 
@@ -480,7 +480,7 @@ export default function AllInWarehouse() {
                 value={fName}
                 onChange={(e) => setFName(e.target.value)}
                 placeholder="szűrő…"
-                className="h-9 text-[12px] bg-white text-slate-700 placeholder:text-slate-400"
+                className="h-9 text-[12px] bg-slate-100 border border-slate-300 text-slate-700 placeholder:text-slate-400"
               />
             </div>
 
