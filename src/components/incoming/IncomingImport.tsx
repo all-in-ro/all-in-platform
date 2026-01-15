@@ -3,6 +3,9 @@ import { Upload, CheckCircle2, AlertTriangle } from "lucide-react";
 import type { IncomingItemDraft, IncomingSourceMeta, Location } from "../../lib/incoming/types";
 import { parseCsvText, guessDelimiter, mapCsvRowsToIncoming, SUPPLIER_PROFILES } from "../../lib/incoming/csvParsers";
 
+// STRICT: csak a "Generic" profil marad, amíg nincs valódi beszállító rendszer a DB-ben.
+const ACTIVE_SUPPLIER_PROFILES = SUPPLIER_PROFILES.filter((p) => p.key === "generic");
+
 function uid(prefix = "m") {
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
@@ -23,7 +26,7 @@ export default function IncomingImport(props: {
   const [mapped, setMapped] = useState<ReturnType<typeof mapCsvRowsToIncoming> | null>(null);
   const [error, setError] = useState<string>("");
 
-  const profile = useMemo(() => SUPPLIER_PROFILES.find((p) => p.key === supplierKey) || SUPPLIER_PROFILES[0], [supplierKey]);
+  const profile = useMemo(() => ACTIVE_SUPPLIER_PROFILES.find((p) => p.key === supplierKey) || ACTIVE_SUPPLIER_PROFILES[0], [supplierKey]);
 
   const invalidCount = useMemo(() => (mapped ? mapped.filter((x) => x.issues.length).length : 0), [mapped]);
 
@@ -95,7 +98,7 @@ export default function IncomingImport(props: {
               onChange={(e) => setSupplierKey(e.target.value)}
               className="w-full h-10 rounded-xl border border-slate-300 px-3 text-[12px] bg-white"
             >
-              {SUPPLIER_PROFILES.map((p) => (
+              {ACTIVE_SUPPLIER_PROFILES.map((p) => (
                 <option key={p.key} value={p.key}>
                   {p.label}
                 </option>
