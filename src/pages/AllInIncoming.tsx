@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Package, ArrowLeft, Upload, Plus, Truck, FileText, Layers } from "lucide-react";
 import IncomingImport from "../components/incoming/IncomingImport";
 import IncomingManualEntry from "../components/incoming/IncomingManualEntry";
@@ -38,15 +38,42 @@ export default function AllInIncoming({
 
   const [tab, setTab] = useState<TabKey>("import");
 
-  // Locations: most ideiglenesen hardcode (a shops táblához majd hozzá kell adni "raktar"-t is, vagy külön locations táblát).
-  const locations: Location[] = useMemo(
-    () => [
-      { id: "csikszereda", name: "Csíkszereda", kind: "shop" },
-      { id: "kezdivasarhely", name: "Kézdivásárhely", kind: "shop" },
-      { id: "raktar", name: "Raktár", kind: "warehouse" }
-    ],
-    []
-  );
+  // Locations: szerverről jön (shops). Fallback: hardcode, ha valamiért nem elérhető.
+  const [locations, setLocations] = useState<Location[]>([
+    { id: "csikszereda", name: "Csíkszereda", kind: "shop" },
+    { id: "kezdivasarhely", name: "Kézdivásárhely", kind: "shop" },
+    { id: "raktar", name: "Raktár", kind: "warehouse" }
+  ]);
+  const [locError, setLocError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/shops", { credentials: "include" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        const items = Array.isArray(j?.items) ? j.items : [];
+        const mapped: Location[] = items.map((x: any) => ({
+          id: String(x.id),
+          name: String(x.name),
+          kind: String(x.id) === "raktar" ? "warehouse" : "shop"
+        }));
+        // biztosítsuk, hogy legyen raktar (vagy a backend már adja)
+        if (!mapped.some((l) => l.id === "raktar")) {
+          mapped.push({ id: "raktar", name: "Raktár", kind: "warehouse" });
+        }
+        if (!cancelled && mapped.length) setLocations(mapped);
+        if (!cancelled) setLocError(null);
+      } catch (e: any) {
+        if (!cancelled) setLocError("Nem tudtam lekérni a helyszíneket a szerverről.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
 
   // Incoming drafts (CSV + manual összevonva)
   const [incoming, setIncoming] = useState<IncomingItemDraft[]>([]);
@@ -142,7 +169,24 @@ export default function AllInIncoming({
       </div>
 
       <div className="mx-auto w-full max-w-[1440px] px-4 py-4 space-y-3">
-        {/* Tabs */}
+        
+{locError ? (
+  <div
+    style={{
+      margin: "0 0 10px 0",
+      padding: "10px 12px",
+      borderRadius: 10,
+      border: "1px solid rgba(255,255,255,0.18)",
+      background: "rgba(0,0,0,0.18)",
+      color: "rgba(255,255,255,0.92)",
+      fontSize: 13
+    }}
+  >
+    {locError}
+  </div>
+) : null}
+
+{/* Tabs */}
         <div className="rounded-xl border border-white/20 bg-white/5 px-3 py-2 flex items-center gap-2 flex-wrap">
           <button className={tabBtn(tab === "import")} onClick={() => setTab("import")} type="button">
             <span className="inline-flex items-center gap-2">
