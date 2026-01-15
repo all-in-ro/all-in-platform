@@ -304,14 +304,14 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
           <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
             <div>
               <h1 className="text-white text-xl font-semibold">FELHASZNÁLÓK</h1>
-              <div className="text-white/60 text-sm">Belépőkódok (ADMIN)</div>
+              
             </div>
 
-            <div className="flex items-center gap-2 flex-nowrap ml-auto">
-              <Button type="button" className={btnPrimary} onClick={openPlaceModal}>
+            <div className="flex items-center gap-2 flex-nowrap ml-auto w-full sm:w-auto">
+              <Button type="button" className={btnPrimary + " w-full sm:w-auto"} onClick={openPlaceModal}>
                 Helység létrehozása / törlése...
               </Button>
-              <Button className={btn} onClick={() => (window.location.hash = "#home")} type="button">
+              <Button className={btn + " order-1 sm:order-none"} onClick={() => (window.location.hash = "#home")} type="button">
                 Vissza
               </Button>
             </div>
@@ -457,7 +457,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           <div className="text-white/70 text-xs mt-1">Létrehozva: {fmt(it.createdAt)}</div>
                         </div>
 
-                        <div className="flex items-center gap-2 flex-nowrap ml-auto">
+                        <div className="flex items-center gap-2 flex-nowrap ml-auto w-full sm:w-auto">
                           <button
                             type="button"
                             aria-label={it.revokedAt ? "Aktiválás" : "Inaktiválás"}
@@ -567,9 +567,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 </div>
               </div>
 
-              <div className="text-xs text-white/50">
-                Megjegyzés: a kódot a rendszer titkosítva tárolja, hogy az ADMIN vissza tudja küldeni. Törlés végleges.
-              </div>
+              
             </div>
 
             <div className="pt-4 border-t border-white/10 text-xs text-white/60">
