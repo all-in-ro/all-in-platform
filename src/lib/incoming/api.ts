@@ -1,4 +1,4 @@
-import type { IncomingBatchDetail, IncomingBatchSummary, Location } from "./types";
+import type { IncomingBatchDetail, IncomingBatchSummary, Location , TransferDetail, TransferSummary, TransferDraftItem} from "./types";
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -74,5 +74,49 @@ export async function apiCommitIncomingBatch(batchId: string): Promise<{ ok: tru
   return fetchJSON<{ ok: true }>(`/api/incoming/batches/${encodeURIComponent(batchId)}/commit`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+
+// --- Transfers API ---
+export async function apiCreateTransfer(input: {
+  fromLocationId: string;
+  toLocationId: string;
+  note?: string;
+}): Promise<{ id: string }> {
+  return fetchJSON<{ id: string }>(`/api/transfers`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function apiSaveTransferItems(transferId: string, items: TransferDraftItem[]): Promise<{ ok: true; count: number }> {
+  return fetchJSON<{ ok: true; count: number }>(`/api/transfers/${encodeURIComponent(transferId)}/items`, {
+    method: "POST",
+    body: JSON.stringify({ items }),
+  });
+}
+
+export async function apiListTransfers(params?: { limit?: number; offset?: number }): Promise<{ items: TransferSummary[] }> {
+  const q = new URLSearchParams();
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchJSON<{ items: TransferSummary[] }>(`/api/transfers${suffix}`);
+}
+
+export async function apiGetTransfer(transferId: string): Promise<TransferDetail> {
+  return fetchJSON<TransferDetail>(`/api/transfers/${encodeURIComponent(transferId)}`);
+}
+
+export async function apiCommitTransfer(transferId: string): Promise<{ ok: true }> {
+  return fetchJSON<{ ok: true }>(`/api/transfers/${encodeURIComponent(transferId)}/commit`, {
+    method: "POST",
+  });
+}
+
+export async function apiCancelTransfer(transferId: string): Promise<{ ok: true }> {
+  return fetchJSON<{ ok: true }>(`/api/transfers/${encodeURIComponent(transferId)}/cancel`, {
+    method: "POST",
   });
 } 
