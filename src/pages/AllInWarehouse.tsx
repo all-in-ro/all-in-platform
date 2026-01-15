@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Eye, EyeOff, ArrowLeft, Package, Pencil, Trash2 } from "lucide-react";
@@ -19,7 +19,7 @@ import { Eye, EyeOff, ArrowLeft, Package, Pencil, Trash2 } from "lucide-react";
 type StoreKey = "Csíkszereda" | "Kézdivásárhely" | "Raktár";
 
 type AllInProductRow = {
-  id: number;
+  id: string;
   imageUrl?: string;
 
   brand: string;
@@ -51,187 +51,75 @@ const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smok
 
 const STORES: StoreKey[] = ["Csíkszereda", "Kézdivásárhely", "Raktár"];
 
-// MOCK: ugyanaz a termék több sorban, külön méret + külön SKU
-const MOCK: AllInProductRow[] = [
-  {
-    id: 101,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Malfini",
-    sku: "MLF-TSH-001-S",
-    name: "Póló basic (kereknyak)",
-    size: "S",
-    colorName: "Fekete",
-    colorCode: "001",
-    colorHex: "#111827",
-    byStore: { "Csíkszereda": 5, "Kézdivásárhely": 2, Raktár: 8 },
-    incomingQty: 6,
-    sellPrice: 59.9,
-    buyPrice: 29.5,
-    gender: "Férfi",
-    category: "Pólók" },
-  {
-    id: 102,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Malfini",
-    sku: "MLF-TSH-001-M",
-    name: "Póló basic (kereknyak)",
-    size: "M",
-    colorName: "Fekete",
-    colorCode: "001",
-    colorHex: "#111827",
-    byStore: { "Csíkszereda": 3, Raktár: 6 },
-    incomingQty: 0,
-    sellPrice: 59.9,
-    buyPrice: 29.5,
-    gender: "Férfi",
-    category: "Pólók" },
-  {
-    id: 103,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Malfini",
-    sku: "MLF-TSH-001-L",
-    name: "Póló basic (kereknyak)",
-    size: "L",
-    colorName: "Fekete",
-    colorCode: "001",
-    colorHex: "#111827",
-    byStore: { "Kézdivásárhely": 1, Raktár: 4, "Sepsiszentgyörgy": 2 },
-    incomingQty: 3,
-    sellPrice: 59.9,
-    buyPrice: 29.5,
-    gender: "Férfi",
-    category: "Pólók" },
+type ApiStoreId = "csikszereda" | "kezdivasarhely" | "raktar";
 
-  {
-    id: 201,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-21-22",
-    name: "Gyerek csizma téli – MORO",
-    size: "21/22",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { "Csíkszereda": 0, Raktár: 1 },
-    incomingQty: 8,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-  {
-    id: 202,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-23-24",
-    name: "Gyerek csizma téli – MORO",
-    size: "23/24",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { "Kézdivásárhely": 2, Raktár: 4 },
-    incomingQty: 0,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-  {
-    id: 203,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-25-26",
-    name: "Gyerek csizma téli – MORO",
-    size: "25/26",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { "Csíkszereda": 1, Raktár: 3 },
-    incomingQty: 2,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
-  {
-    id: 204,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "Renbut",
-    sku: "RNB-BOOT-0138-27-28",
-    name: "Gyerek csizma téli – MORO",
-    size: "27/28",
-    colorName: "Barna",
-    colorCode: "S10",
-    colorHex: "#7c4a2d",
-    byStore: { Raktár: 2 },
-    incomingQty: 0,
-    sellPrice: 197.23,
-    buyPrice: 102.0,
-    gender: "Gyerek",
-    category: "Lábbeli" },
+type ApiWarehouseItem = {
+  product_key: string;
+  brand: string;
+  code: string;
+  name: string;
+  size: string;
+  color_name: string;
+  color_code?: string | null;
+  color_hex?: string | null;
+  gender?: string | null;
+  category?: string | null;
+  image_url?: string | null;
+  sell_price?: string | number | null;
+  buy_price?: string | number | null;
+  incoming_qty?: number | null;
+  byLocation: Partial<Record<ApiStoreId, number>>;
+};
 
-  {
-    id: 301,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-S",
-    name: "Kapucnis pulóver (unisex)",
-    size: "S",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { "Csíkszereda": 1, "Kézdivásárhely": 1, Raktár: 7 },
-    incomingQty: 10,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-  {
-    id: 302,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-M",
-    name: "Kapucnis pulóver (unisex)",
-    size: "M",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { "Csíkszereda": 2, Raktár: 4 },
-    incomingQty: 0,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-  {
-    id: 303,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-L",
-    name: "Kapucnis pulóver (unisex)",
-    size: "L",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { Raktár: 3 },
-    incomingQty: 1,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-  {
-    id: 304,
-    imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
-    brand: "All In",
-    sku: "AI-HOOD-2201-XL",
-    name: "Kapucnis pulóver (unisex)",
-    size: "XL",
-    colorName: "Kék",
-    colorCode: "B07",
-    colorHex: "#2563eb",
-    byStore: { Raktár: 2 },
-    incomingQty: 0,
-    sellPrice: 149.0,
-    buyPrice: 88.0,
-    gender: "Unisex",
-    category: "Pulóverek" },
-];
+type ApiWarehouseResponse = {
+  stores: { id: string; name: string }[];
+  items: ApiWarehouseItem[];
+};
+
+const STORE_ID_TO_NAME: Record<ApiStoreId, StoreKey> = {
+  csikszereda: "Csíkszereda",
+  kezdivasarhely: "Kézdivásárhely",
+  raktar: "Raktár",
+};
+
+function parsePrice(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function mapApiItemToRow(x: ApiWarehouseItem): AllInProductRow {
+  const byStore: Record<StoreKey, number> = {
+    "Csíkszereda": 0,
+    "Kézdivásárhely": 0,
+    "Raktár": 0,
+  };
+
+  (Object.entries(x.byLocation || {}) as Array<[ApiStoreId, number]>).forEach(([k, v]) => {
+    if (k in STORE_ID_TO_NAME) byStore[STORE_ID_TO_NAME[k]] = Number(v) || 0;
+  });
+
+  return {
+    id: x.product_key,
+    imageUrl: x.image_url ?? undefined,
+    brand: x.brand ?? "",
+    sku: x.code ?? "",
+    name: x.name ?? "",
+    size: x.size ?? "",
+    colorName: x.color_name ?? "",
+    colorCode: (x.color_code ?? undefined) as string | undefined,
+    colorHex: (x.color_hex ?? undefined) as string | undefined,
+    byStore,
+    incomingQty: x.incoming_qty ?? 0,
+    sellPrice: parsePrice(x.sell_price) ?? 0,
+    buyPrice: parsePrice(x.buy_price),
+    gender: x.gender ?? "",
+    category: x.category ?? "",
+  };
+}
+
+
+// MOCK eltávolítva: a lista most az API/DB-ből jön.
 
 function money(v?: number) {
   if (typeof v !== "number" || Number.isNaN(v)) return "—";
@@ -279,22 +167,57 @@ export default function AllInWarehouse() {
   const [q, setQ] = useState("");
   const [showBuyPrice, setShowBuyPrice] = useState(false);
 
-  const goView = (id: number) => {
+  const goView = (id: string) => {
     window.location.hash = `#allinproduct/${id}`;
   };
 
-  const goEdit = (id: number) => {
+  const goEdit = (id: string) => {
     window.location.hash = `#allinproductedit/${id}`;
   };
 
-  const doDelete = (id: number) => {
-    // Mock: később API delete + refresh
-    // Itt csak jelzünk, hogy van gomb.
-    // eslint-disable-next-line no-alert
-    alert(`Törlés (mock): ${id}`);
+  const [items, setItems] = useState<AllInProductRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadWarehouse = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/allin/warehouse", { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as ApiWarehouseResponse;
+
+      const mapped = (data.items || []).map(mapApiItemToRow);
+      setItems(mapped);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Szűrők (árakra NINCS szűrés)
+  useEffect(() => {
+    void loadWarehouse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const doDelete = async (id: string) => {
+    // Valós törlés (soft delete a backendben) + újratöltés
+    // eslint-disable-next-line no-alert
+    const ok = confirm("Biztosan törlöd ezt a terméket?");
+    if (!ok) return;
+
+    const res = await fetch(`/api/allin/products/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+
+    if (!res.ok) {
+      // eslint-disable-next-line no-alert
+      alert("Törlés sikertelen.");
+      return;
+    }
+
+    await loadWarehouse();
+  };
+
+// Szűrők (árakra NINCS szűrés)
   const [fBrand, setFBrand] = useState("");
   const [fSku, setFSku] = useState("");
   const [fName, setFName] = useState("");
@@ -302,17 +225,17 @@ export default function AllInWarehouse() {
   const [fGender, setFGender] = useState("");
   const [fCategory, setFCategory] = useState("");
 
-  const brandOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.brand))).sort(), []);
-  const colorOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.colorName))).sort(), []);
-  const genderOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.gender))).sort(), []);
-  const categoryOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.category))).sort(), []);
+  const brandOptions = useMemo(() => Array.from(new Set(items.map((x) => x.brand))).sort(), [items]);
+  const colorOptions = useMemo(() => Array.from(new Set(items.map((x) => x.colorName))).sort(), [items]);
+  const genderOptions = useMemo(() => Array.from(new Set(items.map((x) => x.gender))).sort(), [items]);
+  const categoryOptions = useMemo(() => Array.from(new Set(items.map((x) => x.category))).sort(), [items]);
 
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     const sku = fSku.trim().toLowerCase();
     const name = fName.trim().toLowerCase();
 
-    return MOCK.filter((r) => {
+    return items.filter((r) => {
       // kereső
       if (s) {
         const ok =
@@ -336,7 +259,7 @@ export default function AllInWarehouse() {
 
       return true;
     });
-  }, [q, fBrand, fSku, fName, fColor, fGender, fCategory]);
+  }, [items, q, fBrand, fSku, fName, fColor, fGender, fCategory]);
 
   const th = "px-1.5 py-1.5 text-left font-normal text-[11px] whitespace-nowrap";
   const td = "px-1.5 py-1.5 align-top text-[11px] leading-[1.15]";
