@@ -1,78 +1,83 @@
 import React, { useMemo, useRef, useState } from "react";
 import { Upload, CheckCircle2, AlertTriangle } from "lucide-react";
 import type { IncomingItemDraft, IncomingSourceMeta, Location } from "../../lib/incoming/types";
-import { parseCsvText, guessDelimiter, mapCsvRowsToIncoming, SupplierProfile, SUPPLIER_PROFILES } from "../../lib/incoming/csvParsers";
-
-const HEADER = "#354153";
+import { parseCsvText, guessDelimiter, mapCsvRowsToIncoming, SUPPLIER_PROFILES } from "../../lib/incoming/csvParsers";
 
 function uid(prefix = "m") {
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
-export default function IncomingImport({
-  locations,
-  existingCount,
-  onAddBatch
-}: {
+export default function IncomingImport(props: {
   locations: Location[];
   existingCount: number;
   onAddBatch: (items: IncomingItemDraft[], meta: IncomingSourceMeta) => void;
 }) {
+  const { locations, existingCount, onAddBatch } = props;
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   const [supplierKey, setSupplierKey] = useState<string>("generic");
-  const supplier: SupplierProfile = useMemo(() => SUPPLIER_PROFILES[supplierKey] || SUPPLIER_PROFILES.generic, [supplierKey]);
-
-  const [rawText, setRawText] = useState<string>("");
+  const [supplierName, setSupplierName] = useState<string>("");
+  const [locationId, setLocationId] = useState<string>(() => locations[0]?.id || "");
   const [fileName, setFileName] = useState<string>("");
-  const [err, setErr] = useState<string>("");
+  const [preview, setPreview] = useState<{ headers: string[]; rows: string[][] } | null>(null);
+  const [mapped, setMapped] = useState<ReturnType<typeof mapCsvRowsToIncoming> | null>(null);
+  const [error, setError] = useState<string>("");
 
-  const [preview, setPreview] = useState<{ headers: string[]; rows: Record<string, string>[] } | null>(null);
-  const [mapped, setMapped] = useState<{ items: IncomingItemDraft[]; issues: string[] } | null>(null);
+  const profile = useMemo(() => SUPPLIER_PROFILES.find((p) => p.key === supplierKey) || SUPPLIER_PROFILES[0], [supplierKey]);
 
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const invalidCount = useMemo(() => (mapped ? mapped.filter((x) => x.issues.length).length : 0), [mapped]);
 
-  const pickFile = () => fileRef.current?.click();
+  const canAdd = !!mapped && mapped.length > 0 && invalidCount === 0 && !!locationId;
 
-  const onFile = async (f: File) => {
-    setErr("");
+  const onPickFile = async (f: File) => {
+    setError("");
+    setPreview(null);
+    setMapped(null);
     setFileName(f.name);
-    const txt = await f.text();
-    setRawText(txt);
-    processText(txt, f.name);
-  };
 
-  const processText = (txt: string, label?: string) => {
-    setErr("");
-    try {
-      const delimiter = guessDelimiter(txt) || supplier.delimiter || ",";
-      const parsed = parseCsvText(txt, { delimiter });
-      setPreview({ headers: parsed.headers, rows: parsed.rows.slice(0, 50) });
-
-      const mapped2 = mapCsvRowsToIncoming(parsed, supplier);
-      setMapped(mapped2);
-    } catch (e: any) {
-      setErr(String(e?.message || e || "Hiba CSV feldolgozásnál"));
-      setPreview(null);
-      setMapped(null);
+    const text = await f.text();
+    const delim = guessDelimiter(text);
+    const parsed = parseCsvText(text, delim);
+    if (!parsed.headers.length) {
+      setError("Üres vagy nem értelmezhető CSV.");
+      return;
     }
+    setPreview(parsed);
+
+    const mappedRows = mapCsvRowsToIncoming({ headers: parsed.headers, rows: parsed.rows, profile });
+    setMapped(mappedRows);
   };
 
-  const add = () => {
-    if (!mapped?.items?.length) return;
+  const addToIncoming = () => {
+    if (!mapped) return;
+    const metaId = uid("csv");
+    const label = fileName || "CSV import";
     const meta: IncomingSourceMeta = {
-      id: uid("csv"),
+      id: metaId,
       kind: "csv",
-      label: fileName || supplier.label,
-      supplier: supplier.label,
-      createdAtISO: new Date().toISOString()
+      label,
+      supplier: supplierName.trim() || profile.label,
+      createdAtISO: new Date().toISOString(),
+      locationId: locationId,
     };
-    onAddBatch(mapped.items, meta);
-    // keep preview, but clear file input
-    if (fileRef.current) fileRef.current.value = "";
-  };
 
-  const badge = (ok: boolean) =>
-    "inline-flex items-center gap-2 px-3 py-1 rounded-xl text-xs border " +
-    (ok ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-800 border-amber-200");
+    const items: IncomingItemDraft[] = mapped.map((m) => ({
+      sku: m.sku,
+      name: m.name,
+      colorCode: m.colorCode,
+      colorName: m.colorName,
+      size: m.size,
+      category: m.category,
+      qty: m.qty,
+      sourceMetaId: metaId,
+    }));
+
+    onAddBatch(items, meta);
+    setPreview(null);
+    setMapped(null);
+    setFileName("");
+    if (inputRef.current) inputRef.current.value = "";
+  };
 
   return (
     <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
@@ -87,119 +92,137 @@ export default function IncomingImport({
             <div className="text-[11px] text-slate-600 mb-1 font-medium">Beszállító profil</div>
             <select
               value={supplierKey}
-              onChange={(e) => {
-                const k = e.target.value;
-                setSupplierKey(k);
-                if (rawText) processText(rawText, fileName);
-              }}
-              className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-[12px]"
+              onChange={(e) => setSupplierKey(e.target.value)}
+              className="w-full h-10 rounded-xl border border-slate-300 px-3 text-[12px] bg-white"
             >
-              {Object.keys(SUPPLIER_PROFILES).map((k) => (
-                <option key={k} value={k}>
-                  {SUPPLIER_PROFILES[k].label}
+              {SUPPLIER_PROFILES.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label}
                 </option>
               ))}
             </select>
           </div>
 
-          <div className="flex items-center gap-2 justify-end">
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onFile(f);
-              }}
-            />
-            <button
-              type="button"
-              onClick={pickFile}
-              className="h-9 px-4 rounded-xl bg-[#354153] hover:bg-[#3c5069] text-white border border-white/30 inline-flex items-center text-[12px]"
-              title="CSV kiválasztása"
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              CSV kiválasztása
-            </button>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Beszállító neve (opcionális)</div>
+              <input
+                value={supplierName}
+                onChange={(e) => setSupplierName(e.target.value)}
+                placeholder={profile.label}
+                className="w-full h-10 rounded-xl border border-slate-300 px-3 text-[12px]"
+              />
+            </div>
 
-            <button
-              type="button"
-              onClick={add}
-              disabled={!mapped?.items?.length}
-              className={
-                "h-9 px-4 rounded-xl text-white inline-flex items-center text-[12px] " +
-                (mapped?.items?.length ? "bg-[#208d8b] hover:bg-[#1b7a78]" : "bg-slate-300 cursor-not-allowed")
-              }
-              title="Bejövő tételekhez ad"
-            >
-              Hozzáadás ({mapped?.items?.length || 0})
-            </button>
+            <div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Helyszín (ahová bejön)</div>
+              <select
+                value={locationId}
+                onChange={(e) => setLocationId(e.target.value)}
+                className="w-full h-10 rounded-xl border border-slate-300 px-3 text-[12px] bg-white"
+              >
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
-        {err ? <div className="text-red-600 text-[12px] whitespace-pre-wrap">{err}</div> : null}
+        <div className="flex items-center gap-3">
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onPickFile(f);
+            }}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="h-10 px-4 rounded-xl border border-slate-300 bg-white text-[12px] font-semibold text-slate-800 hover:bg-slate-50 inline-flex items-center gap-2"
+          >
+            <Upload className="w-4 h-4" />
+            CSV kiválasztása
+          </button>
 
-        {/* Status */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={badge(Boolean(mapped?.items?.length))}>
-            {mapped?.items?.length ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-            {mapped?.items?.length ? `${mapped.items.length} tétel értelmezve` : "Nincs feldolgozott tétel"}
-          </span>
-          <span className="text-[11px] text-slate-500">Jelenlegi bejövő tételek: {existingCount}</span>
+          {fileName ? <div className="text-[12px] text-slate-600 truncate">{fileName}</div> : <div className="text-[12px] text-slate-400">Nincs fájl</div>}
         </div>
 
-        {mapped?.issues?.length ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-            <div className="text-[12px] font-semibold text-amber-900 mb-1">Figyelmeztetések</div>
-            <ul className="text-[11px] text-amber-800 list-disc pl-5 space-y-1">
-              {mapped.issues.slice(0, 10).map((x, i) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-          </div>
+        {error ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{error}</div>
         ) : null}
 
-        {/* Preview table */}
-        {preview ? (
+        {mapped ? (
           <div className="rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-3 py-2 border-b border-slate-200 text-[12px] font-semibold text-slate-800">Előnézet (első 50 sor)</div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-white" style={{ backgroundColor: HEADER }}>
-                    {preview.headers.map((h) => (
-                      <th key={h} className="px-2 py-2 text-left font-normal text-[11px] whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
+            <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
+              <div className="text-[11px] text-slate-600">
+                Sorok: <span className="font-semibold text-slate-800">{mapped.length}</span> | Hibás:{" "}
+                <span className={invalidCount ? "font-semibold text-red-700" : "font-semibold text-slate-800"}>{invalidCount}</span>
+              </div>
+
+              <button
+                type="button"
+                disabled={!canAdd}
+                onClick={addToIncoming}
+                className="h-9 px-3 rounded-xl bg-slate-900 text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                title={canAdd ? "Hozzáadás a bejövő tételekhez" : "Javítsd a hibákat és válassz helyszínt"}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Hozzáadás ({existingCount}+)
+              </button>
+            </div>
+
+            <div className="max-h-[340px] overflow-auto">
+              <table className="w-full text-[12px]">
+                <thead className="bg-slate-50 text-slate-600 sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold">Kód</th>
+                    <th className="text-left px-3 py-2 font-semibold">Termék</th>
+                    <th className="text-left px-3 py-2 font-semibold">Szín</th>
+                    <th className="text-left px-3 py-2 font-semibold">Méret</th>
+                    <th className="text-right px-3 py-2 font-semibold">Db</th>
+                    <th className="text-left px-3 py-2 font-semibold">Kategória</th>
+                    <th className="text-left px-3 py-2 font-semibold">Állapot</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.rows.map((r, idx) => (
-                    <tr key={idx} className="border-t border-slate-200">
-                      {preview.headers.map((h) => (
-                        <td key={h} className="px-2 py-2 text-[11px] text-slate-700 whitespace-nowrap">
-                          {r[h] || ""}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                  {!preview.rows.length ? (
-                    <tr>
-                      <td className="px-3 py-6 text-[12px] text-slate-500" colSpan={preview.headers.length}>
-                        Üres CSV? Ez művészet.
+                  {mapped.slice(0, 200).map((r, i) => (
+                    <tr key={i} className="border-t border-slate-200">
+                      <td className="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">{r.sku}</td>
+                      <td className="px-3 py-2 text-slate-800">{r.name}</td>
+                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
+                        {r.colorCode ? <span className="font-semibold">{r.colorCode}</span> : <span className="text-slate-400">-</span>}
+                        {r.colorName ? <span className="text-slate-500"> · {r.colorName}</span> : null}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.size || <span className="text-slate-400">-</span>}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.qty}</td>
+                      <td className="px-3 py-2 text-slate-700">{r.category || <span className="text-slate-400">-</span>}</td>
+                      <td className="px-3 py-2">
+                        {r.issues.length ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-red-700">
+                            <AlertTriangle className="w-3.5 h-3.5" /> {r.issues[0]}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-emerald-700">OK</span>
+                        )}
                       </td>
                     </tr>
-                  ) : null}
+                  ))}
                 </tbody>
               </table>
+              {mapped.length > 200 ? (
+                <div className="px-3 py-2 text-[11px] text-slate-500 border-t border-slate-200">Csak az első 200 sor látszik preview-ban.</div>
+              ) : null}
             </div>
           </div>
         ) : (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-[12px] text-slate-600">
-            Válassz egy CSV-t. A parser kezeli a vesszőt és a pontosvesszőt is, idézőjelekkel együtt.
-          </div>
+          <div className="text-[12px] text-slate-500">Tölts fel egy CSV-t, és megmutatom mit értettem belőle.</div>
         )}
       </div>
     </div>
