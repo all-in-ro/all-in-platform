@@ -8,15 +8,18 @@ function uid(prefix = "m") {
 
 type Row = {
   sku: string;
+  brand: string;
   name: string;
+  gender: string;
   colorCode: string;
   colorName: string;
   size: string;
   category: string;
+  buyPrice: string;
   qty: string;
 };
 
-const EMPTY_ROW: Row = { sku: "", name: "", colorCode: "", colorName: "", size: "", category: "", qty: "1" };
+const EMPTY_ROW: Row = { sku: "", brand: "", name: "", gender: "", colorCode: "", colorName: "", size: "", category: "", buyPrice: "", qty: "1" };
 
 export default function IncomingManualEntry(props: {
   locations: Location[];
@@ -60,18 +63,26 @@ export default function IncomingManualEntry(props: {
     const items: IncomingItemDraft[] = rows
       .map((r) => {
         const qty = Math.round(Number((r.qty || "").replace(",", ".")));
+        const buyPriceRaw = (r.buyPrice || "").replace(",", ".").trim();
+        const buyPrice = buyPriceRaw ? buyPriceRaw : null;
+
+        // NOTE: IncomingItemDraft doesn't necessarily have these optional fields typed,
+        // but the draft pipeline (AllInIncoming) can carry them through.
         return {
           sku: r.sku.trim(),
+          brand: r.brand.trim(),
           name: r.name.trim(),
+          gender: r.gender.trim(),
           colorCode: r.colorCode.trim(),
           colorName: r.colorName.trim(),
           size: r.size.trim(),
           category: r.category.trim(),
+          buyPrice,
           qty: Number.isFinite(qty) && qty > 0 ? qty : 0,
           sourceMetaId: metaId,
-        };
+        } as any;
       })
-      .filter((x) => x.sku && x.name && x.qty > 0);
+      .filter((x: any) => x.sku && x.name && x.qty > 0);
 
     onAddBatch(items, meta);
     setRows([{ ...EMPTY_ROW }]);
@@ -122,11 +133,14 @@ export default function IncomingManualEntry(props: {
               <thead className="bg-slate-50 text-slate-600 sticky top-0">
                 <tr>
                   <th className="text-left px-3 py-2 font-semibold">Kód</th>
-                  <th className="text-left px-3 py-2 font-semibold">Termék</th>
+                  <th className="text-left px-3 py-2 font-semibold">Márka</th>
+                  <th className="text-left px-3 py-2 font-semibold">Terméknév</th>
+                  <th className="text-left px-3 py-2 font-semibold">Nem</th>
                   <th className="text-left px-3 py-2 font-semibold">Színkód</th>
                   <th className="text-left px-3 py-2 font-semibold">Szín</th>
                   <th className="text-left px-3 py-2 font-semibold">Méret</th>
                   <th className="text-left px-3 py-2 font-semibold">Kategória</th>
+                  <th className="text-right px-3 py-2 font-semibold">Beszerzési ár</th>
                   <th className="text-right px-3 py-2 font-semibold">Db</th>
                   <th className="px-3 py-2"></th>
                 </tr>
@@ -138,7 +152,22 @@ export default function IncomingManualEntry(props: {
                       <input value={r.sku} onChange={(e) => setCell(idx, "sku", e.target.value)} className="w-full h-9 rounded-lg border border-slate-300 px-2 text-[12px]" />
                     </td>
                     <td className="px-3 py-2">
+                      <input value={r.brand} onChange={(e) => setCell(idx, "brand", e.target.value)} className="w-full h-9 rounded-lg border border-slate-300 px-2 text-[12px]" />
+                    </td>
+                    <td className="px-3 py-2">
                       <input value={r.name} onChange={(e) => setCell(idx, "name", e.target.value)} className="w-full h-9 rounded-lg border border-slate-300 px-2 text-[12px]" />
+                    </td>
+                    <td className="px-3 py-2">
+                      <select
+                        value={r.gender}
+                        onChange={(e) => setCell(idx, "gender", e.target.value)}
+                        className="w-full h-9 rounded-lg border border-slate-300 px-2 text-[12px] bg-white"
+                      >
+                        <option value="">-</option>
+                        <option value="N">Női</option>
+                        <option value="F">Férfi</option>
+                        <option value="U">Unisex</option>
+                      </select>
                     </td>
                     <td className="px-3 py-2">
                       <input value={r.colorCode} onChange={(e) => setCell(idx, "colorCode", e.target.value)} className="w-full h-9 rounded-lg border border-slate-300 px-2 text-[12px]" />
@@ -151,6 +180,14 @@ export default function IncomingManualEntry(props: {
                     </td>
                     <td className="px-3 py-2">
                       <input value={r.category} onChange={(e) => setCell(idx, "category", e.target.value)} className="w-full h-9 rounded-lg border border-slate-300 px-2 text-[12px]" />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <input
+                        value={r.buyPrice}
+                        onChange={(e) => setCell(idx, "buyPrice", e.target.value)}
+                        placeholder="0.00"
+                        className="w-[110px] h-9 rounded-lg border border-slate-300 px-2 text-[12px] text-right"
+                      />
                     </td>
                     <td className="px-3 py-2 text-right">
                       <input
