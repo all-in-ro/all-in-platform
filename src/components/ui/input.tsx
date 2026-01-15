@@ -8,7 +8,13 @@ function cn(...classes: Array<string | undefined | false | null>) {
 
 /**
  * Minimal shadcn-compatible Input.
- * Usage: import { Input } from "@/components/ui/input";
+ *
+ * NOTE: Alapértelmezett (light) stílus, hogy fehér kártyákon is látszódjon:
+ * - világos háttér
+ * - sötét szöveg + halvány placeholder
+ *
+ * Ha sötét hátteren kell (pl. top bar), adj át className-ben:
+ *   "bg-white/10 text-white placeholder:text-white/50 border-white/20"
  */
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, ...props }, ref) => {
@@ -17,8 +23,8 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         type={type}
         ref={ref}
         className={cn(
-          "flex h-10 w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/50",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 focus-visible:border-white/30",
+          "flex h-10 w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 focus-visible:border-slate-400",
           "disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
@@ -27,4 +33,4 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     );
   }
 );
-Input.displayName = "Input"; 
+Input.displayName = "Input";
