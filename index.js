@@ -90,6 +90,14 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireAuthed(req, res, next) {
+  const sid = getSid(req);
+  const s = sid ? sessions.get(sid) : null;
+  if (!s) return res.status(401).send("Not authorized");
+  req.session = s;
+  next();
+}
+
 // --- encrypt/decrypt codes for admin resend (AES-256-GCM) ---
 function codeKey() {
   return crypto.createHash("sha256").update(String(SESSION_SECRET)).digest(); // 32 bytes
@@ -158,8 +166,12 @@ async function ensureShops() {
   await pool.query(
     "INSERT INTO shops (id, name) VALUES ('kezdivasarhely','Kézdivásárhely') ON CONFLICT (id) DO NOTHING"
   );
+  await pool.query(
+    "INSERT INTO shops (id, name) VALUES ('raktar','Raktár') ON CONFLICT (id) DO NOTHING"
+  );
   shopsReady = true;
 }
+
 
 async function shopExists(id) {
   await ensureShops();
@@ -229,6 +241,14 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 // --- admin: shops ---
+
+// --- shops (places): list for any logged in user (admin or shop) ---
+app.get("/api/shops", requireAuthed, async (req, res) => {
+  await ensureShops();
+  const r = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
+  res.json({ items: r.rows });
+});
+
 app.get("/api/admin/shops", requireAdmin, async (req, res) => {
   await ensureShops();
   const r = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
