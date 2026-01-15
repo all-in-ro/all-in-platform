@@ -18,6 +18,13 @@ function mergeKey(it: { sku: string; size: string; colorCode: string; category: 
   return [it.sku || "", it.size || "", it.colorCode || "", it.category || "", it.name || ""].join("|").toLowerCase();
 }
 
+type IncomingItemDraftUI = IncomingItemDraft & {
+  brand?: string;
+  gender?: string;
+  buyPrice?: string | number | null;
+  colorHex?: string;
+};
+
 export default function AllInIncoming() {
   const [tab, setTab] = useState<TabKey>("import");
 
@@ -28,7 +35,9 @@ export default function AllInIncoming() {
   ]);
   const [locErr, setLocErr] = useState<string>("");
 
-  const [incoming, setIncoming] = useState<IncomingItemDraft[]>([]);
+  const [warehouseItems, setWarehouseItems] = useState<any[]>([]);
+
+  const [incoming, setIncoming] = useState<IncomingItemDraftUI[]>([]);
   const [incomingMeta, setIncomingMeta] = useState<Record<string, IncomingSourceMeta>>({});
 
   const [transfer, setTransfer] = useState<TransferDraft>({
@@ -53,11 +62,10 @@ export default function AllInIncoming() {
     (async () => {
       try {
         setLocErr("");
-        const res = await apiGetLocations();
+        const shops = await apiGetLocations();
         if (!alive) return;
-        const shopsArr: any[] = Array.isArray(res) ? res : Array.isArray((res as any)?.items) ? (res as any).items : Array.isArray((res as any)?.stores) ? (res as any).stores : [];
         // map shops -> Location
-        const locs: Location[] = shopsArr.map((s: any) => ({
+        const locs: Location[] = shops.map((s: any) => ({
           id: s.id,
           name: s.name || s.label || s.id,
           kind: s.kind || (s.id === "raktar" ? "warehouse" : "shop"),
@@ -73,19 +81,63 @@ export default function AllInIncoming() {
     };
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/allin/warehouse", { credentials: "include" });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!alive) return;
+        setWarehouseItems(Array.isArray(j?.items) ? j.items : []);
+      } catch {
+        // ignore: warehouse lookup is only for enrichment
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const warehouseByKey = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const it of warehouseItems || []) {
+      const k = [(it.code || ""), (it.size || ""), (it.color_code || it.colorCode || "")].join("|").toLowerCase();
+      m.set(k, it);
+    }
+    return m;
+  }, [warehouseItems]);
+
+  const enrichIncomingItem = (n: IncomingItemDraft): IncomingItemDraftUI => {
+    const k = [(n.sku || ""), (n.size || ""), (n.colorCode || "")].join("|").toLowerCase();
+    const wh = warehouseByKey.get(k);
+    if (!wh) return n as any;
+    return {
+      ...n,
+      brand: wh.brand ?? (n as any).brand,
+      gender: wh.gender ?? (n as any).gender,
+      buyPrice: wh.buy_price ?? wh.buyPrice ?? (n as any).buyPrice ?? null,
+      colorHex: wh.color_hex ?? wh.colorHex ?? (n as any).colorHex,
+      colorName: (wh.color_name || wh.colorName || n.colorName || "").toString(),
+      category: (wh.category || n.category || "").toString(),
+      name: (wh.name || n.name || "").toString(),
+    } as any;
+  };
+
   const addBatch = (items: IncomingItemDraft[], meta: IncomingSourceMeta) => {
     if (!items.length) return;
     const metaId = meta.id;
 
     // merge by key
     setIncoming((prev) => {
-      const map = new Map<string, IncomingItemDraft>();
+      const map = new Map<string, IncomingItemDraftUI>();
       for (const p of prev) map.set(mergeKey(p), p);
       for (const n of items) {
-        const k = mergeKey(n);
+        const nn = enrichIncomingItem(n);
+        const k = mergeKey(nn);
         const ex = map.get(k);
-        if (!ex) map.set(k, n);
-        else map.set(k, { ...ex, qty: ex.qty + n.qty });
+        if (!ex) map.set(k, nn as any);
+        else map.set(k, { ...(ex as any), qty: ex.qty + nn.qty } as any);
       }
       return Array.from(map.values());
     });
@@ -148,7 +200,7 @@ export default function AllInIncoming() {
             size: x.size,
             category: x.category,
             qty: x.qty,
-            raw: { sourceMetaId: x.sourceMetaId },
+            raw: { sourceMetaId: x.sourceMetaId, brand: (x as any).brand, gender: (x as any).gender, buy_price: ((x as any).buyPrice ?? (x as any).buy_price ?? null), color_hex: ((x as any).colorHex ?? (x as any).color_hex ?? null) },
           }))
         );
       }
@@ -193,13 +245,17 @@ export default function AllInIncoming() {
         createdAtISO: d.created_at,
         locationId: d.location_id,
       };
-      const items: IncomingItemDraft[] = d.items.map((it) => ({
+      const items: IncomingItemDraftUI[] = d.items.map((it: any) => ({
         sku: (it.product_code || "").toString(),
         name: (it.product_name || "").toString(),
         colorCode: (it.color_code || "").toString(),
         colorName: (it.color_name || "").toString(),
         size: (it.size || "").toString(),
         category: (it.category || "").toString(),
+        brand: (it.raw?.brand || "").toString(),
+        gender: (it.raw?.gender || "").toString(),
+        buyPrice: it.raw?.buy_price ?? null,
+        colorHex: (it.raw?.color_hex || "").toString(),
         qty: it.qty,
         sourceMetaId: metaId,
       }));
@@ -444,26 +500,36 @@ export default function AllInIncoming() {
             <table className="w-full text-[12px]">
               <thead className="bg-slate-50 text-slate-600 sticky top-0">
                 <tr>
-                  <th className="text-left px-3 py-2 font-semibold">Kód</th>
-                  <th className="text-left px-3 py-2 font-semibold">Termék</th>
+                  <th className="text-left px-3 py-2 font-semibold">Márka</th>
+                  <th className="text-left px-3 py-2 font-semibold">Termékkód</th>
+                  <th className="text-left px-3 py-2 font-semibold">Terméknév</th>
+                  <th className="text-left px-3 py-2 font-semibold">Nem</th>
+                  <th className="text-left px-3 py-2 font-semibold">Kategória</th>
                   <th className="text-left px-3 py-2 font-semibold">Szín</th>
                   <th className="text-left px-3 py-2 font-semibold">Méret</th>
-                  <th className="text-left px-3 py-2 font-semibold">Kategória</th>
-                  <th className="text-right px-3 py-2 font-semibold">Db</th>
+                  <th className="text-right px-3 py-2 font-semibold">Bejövő (db)</th>
+                  <th className="text-right px-3 py-2 font-semibold">Bevételi ár</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {incoming.map((it, idx) => (
                   <tr key={idx} className="border-t border-slate-200">
+                    <td className="px-3 py-2 text-slate-800 whitespace-nowrap">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">{it.sku}</td>
                     <td className="px-3 py-2 text-slate-800">{it.name}</td>
+                    <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
-                      {it.colorCode ? <span className="font-semibold">{it.colorCode}</span> : <span className="text-slate-400">-</span>}
-                      {it.colorName ? <span className="text-slate-500"> · {it.colorName}</span> : null}
+                      <span className="inline-flex items-center gap-2">
+                        {(it as any).colorHex ? (
+                          <span className="w-3 h-3 rounded-full border border-slate-300" style={{ background: (it as any).colorHex as any }} />
+                        ) : null}
+                        {it.colorCode ? <span className="font-semibold text-slate-800">{it.colorCode}</span> : <span className="text-slate-400">-</span>}
+                        {it.colorName ? <span className="text-slate-500">· {it.colorName}</span> : null}
+                      </span>
                     </td>
                     <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{it.size || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 text-right">
                       <input
                         value={String(it.qty)}
@@ -473,6 +539,13 @@ export default function AllInIncoming() {
                         }}
                         className="w-[90px] h-9 rounded-lg border border-slate-300 px-2 text-[12px] text-right"
                       />
+                    </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {(() => {
+                        const bp = (it as any).buyPrice ?? (it as any).buy_price ?? null;
+                        if (bp === null || bp === undefined || bp === "") return <span className="text-slate-400">-</span>;
+                        return <span className="font-semibold text-slate-900">{String(bp)}</span>;
+                      })()}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <button
@@ -488,7 +561,7 @@ export default function AllInIncoming() {
                 ))}
                 {!incoming.length ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
+                    <td colSpan={10} className="px-3 py-10 text-center text-slate-500">
                       Még nincs tétel.
                     </td>
                   </tr>
