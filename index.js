@@ -376,7 +376,7 @@ app.get("/api/incoming/batches/:id", requireAuthed, async (req, res) => {
   }
 
   const items = await pool.query(
-    `SELECT id, batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, raw
+    `SELECT id, batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, buy_price, raw
      FROM incoming_items WHERE batch_id=$1 ORDER BY id ASC`,
     [id]
   );
