@@ -53,10 +53,11 @@ export default function AllInIncoming() {
     (async () => {
       try {
         setLocErr("");
-        const shops = await apiGetLocations();
+        const res = await apiGetLocations();
         if (!alive) return;
+        const shopsArr: any[] = Array.isArray(res) ? res : Array.isArray((res as any)?.items) ? (res as any).items : Array.isArray((res as any)?.stores) ? (res as any).stores : [];
         // map shops -> Location
-        const locs: Location[] = shops.map((s: any) => ({
+        const locs: Location[] = shopsArr.map((s: any) => ({
           id: s.id,
           name: s.name || s.label || s.id,
           kind: s.kind || (s.id === "raktar" ? "warehouse" : "shop"),
