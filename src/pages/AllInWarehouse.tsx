@@ -275,7 +275,7 @@ function QtyPill({ qty, muted }: { qty: number; muted?: boolean }) {
         "inline-flex w-[56px] justify-center self-start px-3 py-1 rounded-lg text-[13px] border " +
         (muted || isZero
           ? "bg-white text-slate-400 border-slate-200"
-          : "bg-[#354153] text-white border-white/25")
+          : "bg-[#dde4ef] text-slate-700 border-[#dde4ef]")
       }
       title={String(qty)}
     >
@@ -589,9 +589,7 @@ export default function AllInWarehouse() {
                       </td>
 
                       <td className={td}>
-                        <span className="inline-flex min-w-[44px] justify-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-800 border border-slate-200">
-                          {r.size}
-                        </span>
+                        <span className="inline-flex min-w-[44px] justify-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-teal-600 text-white border border-teal-600">{r.size}</span>
                       </td>
 
                       <td className={td + " text-center border-l border-slate-200 bg-slate-50"}>
@@ -612,7 +610,7 @@ export default function AllInWarehouse() {
                         <span
                           className={
                             "inline-flex w-[62px] justify-center px-2.5 py-1 rounded-md text-[12px] border " +
-                            (total === 0 ? "bg-white text-slate-400 border-slate-200" : "bg-[#354153] text-white border-white/25")
+                            (total === 0 ? "bg-white text-slate-400 border-slate-200" : "bg-teal-600 text-white border-teal-600")
                           }
                           title="Üzletek összege + bejövő"
                         >
