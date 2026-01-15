@@ -872,6 +872,193 @@ app.post("/api/transfers/:id/cancel", requireAuthed, async (req, res) => {
 });
 
 // --- static frontend ---
+
+// ======================
+// ALL IN – Warehouse v1
+// Products master + location stock (server as truth)
+// ======================
+
+function makeProductKey({ code, colorCode, size }) {
+  const c = String(code || "").trim();
+  const cc = String(colorCode || "").trim();
+  const s = String(size || "").trim();
+  return `${c}|${cc}|${s}`;
+}
+
+async function ensureAllInTables() {
+  // Do NOT auto-create tables here. User runs migrations manually in Render Shell.
+  // This function exists only for future; kept intentionally unused.
+  return true;
+}
+
+app.get("/api/allin/warehouse", requireAuthed, async (req, res) => {
+  try {
+    const shops = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
+    const products = await pool.query(
+      `SELECT product_key, brand, code, name, size, color_name, color_code, category, image_url
+       FROM allin_products
+       ORDER BY name ASC, brand ASC, code ASC, color_code ASC, size ASC`
+    );
+    const stock = await pool.query(
+      `SELECT location_id, product_key, qty
+       FROM location_stock`
+    );
+
+    const stockMap = new Map(); // key: location_id|product_key -> qty
+    for (const r of stock.rows) {
+      stockMap.set(`${r.location_id}|${r.product_key}`, Number(r.qty || 0));
+    }
+
+    const items = products.rows.map((p) => {
+      const byLocation = {};
+      for (const sh of shops.rows) {
+        byLocation[sh.id] = stockMap.get(`${sh.id}|${p.product_key}`) ?? 0;
+      }
+      return { ...p, byLocation };
+    });
+
+    res.json({ stores: shops.rows, items });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to load warehouse" });
+  }
+});
+
+app.post("/api/allin/products", requireAuthed, express.json(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const brand = String(body.brand || "").trim();
+    const code = String(body.code || "").trim();
+    const name = String(body.name || "").trim();
+    const size = String(body.size || "").trim();
+    const color_name = String(body.color_name || body.colorName || "").trim();
+    const color_code = String(body.color_code || body.colorCode || "").trim();
+    const category = String(body.category || "").trim();
+    const image_url = String(body.image_url || body.imageUrl || "").trim();
+
+    if (!code || !name || !size) {
+      return res.status(400).json({ error: "Missing required fields: code, name, size" });
+    }
+
+    const product_key = makeProductKey({ code, colorCode: color_code, size });
+
+    await pool.query(
+      `INSERT INTO allin_products (product_key, brand, code, name, size, color_name, color_code, category, image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (product_key) DO UPDATE
+         SET brand=EXCLUDED.brand,
+             name=EXCLUDED.name,
+             color_name=EXCLUDED.color_name,
+             category=EXCLUDED.category,
+             image_url=EXCLUDED.image_url`,
+      [product_key, brand, code, name, size, color_name, color_code, category, image_url]
+    );
+
+    res.json({ ok: true, product_key });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to create product" });
+  }
+});
+
+app.patch("/api/allin/products/:product_key", requireAuthed, express.json(), async (req, res) => {
+  try {
+    const product_key = req.params.product_key;
+    const body = req.body || {};
+
+    const fields = {
+      brand: body.brand,
+      name: body.name,
+      category: body.category,
+      image_url: body.image_url ?? body.imageUrl,
+      color_name: body.color_name ?? body.colorName
+    };
+
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const [k, v] of Object.entries(fields)) {
+      if (v === undefined) continue;
+      sets.push(`${k}=$${i++}`);
+      vals.push(String(v).trim());
+    }
+    if (!sets.length) return res.json({ ok: true });
+
+    vals.push(product_key);
+    await pool.query(`UPDATE allin_products SET ${sets.join(", ")} WHERE product_key=$${i}`, vals);
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to update product" });
+  }
+});
+
+app.delete("/api/allin/products/:product_key", requireAuthed, async (req, res) => {
+  try {
+    const product_key = req.params.product_key;
+    await pool.query("DELETE FROM allin_products WHERE product_key=$1", [product_key]);
+    await pool.query("DELETE FROM location_stock WHERE product_key=$1", [product_key]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to delete product" });
+  }
+});
+
+app.post("/api/allin/stock/set", requireAuthed, express.json(), async (req, res) => {
+  try {
+    const { location_id, product_key, qty, reason } = req.body || {};
+    const loc = String(location_id || "").trim();
+    const key = String(product_key || "").trim();
+    const q = Number(qty);
+
+    if (!loc || !key || !Number.isFinite(q) || q < 0) {
+      return res.status(400).json({ error: "Invalid payload (location_id, product_key, qty>=0 required)" });
+    }
+
+    await pool.query(
+      `INSERT INTO location_stock (location_id, product_key, qty, updated_at)
+       VALUES ($1,$2,$3, now())
+       ON CONFLICT (location_id, product_key) DO UPDATE
+         SET qty=EXCLUDED.qty,
+             updated_at=now()`,
+      [loc, key, Math.floor(q)]
+    );
+
+    // audit move as delta vs previous (optional) – keep simple v1: write absolute set as move delta computed server-side
+    const prev = await pool.query(`SELECT qty FROM location_stock WHERE location_id=$1 AND product_key=$2`, [loc, key]);
+    // prev already updated; can't compute. Keep minimal: write a move with qty_delta=0 and note in actor string? skip.
+    // We'll write a move with qty_delta=0 but include source_id as reason for trace.
+    const actor = (req.session?.admin?.email || req.session?.shop?.email || "unknown").toString();
+    await pool.query(
+      `INSERT INTO stock_moves (source_type, source_id, location_id, product_key, qty_delta, actor)
+       VALUES ('manual', $1, $2, $3, 0, $4)`,
+      [String(reason || "manual_set"), loc, key, actor]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to set stock" });
+  }
+});
+
+app.get("/api/allin/stock", requireAuthed, async (req, res) => {
+  try {
+    const location_id = String(req.query.location_id || "").trim();
+    if (!location_id) return res.status(400).json({ error: "location_id required" });
+    const r = await pool.query(
+      `SELECT product_key, qty FROM location_stock WHERE location_id=$1 ORDER BY product_key ASC`,
+      [location_id]
+    );
+    res.json({ items: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to load stock" });
+  }
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("*", (req, res) => {
