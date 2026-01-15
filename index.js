@@ -445,10 +445,23 @@ app.post("/api/incoming/batches/:id/items", requireAuthed, async (req, res) => {
     await client.query("COMMIT");
     res.json({ ok: true });
   } catch (e) {
-    try { await client.query("ROLLBACK"); } catch {}
-    console.error(e);
-    res.status(500).json({ error: "db error" });
-  } finally {
+      try { await client.query("ROLLBACK"); } catch {}
+
+      // Postgres error codes:
+      // 23514 = check_violation
+      if (e && e.code === "23514") {
+        if (e.constraint === "incoming_items_buy_price_non_negative") {
+          return res.status(400).json({ error: "buy_price must be >= 0" });
+        }
+        if (e.constraint === "incoming_items_qty_check") {
+          return res.status(400).json({ error: "qty must be > 0" });
+        }
+        return res.status(400).json({ error: "invalid input" });
+      }
+
+      console.error("db error", e);
+      return res.status(500).json({ error: "db error" });
+    } finally {
     client.release();
   }
 });
