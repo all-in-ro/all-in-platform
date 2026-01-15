@@ -46,6 +46,8 @@ type AllInProductRow = {
 
 const BG = "#474c59";
 const HEADER = "#354153";
+// Public logo (Cloudflare R2) – works in all deployments
+const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
 
 const STORES: StoreKey[] = ["Csíkszereda", "Kézdivásárhely", "Raktár"];
 
@@ -350,7 +352,7 @@ export default function AllInWarehouse() {
             </div>
             <div className="leading-tight flex items-center gap-2">
               <img
-                src={`${import.meta.env.BASE_URL}allin-logo-w.png`}
+                src={ALLIN_LOGO_URL}
                 alt="ALL IN"
                 className="h-6 w-auto"
               />
@@ -389,7 +391,7 @@ export default function AllInWarehouse() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Gyorsszűrő: bármi (márka, kód, név, szín, színkód, kategória, méret...)"
-            className="h-9 text-[12px]"
+            className="h-9 text-[12px] bg-white text-slate-700 placeholder:text-slate-400"
           />
         </div>
         {/* Filters */}
@@ -468,7 +470,7 @@ export default function AllInWarehouse() {
                 value={fSku}
                 onChange={(e) => setFSku(e.target.value)}
                 placeholder="szűrő…"
-                className="h-9 text-[12px]"
+                className="h-9 text-[12px] bg-white text-slate-700 placeholder:text-slate-400"
               />
             </div>
 
@@ -478,7 +480,7 @@ export default function AllInWarehouse() {
                 value={fName}
                 onChange={(e) => setFName(e.target.value)}
                 placeholder="szűrő…"
-                className="h-9 text-[12px]"
+                className="h-9 text-[12px] bg-white text-slate-700 placeholder:text-slate-400"
               />
             </div>
 
