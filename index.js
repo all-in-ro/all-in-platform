@@ -721,6 +721,156 @@ app.get("/api/health", async (req, res) => {
   res.json({ ok: true, db: r.rowCount === 1 });
 });
 
+
+// --- Transfers API (draft + items + commit/cancel) ---
+app.post("/api/transfers", requireAuthed, async (req, res) => {
+  const s = req.session;
+  const body = req.body || {};
+  const fromLocationId = String(body.fromLocationId || "").trim();
+  const toLocationId = String(body.toLocationId || "").trim();
+  const note = body.note != null ? String(body.note) : null;
+
+  if (!fromLocationId || !toLocationId) return res.status(400).json({ error: "Missing from/to location" });
+  if (fromLocationId === toLocationId) return res.status(400).json({ error: "From and To cannot be the same" });
+
+  const id = crypto.randomUUID();
+  const createdBy = s?.isAdmin ? "ADMIN" : "SHOP";
+  const actor = s?.user || s?.shopId || "unknown";
+
+  await pool.query(
+    `INSERT INTO transfers (id, created_at, from_location_id, to_location_id, status, note, created_by, actor)
+     VALUES ($1, now(), $2, $3, 'draft', $4, $5, $6)`,
+    [id, fromLocationId, toLocationId, note, createdBy, actor]
+  );
+
+  res.json({ id });
+});
+
+app.get("/api/transfers", requireAuthed, async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+
+  const r = await pool.query(
+    `SELECT id,
+            created_at,
+            status,
+            from_location_id AS "fromLocationId",
+            to_location_id   AS "toLocationId",
+            note,
+            created_by AS "createdBy",
+            actor
+     FROM transfers
+     ORDER BY created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+
+  res.json({
+    items: r.rows.map((x) => ({ ...x, createdAtISO: x.created_at })),
+  });
+});
+
+app.get("/api/transfers/:id", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const h = await pool.query(
+    `SELECT id,
+            created_at,
+            status,
+            from_location_id AS "fromLocationId",
+            to_location_id   AS "toLocationId",
+            note,
+            created_by AS "createdBy",
+            actor
+     FROM transfers
+     WHERE id = $1`,
+    [id]
+  );
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+
+  const items = await pool.query(
+    `SELECT product_code AS sku,
+            product_name AS name,
+            color_code   AS "colorCode",
+            color_name   AS "colorName",
+            size,
+            category,
+            qty,
+            matched_product_id AS "matchedProductId",
+            raw
+     FROM transfer_items
+     WHERE transfer_id = $1
+     ORDER BY id ASC`,
+    [id]
+  );
+
+  const row = h.rows[0];
+  res.json({
+    id: row.id,
+    createdAtISO: row.created_at,
+    status: row.status,
+    fromLocationId: row.fromLocationId,
+    toLocationId: row.toLocationId,
+    note: row.note,
+    createdBy: row.createdBy,
+    actor: row.actor,
+    items: items.rows,
+  });
+});
+
+app.post("/api/transfers/:id/items", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const body = req.body || {};
+  const items = Array.isArray(body.items) ? body.items : [];
+
+  const h = await pool.query(`SELECT status FROM transfers WHERE id = $1`, [id]);
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+  if (h.rows[0].status !== "draft") return res.status(400).json({ error: "Only draft transfers can be edited" });
+
+  await pool.query("DELETE FROM transfer_items WHERE transfer_id = $1", [id]);
+
+  let count = 0;
+  for (const it of items) {
+    const sku = it.sku != null ? String(it.sku) : null;
+    const name = it.name != null ? String(it.name) : null;
+    const colorCode = it.colorCode != null ? String(it.colorCode) : null;
+    const colorName = it.colorName != null ? String(it.colorName) : null;
+    const size = it.size != null ? String(it.size) : null;
+    const category = it.category != null ? String(it.category) : null;
+    const qty = Number(it.qty || 0);
+    if (!qty || qty <= 0) continue;
+
+    await pool.query(
+      `INSERT INTO transfer_items
+        (transfer_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, raw)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, sku, name, colorCode, colorName, size, category, qty, it.matchedProductId || null, it.raw || null]
+    );
+    count++;
+  }
+
+  res.json({ ok: true, count });
+});
+
+app.post("/api/transfers/:id/commit", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const h = await pool.query(`SELECT status FROM transfers WHERE id = $1`, [id]);
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+  if (h.rows[0].status !== "draft") return res.status(400).json({ error: "Only draft transfers can be committed" });
+
+  await pool.query(`UPDATE transfers SET status = 'committed' WHERE id = $1`, [id]);
+  res.json({ ok: true });
+});
+
+app.post("/api/transfers/:id/cancel", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const h = await pool.query(`SELECT status FROM transfers WHERE id = $1`, [id]);
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+  if (h.rows[0].status !== "draft") return res.status(400).json({ error: "Only draft transfers can be cancelled" });
+
+  await pool.query(`UPDATE transfers SET status = 'cancelled' WHERE id = $1`, [id]);
+  res.json({ ok: true });
+});
+
 // --- static frontend ---
 app.use(express.static(path.join(__dirname, "public")));
 
