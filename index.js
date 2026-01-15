@@ -283,6 +283,188 @@ app.delete("/api/admin/shops/:id", requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+
+
+// =========================
+// Incoming v1 (draft -> DB)
+// =========================
+
+// NOTE: these endpoints assume the DB tables exist.
+// We'll create them with Render Shell SQL when needed.
+
+function normalizeStr(v) {
+  return String(v ?? "").trim();
+}
+
+function toInt(v) {
+  const n = Number.parseInt(String(v ?? "").trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+app.post("/api/incoming/batches", requireAuthed, async (req, res) => {
+  const s = req.session;
+  const body = req.body || {};
+
+  const supplier = normalizeStr(body.supplier);
+  const sourceType = normalizeStr(body.sourceType || body.source_type || "manual"); // csv | manual
+  const locationId = normalizeStr(body.locationId || body.location_id || (s.role === "shop" ? s.shopId : "raktar"));
+  const note = normalizeStr(body.note);
+
+  if (!supplier) return res.status(400).json({ error: "supplier required" });
+  if (!locationId) return res.status(400).json({ error: "locationId required" });
+  if (!["csv", "manual"].includes(sourceType)) return res.status(400).json({ error: "sourceType must be csv|manual" });
+
+  const id = newId("incb");
+  const createdBy = s.role === "admin" ? "ADMIN" : "SHOP";
+  const actor = s.actor || createdBy;
+
+  await pool.query(
+    `INSERT INTO incoming_batches (id, supplier, source_type, location_id, status, note, created_by, actor)
+     VALUES ($1,$2,$3,$4,'draft',$5,$6,$7)`,
+    [id, supplier, sourceType, locationId, note || null, createdBy, actor]
+  );
+
+  res.json({ id });
+});
+
+app.get("/api/incoming/batches", requireAuthed, async (req, res) => {
+  const from = normalizeStr(req.query.from);
+  const to = normalizeStr(req.query.to);
+  const locationId = normalizeStr(req.query.locationId || req.query.location_id);
+
+  const where = [];
+  const args = [];
+  let i = 1;
+
+  if (from) { where.push(`created_at >= $${i++}`); args.push(from); }
+  if (to) { where.push(`created_at <= $${i++}`); args.push(to); }
+  if (locationId) { where.push(`location_id = $${i++}`); args.push(locationId); }
+
+  // shop users only see their own location by default unless explicitly admin
+  if (req.session.role === "shop" && !locationId) {
+    where.push(`location_id = $${i++}`);
+    args.push(req.session.shopId);
+  }
+
+  const q = `
+    SELECT b.id, b.created_at, b.supplier, b.source_type, b.location_id, b.status, b.note,
+           (SELECT COUNT(*) FROM incoming_items it WHERE it.batch_id = b.id) AS items_count
+    FROM incoming_batches b
+    ${where.length ? "WHERE " + where.join(" AND ") : ""}
+    ORDER BY b.created_at DESC
+    LIMIT 200
+  `;
+
+  const r = await pool.query(q, args);
+  res.json({ items: r.rows });
+});
+
+app.get("/api/incoming/batches/:id", requireAuthed, async (req, res) => {
+  const id = normalizeStr(req.params.id);
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const b = await pool.query(
+    `SELECT id, created_at, supplier, source_type, location_id, status, note, created_by, actor
+     FROM incoming_batches WHERE id=$1`,
+    [id]
+  );
+  if (!b.rows.length) return res.status(404).json({ error: "not found" });
+
+  // shop users can only read their own location
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const items = await pool.query(
+    `SELECT id, batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, raw
+     FROM incoming_items WHERE batch_id=$1 ORDER BY id ASC`,
+    [id]
+  );
+
+  res.json({ batch: b.rows[0], items: items.rows });
+});
+
+app.post("/api/incoming/batches/:id/items", requireAuthed, async (req, res) => {
+  const batchId = normalizeStr(req.params.id);
+  if (!batchId) return res.status(400).json({ error: "batch id required" });
+
+  // verify batch + permissions
+  const b = await pool.query(`SELECT id, location_id, status FROM incoming_batches WHERE id=$1`, [batchId]);
+  if (!b.rows.length) return res.status(404).json({ error: "batch not found" });
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (b.rows[0].status !== "draft") {
+    return res.status(400).json({ error: "batch is not draft" });
+  }
+
+  const body = req.body || {};
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) return res.status(400).json({ error: "items required" });
+
+  // transactional replace: delete existing, insert new
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM incoming_items WHERE batch_id=$1", [batchId]);
+
+    for (const it of items) {
+      const product_code = normalizeStr(it.code || it.product_code);
+      const product_name = normalizeStr(it.name || it.product_name);
+      const color_code = normalizeStr(it.colorCode || it.color_code);
+      const color_name = normalizeStr(it.colorName || it.color_name);
+      const size = normalizeStr(it.size);
+      const category = normalizeStr(it.category);
+      const qty = toInt(it.qty);
+
+      if (!product_code && !product_name) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "each item needs code or name" });
+      }
+      if (qty === null || qty <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "each item needs qty > 0" });
+      }
+
+      const matched_product_id = it.matchedProductId ? normalizeStr(it.matchedProductId) : null;
+      const raw = it && typeof it === "object" ? it : null;
+
+      await client.query(
+        `INSERT INTO incoming_items
+         (batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, raw)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [batchId, product_code || null, product_name || null, color_code || null, color_name || null, size || null, category || null, qty, matched_product_id, raw]
+      );
+    }
+
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error(e);
+    res.status(500).json({ error: "db error" });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/incoming/batches/:id/commit", requireAuthed, async (req, res) => {
+  const id = normalizeStr(req.params.id);
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const b = await pool.query(`SELECT id, location_id, status FROM incoming_batches WHERE id=$1`, [id]);
+  if (!b.rows.length) return res.status(404).json({ error: "not found" });
+
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  // v1: only status change. Stock posting comes later with stock tables.
+  await pool.query(`UPDATE incoming_batches SET status='committed' WHERE id=$1 AND status='draft'`, [id]);
+
+  res.json({ ok: true });
+});
+
 // --- admin: R2 presign + set login logo ---
 app.get("/api/admin/r2/presign", requireAdmin, async (req, res) => {
   if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
