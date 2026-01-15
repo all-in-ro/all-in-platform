@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Eye, EyeOff, ArrowLeft, Package, Pencil, Trash2 } from "lucide-react";
@@ -16,7 +16,7 @@ import { Eye, EyeOff, ArrowLeft, Package, Pencil, Trash2 } from "lucide-react";
  * Később: MOCK → API/DB. (incoming majd az allinincoming CSV importból jön)
  */
 
-type StoreKey = string;
+type StoreKey = "Csíkszereda" | "Kézdivásárhely" | "Raktár";
 
 type AllInProductRow = {
   id: number;
@@ -49,7 +49,7 @@ const HEADER = "#354153";
 // Public logo (Cloudflare R2) – works in all deployments
 const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
 
-const DEFAULT_STORES: StoreKey[] = ["Csíkszereda", "Kézdivásárhely", "Raktár"];
+const STORES: StoreKey[] = ["Csíkszereda", "Kézdivásárhely", "Raktár"];
 
 // MOCK: ugyanaz a termék több sorban, külön méret + külön SKU
 const MOCK: AllInProductRow[] = [
@@ -244,7 +244,7 @@ function n(v?: number) {
 }
 
 function sumStore(byStore: Partial<Record<StoreKey, number>>) {
-  return stores.reduce((acc, k) => acc + n(byStore?.[k]), 0);
+  return STORES.reduce((acc, k) => acc + n(byStore?.[k]), 0);
 }
 
 function ColorDot({ hex }: { hex?: string }) {
@@ -302,128 +302,17 @@ export default function AllInWarehouse() {
   const [fGender, setFGender] = useState("");
   const [fCategory, setFCategory] = useState("");
 
-const [baseRows, setBaseRows] = useState<AllInProductRow[]>(MOCK);
-const [stores, setStores] = useState<StoreKey[]>(DEFAULT_STORES);
-const [loadError, setLoadError] = useState<string | null>(null);
-
-async function fetchJson(input: RequestInfo, init?: RequestInit) {
-  const res = await fetch(input, { credentials: "include", ...(init || {}) });
-  const text = await res.text();
-  let data: any = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* not json */ }
-  return { res, text, data };
-}
-
-function pickArray(obj: any, keys: string[]): any[] {
-  if (Array.isArray(obj)) return obj;
-  if (obj && typeof obj === "object") {
-    for (const k of keys) {
-      const v = (obj as any)[k];
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return [];
-}
-
-useEffect(() => {
-  let alive = true;
-  (async () => {
-    try {
-      setLoadError(null);
-
-      // Shops -> store columns
-      const shopsResp = await fetchJson("/api/shops");
-      if (shopsResp.res.ok) {
-        const shopsArr = pickArray(shopsResp.data, ["shops", "data", "rows"]);
-        const names = shopsArr
-          .map((x: any) => String(x?.name || x?.title || x?.label || "").trim())
-          .filter(Boolean);
-
-        if (alive && names.length) {
-          const preferred = ["Csíkszereda", "Kézdivásárhely", "Raktár"];
-          const ordered: string[] = [];
-          for (const p of preferred) if (names.includes(p)) ordered.push(p);
-          for (const n of names) if (!ordered.includes(n)) ordered.push(n);
-          setStores(ordered);
-        }
-      } else {
-        if (alive) setLoadError(shopsResp.text || `Not authorized (/api/shops)`);
-      }
-
-      // Warehouse -> products + stock
-      const whResp = await fetchJson("/api/allin/warehouse");
-      if (!whResp.res.ok) {
-        if (alive) setLoadError((prev) => prev || whResp.text || `Not authorized (/api/allin/warehouse)`);
-        return;
-      }
-
-      const products = pickArray(whResp.data, ["products", "rows", "items"]);
-      const stockRows = pickArray(whResp.data, ["stock", "stocks", "location_stock"]);
-
-      // stockMap: product_key -> storeName -> qty
-      const stockMap = new Map<string, Record<string, number>>();
-      for (const r of stockRows) {
-        const key = String(r?.product_key || r?.productKey || "").trim();
-        if (!key) continue;
-        const storeName = String(
-          r?.store_name || r?.shop_name || r?.location_name || r?.name || r?.location || ""
-        ).trim();
-        const qty = Number(r?.qty ?? r?.quantity ?? 0) || 0;
-        if (!storeName) continue;
-        const entry = stockMap.get(key) || {};
-        entry[storeName] = qty;
-        stockMap.set(key, entry);
-      }
-
-      const mapped: AllInProductRow[] = products.map((p: any, i: number) => {
-        const productKey = String(p?.product_key || p?.productKey || p?.key || "").trim() || `tmp_${i}`;
-        const code = String(p?.code || p?.sku || p?.product_code || "").trim();
-        return {
-          id: Number.isFinite(Number(p?.id)) ? Number(p?.id) : i + 1,
-          imageUrl: String(p?.image_url || p?.imageUrl || "").trim() || undefined,
-          brand: String(p?.brand || "").trim() || "—",
-          sku: code || productKey,
-          name: String(p?.name || p?.product_name || "").trim() || "—",
-          size: String(p?.size || "").trim() || "—",
-          colorName: String(p?.color_name || p?.colorName || "").trim() || "—",
-          colorCode: String(p?.color_code || p?.colorCode || "").trim() || undefined,
-          colorHex: (p?.color_hex || p?.colorHex) ?? undefined,
-          byStore: (stockMap.get(productKey) || {}) as any,
-          incomingQty: Number(p?.incoming_qty ?? p?.incomingQty ?? 0) || 0,
-          sellPrice: Number(p?.sell_price ?? p?.sellPrice ?? 0) || 0,
-          buyPrice:
-            p?.buy_price != null
-              ? Number(p?.buy_price)
-              : p?.buyPrice != null
-              ? Number(p?.buyPrice)
-              : undefined,
-          gender: String(p?.gender || "").trim() || "—",
-          category: String(p?.category || "").trim() || "—",
-        };
-      });
-
-      if (alive && mapped.length) setBaseRows(mapped);
-    } catch (e: any) {
-      if (alive) setLoadError(String(e?.message || e));
-    }
-  })();
-  return () => {
-    alive = false;
-  };
-}, []);
-
-
-  const brandOptions = useMemo(() => Array.from(new Set(baseRows.map((x) => x.brand))).sort(), []);
-  const colorOptions = useMemo(() => Array.from(new Set(baseRows.map((x) => x.colorName))).sort(), []);
-  const genderOptions = useMemo(() => Array.from(new Set(baseRows.map((x) => x.gender))).sort(), []);
-  const categoryOptions = useMemo(() => Array.from(new Set(baseRows.map((x) => x.category))).sort(), []);
+  const brandOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.brand))).sort(), []);
+  const colorOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.colorName))).sort(), []);
+  const genderOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.gender))).sort(), []);
+  const categoryOptions = useMemo(() => Array.from(new Set(MOCK.map((x) => x.category))).sort(), []);
 
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     const sku = fSku.trim().toLowerCase();
     const name = fName.trim().toLowerCase();
 
-    return baseRows.filter((r) => {
+    return MOCK.filter((r) => {
       // kereső
       if (s) {
         const ok =
@@ -447,7 +336,7 @@ useEffect(() => {
 
       return true;
     });
-  }, [baseRows, q, fBrand, fSku, fName, fColor, fGender, fCategory]);
+  }, [q, fBrand, fSku, fName, fColor, fGender, fCategory]);
 
   const th = "px-1.5 py-1.5 text-left font-normal text-[11px] whitespace-nowrap";
   const td = "px-1.5 py-1.5 align-top text-[11px] leading-[1.15]";
