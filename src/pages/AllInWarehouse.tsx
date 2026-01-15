@@ -66,8 +66,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 59.9,
     buyPrice: 29.5,
     gender: "Férfi",
-    category: "Pólók",
-  },
+    category: "Pólók" },
   {
     id: 102,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -83,8 +82,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 59.9,
     buyPrice: 29.5,
     gender: "Férfi",
-    category: "Pólók",
-  },
+    category: "Pólók" },
   {
     id: 103,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -100,8 +98,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 59.9,
     buyPrice: 29.5,
     gender: "Férfi",
-    category: "Pólók",
-  },
+    category: "Pólók" },
 
   {
     id: 201,
@@ -118,8 +115,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 197.23,
     buyPrice: 102.0,
     gender: "Gyerek",
-    category: "Lábbeli",
-  },
+    category: "Lábbeli" },
   {
     id: 202,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -135,8 +131,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 197.23,
     buyPrice: 102.0,
     gender: "Gyerek",
-    category: "Lábbeli",
-  },
+    category: "Lábbeli" },
   {
     id: 203,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -147,13 +142,12 @@ const MOCK: AllInProductRow[] = [
     colorName: "Barna",
     colorCode: "S10",
     colorHex: "#7c4a2d",
-    byStore: { "Csíkszereda": 1, "Sepsiszentgyörgy": 1, Raktár: 3 },
+    byStore: { "Csíkszereda": 1, Raktár: 3 },
     incomingQty: 2,
     sellPrice: 197.23,
     buyPrice: 102.0,
     gender: "Gyerek",
-    category: "Lábbeli",
-  },
+    category: "Lábbeli" },
   {
     id: 204,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -169,8 +163,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 197.23,
     buyPrice: 102.0,
     gender: "Gyerek",
-    category: "Lábbeli",
-  },
+    category: "Lábbeli" },
 
   {
     id: 301,
@@ -187,8 +180,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 149.0,
     buyPrice: 88.0,
     gender: "Unisex",
-    category: "Pulóverek",
-  },
+    category: "Pulóverek" },
   {
     id: 302,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -204,8 +196,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 149.0,
     buyPrice: 88.0,
     gender: "Unisex",
-    category: "Pulóverek",
-  },
+    category: "Pulóverek" },
   {
     id: 303,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -216,13 +207,12 @@ const MOCK: AllInProductRow[] = [
     colorName: "Kék",
     colorCode: "B07",
     colorHex: "#2563eb",
-    byStore: { "Sepsiszentgyörgy": 2, Raktár: 3 },
+    byStore: { Raktár: 3 },
     incomingQty: 1,
     sellPrice: 149.0,
     buyPrice: 88.0,
     gender: "Unisex",
-    category: "Pulóverek",
-  },
+    category: "Pulóverek" },
   {
     id: 304,
     imageUrl: "https://via.placeholder.com/56x56.png?text=IMG",
@@ -238,8 +228,7 @@ const MOCK: AllInProductRow[] = [
     sellPrice: 149.0,
     buyPrice: 88.0,
     gender: "Unisex",
-    category: "Pulóverek",
-  },
+    category: "Pulóverek" },
 ];
 
 function money(v?: number) {
@@ -359,8 +348,12 @@ export default function AllInWarehouse() {
             <div className="h-9 w-9 rounded-xl grid place-items-center border border-white/25 bg-white/5">
               <Package className="h-5 w-5" />
             </div>
-            <div className="leading-tight">
-              <div className="text-base font-semibold">ALL IN</div>
+            <div className="leading-tight flex items-center gap-2">
+              <img
+                src={`${import.meta.env.BASE_URL}allin-logo-w.png`}
+                alt="ALL IN"
+                className="h-6 w-auto"
+              />
               <div className="text-xs text-white/70">Raktár</div>
             </div>
           </div>
@@ -406,7 +399,7 @@ export default function AllInWarehouse() {
             style={{ gridTemplateColumns: "160px 140px 180px 160px 180px 1fr 140px" }}
           >
             <div>
-              <div className="text-[11px] text-slate-500 mb-1">Márka</div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Márka</div>
               <select
                 value={fBrand}
                 onChange={(e) => setFBrand(e.target.value)}
@@ -422,7 +415,7 @@ export default function AllInWarehouse() {
             </div>
 
             <div>
-              <div className="text-[11px] text-slate-500 mb-1">Nem</div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Nem</div>
               <select
                 value={fGender}
                 onChange={(e) => setFGender(e.target.value)}
@@ -438,7 +431,7 @@ export default function AllInWarehouse() {
             </div>
 
             <div>
-              <div className="text-[11px] text-slate-500 mb-1">Kategória</div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Kategória</div>
               <select
                 value={fCategory}
                 onChange={(e) => setFCategory(e.target.value)}
@@ -454,7 +447,7 @@ export default function AllInWarehouse() {
             </div>
 
             <div>
-              <div className="text-[11px] text-slate-500 mb-1">Szín</div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Szín</div>
               <select
                 value={fColor}
                 onChange={(e) => setFColor(e.target.value)}
@@ -470,7 +463,7 @@ export default function AllInWarehouse() {
             </div>
 
             <div>
-              <div className="text-[11px] text-slate-500 mb-1">Termékkód</div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Termékkód</div>
               <Input
                 value={fSku}
                 onChange={(e) => setFSku(e.target.value)}
@@ -480,7 +473,7 @@ export default function AllInWarehouse() {
             </div>
 
             <div>
-              <div className="text-[11px] text-slate-500 mb-1">Terméknév</div>
+              <div className="text-[11px] text-slate-600 mb-1 font-medium">Terméknév</div>
               <Input
                 value={fName}
                 onChange={(e) => setFName(e.target.value)}
