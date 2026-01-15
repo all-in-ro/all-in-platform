@@ -416,6 +416,11 @@ app.post("/api/incoming/batches/:id/items", requireAuthed, async (req, res) => {
       const size = normalizeStr(it.size);
       const category = normalizeStr(it.category);
       const qty = toInt(it.qty);
+      // Optional: item-level buy price (preferred over raw-only)
+      const buy_price_raw = it?.buy_price ?? it?.buyPrice ?? null;
+      const buy_price = buy_price_raw === null || buy_price_raw === undefined || String(buy_price_raw).trim() === ""
+        ? null
+        : String(buy_price_raw).trim();
 
       if (!product_code && !product_name) {
         await client.query("ROLLBACK");
@@ -431,9 +436,9 @@ app.post("/api/incoming/batches/:id/items", requireAuthed, async (req, res) => {
 
       await client.query(
         `INSERT INTO incoming_items
-         (batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, raw)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [batchId, product_code || null, product_name || null, color_code || null, color_name || null, size || null, category || null, qty, matched_product_id, raw]
+         (batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, buy_price, raw)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [batchId, product_code || null, product_name || null, color_code || null, color_name || null, size || null, category || null, qty, matched_product_id, buy_price, raw]
       );
     }
 
