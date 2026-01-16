@@ -3,6 +3,12 @@ import { ArrowRightLeft, Trash2, Save, List, CheckCircle2, XCircle, RefreshCcw }
 import type { Location, TransferDraft, TransferDraftItem, IncomingItemDraft, TransferSummary } from "../../lib/incoming/types";
 import { apiCommitTransfer, apiCreateTransfer, apiGetTransfer, apiListTransfers, apiSaveTransferItems, apiCancelTransfer } from "../../lib/incoming/api";
 
+function formatBuyPrice(v: any) {
+  if (v === null || v === undefined || String(v).trim() === "") return "";
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n.toFixed(2) : "";
+}
+
 function mergeKey(it: { sku: string; size: string; colorCode: string; category: string; name: string }) {
   return [it.sku || "", it.size || "", it.colorCode || "", it.category || "", it.name || ""].join("|").toLowerCase();
 }
@@ -14,6 +20,11 @@ function mapIncomingToTransferItems(incoming: IncomingItemDraft[]): TransferDraf
     const existing = map.get(k);
     const next: TransferDraftItem = {
       sku: it.sku,
+      // NOTE: TransferDraftItem típusban ezek lehetnek nem deklaráltak,
+      // de UI-ban visszük tovább, hogy mindenhol ugyanazok az oszlopok látszódjanak.
+      ...(it as any).brand ? { brand: (it as any).brand } : {},
+      ...(it as any).gender ? { gender: (it as any).gender } : {},
+      (it as any).buyPrice !== undefined && (it as any).buyPrice !== null ? { buyPrice: (it as any).buyPrice } : {},
       name: it.name,
       colorCode: it.colorCode,
       colorName: it.colorName,
@@ -22,7 +33,7 @@ function mapIncomingToTransferItems(incoming: IncomingItemDraft[]): TransferDraf
       qty: Number(it.qty || 0),
     };
     if (!existing) map.set(k, next);
-    else map.set(k, { ...existing, qty: existing.qty + next.qty });
+    else map.set(k, { ...existing, qty: existing.qty + next.qty } as any);
   }
   return Array.from(map.values()).filter((x) => x.qty > 0);
 }
@@ -76,13 +87,16 @@ export default function IncomingTransfer(props: {
     } else {
       nextItems.push({
         sku: it.sku,
+        ...(it as any).brand ? { brand: (it as any).brand } : {},
+        ...(it as any).gender ? { gender: (it as any).gender } : {},
+        (it as any).buyPrice !== undefined && (it as any).buyPrice !== null ? { buyPrice: (it as any).buyPrice } : {},
         name: it.name,
         colorCode: it.colorCode,
         colorName: it.colorName,
         size: it.size,
         category: it.category,
         qty: Number(it.qty || 0),
-      });
+      } as any);
     }
     onChange({ ...transfer, items: nextItems });
   }
@@ -279,9 +293,14 @@ export default function IncomingTransfer(props: {
               <thead className="bg-white/5 text-slate-200">
                 <tr>
                   <th className="px-3 py-2 text-left">Kód</th>
-                  <th className="px-3 py-2 text-left">Termék</th>
+                  <th className="px-3 py-2 text-left">Márka</th>
+                  <th className="px-3 py-2 text-left">Terméknév</th>
+                  <th className="px-3 py-2 text-left">Nem</th>
+                  <th className="px-3 py-2 text-left">Színkód</th>
                   <th className="px-3 py-2 text-left">Szín</th>
                   <th className="px-3 py-2 text-left">Méret</th>
+                  <th className="px-3 py-2 text-left">Kategória</th>
+                  <th className="px-3 py-2 text-right">Beszerzési ár</th>
                   <th className="px-3 py-2 text-right">Db</th>
                   <th className="px-3 py-2 text-right"> </th>
                 </tr>
@@ -290,12 +309,14 @@ export default function IncomingTransfer(props: {
                 {transfer.items.map((it, i) => (
                   <tr key={mergeKey(it) + i} className="border-t border-white/10 text-slate-100">
                     <td className="px-3 py-2">{it.sku}</td>
+                    <td className="px-3 py-2 text-slate-200">{(it as any).brand || <span className="text-slate-500">-</span>}</td>
                     <td className="px-3 py-2">{it.name}</td>
-                    <td className="px-3 py-2">
-                      {it.colorCode ? <span className="text-slate-200">{it.colorCode}</span> : null}
-                      {it.colorName ? <span className="text-slate-400"> {it.colorName}</span> : null}
-                    </td>
+                    <td className="px-3 py-2 text-slate-200">{(it as any).gender || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2">{it.colorCode || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2 text-slate-200">{it.colorName || <span className="text-slate-500">-</span>}</td>
                     <td className="px-3 py-2">{it.size}</td>
+                    <td className="px-3 py-2 text-slate-200">{it.category || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2 text-right text-slate-200 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-500">-</span>}</td>
                     <td className="px-3 py-2 text-right">
                       <input
                         className="w-20 rounded-md border border-white/10 bg-[#0a1020] px-2 py-1 text-right text-sm text-white"
@@ -319,7 +340,7 @@ export default function IncomingTransfer(props: {
                 ))}
                 {!transfer.items.length ? (
                   <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={6}>
+                    <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
                       Üres. Kattints jobb oldalt a bejövő listából.
                     </td>
                   </tr>
@@ -445,9 +466,14 @@ export default function IncomingTransfer(props: {
                 <thead className="bg-white/5 text-slate-200">
                   <tr>
                     <th className="px-3 py-2 text-left">Kód</th>
-                    <th className="px-3 py-2 text-left">Termék</th>
+                    <th className="px-3 py-2 text-left">Márka</th>
+                    <th className="px-3 py-2 text-left">Terméknév</th>
+                    <th className="px-3 py-2 text-left">Nem</th>
+                    <th className="px-3 py-2 text-left">Színkód</th>
                     <th className="px-3 py-2 text-left">Szín</th>
                     <th className="px-3 py-2 text-left">Méret</th>
+                    <th className="px-3 py-2 text-left">Kategória</th>
+                    <th className="px-3 py-2 text-right">Beszerzési ár</th>
                     <th className="px-3 py-2 text-right">Db</th>
                   </tr>
                 </thead>
@@ -460,18 +486,20 @@ export default function IncomingTransfer(props: {
                       title="Hozzáadás a mozgatáshoz"
                     >
                       <td className="px-3 py-2">{it.sku}</td>
+                      <td className="px-3 py-2 text-slate-200">{(it as any).brand || <span className="text-slate-500">-</span>}</td>
                       <td className="px-3 py-2">{it.name}</td>
-                      <td className="px-3 py-2">
-                        {it.colorCode ? <span className="text-slate-200">{it.colorCode}</span> : null}
-                        {it.colorName ? <span className="text-slate-400"> {it.colorName}</span> : null}
-                      </td>
+                      <td className="px-3 py-2 text-slate-200">{(it as any).gender || <span className="text-slate-500">-</span>}</td>
+                      <td className="px-3 py-2">{it.colorCode || <span className="text-slate-500">-</span>}</td>
+                      <td className="px-3 py-2 text-slate-200">{it.colorName || <span className="text-slate-500">-</span>}</td>
                       <td className="px-3 py-2">{it.size}</td>
+                      <td className="px-3 py-2 text-slate-200">{it.category || <span className="text-slate-500">-</span>}</td>
+                      <td className="px-3 py-2 text-right text-slate-200 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-500">-</span>}</td>
                       <td className="px-3 py-2 text-right">{it.qty}</td>
                     </tr>
                   ))}
                   {!incomingRows.length ? (
                     <tr>
-                      <td className="px-3 py-6 text-center text-slate-500" colSpan={5}>
+                      <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
                         Nincs bejövő tétel.
                       </td>
                     </tr>
