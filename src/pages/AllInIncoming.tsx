@@ -18,11 +18,6 @@ function mergeKey(it: { sku: string; size: string; colorCode: string; category: 
   return [it.sku || "", it.size || "", it.colorCode || "", it.category || "", it.name || ""].join("|").toLowerCase();
 }
 
-type IncomingItemDraftUI = IncomingItemDraft & {
-  buyPrice?: string | number | null;
-};
-
-
 export default function AllInIncoming() {
   const [tab, setTab] = useState<TabKey>("import");
 
@@ -33,7 +28,7 @@ export default function AllInIncoming() {
   ]);
   const [locErr, setLocErr] = useState<string>("");
 
-  const [incoming, setIncoming] = useState<IncomingItemDraftUI[]>([]);
+  const [incoming, setIncoming] = useState<IncomingItemDraft[]>([]);
   const [incomingMeta, setIncomingMeta] = useState<Record<string, IncomingSourceMeta>>({});
 
   const [transfer, setTransfer] = useState<TransferDraft>({
@@ -58,11 +53,10 @@ export default function AllInIncoming() {
     (async () => {
       try {
         setLocErr("");
-        const res = await apiGetLocations();
+        const shops = await apiGetLocations();
         if (!alive) return;
-        const shopsArr: any[] = Array.isArray(res) ? res : Array.isArray((res as any)?.items) ? (res as any).items : Array.isArray((res as any)?.stores) ? (res as any).stores : [];
         // map shops -> Location
-        const locs: Location[] = shopsArr.map((s: any) => ({
+        const locs: Location[] = shops.map((s: any) => ({
           id: s.id,
           name: s.name || s.label || s.id,
           kind: s.kind || (s.id === "raktar" ? "warehouse" : "shop"),
@@ -84,7 +78,7 @@ export default function AllInIncoming() {
 
     // merge by key
     setIncoming((prev) => {
-      const map = new Map<string, IncomingItemDraftUI>();
+      const map = new Map<string, IncomingItemDraft>();
       for (const p of prev) map.set(mergeKey(p), p);
       for (const n of items) {
         const k = mergeKey(n);
@@ -153,8 +147,7 @@ export default function AllInIncoming() {
             size: x.size,
             category: x.category,
             qty: x.qty,
-            buy_price: (x as any).buyPrice ?? null,
-            raw: { sourceMetaId: x.sourceMetaId, buy_price: (x as any).buyPrice ?? null },
+            raw: { sourceMetaId: x.sourceMetaId },
           }))
         );
       }
@@ -199,7 +192,7 @@ export default function AllInIncoming() {
         createdAtISO: d.created_at,
         locationId: d.location_id,
       };
-      const items: IncomingItemDraftUI[] = d.items.map((it: any) => ({
+      const items: IncomingItemDraft[] = d.items.map((it) => ({
         sku: (it.product_code || "").toString(),
         name: (it.product_name || "").toString(),
         colorCode: (it.color_code || "").toString(),
@@ -208,7 +201,6 @@ export default function AllInIncoming() {
         category: (it.category || "").toString(),
         qty: it.qty,
         sourceMetaId: metaId,
-        buyPrice: it.buy_price ?? it.raw?.buy_price ?? null,
       }));
       setIncoming(items);
       setIncomingMeta({ [metaId]: meta });
@@ -420,14 +412,14 @@ export default function AllInIncoming() {
                         ))}
                         {!history.length && !historyLoading ? (
                           <tr>
-                            <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
+                            <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                               Nincs adat.
                             </td>
                           </tr>
                         ) : null}
                         {historyLoading ? (
                           <tr>
-                            <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
+                            <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                               Betöltés...
                             </td>
                           </tr>
@@ -456,8 +448,6 @@ export default function AllInIncoming() {
                   <th className="text-left px-3 py-2 font-semibold">Szín</th>
                   <th className="text-left px-3 py-2 font-semibold">Méret</th>
                   <th className="text-left px-3 py-2 font-semibold">Kategória</th>
-                  <th className="text-right px-3 py-2 font-semibold">Beszerzési ár</th>
-                  <th className="text-right px-3 py-2 font-semibold">Összérték</th>
                   <th className="text-right px-3 py-2 font-semibold">Db</th>
                   <th className="px-3 py-2"></th>
                 </tr>
@@ -473,8 +463,6 @@ export default function AllInIncoming() {
                     </td>
                     <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{it.size || <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{(it as any).buyPrice !== null && (it as any).buyPrice !== undefined && String((it as any).buyPrice).trim() !== "" ? Number((it as any).buyPrice).toFixed(2) : <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{(() => { const bp = ((it as any).buyPrice !== null && (it as any).buyPrice !== undefined && String((it as any).buyPrice).trim() !== "") ? Number((it as any).buyPrice) : 0; const q = Number(it.qty || 0); return (q * bp).toFixed(2); })()}</td>
                     <td className="px-3 py-2 text-right">
                       <input
                         value={String(it.qty)}
@@ -499,7 +487,7 @@ export default function AllInIncoming() {
                 ))}
                 {!incoming.length ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-10 text-center text-slate-500">
+                    <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
                       Még nincs tétel.
                     </td>
                   </tr>
