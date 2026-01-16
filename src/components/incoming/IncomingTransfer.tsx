@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ArrowRightLeft, Trash2, Save, List, CheckCircle2, XCircle, RefreshCcw } from "lucide-react";
 import type { Location, TransferDraft, TransferDraftItem, IncomingItemDraft, TransferSummary } from "../../lib/incoming/types";
 import {
@@ -74,10 +74,10 @@ export default function IncomingTransfer(props: {
   const [incomingBusy, setIncomingBusy] = useState(false);
   const [incomingLocal, setIncomingLocal] = useState<IncomingItemDraft[]>([]);
 
-  // UI: visszajelzés + lista elrejtés
-  const [hideAdded, setHideAdded] = useState(true);
+  // UI visszajelzés: legutóbb hozzáadott tétel kiemelése lent (draft)
   const [lastAddedKey, setLastAddedKey] = useState<string>("");
-  const clearLastAddedTimer = useRef<number | null>(null);
+
+  // UI: a panelek egymás alatt vannak, nincs külön jobboldali tab.
 
   const locationById = useMemo(() => {
     const m = new Map<string, Location>();
@@ -153,6 +153,13 @@ export default function IncomingTransfer(props: {
     }
   }
 
+  // UI: a frissen hozzáadott sor kiemelése rövid ideig
+  useEffect(() => {
+    if (!lastAddedKey) return;
+    const t = setTimeout(() => setLastAddedKey(""), 900);
+    return () => clearTimeout(t);
+  }, [lastAddedKey]);
+
   // első betöltés: próbáljuk okosan, automatikusan behúzni a legfrissebbet.
   useEffect(() => {
     refreshHistory();
@@ -162,27 +169,13 @@ export default function IncomingTransfer(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (clearLastAddedTimer.current) window.clearTimeout(clearLastAddedTimer.current);
-    };
-  }, []);
-
-  function flashLastAdded(k: string) {
-    setLastAddedKey(k);
-    if (clearLastAddedTimer.current) window.clearTimeout(clearLastAddedTimer.current);
-    clearLastAddedTimer.current = window.setTimeout(() => setLastAddedKey(""), 1200);
-  }
-
   function addFromIncoming(it: IncomingItemDraft) {
     const k = mergeKey(it);
-    const addQty = Number(it.qty || 0);
+    setLastAddedKey(k);
     const nextItems = [...transfer.items];
     const idx = nextItems.findIndex((x) => mergeKey(x) === k);
-
     if (idx >= 0) {
-      nextItems[idx] = { ...nextItems[idx], qty: nextItems[idx].qty + addQty };
-      setMsg(`Már a draftban volt, hozzáadva: ${it.sku} • +${addQty} db`);
+      nextItems[idx] = { ...nextItems[idx], qty: nextItems[idx].qty + Number(it.qty || 0) };
     } else {
       nextItems.push({
         sku: it.sku,
@@ -194,12 +187,9 @@ export default function IncomingTransfer(props: {
         colorName: it.colorName,
         size: it.size,
         category: it.category,
-        qty: addQty,
+        qty: Number(it.qty || 0),
       } as any);
-      setMsg(`Hozzáadva: ${it.sku} • ${addQty} db`);
     }
-
-    flashLastAdded(k);
     onChange({ ...transfer, items: nextItems });
   }
 
@@ -225,7 +215,6 @@ export default function IncomingTransfer(props: {
   function fillAllFromIncoming() {
     const src = incoming.length ? incoming : incomingLocal;
     onChange({ ...transfer, items: mapIncomingToTransferItems(src) });
-    setMsg("Kitöltve bejövőből.");
   }
 
   async function saveDraft() {
@@ -319,23 +308,16 @@ export default function IncomingTransfer(props: {
     }
   }
 
-  const incomingAllRows = useMemo(() => {
-    const src = incoming.length ? incoming : incomingLocal;
-    return src.slice().sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
-  }, [incoming, incomingLocal]);
-
-  const draftKeys = useMemo(() => {
-    const s = new Set<string>();
-    for (const it of transfer.items) s.add(mergeKey(it));
-    return s;
-  }, [transfer.items]);
-
   const incomingRows = useMemo(() => {
-    if (!hideAdded) return incomingAllRows;
-    return incomingAllRows.filter((r) => !draftKeys.has(mergeKey(r)));
-  }, [incomingAllRows, hideAdded, draftKeys]);
+    const src = incoming.length ? incoming : incomingLocal;
+    const taken = new Set(transfer.items.map((x) => mergeKey(x as any)));
+    return src
+      .filter((it) => !taken.has(mergeKey(it)))
+      .slice()
+      .sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
+  }, [incoming, incomingLocal, transfer.items]);
 
-  const incomingTotal = useMemo(() => sumQty(incomingAllRows), [incomingAllRows]);
+  const incomingTotal = useMemo(() => sumQty(incomingRows), [incomingRows]);
   const draftTotal = useMemo(() => sumQty(transfer.items), [transfer.items]);
 
   const headerChip = (label: string, value: number) => (
@@ -352,7 +334,7 @@ export default function IncomingTransfer(props: {
             <List size={18} />
             <div className="text-sm">Bejövő tételek</div>
             <div className="ml-2 flex flex-wrap gap-2">
-              {headerChip("Tételek", incomingAllRows.length)}
+              {headerChip("Tételek", incomingRows.length)}
               {headerChip("Össz DB", incomingTotal)}
               {headerChip("Előzmények", history.length)}
             </div>
@@ -399,29 +381,10 @@ export default function IncomingTransfer(props: {
           </div>
         </div>
 
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-slate-600">
-            Kattints sorra a listában, és hozzáadom a mozgatás draftjához.
-            <span className="ml-2 text-slate-500">Forrás: {incoming.length ? "aktuális draft" : incomingLocal.length ? "batch (betöltve)" : "nincs"}</span>
-          </div>
-
-          <label className="inline-flex items-center gap-2 text-xs text-slate-700 select-none">
-            <input
-              type="checkbox"
-              checked={hideAdded}
-              onChange={(e) => setHideAdded(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300"
-            />
-            Hozzáadottak elrejtése
-          </label>
+        <div className="mt-2 text-xs text-slate-600">
+          Kattints sorra a listában, és hozzáadom a mozgatás draftjához. A hozzáadott tétel felül eltűnik, hogy ne kattints rá kétszer.
+          <span className="ml-2 text-slate-500">Forrás: {incoming.length ? "aktuális draft" : incomingLocal.length ? "batch (betöltve)" : "nincs"}</span>
         </div>
-
-        {(msg || err) && (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-            {msg ? <div className="text-emerald-700">{msg}</div> : null}
-            {err ? <div className="text-rose-700">{err}</div> : null}
-          </div>
-        )}
 
         {!incomingRows.length ? (
           <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
@@ -445,30 +408,25 @@ export default function IncomingTransfer(props: {
                 </tr>
               </thead>
               <tbody>
-                {incomingRows.map((it, i) => {
-                  const inDraft = draftKeys.has(mergeKey(it));
-                  return (
-                    <tr
-                      key={mergeKey(it) + i}
-                      className={`border-t border-slate-200 text-slate-900 hover:bg-slate-50 cursor-pointer ${!hideAdded && inDraft ? "opacity-60" : ""}`}
-                      onClick={() => addFromIncoming(it)}
-                      title="Hozzáadás a mozgatáshoz"
-                    >
-                      <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
-                      <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2">{it.name}</td>
-                      <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2">{it.size}</td>
-                      <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
-                      <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">
-                        {formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right">{it.qty}</td>
-                    </tr>
-                  );
-                })}
+                {incomingRows.map((it, i) => (
+                  <tr
+                    key={mergeKey(it) + i}
+                    className="border-t border-slate-200 text-slate-900 hover:bg-slate-50 cursor-pointer"
+                    onClick={() => addFromIncoming(it)}
+                    title="Hozzáadás a mozgatáshoz"
+                  >
+                    <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
+                    <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2">{it.name}</td>
+                    <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2">{it.size}</td>
+                    <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2 text-right">{it.qty}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -508,6 +466,13 @@ export default function IncomingTransfer(props: {
             </button>
           </div>
         </div>
+
+        {(msg || err) && (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            {msg ? <div className="text-emerald-700">{msg}</div> : null}
+            {err ? <div className="text-rose-700">{err}</div> : null}
+          </div>
+        )}
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
@@ -560,44 +525,44 @@ export default function IncomingTransfer(props: {
               </tr>
             </thead>
             <tbody>
-              {transfer.items.map((it, i) => {
-                const k = mergeKey(it);
-                const flash = lastAddedKey && k === lastAddedKey;
-                return (
-                  <tr key={k + i} className={`border-t border-slate-200 text-slate-900 ${flash ? "bg-emerald-50" : ""}`}>
-                    <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
-                    <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.name}</td>
-                    <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.size}</td>
-                    <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">
-                      {formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <input
-                        className="w-24 rounded-md border border-slate-200 bg-white px-2 py-1 text-right text-sm text-slate-900"
-                        type="number"
-                        min={1}
-                        value={it.qty}
-                        onChange={(e) => updateItemQty(i, Math.max(1, Number(e.target.value || 1)))}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <button
-                        className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-50"
-                        onClick={() => removeItem(i)}
-                        type="button"
-                        title="Törlés"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {transfer.items.map((it, i) => (
+                <tr
+                  key={mergeKey(it) + i}
+                  className={
+                    "border-t border-slate-200 text-slate-900 transition-colors" +
+                    (lastAddedKey && mergeKey(it as any) === lastAddedKey ? " bg-emerald-50" : "")
+                  }
+                >
+                  <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
+                  <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2">{it.name}</td>
+                  <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2">{it.size}</td>
+                  <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2 text-right">
+                    <input
+                      className="w-24 rounded-md border border-slate-200 bg-white px-2 py-1 text-right text-sm text-slate-900"
+                      type="number"
+                      min={1}
+                      value={it.qty}
+                      onChange={(e) => updateItemQty(i, Math.max(1, Number(e.target.value || 1)))}
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-50"
+                      onClick={() => removeItem(i)}
+                      type="button"
+                      title="Törlés"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
               {!transfer.items.length ? (
                 <tr>
                   <td className="px-3 py-6 text-center text-slate-600" colSpan={11}>
@@ -708,7 +673,7 @@ export default function IncomingTransfer(props: {
             disabled={!selectedId || busy}
             type="button"
           >
-            <XCircle2 size={16} />
+            <XCircle size={16} />
             Törlés
           </button>
         </div>
