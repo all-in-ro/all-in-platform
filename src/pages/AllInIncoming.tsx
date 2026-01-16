@@ -14,35 +14,16 @@ const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smok
 
 type TabKey = "import" | "manual" | "transfer" | "docs" | "bom" | "history";
 
-async function tryDeleteIncomingBatch(batchId: string) {
-  // We don't have the backend file here, so we try a couple of likely routes.
-  // Backend should implement one of these (preferred: the same base route used by apiListIncomingBatches).
-  const candidates = [
-    `/api/incoming/batches/${encodeURIComponent(batchId)}`,
-    `/api/incoming/batch/${encodeURIComponent(batchId)}`,
-    `/api/allin/incoming/batches/${encodeURIComponent(batchId)}`,
-    `/api/allin/incoming/batch/${encodeURIComponent(batchId)}`,
-  ];
-
-  let lastErr = "";
-  for (const url of candidates) {
-    try {
-      const res = await fetch(url, {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "content-type": "application/json", Accept: "application/json" },
-      });
-      if (res.ok) return;
-      const txt = await res.text().catch(() => "");
-      lastErr = txt || `${res.status} ${res.statusText}`;
-      // if it's a hard auth/permission error, stop early
-      if (res.status === 401 || res.status === 403) break;
-    } catch (e: any) {
-      lastErr = e?.message || String(e);
-    }
-  }
-
-  throw new Error(lastErr || "Törlés sikertelen (nincs DELETE endpoint vagy hibás útvonal).");
+async function deleteIncomingBatchPermanently(batchId: string) {
+  const url = `/api/incoming/batches/${encodeURIComponent(batchId)}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (res.ok) return;
+  const txt = await res.text().catch(() => "");
+  throw new Error(txt || `${res.status} ${res.statusText}`);
 }
 
 function mergeKey(it: { sku: string; size: string; colorCode: string; category: string; name: string }) {
@@ -78,11 +59,10 @@ export default function AllInIncoming() {
   const [historyErr, setHistoryErr] = useState<string>("");
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
 
-  // Styled confirm modal (same vibe as AllInUsers)
+  // confirm delete modal (AllInUsers-style)
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmTitle, setConfirmTitle] = useState("");
-  const [confirmMsg, setConfirmMsg] = useState("");
-  const [confirmBatchId, setConfirmBatchId] = useState<string | null>(null);
+  const [confirmBatchId, setConfirmBatchId] = useState<string>("");
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   useEffect(() => {
     if (!confirmOpen) return;
@@ -255,16 +235,15 @@ export default function AllInIncoming() {
       setIncomingMeta({ [metaId]: meta });
       setSaveOk(`Betöltve: ${d.id}`);
       setSaveErr("");
-
-      // UX: amit betöltöttél, kerüljön alulra és tűnjön el a tetejéről
+      // maradunk az Előzmények fülön, és a betöltött batch kerüljön a lista aljára
       setHistory((prev) => {
         const idx = prev.findIndex((x) => x.id === batchId);
-        if (idx < 0) return prev;
-        const moved = prev[idx];
-        return [...prev.slice(0, idx), ...prev.slice(idx + 1), moved];
+        if (idx === -1) return prev;
+        const copy = prev.slice();
+        const [moved] = copy.splice(idx, 1);
+        copy.push(moved);
+        return copy;
       });
-
-      // Maradjunk az Előzmények fülön: alul betöltődik a draft tábla, fent pedig eltűnik / lekerül alulra a betöltött sor.
     } catch (e: any) {
       setHistoryErr(e?.message || "Nem sikerült betölteni a batch-et.");
     }
@@ -282,28 +261,26 @@ export default function AllInIncoming() {
     }
   };
 
-  const openConfirmDelete = (batchId: string) => {
-    setConfirmTitle("Végleges törlés");
-    setConfirmMsg(`Biztos törlöd véglegesen? Ez nem visszavonható.\n\nBatch ID: ${batchId}`);
+  const openDeleteConfirm = (batchId: string) => {
     setConfirmBatchId(batchId);
     setConfirmOpen(true);
   };
 
-  const runConfirmDelete = async () => {
-    const batchId = confirmBatchId;
-    setConfirmOpen(false);
-    setConfirmBatchId(null);
-    if (!batchId) return;
-
+  const confirmDelete = async () => {
+    if (!confirmBatchId) return;
     setHistoryErr("");
-    setSaveOk("");
+    setConfirmBusy(true);
     try {
-      await tryDeleteIncomingBatch(batchId);
-      if (selectedBatchId === batchId) setSelectedBatchId("");
-      setSaveOk(`Törölve: ${batchId}`);
+      await deleteIncomingBatchPermanently(confirmBatchId);
+      setSaveOk(`Törölve: ${confirmBatchId}`);
+      setSaveErr("");
+      setConfirmOpen(false);
+      setConfirmBatchId("");
       void loadHistory();
     } catch (e: any) {
       setHistoryErr(e?.message || "Törlés sikertelen.");
+    } finally {
+      setConfirmBusy(false);
     }
   };
 
@@ -484,11 +461,11 @@ export default function AllInIncoming() {
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => openConfirmDelete(b.id)}
+                                  onClick={() => openDeleteConfirm(b.id)}
+                                  className="h-8 w-8 rounded-md bg-red-600 text-white hover:bg-red-700 inline-flex items-center justify-center"
                                   title="Előzmény végleges törlése"
-                                  className="h-8 w-8 flex items-center justify-center rounded-full border border-red-300 text-red-700 hover:bg-red-50"
                                 >
-                                  <Trash2 className="h-4 w-4" />
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                                 <button
                                   type="button"
@@ -589,31 +566,46 @@ export default function AllInIncoming() {
         </div>
       </div>
 
-      {/* Confirm delete modal */}
-      {confirmOpen && (
-        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-            <div className="text-white font-semibold">{confirmTitle}</div>
-            <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
-                onClick={() => setConfirmOpen(false)}
-              >
-                Mégse
-              </button>
-              <button
-                type="button"
-                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
-                onClick={runConfirmDelete}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+	    {confirmOpen ? (
+	      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+	        <button
+	          type="button"
+	          className="absolute inset-0 bg-black/40"
+	          onClick={() => (confirmBusy ? null : setConfirmOpen(false))}
+	          aria-label="Bezárás"
+	        />
+	        <div className="relative w-full max-w-[520px] rounded-xl bg-white border border-slate-200 shadow-xl">
+	          <div className="px-4 py-3 border-b border-slate-200 text-[13px] font-semibold text-slate-900">
+	            Előzmény végleges törlése
+	          </div>
+	          <div className="px-4 py-4 text-[12px] text-slate-700">
+	            Biztosan törlöd véglegesen ezt a batch-et?
+	            <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-slate-900 font-semibold">
+	              {confirmBatchId}
+	            </div>
+	          </div>
+	          <div className="px-4 py-3 border-t border-slate-200 flex items-center justify-end gap-2">
+	            <button
+	              type="button"
+	              className="h-9 px-3 rounded-xl border border-slate-300 bg-white text-[12px] font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+	              onClick={() => setConfirmOpen(false)}
+	              disabled={confirmBusy}
+	            >
+	              Mégse
+	            </button>
+	            <button
+	              type="button"
+	              className="h-9 px-3 rounded-xl bg-red-600 text-white text-[12px] font-semibold hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+	              onClick={confirmDelete}
+	              disabled={confirmBusy}
+	            >
+	              {confirmBusy ? "Törlés..." : "Törlés"}
+	            </button>
+	          </div>
+	        </div>
+	      </div>
+	    ) : null}
+
+	    </div>
   );
 }
