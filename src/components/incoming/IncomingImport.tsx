@@ -1,7 +1,9 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Upload, CheckCircle2, AlertTriangle } from "lucide-react";
 import type { IncomingItemDraft, IncomingSourceMeta, Location } from "../../lib/incoming/types";
-import { parseCsvText, guessDelimiter, mapCsvRowsToIncoming, SUPPLIER_PROFILES } from "../../lib/incoming/csvParsers";
+import { parseCsvText, guessDelimiter } from "../../lib/incoming/csvParsers";
+import type { ImportMappedRow } from "../../lib/incoming/importMapper";
+import { mapTableToIncomingRows } from "../../lib/incoming/importMapper";
 
 function uid(prefix = "m") {
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
@@ -64,14 +66,11 @@ export default function IncomingImport(props: {
   const { locations, existingCount, onAddBatch } = props;
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // No more supplier profiles. One standard import mapping.
-  const profile = useMemo(() => SUPPLIER_PROFILES[0], []);
-
   const [supplierName, setSupplierName] = useState<string>("");
   const [locationId, setLocationId] = useState<string>(() => locations[0]?.id || "");
   const [fileName, setFileName] = useState<string>("");
   const [preview, setPreview] = useState<TableParsed | null>(null);
-  const [mapped, setMapped] = useState<ReturnType<typeof mapCsvRowsToIncoming> | null>(null);
+  const [mapped, setMapped] = useState<ImportMappedRow[] | null>(null);
   const [error, setError] = useState<string>("");
 
   const invalidCount = useMemo(() => (mapped ? mapped.filter((x) => x.issues.length).length : 0), [mapped]);
@@ -92,7 +91,10 @@ export default function IncomingImport(props: {
       }
       setPreview(parsed);
 
-      const mappedRows = mapCsvRowsToIncoming({ headers: parsed.headers, rows: parsed.rows, profile });
+      const mappedRows = mapTableToIncomingRows(
+        { headers: parsed.headers, rows: parsed.rows },
+        { source: "auto", parseCode: true }
+      );
       setMapped(mappedRows);
     } catch (e: any) {
       // Most common reason: xlsx dependency missing
@@ -122,14 +124,14 @@ export default function IncomingImport(props: {
       mapped.map((m) =>
         ({
           sku: m.sku,
-          brand: (m as any).brand ?? "",
+          brand: m.brand ?? "",
           name: m.name,
-          gender: (m as any).gender ?? "",
+          gender: m.gender ?? "",
           colorCode: m.colorCode,
           colorName: m.colorName,
           size: m.size,
           category: m.category,
-          buyPrice: (m as any).buyPrice ?? (m as any).buy_price ?? null,
+          buyPrice: m.buyPrice ?? null,
           qty: m.qty,
           sourceMetaId: metaId,
         } as any)
