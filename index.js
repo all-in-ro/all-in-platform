@@ -384,6 +384,39 @@ app.get("/api/incoming/batches/:id", requireAuthed, async (req, res) => {
   res.json({ batch: b.rows[0], items: items.rows });
 });
 
+// --- incoming: delete batch permanently (history cleanup) ---
+// Deletes both header + items.
+// Permissions:
+// - admin can delete any
+// - shop can delete only its own location
+app.delete("/api/incoming/batches/:id", requireAuthed, async (req, res) => {
+  const id = normalizeStr(req.params.id);
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  // read batch + permission check
+  const b = await pool.query(`SELECT id, location_id FROM incoming_batches WHERE id=$1`, [id]);
+  if (!b.rowCount) return res.status(404).json({ error: "not found" });
+
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM incoming_items WHERE batch_id=$1", [id]);
+    await client.query("DELETE FROM incoming_batches WHERE id=$1", [id]);
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("delete incoming batch failed", e);
+    return res.status(500).json({ error: "db error" });
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/incoming/batches/:id/items", requireAuthed, async (req, res) => {
   const batchId = normalizeStr(req.params.id);
   if (!batchId) return res.status(400).json({ error: "batch id required" });
