@@ -193,6 +193,7 @@ export default function IncomingImport(props: {
     <th className="text-left px-3 py-2 font-semibold">Márka</th>
     <th className="text-left px-3 py-2 font-semibold">Terméknév</th>
     <th className="text-left px-3 py-2 font-semibold">Nem</th>
+    <th className="text-left px-3 py-2 font-semibold">Színkód</th>
     <th className="text-left px-3 py-2 font-semibold">Szín</th>
     <th className="text-left px-3 py-2 font-semibold">Méret</th>
     <th className="text-left px-3 py-2 font-semibold">Kategória</th>
@@ -212,10 +213,8 @@ export default function IncomingImport(props: {
   <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
     {(r as any).gender ? <span className="font-semibold">{(r as any).gender}</span> : <span className="text-slate-400">-</span>}
   </td>
-  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
-    {r.colorCode ? <span className="font-semibold">{r.colorCode}</span> : <span className="text-slate-400">-</span>}
-    {r.colorName ? <span className="text-slate-500"> · {r.colorName}</span> : null}
-  </td>
+  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.colorCode ? <span className="font-semibold">{r.colorCode}</span> : <span className="text-slate-400">-</span>}</td>
+  <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.colorName ? <span className="font-semibold">{r.colorName}</span> : <span className="text-slate-400">-</span>}</td>
   <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{r.size || <span className="text-slate-400">-</span>}</td>
   <td className="px-3 py-2 text-slate-700">{r.category || <span className="text-slate-400">-</span>}</td>
   <td className="px-3 py-2 text-right font-semibold text-slate-900 whitespace-nowrap">
