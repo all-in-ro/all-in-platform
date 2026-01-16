@@ -193,6 +193,9 @@ export default function AllInIncoming() {
         locationId: d.location_id,
       };
       const items: IncomingItemDraft[] = d.items.map((it) => ({
+        brand: (it.brand || "").toString(),
+        gender: (it.gender || "").toString(),
+        buyPrice: (it.buy_price ?? it.buyPrice ?? null) as any,
         sku: (it.product_code || "").toString(),
         name: (it.product_name || "").toString(),
         colorCode: (it.color_code || "").toString(),
