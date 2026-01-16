@@ -321,10 +321,16 @@ export default function IncomingTransfer(props: {
     }
   }
 
+  // UX: ami már bekerült a draftba, az a felső listából tűnjön el, hogy ne lehessen duplán rákattintani.
   const incomingRows = useMemo(() => {
     const src = incoming.length ? incoming : incomingLocal;
-    return src.slice().sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
-  }, [incoming, incomingLocal]);
+
+    const picked = new Set<string>(transfer.items.map((x) => mergeKey(x as any)));
+    return src
+      .filter((it) => !picked.has(mergeKey(it)))
+      .slice()
+      .sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
+  }, [incoming, incomingLocal, transfer.items]);
 
   const incomingTotal = useMemo(() => sumQty(incomingRows), [incomingRows]);
   const draftTotal = useMemo(() => sumQty(transfer.items), [transfer.items]);
