@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, Trash2, Save, List, CheckCircle2, XCircle, RefreshCcw } from "lucide-react";
 import type { Location, TransferDraft, TransferDraftItem, IncomingItemDraft, TransferSummary } from "../../lib/incoming/types";
 import {
@@ -74,7 +74,17 @@ export default function IncomingTransfer(props: {
   const [incomingBusy, setIncomingBusy] = useState(false);
   const [incomingLocal, setIncomingLocal] = useState<IncomingItemDraft[]>([]);
 
-  // UI: a panelek egymás alatt vannak, nincs külön jobboldali tab.
+  // Jobb oldali panel: ne legyen két táblázat egyszerre az arcodban.
+  const [rightTab, setRightTab] = useState<"incoming" | "history">("incoming");
+
+  // UX: kattintás után legyen egyértelmű visszajelzés.
+  // - a bejövő listából (opcionálisan) eltűnik az, ami már bekerült a draftba
+  // - a draftban a frissen hozzáadott sor röviden kiemelődik
+  // - felül kap a user egy rövid státusz üzenetet
+  const [hideAdded, setHideAdded] = useState(true);
+  const [lastAddedKey, setLastAddedKey] = useState<string>("");
+  const [toast, setToast] = useState<string>("");
+  const draftRef = useRef<HTMLDivElement | null>(null);
 
   const locationById = useMemo(() => {
     const m = new Map<string, Location>();
@@ -143,6 +153,7 @@ export default function IncomingTransfer(props: {
 
       setIncomingLocal(normalized.filter((r) => r.sku));
       setMsg("Bejövő batch betöltve.");
+      setRightTab("incoming");
     } catch (e: any) {
       setErr(e?.message || "Nem sikerült betölteni a bejövő batch-et.");
     } finally {
@@ -180,6 +191,15 @@ export default function IncomingTransfer(props: {
       } as any);
     }
     onChange({ ...transfer, items: nextItems });
+
+    // visszajelzés: kiemelés + rövid üzenet
+    setLastAddedKey(k);
+    setToast(`Hozzáadva: ${it.sku || "(nincs kód)"} • ${Number(it.qty || 0)} db`);
+    // görgessünk oda, hogy lássa is mit tett be
+    setTimeout(() => draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    // automatikus kiemelés/üzenet törlés
+    window.setTimeout(() => setLastAddedKey(""), 900);
+    window.setTimeout(() => setToast(""), 1800);
   }
 
   function updateItemQty(i: number, qty: number) {
@@ -227,6 +247,7 @@ export default function IncomingTransfer(props: {
       setMsg(`Mentve (Transfer ID: ${created.id}).`);
       setSelectedId(created.id);
       await refreshHistory();
+      setRightTab("history");
     } catch (e: any) {
       setErr(e?.message || "Nem sikerült menteni a mozgatást.");
     } finally {
@@ -297,88 +318,113 @@ export default function IncomingTransfer(props: {
     }
   }
 
+  const draftKeySet = useMemo(() => {
+    return new Set(transfer.items.map((x) => mergeKey(x as any)));
+  }, [transfer.items]);
+
   const incomingRows = useMemo(() => {
     const src = incoming.length ? incoming : incomingLocal;
-    return src.slice().sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
-  }, [incoming, incomingLocal]);
+    const sorted = src.slice().sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
+    if (!hideAdded) return sorted;
+    // Ami már bekerült a draftba, azt elrejtjük a listából, hogy egyértelmű legyen, hogy megtörtént.
+    return sorted.filter((r) => !draftKeySet.has(mergeKey(r as any)));
+  }, [incoming, incomingLocal, hideAdded, draftKeySet]);
 
   const incomingTotal = useMemo(() => sumQty(incomingRows), [incomingRows]);
   const draftTotal = useMemo(() => sumQty(transfer.items), [transfer.items]);
 
   const headerChip = (label: string, value: number) => (
-    <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700">
-      {label}: <span className="ml-1 text-slate-900">{value}</span>
+    <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-200">
+      {label}: <span className="ml-1 text-white">{value}</span>
     </span>
   );
 
   return (
     <div className="w-full">
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2 text-slate-900">
-            <List size={18} />
-            <div className="text-sm">Bejövő tételek</div>
-            <div className="ml-2 flex flex-wrap gap-2">
-              {headerChip("Tételek", incomingRows.length)}
-              {headerChip("Össz DB", incomingTotal)}
-              {headerChip("Előzmények", history.length)}
+      {toast ? (
+        <div className="mb-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+          {toast}
+        </div>
+      ) : null}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Left: draft */}
+        <div ref={draftRef} className="rounded-xl border border-white/10 bg-[#0b1220] p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2 text-white">
+              <ArrowRightLeft size={18} />
+              <div>
+                <div>Mozgatás (draft)</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {headerChip("Tételek", transfer.items.length)}
+                  {headerChip("Össz DB", draftTotal)}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
+                onClick={fillAllFromIncoming}
+                type="button"
+                title="Bejövő tételekből kitölti (összevonva)"
+              >
+                <RefreshCcw size={16} />
+                Kitöltés bejövőből
+              </button>
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-emerald-600/80 px-3 py-2 text-sm text-white hover:bg-emerald-600"
+                onClick={saveDraft}
+                disabled={busy}
+                type="button"
+              >
+                <Save size={16} />
+                Mentés
+              </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              className="min-w-[280px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              value={incomingBatchId}
-              onChange={(e) => setIncomingBatchId(e.target.value)}
-              disabled={incomingBusy}
-              title="Válassz bejövő batch-et"
-            >
-              <option value="">Válassz bejövő batch-et…</option>
-              {incomingBatches.map((b: any) => (
-                <option key={b.id} value={b.id}>
-                  {(b.createdAtISO ? new Date(b.createdAtISO).toLocaleString() : "") +
-                    (b.supplier ? ` • ${b.supplier}` : "") +
-                    (b.sourceType || b.source_type ? ` • ${(b.sourceType || b.source_type)}` : "") +
-                    (b.status ? ` • ${b.status}` : "")}
-                </option>
-              ))}
-            </select>
+          {(msg || err) && (
+            <div className="mt-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
+              {msg ? <div className="text-emerald-300">{msg}</div> : null}
+              {err ? <div className="text-rose-300">{err}</div> : null}
+            </div>
+          )}
 
-            <button
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 hover:bg-slate-50"
-              onClick={() => refreshIncomingBatches(false)}
-              disabled={incomingBusy}
-              type="button"
-            >
-              <RefreshCcw size={16} />
-              Frissítés
-            </button>
-
-            <button
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700"
-              onClick={() => loadIncomingBatch()}
-              disabled={!incomingBatchId || incomingBusy}
-              type="button"
-            >
-              <List size={16} />
-              Betöltés
-            </button>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs text-slate-400 mb-1">Forrás helyszín</div>
+              <select
+                className="w-full rounded-lg border border-white/10 bg-[#0a1020] px-3 py-2 text-sm text-white"
+                value={transfer.fromLocationId}
+                onChange={(e) => setFrom(e.target.value)}
+              >
+                <option value="">Válassz...</option>
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div className="text-xs text-slate-400 mb-1">Cél helyszín</div>
+              <select
+                className="w-full rounded-lg border border-white/10 bg-[#0a1020] px-3 py-2 text-sm text-white"
+                value={transfer.toLocationId}
+                onChange={(e) => setTo(e.target.value)}
+              >
+                <option value="">Válassz...</option>
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-2 text-xs text-slate-600">
-          Kattints sorra a listában, és hozzáadom a mozgatás draftjához.
-          <span className="ml-2 text-slate-500">Forrás: {incoming.length ? "aktuális draft" : incomingLocal.length ? "batch (betöltve)" : "nincs"}</span>
-        </div>
-
-        {!incomingRows.length ? (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-            Nincs bejövő tétel. Válassz batch-et fent és kattints a Betöltés gombra.
-          </div>
-        ) : (
-          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
+          <div className="mt-4 overflow-x-auto rounded-xl border border-white/10">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-slate-700">
+              <thead className="bg-white/5 text-slate-200">
                 <tr>
                   <th className="px-3 py-2 text-left">Kód</th>
                   <th className="px-3 py-2 text-left">Márka</th>
@@ -390,273 +436,362 @@ export default function IncomingTransfer(props: {
                   <th className="px-3 py-2 text-left">Kategória</th>
                   <th className="px-3 py-2 text-right">Beszerzési ár</th>
                   <th className="px-3 py-2 text-right">Db</th>
+                  <th className="px-3 py-2 text-right"> </th>
                 </tr>
               </thead>
               <tbody>
-                {incomingRows.map((it, i) => (
+                {transfer.items.map((it, i) => (
                   <tr
                     key={mergeKey(it) + i}
-                    className="border-t border-slate-200 text-slate-900 hover:bg-slate-50 cursor-pointer"
-                    onClick={() => addFromIncoming(it)}
-                    title="Hozzáadás a mozgatáshoz"
+                    className={`border-t border-white/10 text-slate-100 ${lastAddedKey && lastAddedKey === mergeKey(it as any) ? "bg-emerald-600/10" : ""}`}
                   >
-                    <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
-                    <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2">{it.sku}</td>
+                    <td className="px-3 py-2 text-slate-200">{(it as any).brand || <span className="text-slate-500">-</span>}</td>
                     <td className="px-3 py-2">{it.name}</td>
-                    <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2 text-slate-200">{(it as any).gender || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2">{it.colorCode || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2 text-slate-200">{it.colorName || <span className="text-slate-500">-</span>}</td>
                     <td className="px-3 py-2">{it.size}</td>
-                    <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right">{it.qty}</td>
+                    <td className="px-3 py-2 text-slate-200">{it.category || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2 text-right text-slate-200 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-500">-</span>}</td>
+                    <td className="px-3 py-2 text-right">
+                      <input
+                        className="w-20 rounded-md border border-white/10 bg-[#0a1020] px-2 py-1 text-right text-sm text-white"
+                        type="number"
+                        min={1}
+                        value={it.qty}
+                        onChange={(e) => updateItemQty(i, Math.max(1, Number(e.target.value || 1)))}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        className="inline-flex items-center justify-center rounded-md border border-white/10 bg-white/5 p-2 text-slate-200 hover:bg-white/10"
+                        onClick={() => removeItem(i)}
+                        type="button"
+                        title="Törlés"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
+                {!transfer.items.length ? (
+                  <tr>
+                    <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
+                      Üres. Jobb oldalt válts „Bejövő lista” fülre, és kattints a sorokra.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
-        )}
-      </div>
-
-      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2 text-slate-900">
-            <ArrowRightLeft size={18} />
-            <div className="text-sm">Mozgatás (draft)</div>
-            <div className="ml-2 flex flex-wrap gap-2">
-              {headerChip("Tételek", transfer.items.length)}
-              {headerChip("Össz DB", draftTotal)}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 hover:bg-slate-50"
-              onClick={fillAllFromIncoming}
-              type="button"
-              title="Bejövő tételekből kitölti (összevonva)"
-            >
-              <RefreshCcw size={16} />
-              Kitöltés bejövőből
-            </button>
-
-            <button
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700"
-              onClick={saveDraft}
-              disabled={busy}
-              type="button"
-            >
-              <Save size={16} />
-              Mentés
-            </button>
-          </div>
         </div>
 
-        {(msg || err) && (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-            {msg ? <div className="text-emerald-700">{msg}</div> : null}
-            {err ? <div className="text-rose-700">{err}</div> : null}
-          </div>
-        )}
-
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <div className="text-xs text-slate-600 mb-1">Forrás helyszín</div>
-            <select
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              value={transfer.fromLocationId}
-              onChange={(e) => setFrom(e.target.value)}
-            >
-              <option value="">Válassz...</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <div className="text-xs text-slate-600 mb-1">Cél helyszín</div>
-            <select
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              value={transfer.toLocationId}
-              onChange={(e) => setTo(e.target.value)}
-            >
-              <option value="">Válassz...</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
-              <tr>
-                <th className="px-3 py-2 text-left">Kód</th>
-                <th className="px-3 py-2 text-left">Márka</th>
-                <th className="px-3 py-2 text-left">Terméknév</th>
-                <th className="px-3 py-2 text-left">Nem</th>
-                <th className="px-3 py-2 text-left">Színkód</th>
-                <th className="px-3 py-2 text-left">Szín</th>
-                <th className="px-3 py-2 text-left">Méret</th>
-                <th className="px-3 py-2 text-left">Kategória</th>
-                <th className="px-3 py-2 text-right">Beszerzési ár</th>
-                <th className="px-3 py-2 text-right">Db</th>
-                <th className="px-3 py-2 text-right"> </th>
-              </tr>
-            </thead>
-            <tbody>
-              {transfer.items.map((it, i) => (
-                <tr key={mergeKey(it) + i} className="border-t border-slate-200 text-slate-900">
-                  <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
-                  <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2">{it.name}</td>
-                  <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2">{it.size}</td>
-                  <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2 text-right">
-                    <input
-                      className="w-24 rounded-md border border-slate-200 bg-white px-2 py-1 text-right text-sm text-slate-900"
-                      type="number"
-                      min={1}
-                      value={it.qty}
-                      onChange={(e) => updateItemQty(i, Math.max(1, Number(e.target.value || 1)))}
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <button
-                      className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-50"
-                      onClick={() => removeItem(i)}
-                      type="button"
-                      title="Törlés"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {!transfer.items.length ? (
-                <tr>
-                  <td className="px-3 py-6 text-center text-slate-600" colSpan={11}>
-                    Üres. Válassz bejövő batch-et fent, töltsd be, majd kattints a sorokra.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <details className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-        <summary className="cursor-pointer list-none">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 text-slate-900">
+        {/* Right: incoming OR history (tabbed) */}
+        <div className="rounded-xl border border-white/10 bg-[#0b1220] p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-2 text-white">
               <List size={18} />
-              <div className="text-sm">Előzmények</div>
-              <div className="ml-2">{headerChip("Mentett mozgatások", history.length)}</div>
+              <div>
+                <div>Mozgatás</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {headerChip("Bejövő tételek", incomingRows.length)}
+                  {headerChip("Bejövő DB", incomingTotal)}
+                  {headerChip("Előzmények", history.length)}
+                </div>
+              </div>
             </div>
-            <button
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 hover:bg-slate-50"
-              onClick={(e) => {
-                e.preventDefault();
-                refreshHistory();
-              }}
-              disabled={histBusy}
-              type="button"
-            >
-              <RefreshCcw size={16} />
-              Frissítés
-            </button>
+
+            <div className="flex items-center gap-2">
+              <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1">
+                <button
+                  type="button"
+                  onClick={() => setRightTab("incoming")}
+                  className={`px-3 py-2 text-sm rounded-md ${rightTab === "incoming" ? "bg-white/10 text-white" : "text-slate-200 hover:bg-white/10"}`}
+                >
+                  Bejövő lista
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRightTab("history")}
+                  className={`px-3 py-2 text-sm rounded-md ${rightTab === "history" ? "bg-white/10 text-white" : "text-slate-200 hover:bg-white/10"}`}
+                >
+                  Előzmények
+                </button>
+              </div>
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
+                onClick={refreshHistory}
+                disabled={histBusy}
+                type="button"
+              >
+                <RefreshCcw size={16} />
+                Frissítés
+              </button>
+            </div>
           </div>
-        </summary>
 
-        <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
-              <tr>
-                <th className="px-3 py-2 text-left"> </th>
-                <th className="px-3 py-2 text-left">Dátum</th>
-                <th className="px-3 py-2 text-left">Honnan → Hová</th>
-                <th className="px-3 py-2 text-left">Státusz</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h) => (
-                <tr key={h.id} className="border-t border-slate-200 text-slate-900">
-                  <td className="px-3 py-2">
-                    <input type="radio" name="transferSel" checked={selectedId === h.id} onChange={() => setSelectedId(h.id)} />
-                  </td>
-                  <td className="px-3 py-2 text-slate-700">{new Date(h.createdAtISO).toLocaleString()}</td>
-                  <td className="px-3 py-2">
-                    <span className="text-slate-900">{locationById.get(h.fromLocationId)?.name || h.fromLocationId}</span>
-                    <span className="text-slate-500"> → </span>
-                    <span className="text-slate-900">{locationById.get(h.toLocationId)?.name || h.toLocationId}</span>
-                  </td>
-                  <td className="px-3 py-2">
-                    {h.status === "committed" ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
-                        <CheckCircle2 size={14} />
-                        committed
-                      </span>
-                    ) : h.status === "cancelled" ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-700">
-                        <XCircle size={14} />
-                        cancelled
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">draft</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {!history.length ? (
-                <tr>
-                  <td className="px-3 py-6 text-center text-slate-600" colSpan={4}>
-                    Nincs még mentett mozgatás.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+          {rightTab === "history" ? (
+            <>
+              <div className="mt-3 rounded-xl border border-white/10 overflow-hidden">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-white/5 text-slate-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left"> </th>
+                      <th className="px-3 py-2 text-left">Dátum</th>
+                      <th className="px-3 py-2 text-left">Honnan → Hová</th>
+                      <th className="px-3 py-2 text-left">Státusz</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((h) => (
+                      <tr key={h.id} className="border-t border-white/10 text-slate-100">
+                        <td className="px-3 py-2">
+                          <input type="radio" name="transferSel" checked={selectedId === h.id} onChange={() => setSelectedId(h.id)} />
+                        </td>
+                        <td className="px-3 py-2 text-slate-300">{new Date(h.createdAtISO).toLocaleString()}</td>
+                        <td className="px-3 py-2">
+                          <span className="text-slate-200">{locationById.get(h.fromLocationId)?.name || h.fromLocationId}</span>
+                          <span className="text-slate-500"> → </span>
+                          <span className="text-slate-200">{locationById.get(h.toLocationId)?.name || h.toLocationId}</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          {h.status === "committed" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-600/20 px-2 py-1 text-xs text-emerald-200">
+                              <CheckCircle2 size={14} />
+                              committed
+                            </span>
+                          ) : h.status === "cancelled" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-600/20 px-2 py-1 text-xs text-rose-200">
+                              <XCircle size={14} />
+                              cancelled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-1 text-xs text-slate-200">draft</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {!history.length ? (
+                      <tr>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={4}>
+                          Nincs még mentett mozgatás.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 hover:bg-slate-50"
-            onClick={loadSelected}
-            disabled={!selectedId || busy}
-            type="button"
-          >
-            <List size={16} />
-            Betöltés draftba
-          </button>
-          <button
-            className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700"
-            onClick={commitSelected}
-            disabled={!selectedId || busy}
-            type="button"
-          >
-            <CheckCircle2 size={16} />
-            Commit
-          </button>
-          <button
-            className="inline-flex items-center gap-2 rounded-lg border border-rose-600 bg-rose-600 px-3 py-2 text-sm text-white hover:bg-rose-700"
-            onClick={cancelSelected}
-            disabled={!selectedId || busy}
-            type="button"
-          >
-            <XCircle size={16} />
-            Törlés
-          </button>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
+                  onClick={loadSelected}
+                  disabled={!selectedId || busy}
+                  type="button"
+                >
+                  <List size={16} />
+                  Betöltés draftba
+                </button>
+                <button
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-emerald-600/80 px-3 py-2 text-sm text-white hover:bg-emerald-600"
+                  onClick={commitSelected}
+                  disabled={!selectedId || busy}
+                  type="button"
+                >
+                  <CheckCircle2 size={16} />
+                  Commit
+                </button>
+                <button
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-rose-600/70 px-3 py-2 text-sm text-white hover:bg-rose-600"
+                  onClick={cancelSelected}
+                  disabled={!selectedId || busy}
+                  type="button"
+                >
+                  <XCircle size={16} />
+                  Törlés
+                </button>
+              </div>
+
+              {(msg || err) && (
+                <div className="mt-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
+                  {msg ? <div className="text-emerald-300">{msg}</div> : null}
+                  {err ? <div className="text-rose-300">{err}</div> : null}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div className="text-sm text-slate-200">
+                    <span className="text-white">Bejövő forrás</span>
+                    <span className="text-slate-400"> (batch)</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="min-w-[280px] rounded-lg border border-white/10 bg-[#0a1020] px-3 py-2 text-sm text-white"
+                      value={incomingBatchId}
+                      onChange={(e) => setIncomingBatchId(e.target.value)}
+                      disabled={incomingBusy}
+                      title="Válassz bejövő batch-et, amit mozgatni szeretnél"
+                    >
+                      <option value="">Válassz bejövő batch-et…</option>
+                      {incomingBatches.map((b: any) => (
+                        <option key={b.id} value={b.id}>
+                          {(b.createdAtISO ? new Date(b.createdAtISO).toLocaleString() : "") +
+                            (b.supplier ? ` • ${b.supplier}` : "") +
+                            (b.sourceType || b.source_type ? ` • ${(b.sourceType || b.source_type)}` : "") +
+                            (b.status ? ` • ${b.status}` : "")}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
+                      onClick={() => refreshIncomingBatches(false)}
+                      disabled={incomingBusy}
+                      type="button"
+                    >
+                      <RefreshCcw size={16} />
+                      Frissítés
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-emerald-600/80 px-3 py-2 text-sm text-white hover:bg-emerald-600"
+                      onClick={() => loadIncomingBatch()}
+                      disabled={!incomingBatchId || incomingBusy}
+                      type="button"
+                    >
+                      <List size={16} />
+                      Betöltés
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-slate-400">
+                  Tipp: ha újratöltötted az oldalt, a bal oldali draft üres marad. Itt válaszd ki a batch-et és töltsd be, aztán kattints a sorokra.
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="text-white">Bejövő lista</div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-300 select-none cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={hideAdded}
+                        onChange={(e) => setHideAdded(e.target.checked)}
+                      />
+                      Hozzáadottak elrejtése
+                    </label>
+                    <div className="text-xs text-slate-400">Kattints sorra, hogy átkerüljön a draftba</div>
+                  </div>
+                </div>
+
+                <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <div className="text-xs text-slate-300 whitespace-nowrap">Bejövő batch</div>
+                      <select
+                        className="w-full sm:w-[420px] rounded-lg border border-white/10 bg-[#0a1020] px-3 py-2 text-sm text-white"
+                        value={incomingBatchId}
+                        onChange={(e) => setIncomingBatchId(e.target.value)}
+                      >
+                        <option value="">Válassz batch-et...</option>
+                        {incomingBatches.map((b: any) => (
+                          <option key={b.id} value={b.id}>
+                            {b.id}  •  {b.supplier || "(nincs beszállító)"}  •  {b.status || ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm text-white hover:bg-white/15"
+                        onClick={() => loadIncomingBatch()}
+                        disabled={!incomingBatchId || incomingBusy}
+                        type="button"
+                        title="A kiválasztott bejövő batch tételeit betölti ide"
+                      >
+                        <RefreshCcw size={16} />
+                        Betöltés
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-300">
+                      Forrás: {incoming.length ? "aktuális draft" : incomingLocal.length ? "batch (betöltve)" : "nincs"}
+                    </div>
+                  </div>
+                </div>
+
+                {!incomingRows.length ? (
+                  <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
+                    <div className="text-white">Nincs bejövő tétel.</div>
+                    <div className="mt-2 text-slate-300">
+                      Tipikus okok:
+                      <ul className="list-disc pl-5 mt-1 text-slate-300">
+                        <li>Az Incoming batch nincs betöltve ebbe a nézetbe.</li>
+                        <li>Az Incoming oldalon a draft üres (újratöltés után).</li>
+                      </ul>
+                      <div className="mt-2 text-slate-300">
+                        Teendő: menj az <span className="text-white">Előzmények</span> fülre az Incoming oldalon, <span className="text-white">Betöltés</span>, majd térj vissza ide.
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 overflow-x-auto rounded-xl border border-white/10">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-white/5 text-slate-200">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Kód</th>
+                          <th className="px-3 py-2 text-left">Márka</th>
+                          <th className="px-3 py-2 text-left">Terméknév</th>
+                          <th className="px-3 py-2 text-left">Nem</th>
+                          <th className="px-3 py-2 text-left">Színkód</th>
+                          <th className="px-3 py-2 text-left">Szín</th>
+                          <th className="px-3 py-2 text-left">Méret</th>
+                          <th className="px-3 py-2 text-left">Kategória</th>
+                          <th className="px-3 py-2 text-right">Beszerzési ár</th>
+                          <th className="px-3 py-2 text-right">Db</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {incomingRows.map((it, i) => {
+                          const k = mergeKey(it as any);
+                          const alreadyInDraft = draftKeySet.has(k);
+                          return (
+                            <tr
+                              key={k + i}
+                              className={`border-t border-white/10 text-slate-100 ${alreadyInDraft ? "opacity-60" : "hover:bg-white/5 cursor-pointer"}`}
+                              onClick={() => {
+                                if (alreadyInDraft) {
+                                  setToast(`Már a draftban van: ${it.sku || "(nincs kód)"}`);
+                                  window.setTimeout(() => setToast(""), 1400);
+                                  setTimeout(() => draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                                  return;
+                                }
+                                addFromIncoming(it);
+                              }}
+                              title={alreadyInDraft ? "Már benne van a draftban" : "Hozzáadás a mozgatáshoz"}
+                            >
+                            <td className="px-3 py-2">{it.sku}</td>
+                            <td className="px-3 py-2 text-slate-200">{(it as any).brand || <span className="text-slate-500">-</span>}</td>
+                            <td className="px-3 py-2">{it.name}</td>
+                            <td className="px-3 py-2 text-slate-200">{(it as any).gender || <span className="text-slate-500">-</span>}</td>
+                            <td className="px-3 py-2">{it.colorCode || <span className="text-slate-500">-</span>}</td>
+                            <td className="px-3 py-2 text-slate-200">{it.colorName || <span className="text-slate-500">-</span>}</td>
+                            <td className="px-3 py-2">{it.size}</td>
+                            <td className="px-3 py-2 text-slate-200">{it.category || <span className="text-slate-500">-</span>}</td>
+                            <td className="px-3 py-2 text-right text-slate-200 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-500">-</span>}</td>
+                            <td className="px-3 py-2 text-right">{it.qty}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
-      </details>
+      </div>
     </div>
   );
 }
