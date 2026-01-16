@@ -1,363 +1,226 @@
 /*
   ALL IN – Incoming import mapper (professional)
 
-  Goal:
-  - Accept XLS/XLSX/CSV headers in HU/RO/EN (and vendor-specific like ForIT)
-  - Map them into ONE internal canonical draft shape using Hungarian field names
-  - Parse missing fields from code where possible (e.g., color_code + size from vendor SKU)
-  - Keep raw row for audit/debug
+  Requirements:
+  - Import from CSV/XLS/XLSX with HU/RO/EN headers (plus vendor headers like ForIT Forms)
+  - Internally we keep ONE canonical draft shape used by Incoming UI (sku/brand/name/...)
+  - No positional mapping. Header aliases only.
+  - Optional parsing of missing colorCode/size from vendor code.
 
-  IMPORTANT:
-  - This module is UI-agnostic. TSX components should call mapRowToIncomingDraft()
-  - Do not do positional mapping. Only header alias mapping.
+  This file is meant to be the *only* place that knows how to map vendor spreadsheets.
 */
 
-export type IncomingGender =
-  | 'Férfi'
-  | 'Női'
-  | 'Unisex'
-  | 'Gyerek'
-  | 'Ismeretlen';
+export type IncomingGenderCode = "F" | "N" | "U" | "K" | ""; // Férfi / Női / Unisex / Gyerek / unknown
 
-export type IncomingDraftItem = {
-  // Canonical (HU) keys used across the app
-  kod: string; // Kód
-  marka: string; // Márka
-  termeknev: string; // Terméknév
-  nem: IncomingGender; // Nem
-  szinkod: string; // Színkód
-  szin: string; // Szín
-  meret: string; // Méret
-  kategoria: string; // Kategória
-  beszerzesi_ar: number | null; // Beszerzési ár
-  db: number | null; // Db
+export type ImportMappedRow = {
+  // Canonical UI shape (used by IncomingImport / IncomingTransfer / etc.)
+  sku: string; // Kód
+  brand: string; // Márka
+  name: string; // Terméknév
+  gender: IncomingGenderCode; // Nem
+  colorCode: string; // Színkód
+  colorName: string; // Szín
+  size: string; // Méret
+  category: string; // Kategória
+  buyPrice: number | null; // Beszerzési ár
+  qty: number; // Db
 
-  // Derived
-  osszertek: number | null; // Beszerzési ár * Db
+  // diagnostics
+  issues: string[];
+  raw: Record<string, unknown>;
+};
 
-  // Meta
-  source_headers: Record<string, string>; // canonicalKey -> original header
-  issues: string[]; // warnings/errors for UI display/logging
-  raw: Record<string, unknown>; // original row
+export type ImportTable = {
+  headers: string[];
+  rows: string[][];
 };
 
 export type ImportOptions = {
-  // If true, try to parse missing fields from kod (e.g. color/size)
+  // If provided, forces vendor profile handling.
+  source?: "auto" | "forit";
+  // If false, won't try to parse size/colorCode from sku.
   parseCode?: boolean;
-
-  // If provided, used to normalize DEPT/gender values, etc.
-  // Example: { BARBAT: 'Férfi', FEMEIE: 'Női' }
-  genderMap?: Record<string, IncomingGender>;
 };
 
-const DEFAULT_GENDER_MAP: Record<string, IncomingGender> = {
-  BARBAT: 'Férfi',
-  FEMEIE: 'Női',
-  UNISEX: 'Unisex',
-  COPII: 'Gyerek',
-  COPIL: 'Gyerek',
-  KIDS: 'Gyerek',
-  MEN: 'Férfi',
-  WOMEN: 'Női',
-  MALE: 'Férfi',
-  FEMALE: 'Női',
-};
-
-// ---- Header normalization -------------------------------------------------
+// ------------------------- helpers -------------------------
 
 export function normalizeHeader(input: string): string {
-  // Lowercase, remove diacritics, strip separators
-  return String(input)
+  return String(input ?? "")
     .trim()
     .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]/g, '');
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
 }
 
-function toStringSafe(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  return String(v).trim();
+function s(v: unknown): string {
+  return String(v ?? "").trim();
 }
 
-function toNumberSafe(v: unknown): number | null {
+function toNumber(v: unknown): number | null {
   if (v === null || v === undefined) return null;
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const raw = String(v).trim();
+  if (!raw) return null;
 
-  const s = String(v).trim();
-  if (!s) return null;
+  // common: "1.234,56", "1234,56", "RON 12,5"
+  let cleaned = raw
+    .replace(/\s+/g, "")
+    .replace(/(ron|lei|eur|usd)/gi, "")
+    .replace(/[^0-9,.-]/g, "");
 
-  // Common vendor formats: "12,50" or "RON 12,50" or "12.50"
-  const cleaned = s
-    .replace(/\s+/g, '')
-    .replace(/(ron|lei|eur|usd)/gi, '')
-    .replace(/[^0-9,.-]/g, '');
-
-  // If has comma and dot, assume dot is thousands separator and comma decimal (RO style)
-  // Example: 1.234,56 -> 1234.56
-  let normalized = cleaned;
-  const hasComma = normalized.includes(',');
-  const hasDot = normalized.includes('.');
+  const hasComma = cleaned.includes(",");
+  const hasDot = cleaned.includes(".");
   if (hasComma && hasDot) {
-    normalized = normalized.replace(/\./g, '').replace(',', '.');
+    cleaned = cleaned.replace(/\./g, "").replace(",", ".");
   } else if (hasComma && !hasDot) {
-    normalized = normalized.replace(',', '.');
+    cleaned = cleaned.replace(",", ".");
   }
 
-  const n = Number(normalized);
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
 
-function toIntSafe(v: unknown): number | null {
-  const n = toNumberSafe(v);
-  if (n === null) return null;
+function toInt(v: unknown): number {
+  const n = toNumber(v);
+  if (n === null) return 0;
   const i = Math.round(n);
-  return Number.isFinite(i) ? i : null;
+  return Number.isFinite(i) ? i : 0;
 }
 
-// ---- Alias dictionary (HU/RO/EN + vendor-specific) ------------------------
+function normalizeGender(v: unknown): IncomingGenderCode {
+  const raw = s(v);
+  if (!raw) return "";
+  const key = raw.trim().toUpperCase();
 
-// Canonical keys (internal HU) -> acceptable headers (normalized)
+  // RO
+  if (["BARBAT", "B\u0102RBAT", "MEN", "MALE", "M"].includes(key)) return "F";
+  if (["FEMEIE", "FEMEIEI", "WOMEN", "FEMALE", "F"].includes(key)) return "N";
+  if (["UNISEX", "U"].includes(key)) return "U";
+  if (["COPII", "COPIL", "KIDS", "CHILD", "CHILDREN"].includes(key)) return "K";
+
+  // HU
+  if (["FERFI", "F\u00c9RFI"].includes(key)) return "F";
+  if (["NOI", "N\u0150I"].includes(key)) return "N";
+  if (["GYEREK"].includes(key)) return "K";
+
+  return "";
+}
+
+function isLikelyForIt(headers: string[]): boolean {
+  const set = new Set(headers.map(normalizeHeader));
+  return ["denumire", "cod", "cant", "categorie", "pretachiz"].every((k) => set.has(k));
+}
+
+// Parse vendor code pattern like: 1125--3027382-001-001--7
+function parseFromSku(code: string): { colorCode?: string; size?: string } {
+  const c = s(code);
+  if (!c) return {};
+
+  const sizeMatch = c.match(/--([A-Za-z0-9]{1,6})$/);
+  const colorMatch = c.match(/-([0-9]{3})-([0-9]{3})--/);
+  return {
+    colorCode: colorMatch?.[1],
+    size: sizeMatch?.[1],
+  };
+}
+
+// Canonical field -> aliases (normalized)
 const ALIASES: Record<
-  keyof Omit<IncomingDraftItem, 'osszertek' | 'source_headers' | 'issues' | 'raw'>,
+  keyof Pick<ImportMappedRow, "sku" | "brand" | "name" | "gender" | "colorCode" | "colorName" | "size" | "category" | "buyPrice" | "qty">,
   string[]
 > = {
-  kod: [
-    'kod',
-    'productcode',
-    'sku',
-    'itemcode',
-    'cod',
-    'codprodus',
-    'codarticol',
-    'code',
+  sku: ["kod", "productcode", "sku", "itemcode", "cod", "codprodus", "codarticol", "code"],
+  brand: ["marka", "brand", "marca", "info1"],
+  name: ["termeknev", "productname", "name", "denumire", "nume", "descriere"],
+  gender: ["nem", "gender", "gen", "sex", "dept", "department"],
+  colorCode: ["szinkod", "colorcode", "codculoare", "colourcode"],
+  colorName: ["szin", "color", "culoare", "colour", "colorname"],
+  size: ["meret", "size", "marime", "m\u0103rime"],
+  category: ["kategoria", "category", "categorie", "grupa", "tip"],
+  buyPrice: [
+    "beszeresiar",
+    "beszerzesi_ar",
+    "buyprice",
+    "purchaseprice",
+    "cost",
+    "pretachiz",
+    "pretachizitie",
   ],
-  marka: ['marka', 'brand', 'marca', 'info1'],
-  termeknev: ['termeknev', 'productname', 'name', 'denumire', 'nume', 'descriere'],
-  nem: ['nem', 'gender', 'gen', 'sex', 'dept', 'department'],
-  szinkod: ['szinkod', 'colorcode', 'codculoare', 'codculoareprodus', 'colourcode'],
-  szin: ['szin', 'color', 'culoare', 'colour', 'colorname', 'culoareprodus'],
-  meret: ['meret', 'size', 'marime', 'mărime'.normalize('NFD').replace(/[\u0300-\u036f]/g, ''), 'dimensione'],
-  kategoria: ['kategoria', 'category', 'categorie', 'grupa', 'tip'],
-  beszerzesi_ar: [
-    'beszerzesi ar'.replace(/\s/g, ''),
-    'beszerzesi_ar',
-    'buyprice',
-    'purchaseprice',
-    'cost',
-    'pretachiz',
-    'pretachizitie',
-    'pretachizitie'.replace(/\s/g, ''),
-  ],
-  db: ['db', 'qty', 'quantity', 'cant', 'cantitate', 'buc', 'pieces'],
+  qty: ["db", "qty", "quantity", "cant", "cantitate", "buc", "pieces"],
 };
 
-// ---- Vendor specific: ForIT/Forms mapping ---------------------------------
-
-// ForIT typical headers (normalized): denumire, um, codbare, cod, cant, categorie, pretachiz, dept, info1
-const FORIT_HINT_HEADERS = ['denumire', 'cod', 'cant', 'categorie', 'pretachiz'];
-
-function isLikelyForIt(headersNormalized: string[]): boolean {
-  const set = new Set(headersNormalized);
-  return FORIT_HINT_HEADERS.every((h) => set.has(h));
-}
-
-// ---- Code parsing ----------------------------------------------------------
-
-export type ParsedCode = {
-  color_code?: string;
-  size?: string;
-  confidence: 'high' | 'low' | 'none';
-};
-
-/**
- * Parse vendor code patterns.
- * Current supported pattern (example): 1125--3027382-001-001--7
- * Heuristic: take the last "--<size>" part as size, and last "-<ccc>-<ccc>--" as color.
- */
-export function parseCode(code: string): ParsedCode {
-  const c = toStringSafe(code);
-  if (!c) return { confidence: 'none' };
-
-  // Size: last "--<something>" where <something> is 1-6 chars alnum
-  const sizeMatch = c.match(/--([A-Za-z0-9]{1,6})$/);
-
-  // Color: -<3digits>-<3digits>-- (take the first of the pair)
-  const colorMatch = c.match(/-([0-9]{3})-([0-9]{3})--/);
-
-  const out: ParsedCode = { confidence: 'none' };
-  if (sizeMatch) out.size = sizeMatch[1];
-  if (colorMatch) out.color_code = colorMatch[1];
-
-  if (out.size || out.color_code) {
-    out.confidence = out.size && out.color_code ? 'high' : 'low';
+function pick(row: Record<string, unknown>, aliases: string[]): unknown {
+  const idx: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) idx[normalizeHeader(k)] = v;
+  for (const a of aliases) {
+    const nk = normalizeHeader(a);
+    if (nk in idx) return idx[nk];
   }
-
-  return out;
+  return undefined;
 }
 
-// ---- Gender normalization --------------------------------------------------
-
-export function normalizeGender(input: unknown, genderMap?: Record<string, IncomingGender>): IncomingGender {
-  const raw = toStringSafe(input);
-  if (!raw) return 'Ismeretlen';
-
-  const key = raw.trim().toUpperCase();
-  const map = { ...DEFAULT_GENDER_MAP, ...(genderMap || {}) };
-  return map[key] || 'Ismeretlen';
-}
-
-// ---- Core mapping ----------------------------------------------------------
-
-type CanonicalKey = keyof typeof ALIASES;
-
-function buildHeaderIndex(row: Record<string, unknown>): {
-  // normalized header -> original header
-  normalizedToOriginal: Record<string, string>;
-  // normalized header -> value
-  normalizedToValue: Record<string, unknown>;
-  headersNormalized: string[];
-} {
-  const normalizedToOriginal: Record<string, string> = {};
-  const normalizedToValue: Record<string, unknown> = {};
-
-  for (const [k, v] of Object.entries(row || {})) {
-    const nk = normalizeHeader(k);
-    if (!nk) continue;
-    // keep first occurrence
-    if (!(nk in normalizedToOriginal)) normalizedToOriginal[nk] = k;
-    if (!(nk in normalizedToValue)) normalizedToValue[nk] = v;
-  }
-
-  return {
-    normalizedToOriginal,
-    normalizedToValue,
-    headersNormalized: Object.keys(normalizedToOriginal),
-  };
-}
-
-function pickValue(
-  idx: ReturnType<typeof buildHeaderIndex>,
-  candidates: string[]
-): { value: unknown; usedHeader: string | null } {
-  for (const c of candidates) {
-    const nc = normalizeHeader(c);
-    if (nc in idx.normalizedToValue) {
-      return { value: idx.normalizedToValue[nc], usedHeader: idx.normalizedToOriginal[nc] };
+function tableToObjects(table: ImportTable): Array<Record<string, unknown>> {
+  const headers = table.headers || [];
+  return (table.rows || []).map((r) => {
+    const obj: Record<string, unknown> = {};
+    for (let i = 0; i < headers.length; i++) {
+      obj[headers[i]] = r?.[i] ?? "";
     }
-  }
-  return { value: undefined, usedHeader: null };
+    return obj;
+  });
 }
 
-export function mapRowToIncomingDraft(
-  row: Record<string, unknown>,
-  options: ImportOptions = {}
-): IncomingDraftItem {
-  const idx = buildHeaderIndex(row);
-  const issues: string[] = [];
-  const source_headers: Record<string, string> = {};
+// ------------------------- public API -------------------------
 
-  const likelyForIt = isLikelyForIt(idx.headersNormalized);
+export function mapTableToIncomingRows(table: ImportTable, options: ImportOptions = {}): ImportMappedRow[] {
+  const objects = tableToObjects(table);
+  const forceForIt = options.source === "forit";
+  const autoForIt = options.source !== "forit" && options.source !== "auto" ? false : isLikelyForIt(table.headers || []);
+  const useForIt = forceForIt || autoForIt;
 
-  // If ForIT, force vendor mapping priorities
-  const forcedForIt: Partial<Record<CanonicalKey, string[]>> = likelyForIt
-    ? {
-        termeknev: ['Denumire'],
-        kod: ['Cod'],
-        db: ['Cant'],
-        kategoria: ['Categorie'],
-        beszerzesi_ar: ['PretAchiz'],
-        marka: ['INFO1'],
-        nem: ['DEPT'],
-      }
-    : {};
+  return objects.map((row) => {
+    const issues: string[] = [];
 
-  function getCanonical(key: CanonicalKey): { value: unknown; header: string | null } {
-    const forced = forcedForIt[key];
-    if (forced) return pickValue(idx, forced);
-    return pickValue(idx, ALIASES[key]);
-  }
+    // ForIT overrides (exact headers)
+    const sku = s(useForIt ? row["Cod"] ?? row["COD"] ?? pick(row, ALIASES.sku) : pick(row, ALIASES.sku));
+    const name = s(useForIt ? row["Denumire"] ?? row["DENUMIRE"] ?? pick(row, ALIASES.name) : pick(row, ALIASES.name));
+    const qty = useForIt ? toInt(row["Cant"] ?? row["CANT"] ?? pick(row, ALIASES.qty)) : toInt(pick(row, ALIASES.qty));
+    const category = s(useForIt ? row["Categorie"] ?? row["CATEGORIE"] ?? pick(row, ALIASES.category) : pick(row, ALIASES.category));
+    const buyPrice = useForIt ? toNumber(row["PretAchiz"] ?? row["PRETACHIZ"] ?? pick(row, ALIASES.buyPrice)) : toNumber(pick(row, ALIASES.buyPrice));
+    const brand = s(useForIt ? row["INFO1"] ?? row["Info1"] ?? pick(row, ALIASES.brand) : pick(row, ALIASES.brand));
+    const genderRaw = useForIt ? (row["DEPT"] ?? row["Dept"] ?? pick(row, ALIASES.gender)) : pick(row, ALIASES.gender);
+    const gender = normalizeGender(genderRaw);
 
-  const kodPick = getCanonical('kod');
-  const termeknevPick = getCanonical('termeknev');
-  const markaPick = getCanonical('marka');
-  const nemPick = getCanonical('nem');
-  const szinkodPick = getCanonical('szinkod');
-  const szinPick = getCanonical('szin');
-  const meretPick = getCanonical('meret');
-  const katPick = getCanonical('kategoria');
-  const arPick = getCanonical('beszerzesi_ar');
-  const dbPick = getCanonical('db');
+    let colorCode = s(pick(row, ALIASES.colorCode));
+    const colorName = s(pick(row, ALIASES.colorName));
+    let size = s(pick(row, ALIASES.size));
 
-  if (kodPick.header) source_headers.kod = kodPick.header;
-  if (termeknevPick.header) source_headers.termeknev = termeknevPick.header;
-  if (markaPick.header) source_headers.marka = markaPick.header;
-  if (nemPick.header) source_headers.nem = nemPick.header;
-  if (szinkodPick.header) source_headers.szinkod = szinkodPick.header;
-  if (szinPick.header) source_headers.szin = szinPick.header;
-  if (meretPick.header) source_headers.meret = meretPick.header;
-  if (katPick.header) source_headers.kategoria = katPick.header;
-  if (arPick.header) source_headers.beszerzesi_ar = arPick.header;
-  if (dbPick.header) source_headers.db = dbPick.header;
+    if (!sku) issues.push("Hiányzó Kód.");
+    if (!name) issues.push("Hiányzó Terméknév.");
+    if (!qty || qty <= 0) issues.push("Hiányzó / hibás Db.");
+    if (buyPrice === null) issues.push("Hiányzó / hibás Beszerzési ár.");
 
-  const kod = toStringSafe(kodPick.value);
-  const termeknev = toStringSafe(termeknevPick.value);
-  const marka = toStringSafe(markaPick.value);
-  const nem = normalizeGender(nemPick.value, options.genderMap);
-
-  let szinkod = toStringSafe(szinkodPick.value);
-  const szin = toStringSafe(szinPick.value);
-  let meret = toStringSafe(meretPick.value);
-
-  const kategoria = toStringSafe(katPick.value);
-  const beszerzesi_ar = toNumberSafe(arPick.value);
-  const db = toIntSafe(dbPick.value);
-
-  if (!kod) issues.push('Hiányzó Kód (kod).');
-  if (!termeknev) issues.push('Hiányzó Terméknév (termeknev).');
-  if (db === null) issues.push('Hiányzó / hibás Db (qty/cant).');
-  if (beszerzesi_ar === null) issues.push('Hiányzó / hibás Beszerzési ár (buy price / pret achiz).');
-
-  // Optional code parsing for missing fields
-  const parseEnabled = options.parseCode !== false;
-  if (parseEnabled && kod) {
-    const parsed = parseCode(kod);
-    if (!szinkod && parsed.color_code) {
-      szinkod = parsed.color_code;
-      issues.push(`Színkód kiszámolva a Kódból (${parsed.confidence}).`);
+    const parseCode = options.parseCode !== false;
+    if (parseCode && sku && (!colorCode || !size)) {
+      const parsed = parseFromSku(sku);
+      if (!colorCode && parsed.colorCode) colorCode = parsed.colorCode;
+      if (!size && parsed.size) size = parsed.size;
     }
-    if (!meret && parsed.size) {
-      meret = parsed.size;
-      issues.push(`Méret kiszámolva a Kódból (${parsed.confidence}).`);
-    }
-  }
 
-  const osszertek = beszerzesi_ar !== null && db !== null ? Number((beszerzesi_ar * db).toFixed(2)) : null;
-
-  return {
-    kod,
-    marka,
-    termeknev,
-    nem,
-    szinkod,
-    szin,
-    meret,
-    kategoria,
-    beszerzesi_ar,
-    db,
-    osszertek,
-    source_headers,
-    issues,
-    raw: row || {},
-  };
-}
-
-/**
- * Utility for mapping a whole sheet (array of row objects).
- */
-export function mapRowsToIncomingDraft(
-  rows: Array<Record<string, unknown>>,
-  options: ImportOptions = {}
-): IncomingDraftItem[] {
-  return (rows || []).map((r) => mapRowToIncomingDraft(r, options));
+    return {
+      sku,
+      brand,
+      name,
+      gender,
+      colorCode,
+      colorName,
+      size,
+      category,
+      buyPrice,
+      qty,
+      issues,
+      raw: row,
+    };
+  });
 }
