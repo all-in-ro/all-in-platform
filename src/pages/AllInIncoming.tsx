@@ -79,24 +79,10 @@ export default function AllInIncoming() {
     (async () => {
       try {
         setLocErr("");
-        const shopsRaw: any = await apiGetLocations();
+        const shops = await apiGetLocations();
         if (!alive) return;
-
-        // apiGetLocations() nem garantáltan tömböt ad (néha {items: [...]}, {data: [...]}, stb.)
-        const shopsArr: any[] =
-          Array.isArray(shopsRaw) ? shopsRaw :
-          Array.isArray(shopsRaw?.items) ? shopsRaw.items :
-          Array.isArray(shopsRaw?.data) ? shopsRaw.data :
-          Array.isArray(shopsRaw?.rows) ? shopsRaw.rows :
-          [];
-
-        if (!shopsArr.length) {
-          setLocErr("Helyszínek formátum hiba (nem tömb) – fallback lista aktív.");
-          return;
-        }
-
         // map shops -> Location
-        const locs: Location[] = shopsArr.map((s: any) => ({
+        const locs: Location[] = shops.map((s: any) => ({
           id: s.id,
           name: s.name || s.label || s.id,
           kind: s.kind || (s.id === "raktar" ? "warehouse" : "shop"),
@@ -171,7 +157,8 @@ export default function AllInIncoming() {
         if (!itemsForMeta.length) continue;
 
         const created = await apiCreateIncomingBatch({
-          supplier: meta.supplier,
+          // Backend expects supplier. If the UI input is not wired yet, keep the flow working.
+          supplier: (meta.supplier || "").trim() || "Ismeretlen beszállító",
           sourceType: meta.kind,
           locationId: meta.locationId,
           note: meta.label,
