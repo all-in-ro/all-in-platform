@@ -14,6 +14,33 @@ const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smok
 
 type TabKey = "import" | "manual" | "transfer" | "docs" | "bom" | "history";
 
+async function tryDeleteIncomingBatch(batchId: string) {
+  // We don't have the backend file here, so we try a couple of likely routes.
+  // Backend should implement one of these (preferred: the same base route used by apiListIncomingBatches).
+  const candidates = [
+    `/api/incoming/batches/${encodeURIComponent(batchId)}`,
+    `/api/incoming/batch/${encodeURIComponent(batchId)}`,
+    `/api/allin/incoming/batches/${encodeURIComponent(batchId)}`,
+    `/api/allin/incoming/batch/${encodeURIComponent(batchId)}`,
+  ];
+
+  let lastErr = "";
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { method: "DELETE", headers: { "content-type": "application/json" } });
+      if (res.ok) return;
+      const txt = await res.text().catch(() => "");
+      lastErr = txt || `${res.status} ${res.statusText}`;
+      // if it's a hard auth/permission error, stop early
+      if (res.status === 401 || res.status === 403) break;
+    } catch (e: any) {
+      lastErr = e?.message || String(e);
+    }
+  }
+
+  throw new Error(lastErr || "Törlés sikertelen (nincs DELETE endpoint vagy hibás útvonal).");
+}
+
 function mergeKey(it: { sku: string; size: string; colorCode: string; category: string; name: string }) {
   return [it.sku || "", it.size || "", it.colorCode || "", it.category || "", it.name || ""].join("|").toLowerCase();
 }
@@ -227,6 +254,23 @@ export default function AllInIncoming() {
     }
   };
 
+  const deleteBatchPermanently = async (batchId: string) => {
+    // blunt but effective. humans love clicking without reading.
+    const ok = window.confirm(`Biztosan végleg törlöd ezt az előzményt?\n\nBatch ID: ${batchId}\n\nEz nem visszavonható.`);
+    if (!ok) return;
+
+    setHistoryErr("");
+    setSaveOk("");
+    try {
+      await tryDeleteIncomingBatch(batchId);
+      if (selectedBatchId === batchId) setSelectedBatchId("");
+      setSaveOk(`Törölve: ${batchId}`);
+      void loadHistory();
+    } catch (e: any) {
+      setHistoryErr(e?.message || "Törlés sikertelen.");
+    }
+  };
+
   const tabs: Array<{ key: TabKey; label: string; icon: any }> = [
     { key: "import", label: "CSV import", icon: Upload },
     { key: "manual", label: "Kézi bevitel", icon: Plus },
@@ -402,6 +446,14 @@ export default function AllInIncoming() {
                                   onChange={() => setSelectedBatchId(b.id)}
                                   title="Kijelölés commit-hoz"
                                 />
+                                <button
+                                  type="button"
+                                  onClick={() => deleteBatchPermanently(b.id)}
+                                  className="h-8 px-3 rounded-xl border border-red-300 bg-white text-[12px] font-semibold text-red-700 hover:bg-red-50"
+                                  title="Előzmény végleges törlése"
+                                >
+                                  Törlés
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => loadBatchIntoDraft(b.id)}
