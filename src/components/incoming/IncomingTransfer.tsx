@@ -393,18 +393,18 @@ export default function IncomingTransfer(props: {
         ) : (
           <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-slate-700">
+              <thead className="bg-[#354153] text-slate-100">
                 <tr>
-                  <th className="px-3 py-2 text-left">Kód</th>
-                  <th className="px-3 py-2 text-left">Márka</th>
-                  <th className="px-3 py-2 text-left">Terméknév</th>
-                  <th className="px-3 py-2 text-left">Nem</th>
-                  <th className="px-3 py-2 text-left">Színkód</th>
-                  <th className="px-3 py-2 text-left">Szín</th>
-                  <th className="px-3 py-2 text-left">Méret</th>
-                  <th className="px-3 py-2 text-left">Kategória</th>
-                  <th className="px-3 py-2 text-right">Beszerzési ár</th>
-                  <th className="px-3 py-2 text-right">Db</th>
+                  <th className="px-3 py-2 text-left font-normal">Kód</th>
+                  <th className="px-3 py-2 text-left font-normal">Márka</th>
+                  <th className="px-3 py-2 text-left font-normal">Terméknév</th>
+                  <th className="px-3 py-2 text-left font-normal">Nem</th>
+                  <th className="px-3 py-2 text-left font-normal">Színkód</th>
+                  <th className="px-3 py-2 text-left font-normal">Szín</th>
+                  <th className="px-3 py-2 text-left font-normal">Méret</th>
+                  <th className="px-3 py-2 text-left font-normal">Kategória</th>
+                  <th className="px-3 py-2 text-right font-normal">Beszerzési ár</th>
+                  <th className="px-3 py-2 text-right font-normal">Db</th>
                 </tr>
               </thead>
               <tbody>
@@ -417,14 +417,14 @@ export default function IncomingTransfer(props: {
                   >
                     <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
                     <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.name}</td>
+                    <td className="px-3 py-2 font-normal">{it.name}</td>
                     <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
+                    <td className="px-3 py-2 font-normal">{it.colorCode || <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2">{it.size}</td>
+                    <td className="px-3 py-2 font-normal">{it.size}</td>
                     <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right">{it.qty}</td>
+                    <td className="px-3 py-2 text-right font-normal">{it.qty}</td>
                   </tr>
                 ))}
               </tbody>
@@ -509,19 +509,19 @@ export default function IncomingTransfer(props: {
 
         <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
+            <thead className="bg-[#354153] text-slate-100">
               <tr>
-                <th className="px-3 py-2 text-left">Kód</th>
-                <th className="px-3 py-2 text-left">Márka</th>
-                <th className="px-3 py-2 text-left">Terméknév</th>
-                <th className="px-3 py-2 text-left">Nem</th>
-                <th className="px-3 py-2 text-left">Színkód</th>
-                <th className="px-3 py-2 text-left">Szín</th>
-                <th className="px-3 py-2 text-left">Méret</th>
-                <th className="px-3 py-2 text-left">Kategória</th>
-                <th className="px-3 py-2 text-right">Beszerzési ár</th>
-                <th className="px-3 py-2 text-right">Db</th>
-                <th className="px-3 py-2 text-right"> </th>
+                <th className="px-3 py-2 text-left font-normal">Kód</th>
+                <th className="px-3 py-2 text-left font-normal">Márka</th>
+                <th className="px-3 py-2 text-left font-normal">Terméknév</th>
+                <th className="px-3 py-2 text-left font-normal">Nem</th>
+                <th className="px-3 py-2 text-left font-normal">Színkód</th>
+                <th className="px-3 py-2 text-left font-normal">Szín</th>
+                <th className="px-3 py-2 text-left font-normal">Méret</th>
+                <th className="px-3 py-2 text-left font-normal">Kategória</th>
+                <th className="px-3 py-2 text-right font-normal">Beszerzési ár</th>
+                <th className="px-3 py-2 text-right font-normal">Db</th>
+                <th className="px-3 py-2 text-right font-normal"> </th>
               </tr>
             </thead>
             <tbody>
@@ -535,14 +535,14 @@ export default function IncomingTransfer(props: {
                 >
                   <td className="px-3 py-2 whitespace-nowrap">{it.sku}</td>
                   <td className="px-3 py-2 text-slate-700">{(it as any).brand || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2">{it.name}</td>
+                  <td className="px-3 py-2 font-normal">{it.name}</td>
                   <td className="px-3 py-2 text-slate-700">{(it as any).gender || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2">{it.colorCode || <span className="text-slate-400">-</span>}</td>
+                  <td className="px-3 py-2 font-normal">{it.colorCode || <span className="text-slate-400">-</span>}</td>
                   <td className="px-3 py-2 text-slate-700">{it.colorName || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2">{it.size}</td>
+                  <td className="px-3 py-2 font-normal">{it.size}</td>
                   <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
                   <td className="px-3 py-2 text-right text-slate-700 whitespace-nowrap">{formatBuyPrice((it as any).buyPrice) || <span className="text-slate-400">-</span>}</td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right font-normal">
                     <input
                       className="w-24 rounded-md border border-slate-200 bg-white px-2 py-1 text-right text-sm text-slate-900"
                       type="number"
@@ -551,7 +551,7 @@ export default function IncomingTransfer(props: {
                       onChange={(e) => updateItemQty(i, Math.max(1, Number(e.target.value || 1)))}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right font-normal">
                     <button
                       className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-700 hover:bg-slate-50"
                       onClick={() => removeItem(i)}
@@ -600,27 +600,27 @@ export default function IncomingTransfer(props: {
 
         <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
+            <thead className="bg-[#354153] text-slate-100">
               <tr>
-                <th className="px-3 py-2 text-left"> </th>
-                <th className="px-3 py-2 text-left">Dátum</th>
-                <th className="px-3 py-2 text-left">Honnan → Hová</th>
-                <th className="px-3 py-2 text-left">Státusz</th>
+                <th className="px-3 py-2 text-left font-normal"> </th>
+                <th className="px-3 py-2 text-left font-normal">Dátum</th>
+                <th className="px-3 py-2 text-left font-normal">Honnan → Hová</th>
+                <th className="px-3 py-2 text-left font-normal">Státusz</th>
               </tr>
             </thead>
             <tbody>
               {history.map((h) => (
                 <tr key={h.id} className="border-t border-slate-200 text-slate-900">
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 font-normal">
                     <input type="radio" name="transferSel" checked={selectedId === h.id} onChange={() => setSelectedId(h.id)} />
                   </td>
                   <td className="px-3 py-2 text-slate-700">{new Date(h.createdAtISO).toLocaleString()}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 font-normal">
                     <span className="text-slate-900">{locationById.get(h.fromLocationId)?.name || h.fromLocationId}</span>
                     <span className="text-slate-500"> → </span>
                     <span className="text-slate-900">{locationById.get(h.toLocationId)?.name || h.toLocationId}</span>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 font-normal">
                     {h.status === "committed" ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
                         <CheckCircle2 size={14} />
