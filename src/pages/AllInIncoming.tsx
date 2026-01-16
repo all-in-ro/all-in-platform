@@ -27,7 +27,11 @@ async function tryDeleteIncomingBatch(batchId: string) {
   let lastErr = "";
   for (const url of candidates) {
     try {
-      const res = await fetch(url, { method: "DELETE", headers: { "content-type": "application/json" } });
+      const res = await fetch(url, {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "content-type": "application/json", Accept: "application/json" },
+      });
       if (res.ok) return;
       const txt = await res.text().catch(() => "");
       lastErr = txt || `${res.status} ${res.statusText}`;
@@ -73,6 +77,21 @@ export default function AllInIncoming() {
   const [history, setHistory] = useState<IncomingBatchSummary[]>([]);
   const [historyErr, setHistoryErr] = useState<string>("");
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
+
+  // Styled confirm modal (same vibe as AllInUsers)
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState("");
+  const [confirmMsg, setConfirmMsg] = useState("");
+  const [confirmBatchId, setConfirmBatchId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!confirmOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen]);
   const [selectedBatchId, setSelectedBatchId] = useState<string>("");
 
   useEffect(() => {
@@ -254,10 +273,18 @@ export default function AllInIncoming() {
     }
   };
 
-  const deleteBatchPermanently = async (batchId: string) => {
-    // blunt but effective. humans love clicking without reading.
-    const ok = window.confirm(`Biztosan végleg törlöd ezt az előzményt?\n\nBatch ID: ${batchId}\n\nEz nem visszavonható.`);
-    if (!ok) return;
+  const openConfirmDelete = (batchId: string) => {
+    setConfirmTitle("Végleges törlés");
+    setConfirmMsg(`Biztos törlöd véglegesen? Ez nem visszavonható.\n\nBatch ID: ${batchId}`);
+    setConfirmBatchId(batchId);
+    setConfirmOpen(true);
+  };
+
+  const runConfirmDelete = async () => {
+    const batchId = confirmBatchId;
+    setConfirmOpen(false);
+    setConfirmBatchId(null);
+    if (!batchId) return;
 
     setHistoryErr("");
     setSaveOk("");
@@ -448,7 +475,7 @@ export default function AllInIncoming() {
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => deleteBatchPermanently(b.id)}
+                                  onClick={() => openConfirmDelete(b.id)}
                                   className="h-8 px-3 rounded-xl border border-red-300 bg-white text-[12px] font-semibold text-red-700 hover:bg-red-50"
                                   title="Előzmény végleges törlése"
                                 >
@@ -552,6 +579,32 @@ export default function AllInIncoming() {
           </div>
         </div>
       </div>
+
+      {/* Confirm delete modal */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+            <div className="text-white font-semibold">{confirmTitle}</div>
+            <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                onClick={() => setConfirmOpen(false)}
+              >
+                Mégse
+              </button>
+              <button
+                type="button"
+                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
+                onClick={runConfirmDelete}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
