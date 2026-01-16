@@ -510,10 +510,107 @@ app.post("/api/incoming/batches/:id/commit", requireAuthed, async (req, res) => 
     return res.status(403).json({ error: "forbidden" });
   }
 
-  // v1: only status change. Stock posting comes later with stock tables.
-  await pool.query(`UPDATE incoming_batches SET status='committed' WHERE id=$1 AND status='draft'`, [id]);
+  // v2: commit = post stock into location_stock + ensure product exists in allin_products
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  res.json({ ok: true });
+    // lock batch row
+    const b2 = await client.query(
+      `SELECT id, location_id, status
+       FROM incoming_batches
+       WHERE id=$1
+       FOR UPDATE`,
+      [id]
+    );
+    if (!b2.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "not found" });
+    }
+
+    const batch = b2.rows[0];
+    if (batch.status !== "draft") {
+      await client.query("COMMIT");
+      return res.json({ ok: true, already: true });
+    }
+
+    const itemsRes = await client.query(
+      `SELECT product_code, product_name, color_code, color_name, size, category, qty, buy_price
+       FROM incoming_items
+       WHERE batch_id=$1`,
+      [id]
+    );
+
+    // 1) ensure products exist (upsert by product_key)
+    for (const it of itemsRes.rows) {
+      const code = String(it.product_code || "").trim();
+      const name = String(it.product_name || "").trim();
+      const size = String(it.size || "").trim();
+      const color_code = String(it.color_code || "").trim();
+      const color_name = String(it.color_name || "").trim();
+      const category = String(it.category || "").trim();
+
+      if (!code || !name || !size) continue;
+
+      const product_key = makeProductKey({ code, colorCode: color_code, size });
+
+      // Keep existing sell_price if already set; update descriptive fields and (optionally) buy_price.
+      await client.query(
+        `INSERT INTO allin_products (
+            product_key, brand, code, name, size,
+            color_name, color_code, color_hex,
+            gender, category,
+            image_url, sell_price, buy_price, incoming_qty,
+            is_deleted
+         )
+         VALUES ($1,'',$2,$3,$4,$5,$6,NULL,NULL,$7,'',NULL,$8,NULL,false)
+         ON CONFLICT (product_key) DO UPDATE
+           SET code=EXCLUDED.code,
+               name=EXCLUDED.name,
+               size=EXCLUDED.size,
+               color_name=EXCLUDED.color_name,
+               color_code=EXCLUDED.color_code,
+               category=EXCLUDED.category,
+               buy_price=COALESCE(EXCLUDED.buy_price, allin_products.buy_price),
+               is_deleted=false`,
+        [product_key, code, name, size, color_name, color_code, category, it.buy_price ?? null]
+      );
+    }
+
+    // 2) post stock to location_stock (additive)
+    for (const it of itemsRes.rows) {
+      const code = String(it.product_code || "").trim();
+      const size = String(it.size || "").trim();
+      const color_code = String(it.color_code || "").trim();
+      const qty = Number(it.qty || 0);
+
+      if (!code || !size || !Number.isFinite(qty) || qty <= 0) continue;
+
+      const product_key = makeProductKey({ code, colorCode: color_code, size });
+
+      await client.query(
+        `INSERT INTO location_stock (location_id, product_key, qty)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (location_id, product_key)
+         DO UPDATE SET qty = location_stock.qty + EXCLUDED.qty`,
+        [batch.location_id, product_key, Math.floor(qty)]
+      );
+    }
+
+    // 3) mark batch committed
+    await client.query(`UPDATE incoming_batches SET status='committed' WHERE id=$1 AND status='draft'`, [id]);
+
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("commit posting failed", e);
+    return res.status(500).json({ error: "commit posting failed" });
+  } finally {
+    client.release();
+  }
 });
 
 // --- admin: R2 presign + set login logo ---
