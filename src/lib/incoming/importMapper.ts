@@ -187,7 +187,17 @@ export function mapTableToIncomingRows(table: ImportTable, options: ImportOption
     const name = s(useForIt ? row["Denumire"] ?? row["DENUMIRE"] ?? pick(row, ALIASES.name) : pick(row, ALIASES.name));
     const qty = useForIt ? toInt(row["Cant"] ?? row["CANT"] ?? pick(row, ALIASES.qty)) : toInt(pick(row, ALIASES.qty));
     const category = s(useForIt ? row["Categorie"] ?? row["CATEGORIE"] ?? pick(row, ALIASES.category) : pick(row, ALIASES.category));
-    const buyPrice = useForIt ? toNumber(row["PretAchiz"] ?? row["PRETACHIZ"] ?? pick(row, ALIASES.buyPrice)) : toNumber(pick(row, ALIASES.buyPrice));
+    // ForIT: some exports use PretAchiz, others pretachiz (lowercase) or mixed casing.
+    // We still fall back to alias-based pick() so vendor variants keep working.
+    const buyPrice = useForIt
+      ? toNumber(
+          (row as any)["PretAchiz"] ??
+            (row as any)["PRETACHIZ"] ??
+            (row as any)["pretachiz"] ??
+            (row as any)["Pretachiz"] ??
+            pick(row, ALIASES.buyPrice)
+        )
+      : toNumber(pick(row, ALIASES.buyPrice));
     const brand = s(useForIt ? row["INFO1"] ?? row["Info1"] ?? pick(row, ALIASES.brand) : pick(row, ALIASES.brand));
     const genderRaw = useForIt ? (row["DEPT"] ?? row["Dept"] ?? pick(row, ALIASES.gender)) : pick(row, ALIASES.gender);
     const gender = normalizeGender(genderRaw);
