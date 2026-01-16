@@ -4,10 +4,13 @@ export type SupplierProfile = {
   // expected column names (case-insensitive) for each field
   columns: {
     sku: string[];
+    brand?: string[];
     name: string[];
+    gender?: string[];
     colorCode: string[];
     colorName: string[];
     size: string[];
+    buyPrice?: string[];
     qty: string[];
     category: string[];
   };
@@ -19,10 +22,23 @@ export const SUPPLIER_PROFILES: SupplierProfile[] = [
     label: "Generic",
     columns: {
       sku: ["sku", "code", "cod", "kód", "product_code", "product code", "cod produs"],
+      brand: ["brand", "márka", "marka", "marca"],
       name: ["name", "product", "product_name", "denumire", "megnevezés", "terméknév"],
+      gender: ["gender", "nem", "sex", "gen"],
       colorCode: ["colorcode", "color_code", "színkód", "cod culoare", "cod color"],
       colorName: ["color", "color_name", "szín", "culoare", "megnevezés szín"],
       size: ["size", "méret", "marime"],
+      buyPrice: [
+        "buy_price",
+        "buy price",
+        "beszerzési ár",
+        "beszerzesi ar",
+        "beszerzesi ár",
+        "pret achizitie",
+        "preț achiziție",
+        "pret de achizitie",
+        "purchase price",
+      ],
       qty: ["qty", "quantity", "darab", "darabszám", "cantitate", "buc"],
       category: ["category", "kategória", "categorie"],
     },
@@ -130,10 +146,13 @@ export function mapCsvRowsToIncoming(opts: {
   profile: SupplierProfile;
 }): Array<{
   sku: string;
+  brand?: string;
   name: string;
+  gender?: string;
   colorCode: string;
   colorName: string;
   size: string;
+  buyPrice?: string | null;
   qty: number;
   category: string;
   raw: Record<string, string>;
@@ -142,10 +161,13 @@ export function mapCsvRowsToIncoming(opts: {
   const { headers, rows, profile } = opts;
 
   const idxSku = pickColumnIndex(headers, profile.columns.sku);
+  const idxBrand = pickColumnIndex(headers, profile.columns.brand || []);
   const idxName = pickColumnIndex(headers, profile.columns.name);
+  const idxGender = pickColumnIndex(headers, profile.columns.gender || []);
   const idxColorCode = pickColumnIndex(headers, profile.columns.colorCode);
   const idxColorName = pickColumnIndex(headers, profile.columns.colorName);
   const idxSize = pickColumnIndex(headers, profile.columns.size);
+  const idxBuyPrice = pickColumnIndex(headers, profile.columns.buyPrice || []);
   const idxQty = pickColumnIndex(headers, profile.columns.qty);
   const idxCategory = pickColumnIndex(headers, profile.columns.category);
 
@@ -155,11 +177,16 @@ export function mapCsvRowsToIncoming(opts: {
 
     const issues: string[] = [];
     const sku = idxSku >= 0 ? (r[idxSku] || "").trim() : "";
+    const brand = idxBrand >= 0 ? (r[idxBrand] || "").trim() : "";
     const name = idxName >= 0 ? (r[idxName] || "").trim() : "";
+    const gender = idxGender >= 0 ? (r[idxGender] || "").trim() : "";
     const colorCode = idxColorCode >= 0 ? (r[idxColorCode] || "").trim() : "";
     const colorName = idxColorName >= 0 ? (r[idxColorName] || "").trim() : "";
     const size = idxSize >= 0 ? (r[idxSize] || "").trim() : "";
     const category = idxCategory >= 0 ? (r[idxCategory] || "").trim() : "";
+
+    const buyPriceRaw = idxBuyPrice >= 0 ? (r[idxBuyPrice] || "").toString().trim() : "";
+    const buyPrice = buyPriceRaw ? buyPriceRaw : null;
 
     let qty = 0;
     if (idxQty >= 0) {
@@ -172,6 +199,6 @@ export function mapCsvRowsToIncoming(opts: {
     if (!name) issues.push("Hiányzó terméknév");
     if (!qty || qty <= 0) issues.push("Hibás darabszám");
 
-    return { sku, name, colorCode, colorName, size, qty, category, raw, issues };
+    return { sku, brand, name, gender, colorCode, colorName, size, buyPrice, qty, category, raw, issues };
   });
 }
