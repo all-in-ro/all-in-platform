@@ -164,11 +164,14 @@ export default function IncomingTransfer(props: {
         toLocationId: d.toLocationId,
         items: (d.items || []).map((x: any) => ({
           sku: x.sku ?? x.product_code ?? "",
+          ...(x.brand ?? x.marka ? { brand: x.brand ?? x.marka } : {}),
           name: x.name ?? x.product_name ?? "",
+          ...(x.gender ?? x.nem ? { gender: x.gender ?? x.nem } : {}),
           colorCode: x.colorCode ?? x.color_code ?? "",
           colorName: x.colorName ?? x.color_name ?? "",
           size: x.size ?? "",
           category: x.category ?? "",
+          ...(x.buyPrice ?? x.buy_price ?? x.beszerzesi_ar ? { buyPrice: x.buyPrice ?? x.buy_price ?? x.beszerzesi_ar } : {}),
           qty: Number(x.qty || 0),
         })),
       });
