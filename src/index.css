@@ -2,27 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root {
-  height: 100%;
+/*
+  Global scrolling:
+  - Do not lock the whole app into a fixed-height container.
+  - Allow normal page scrolling everywhere (desktop + mobile).
+*/
+
+html, body {
   margin: 0;
+  padding: 0;
+  height: 100%;
 }
 
 body {
   background: #474c59;
-  /* Desktopon maradhat a "no scroll" érzet, mobilon viszont kell a pull-to-refresh */
+
+  /* Allow vertical page scroll globally */
+  min-height: 100%;
+  overflow-y: auto;
+
+  /* Avoid sideways scroll from wide tables */
   overflow-x: hidden;
-  overflow-y: hidden;
+
+  /* iOS smooth scrolling */
+  -webkit-overflow-scrolling: touch;
 }
 
-/* Mobil: engedjük a böngésző scrollt (pull-to-refresh-hez kell) */
-@media (max-width: 768px) {
-  body {
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-}
-
-/* Ha egy oldalon tényleg kell belső scroll, erre tedd */
-.scrollable {
-  overflow: auto;
-}
+#root {
+  min-height: 100%;
+} 
