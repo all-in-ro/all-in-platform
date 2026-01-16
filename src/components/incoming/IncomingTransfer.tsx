@@ -24,7 +24,7 @@ function mapIncomingToTransferItems(incoming: IncomingItemDraft[]): TransferDraf
       // de UI-ban visszük tovább, hogy mindenhol ugyanazok az oszlopok látszódjanak.
       ...((it as any).brand ? { brand: (it as any).brand } : {}),
       ...((it as any).gender ? { gender: (it as any).gender } : {}),
-      ...((it as any).buyPrice !== undefined && (it as any).buyPrice !== null ? { buyPrice: (it as any).buyPrice } : {}),
+      ...(...((it as any).buyPrice !== undefined && (it as any).buyPrice !== null ? { buyPrice: (it as any).buyPrice } : {})),
       name: it.name,
       colorCode: it.colorCode,
       colorName: it.colorName,
@@ -89,7 +89,7 @@ export default function IncomingTransfer(props: {
         sku: it.sku,
         ...(it as any).brand ? { brand: (it as any).brand } : {},
         ...(it as any).gender ? { gender: (it as any).gender } : {},
-        (it as any).buyPrice !== undefined && (it as any).buyPrice !== null ? { buyPrice: (it as any).buyPrice } : {},
+        ...((it as any).buyPrice !== undefined && (it as any).buyPrice !== null ? { buyPrice: (it as any).buyPrice } : {}),
         name: it.name,
         colorCode: it.colorCode,
         colorName: it.colorName,
