@@ -119,4 +119,4 @@ export async function apiCancelTransfer(transferId: string): Promise<{ ok: true 
   return fetchJSON<{ ok: true }>(`/api/transfers/${encodeURIComponent(transferId)}/cancel`, {
     method: "POST",
   });
-} 
+}  
