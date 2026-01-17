@@ -34,21 +34,36 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
 });
 
-// --- R2 (HTTP / Bearer token) ---
-// Cloudflare R2 in this account uses Account API tokens (Workers R2 Storage) instead of AWS-style key pairs.
+// --- R2 (S3-compatible via AWS SDK) ---
+// IMPORTANT:
+// - Presigned PUT URLs and direct uploads require AWS-style Access Key / Secret.
+// - A Cloudflare "API Token" (Bearer ...) is NOT valid for the S3-compatible endpoint.
 // Required env:
 // - R2_ENDPOINT: https://<accountid>.r2.cloudflarestorage.com
 // - R2_BUCKET: bucket name
-// - R2_API_TOKEN: Cloudflare Account API token value (with Account.Workers R2 Storage:Edit)
+// - R2_ACCESS_KEY_ID: R2 Access Key ID (S3)
+// - R2_SECRET_ACCESS_KEY: R2 Secret Access Key (S3)
 // Optional:
-// - R2_PUBLIC_BASE_URL: public base URL (custom domain / public dev URL). If missing, API returns key only.
+// - R2_PUBLIC_BASE_URL: public base URL (custom domain / r2.dev). Used to build public URLs.
 const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
-const R2_API_TOKEN = process.env.R2_API_TOKEN || "";
-const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-xxxx.r2.dev
 
-const r2HttpEnabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_API_TOKEN);
-const r2Base = R2_ENDPOINT.replace(/\/+$/, "");
+const r2Enabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY);
+const r2 = r2Enabled
+  ? new S3Client({
+      region: "auto",
+      endpoint: R2_ENDPOINT,
+      credentials: {
+        accessKeyId: R2_ACCESS_KEY_ID,
+        secretAccessKey: R2_SECRET_ACCESS_KEY,
+      },
+      // R2 generally works best with path-style.
+      forcePathStyle: true,
+    })
+  : null;
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
 
@@ -801,7 +816,7 @@ app.get("/api/branding/logo", async (req, res) => {
 // - name (optional): e.g. main.jpg
 app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
   try {
-    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
+    if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
 
     // URL-based upload: allow providing a remote image URL instead of a multipart file.
     // Expects multipart/form-data field: url=https://...
@@ -844,28 +859,14 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
     const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
 
-    // PUT https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
-    const putUrl = `${r2Base}/${R2_BUCKET}/${key}`;
-
-    // S3-compatible date header required by R2
-    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-
-    const r = await fetch(putUrl, {
-      method: "PUT",
-      headers: {
-  Authorization: `Bearer ${R2_API_TOKEN}`,
-  "Content-Type": req.file.mimetype || "application/octet-stream",
-  "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
-  "x-amz-date": amzDate
-},
-body: req.file.buffer
-    });
-
-    if (!r.ok) {
-      const msg = await r.text().catch(() => "");
-      console.error("R2 upload failed:", r.status, msg);
-      return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
-}
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype || "application/octet-stream",
+      })
+    );
 
     const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
     const url = basePub ? `${basePub}/${key}` : key;
@@ -873,8 +874,8 @@ body: req.file.buffer
     return res.json({ key, url });
   } catch (e) {
     console.error("R2 upload failed:", e);
-    return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
-}
+    return res.status(500).json({ error: "Upload failed" });
+  }
 });
 
 // --- health ---
