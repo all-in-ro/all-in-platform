@@ -311,7 +311,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
               <Button type="button" className={btnPrimary + " w-full sm:w-auto"} onClick={openPlaceModal}>
                 Helység létrehozása / törlése...
               </Button>
-              <Button className={btn + " order-1 sm:order-none"} onClick={() => (window.location.hash = "#home")} type="button">
+              <Button className={btn + " order-1 sm:order-none"} onClick={() => (window.location.hash = "#allinadmin")} type="button">
                 Vissza
               </Button>
             </div>
