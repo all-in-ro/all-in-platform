@@ -7,8 +7,8 @@ import pg from "pg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-import createCarsRouter from "./server/api/routes/cars.js";
-import createCarExpensesRouter from "./server/api/routes/car-expenses.js";
+import createCarsRouter from "./api/routes/cars.js";
+import createCarExpensesRouter from "./api/routes/car-expenses.js";
 
 const { Pool } = pg;
 
