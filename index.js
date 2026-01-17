@@ -4,8 +4,6 @@ import { fileURLToPath } from "url";
 import crypto from "crypto";
 import multer from "multer";
 import pg from "pg";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import createCarsRouter from "./api/routes/cars.js";
 import createCarExpensesRouter from "./api/routes/car-expenses.js";
@@ -34,36 +32,21 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
 });
 
-// --- R2 (S3-compatible via AWS SDK) ---
-// IMPORTANT:
-// - Presigned PUT URLs and direct uploads require AWS-style Access Key / Secret.
-// - A Cloudflare "API Token" (Bearer ...) is NOT valid for the S3-compatible endpoint.
+// --- R2 (Cloudflare API / Bearer token) ---
+// Uploads go through Cloudflare's REST API (api.cloudflare.com). This matches the working CUPE flow.
 // Required env:
-// - R2_ENDPOINT: https://<accountid>.r2.cloudflarestorage.com
+// - R2_ACCOUNT_ID: Cloudflare account id (from the R2 Overview page)
 // - R2_BUCKET: bucket name
-// - R2_ACCESS_KEY_ID: R2 Access Key ID (S3)
-// - R2_SECRET_ACCESS_KEY: R2 Secret Access Key (S3)
-// Optional:
-// - R2_PUBLIC_BASE_URL: public base URL (custom domain / r2.dev). Used to build public URLs.
-const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
+// - R2_API_TOKEN: Cloudflare Account API token (needs R2 write access)
+// Optional env:
+// - R2_PUBLIC_BASE_URL: public base URL (e.g. https://pub-....r2.dev) used to return a usable URL
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
-const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-xxxx.r2.dev
+const R2_API_TOKEN = process.env.R2_API_TOKEN || "";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || "";
 
-const r2Enabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY);
-const r2 = r2Enabled
-  ? new S3Client({
-      region: "auto",
-      endpoint: R2_ENDPOINT,
-      credentials: {
-        accessKeyId: R2_ACCESS_KEY_ID,
-        secretAccessKey: R2_SECRET_ACCESS_KEY,
-      },
-      // R2 generally works best with path-style.
-      forcePathStyle: true,
-    })
-  : null;
+const r2HttpEnabled = Boolean(R2_ACCOUNT_ID && R2_BUCKET && R2_API_TOKEN);
+const r2PublicBase = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
 
@@ -644,24 +627,8 @@ app.post("/api/incoming/batches/:id/commit", requireAuthed, async (req, res) => 
 
 // --- admin: R2 presign + set login logo ---
 app.get("/api/admin/r2/presign", requireAdminOrSecret, async (req, res) => {
-  if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
-  if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
-
-  const key = String(req.query.key || "").trim();
-  const contentType = String(req.query.contentType || "application/octet-stream").trim();
-
-  if (!key) return res.status(400).json({ error: "key required" });
-  if (!key.startsWith("branding/")) return res.status(400).json({ error: "Csak branding/ alá engedélyezett" });
-
-  const cmd = new PutObjectCommand({
-    Bucket: R2_BUCKET,
-    Key: key,
-    ContentType: contentType
-  });
-
-  const uploadUrl = await getSignedUrl(r2, cmd, { expiresIn: 60 * 5 });
-  const publicUrl = `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}`;
-  return res.json({ uploadUrl, publicUrl, key });
+  // This deployment uses Cloudflare API-token uploads (no S3 access keys), so presign is disabled.
+  return res.status(400).json({ error: "Presign disabled. Use POST /api/uploads/r2 (multipart)" });
 });
 
 app.post("/api/admin/branding/logo", requireAdminOrSecret, async (req, res) => {
@@ -816,7 +783,7 @@ app.get("/api/branding/logo", async (req, res) => {
 // - name (optional): e.g. main.jpg
 app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
   try {
-    if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
+    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
 
     // URL-based upload: allow providing a remote image URL instead of a multipart file.
     // Expects multipart/form-data field: url=https://...
@@ -858,15 +825,23 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     const nameRaw = String(req.body?.name || req.file?.originalname || "file.bin");
     const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
     const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
+    // Upload via Cloudflare REST API
+    const encodedKey = encodeURIComponent(key).replace(/%2F/g, "/");
+    const putUrl = "https://api.cloudflare.com/client/v4/accounts/" + R2_ACCOUNT_ID + "/r2/buckets/" + R2_BUCKET + "/objects/" + encodedKey;
+    const r = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: "Bearer " + R2_API_TOKEN,
+        "Content-Type": req.file.mimetype || "application/octet-stream",
+      },
+      body: req.file.buffer,
+    });
 
-    await r2.send(
-      new PutObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: key,
-        Body: req.file.buffer,
-        ContentType: req.file.mimetype || "application/octet-stream",
-      })
-    );
+    if (!r.ok) {
+      const msg = await r.text().catch(() => "");
+      console.error("R2 upload failed:", r.status, msg);
+      return res.status(500).json({ error: "Upload failed" });
+    }
 
     const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
     const url = basePub ? `${basePub}/${key}` : key;
