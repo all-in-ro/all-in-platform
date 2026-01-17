@@ -163,41 +163,27 @@ async function fetchJSON(url: string, init?: RequestInit) {
   return await r.json();
 }
 
-async function uploadToR2(file: File, folder: string, name: string): Promise<string> {
-  // CUPE-style presigned upload:
-  // 1) Ask backend for a presigned PUT URL
-  // 2) PUT the file directly to R2
-  // 3) Store returned public URL in DB
-  //
-  // NOTE: backend currently restricts presign keys to "branding/" prefix, so we store car images under branding/cars/...
-  const safeFolder = String(folder || "cars").replace(/^\/+/, "").replace(/\/+$/, "");
-  const key = `branding/${safeFolder}/${name}`;
+async function uploadToR2(file: File): Promise<string> {
+  // Backend upload (CUPE-style): frontend POST -> backend -> R2 (API TOKEN).
+  const fd = new FormData();
+  fd.append("file", file);
 
-  const contentType = file?.type || "application/octet-stream";
-  const qs = new URLSearchParams({ key, contentType });
-
-  const presign = await fetchJSON(`${API}/admin/r2/presign?${qs.toString()}`, {
-    method: "GET",
+  const r = await fetch(`${API}/uploads/r2`, {
+    method: "POST",
+    headers: ADMIN_SECRET ? { "x-admin-secret": ADMIN_SECRET } : undefined,
+    body: fd,
     credentials: "include",
   });
 
-  const uploadUrl = presign?.uploadUrl || presign?.upload_url;
-  const publicUrl = presign?.publicUrl || presign?.public_url || presign?.url;
-
-  if (!uploadUrl || !publicUrl) throw new Error("Nincs presign URL (uploadUrl/publicUrl).");
-
-  const put = await fetch(String(uploadUrl), {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: file,
-  });
-
-  if (!put.ok) {
-    const t = await put.text().catch(() => "");
-    throw new Error(`R2 PUT sikertelen (HTTP ${put.status}) ${t}`.slice(0, 300));
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`Feltöltés sikertelen (HTTP ${r.status}) ${t}`.slice(0, 300));
   }
 
-  return String(publicUrl);
+  const j = await r.json().catch(() => null as any);
+  const url = j?.url || j?.publicUrl || j?.public_url;
+  if (!url) throw new Error("Nincs url a feltöltés válaszában.");
+  return String(url);
 }
 
 async function listCars(): Promise<Car[]> {
@@ -616,11 +602,7 @@ export default function AllInCars() {
     setPhotoUploadErr("");
     setPhotoUploading(true);
     try {
-      const safePlate = (form.plate || "car").replace(/[^a-zA-Z0-9_-]+/g, "-");
-      const ext = (file.name.split(".").pop() || "jpg").slice(0, 5).toLowerCase();
-      const name = `${safePlate}-${Date.now()}.${ext}`;
-      const folder = form.id ? `cars/${form.id}` : "cars/new";
-      const url = await uploadToR2(file, folder, name);
+      const url = await uploadToR2(file);
       setForm((f) => ({ ...f, photo_url: url }));
       setPhotoEdit(false);
     } catch (e: any) {
