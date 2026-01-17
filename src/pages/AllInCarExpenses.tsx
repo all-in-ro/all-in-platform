@@ -193,6 +193,22 @@ function AllInCarExpenses() {
   const [error, setError] = useState<string>("");
   const [msg, setMsg] = useState<string>("");
 
+  // Styled confirm/info modal (same as Users page) so we stop using window.confirm/alert.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState("");
+  const [confirmMsg, setConfirmMsg] = useState("");
+  const [confirmVariant, setConfirmVariant] = useState<"confirm" | "info">("confirm");
+  const [confirmAction, setConfirmAction] = useState<null | { kind: "delete"; id: number }>(null);
+
+  useEffect(() => {
+    if (!confirmOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen]);
+
   // Filters
   const [carId, setCarId] = useState<number | "">("");
   const [q, setQ] = useState("");
@@ -302,15 +318,41 @@ function AllInCarExpenses() {
   }
 
   async function onDelete(id?: number) {
-    if (!id) return;
-    const yes = window.confirm("Biztos törlöd ezt a tételt?");
-    if (!yes) return;
-    const ok = await deleteExpense(id);
+    if (!id) {
+      setConfirmVariant("info");
+      setConfirmTitle("Hiba");
+      setConfirmMsg("Nincs azonosító ehhez a sorhoz, nem tudom törölni.");
+      setConfirmAction(null);
+      setConfirmOpen(true);
+      return;
+    }
+
+    setConfirmVariant("confirm");
+    setConfirmTitle("Végleges törlés");
+    setConfirmMsg("Biztos törlöd ezt a tételt? Ez nem visszavonható.");
+    setConfirmAction({ kind: "delete", id });
+    setConfirmOpen(true);
+  }
+
+  async function runConfirm() {
+    const a = confirmAction;
+    setConfirmOpen(false);
+    setConfirmAction(null);
+    if (!a) return;
+    if (a.kind !== "delete") return;
+
+    const ok = await deleteExpense(a.id);
     if (!ok) {
-      alert("Törlés sikertelen.");
+      setConfirmVariant("info");
+      setConfirmTitle("Törlés sikertelen");
+      setConfirmMsg("A tételt nem sikerült törölni.");
+      setConfirmAction(null);
+      setConfirmOpen(true);
       return;
     }
     await reload();
+    setMsg("Törölve.");
+    setTimeout(() => setMsg(""), 2000);
   }
 
   function exportCSV() {
@@ -514,7 +556,7 @@ function AllInCarExpenses() {
                       <button
   type="button"
   onClick={() => {
-    if (window.confirm("Biztosan törlöd ezt a tételt?")) onDelete(r.id);
+    onDelete(r.id);
   }}
   className="flex items-center justify-center gap-1 text-white text-[12px] font-medium rounded-[4px] shadow-sm"
   style={{ backgroundColor: '#b60e21', height: '30px', padding: '0 10px', borderRadius: '4px' }}
@@ -679,6 +721,38 @@ function AllInCarExpenses() {
           </Card>
         )}
       </div>
+
+      {/* Confirm / Info modal */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+            <div className="text-white font-semibold">{confirmTitle}</div>
+            <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              {confirmVariant === "confirm" && (
+                <button
+                  type="button"
+                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => setConfirmOpen(false)}
+                >
+                  Mégse
+                </button>
+              )}
+              <button
+                type="button"
+                className={
+                  confirmVariant === "confirm"
+                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
+                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
+                }
+                onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
