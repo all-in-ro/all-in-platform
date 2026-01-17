@@ -76,13 +76,9 @@ type ApiWarehouseResponse = {
   items: ApiWarehouseItem[];
 };
 
-// Incoming (AllInIncoming) – kliens oldali összekötés, amíg a backend nem írja be stabilan az incoming_qty-t.
-type IncomingBatchSummary = {
-  id: string;
-  status?: string;
-  created_at?: string;
-  createdAtISO?: string;
-};
+// Incoming (AllInIncoming) – best-effort overlay a "Bejövő" oszlophoz.
+// Fontos: ez NEM hoz létre új terméket a raktárlistába, csak a meglévők bejövő értékét tölti.
+type IncomingBatchSummary = { id: string; status?: string };
 
 function pickIncomingSku(x: any): string {
   return String(x?.product_code ?? x?.sku ?? x?.code ?? "").trim();
@@ -95,7 +91,6 @@ function pickIncomingQty(x: any): number {
 }
 
 async function fetchIncomingQtyBySku(): Promise<Record<string, number>> {
-  // 1) list batches
   const listRes = await fetch("/api/incoming/batches?limit=50&offset=0", { credentials: "include" });
   if (!listRes.ok) throw new Error(`Incoming list HTTP ${listRes.status}`);
   const listJson = await listRes.json();
@@ -104,7 +99,6 @@ async function fetchIncomingQtyBySku(): Promise<Record<string, number>> {
   const committed = batches.filter((b) => (b.status || "").toLowerCase() === "committed");
   if (!committed.length) return {};
 
-  // 2) load committed batch items (best-effort, sequential to avoid hammering)
   const acc: Record<string, number> = {};
   for (const b of committed) {
     const res = await fetch(`/api/incoming/batches/${encodeURIComponent(b.id)}`, { credentials: "include" });
@@ -117,6 +111,7 @@ async function fetchIncomingQtyBySku(): Promise<Record<string, number>> {
       acc[sku] = (acc[sku] || 0) + pickIncomingQty(r);
     }
   }
+
   return acc;
 }
 
@@ -211,9 +206,8 @@ export default function AllInWarehouse() {
   const [q, setQ] = useState("");
   const [showBuyPrice, setShowBuyPrice] = useState(false);
 
-  // Incoming integráció (AllInIncoming -> Warehouse)
-  const [incomingMap, setIncomingMap] = useState<Record<string, number>>({});
-  const [incomingErr, setIncomingErr] = useState<string>("");
+  const [whErr, setWhErr] = useState<string>("");
+  const [incomingNote, setIncomingNote] = useState<string>("");
 
   const goView = (id: string) => {
     window.location.hash = `#allinproduct/${id}`;
@@ -228,24 +222,32 @@ export default function AllInWarehouse() {
 
   const loadWarehouse = async () => {
     setLoading(true);
+    setWhErr("");
+    setIncomingNote("");
     try {
       const res = await fetch("/api/allin/warehouse", { credentials: "include" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`Warehouse HTTP ${res.status}`);
       const data = (await res.json()) as ApiWarehouseResponse;
 
-      const mapped = (data.items || []).map(mapApiItemToRow);
+      let mapped = (data.items || []).map(mapApiItemToRow);
 
-      // Best-effort: ha van committed incoming batch, abból felülírjuk az incoming oszlopot.
-      // (Amint a backend ezt hivatalosan kezeli, ez a rész csak "rásegítés" marad.)
+      // Bejövő overlay: committed incoming batch-ekből számolunk (ha sikerül).
+      // Ha nem sikerül, akkor a backend incoming_qty (ha van) marad.
       try {
-        setIncomingErr("");
-        const inc = await fetchIncomingQtyBySku();
-        setIncomingMap(inc);
-        setItems(mapped.map((r) => ({ ...r, incomingQty: inc[r.sku] ?? r.incomingQty ?? 0 })));
+        const incomingMap = await fetchIncomingQtyBySku();
+        const keys = Object.keys(incomingMap);
+        if (keys.length) {
+          mapped = mapped.map((r) => ({ ...r, incomingQty: incomingMap[r.sku] ?? (r.incomingQty ?? 0) }));
+          setIncomingNote("Bejövő betöltve committed batch-ekből.");
+        }
       } catch (e: any) {
-        setIncomingErr(e?.message || "Incoming batch-ek beolvasása nem sikerült.");
-        setItems(mapped);
+        setIncomingNote(`Bejövő overlay nem ment: ${e?.message || "hiba"}`);
       }
+
+      setItems(mapped);
+    } catch (e: any) {
+      setItems([]);
+      setWhErr(e?.message || "Nem sikerült betölteni a raktárlistát.");
     } finally {
       setLoading(false);
     }
@@ -253,11 +255,16 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     void loadWarehouse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    // Ha az Incoming oldalon mentés/commit/törlés történt, frissítünk.
-    const onIncoming = () => void loadWarehouse();
-    window.addEventListener("allin:incoming-updated", onIncoming as any);
-    return () => window.removeEventListener("allin:incoming-updated", onIncoming as any);
+  // Incoming oldal mentés/commit után frissítjük a raktárt (kliens oldali összekötés)
+  useEffect(() => {
+    const onIncomingChanged = () => {
+      void loadWarehouse();
+    };
+    window.addEventListener("allin:incoming-changed", onIncomingChanged);
+    return () => window.removeEventListener("allin:incoming-changed", onIncomingChanged);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -372,9 +379,15 @@ export default function AllInWarehouse() {
 
       <div className="mx-auto w-full max-w-[1440px] px-4 py-4 space-y-3">
 
-        {incomingErr ? (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-            Incoming összekötés figyelmeztetés: {incomingErr}
+        {whErr ? (
+          <div className="rounded-xl bg-red-50 border border-red-200 text-red-800 px-4 py-3 text-[12px]">
+            {whErr}
+          </div>
+        ) : null}
+
+        {incomingNote ? (
+          <div className="rounded-xl bg-slate-50 border border-slate-200 text-slate-700 px-4 py-3 text-[12px]">
+            {incomingNote}
           </div>
         ) : null}
 
@@ -533,6 +546,14 @@ export default function AllInWarehouse() {
 
 
               <tbody>
+                {!loading && rows.length === 0 ? (
+                  <tr className="border-t border-slate-200">
+                    <td className={td + " text-slate-600"} colSpan={17}>
+                      Nincs megjeleníthető termék. (Import/Mozgatás önmagában nem hoz létre új terméksort a raktárban, csak a meglévők "Bejövő" értékét tudja növelni.)
+                    </td>
+                  </tr>
+                ) : null}
+
                 {rows.map((r, idx) => {
                   const storeSum = sumStore(r.byStore || {});
                   const incoming = n(r.incomingQty);
@@ -672,9 +693,6 @@ export default function AllInWarehouse() {
           <div className="px-4 py-3 text-[11px] text-slate-500 border-t border-slate-200">
             Megjegyzés: a “Bejövő” oszlop a CSV importból (allinincoming) fog jönni és csak az “Összesen” értéket növeli.
             Az üzletek készleteit nem módosítja.
-            {Object.keys(incomingMap).length ? (
-              <span className="ml-2">(Kliens oldali incoming: {Object.keys(incomingMap).length} SKU)</span>
-            ) : null}
           </div>
         </div>
       </div>
