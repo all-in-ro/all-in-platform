@@ -253,7 +253,7 @@ function Kpi({
     <Card className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
       <CardContent className="p-3 md:p-3">
         <div className="text-[12px] text-slate-600">{title}</div>
-        <div className="text-2xl font-semibold">{value}</div>
+	        <div className="text-2xl font-normal">{value}</div>
         {hint && <div className="text-[11px] text-slate-600 mt-1">{hint}</div>}
       </CardContent>
     </Card>
@@ -284,7 +284,7 @@ function BoardView({ rows }: { rows: any[] }) {
     >
       <div className="flex items-center justify-between gap-3">
         <div className="truncate">
-          <div className="text-[#344154] text-[15px] font-bold leading-tight">
+	          <div className="text-[#344154] text-[15px] font-normal leading-tight">
             {c.plate || "Ismeretlen"}
           </div>
           <div className="text-slate-700 text-[13px] truncate">
@@ -365,7 +365,7 @@ function ListView({
 
   return (
     <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
-      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-white text-slate-800 border-b border-slate-300 shadow-sm ">
+	      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-slate-50 text-slate-600 border-b border-slate-300">
         <div>Autó</div>
         <div className="text-center">ITP</div>
         <div className="text-center">RCA</div>
@@ -379,7 +379,7 @@ function ListView({
           const key = String(c.id ?? c.plate ?? Math.random());
           const open = !!expanded[key];
           return (
-            <div key={key} className="px-4 py-2.5 hover:bg-white">
+	            <div key={key} className="px-4 py-2.5 hover:bg-slate-50">
               <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
@@ -392,7 +392,7 @@ function ListView({
                     )}
                   </div>
                   <div className="truncate">
-                    <div className="text-[#344154] text-[15px] font-bold leading-tight">
+	                    <div className="text-[#344154] text-[15px] font-normal leading-tight">
                       {c.plate || "Ismeretlen"}
                     </div>
                     <div className="text-slate-700 text-[13px] truncate">
@@ -753,7 +753,7 @@ export default function AllInCars() {
       {/* Header */}
       <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
         <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-          <div className="text-white font-semibold">Autók nyílvántartása / Kiadások</div>
+	          <div className="text-white font-normal">Autók nyílvántartása / Kiadások</div>
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -1297,7 +1297,7 @@ export default function AllInCars() {
       {confirmOpen && (
         <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
           <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-            <div className="text-white font-semibold">{confirmTitle}</div>
+	            <div className="text-white font-normal">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               {confirmVariant === "confirm" && (
@@ -1311,11 +1311,11 @@ export default function AllInCars() {
               )}
               <button
                 type="button"
-                className={
-                  confirmVariant === "confirm"
-                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
-                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
-                }
+	                className={
+	                  confirmVariant === "confirm"
+	                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-normal"
+	                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-normal"
+	                }
                 onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
               >
                 OK
