@@ -7,8 +7,8 @@ import pg from "pg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-import createCarsRouter from "./server/api/routes/cars.js";
-import createCarExpensesRouter from "./server/api/routes/car-expenses.js";
+import createCarsRouter from "./api/routes/cars.js";
+import createCarExpensesRouter from "./api/routes/car-expenses.js";
 
 const { Pool } = pg;
 
@@ -34,33 +34,21 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
 });
 
-// --- R2 (S3-compatible) ---
+// --- R2 (HTTP / Bearer token) ---
+// Cloudflare R2 in this account uses Account API tokens (Workers R2 Storage) instead of AWS-style key pairs.
 // Required env:
-// - R2_ACCOUNT_ID: Cloudflare Account ID (e.g. eaa5...)
-// - R2_BUCKET: bucket name (e.g. all-in-assets)
-// - R2_ACCESS_KEY_ID: S3 compatible Access Key ID
-// - R2_SECRET_ACCESS_KEY: S3 compatible Secret Access Key
+// - R2_ENDPOINT: https://<accountid>.r2.cloudflarestorage.com
+// - R2_BUCKET: bucket name
+// - R2_API_TOKEN: Cloudflare Account API token value (with Account.Workers R2 Storage:Edit)
 // Optional:
-// - R2_PUBLIC_BASE_URL: public base URL (e.g. https://pub-....r2.dev)
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+// - R2_PUBLIC_BASE_URL: public base URL (custom domain / public dev URL). If missing, API returns key only.
+const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
 const R2_BUCKET = process.env.R2_BUCKET || "";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
-const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-....r2.dev
+const R2_API_TOKEN = process.env.R2_API_TOKEN || "";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
 
-const r2Enabled = Boolean(R2_ACCOUNT_ID && R2_BUCKET && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY);
-
-const r2 = r2Enabled
-  ? new S3Client({
-      region: "auto",
-      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: R2_ACCESS_KEY_ID,
-        secretAccessKey: R2_SECRET_ACCESS_KEY,
-      },
-    })
-  : null;
-
+const r2HttpEnabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_API_TOKEN);
+const r2Base = R2_ENDPOINT.replace(/\/+$/, "");
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
 
@@ -813,7 +801,7 @@ app.get("/api/branding/logo", async (req, res) => {
 // - name (optional): e.g. main.jpg
 app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
   try {
-    if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
+    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
 
     // URL-based upload: allow providing a remote image URL instead of a multipart file.
     // Expects multipart/form-data field: url=https://...
@@ -855,15 +843,29 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     const nameRaw = String(req.body?.name || req.file?.originalname || "file.bin");
     const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
     const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
-    // Upload to Cloudflare R2 via S3-compatible API (AWS4-HMAC-SHA256 signing handled by SDK)
-    const cmd = new PutObjectCommand({
-      Bucket: R2_BUCKET,
-      Key: key,
-      Body: req.file.buffer,
-      ContentType: req.file.mimetype || "application/octet-stream",
+
+    // PUT https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
+    const putUrl = `${r2Base}/${R2_BUCKET}/${key}`;
+
+    // S3-compatible date header required by R2
+    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+
+    const r = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+  Authorization: `Bearer ${R2_API_TOKEN}`,
+  "Content-Type": req.file.mimetype || "application/octet-stream",
+  "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+  "x-amz-date": amzDate
+},
+body: req.file.buffer
     });
 
-    await r2.send(cmd);
+    if (!r.ok) {
+      const msg = await r.text().catch(() => "");
+      console.error("R2 upload failed:", r.status, msg);
+      return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
+}
 
     const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
     const url = basePub ? `${basePub}/${key}` : key;
@@ -871,8 +873,8 @@ app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (
     return res.json({ key, url });
   } catch (e) {
     console.error("R2 upload failed:", e);
-    return res.status(500).json({ error: "Upload failed" });
-  }
+    return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
+}
 });
 
 // --- health ---
