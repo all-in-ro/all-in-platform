@@ -250,7 +250,7 @@ function Kpi({
   tone?: string;
 }) {
   return (
-    <Card className={"rounded-xl border-slate-300 text-slate-800 " + tone}>
+    <Card className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
       <CardContent className="p-3 md:p-3">
         <div className="text-[12px] text-slate-600">{title}</div>
         <div className="text-2xl font-semibold">{value}</div>
@@ -827,8 +827,8 @@ export default function AllInCars() {
         {/* KPI row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
           <Kpi title="Összes autó" value={String(metrics.total)} hint="Nyilvántartott tétel" />
-          <Kpi title="Közelgő lejárat" value={String(metrics.soon)} hint="≤ 5 nap" tone="bg-amber-500/20" />
-          <Kpi title="Lejárt" value={String(metrics.expired)} hint="Azonnali intézkedés" tone="bg-red-600/20" />
+          <Kpi title="Közelgő lejárat" value={String(metrics.soon)} hint="≤ 5 nap" />
+          <Kpi title="Lejárt" value={String(metrics.expired)} hint="Azonnali intézkedés" />
         </div>
 
         {/* Tools bar */}
