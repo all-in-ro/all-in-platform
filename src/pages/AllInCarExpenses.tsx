@@ -483,19 +483,19 @@ function AllInCarExpenses() {
 
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-          <Card className="rounded-xl border-slate-300 text-slate-800">
+          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összes tétel</div>
               <div className="text-2xl font-semibold">{enriched.length}</div>
             </CardContent>
           </Card>
-          <Card className="rounded-xl border-slate-300 text-slate-800">
+          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Időszak</div>
               <div className="text-sm">{dateFrom} → {dateTo}</div>
             </CardContent>
           </Card>
-          <Card className="rounded-xl border-slate-300 text-slate-800">
+          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összeg (RON)</div>
               <div className="text-2xl font-semibold"><Money value={total} /></div>
