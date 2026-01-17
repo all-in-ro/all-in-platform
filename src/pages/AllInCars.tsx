@@ -44,7 +44,7 @@ type Car = {
 };
 
 const API =
-  (import.meta as any).env?.VITE_API_BASE || "https://all-in-platform.onrender.com/api";
+  (import.meta as any).env?.VITE_API_BASE || "https://cupe.onrender.com/api";
 
 // R2 upload endpoint tipikusan admin-vedelemmel fut (401 ha nincs megfelelo fejlec).
 // Frontenden env-bol vesszuk, ugyanugy mint a tobbi admin oldal.
@@ -722,7 +722,7 @@ export default function AllInCars() {
               className="h-8 px-3 text-white"
               style={{ backgroundColor: CUPE.green }}
               onClick={() => {
-                window.location.hash = "#allincarexpenses";
+                window.location.hash = "#admincarexpenses";
               }}
             >
               Kiadások
@@ -757,7 +757,7 @@ export default function AllInCars() {
               className="h-8 px-3 text-white"
               style={{ backgroundColor: CUPE.blue }}
               onClick={() => {
-                window.location.hash = "#allinextras";
+                window.location.hash = "#adminextras";
               }}
             >
               Egyebek
@@ -767,7 +767,7 @@ export default function AllInCars() {
               type="button"
               variant="outline"
               className="h-8 px-3 text-white border-white/40"
-              onClick={() => (window.location.hash = "#allinadmin")}
+              onClick={() => window.history.back()}
               onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#495465"; }}
               onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
             >
