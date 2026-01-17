@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 
-import AllInCarExpensesMobile from "./AllInCarExpensesMobile";
 /* ---------- Types ---------- */
 type Car = {
   id: number;
@@ -761,19 +760,9 @@ function AllInCarExpenses() {
 /* ====== Auto mobile/desktop switch (car expenses) ====== */
 export const AllInCarExpensesDesktop = AllInCarExpenses;
 
-function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = React.useState(
-    () => typeof window !== "undefined" && window.innerWidth <= breakpoint
-  );
-  React.useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth <= breakpoint);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [breakpoint]);
-  return isMobile;
-}
-
 export default function AllInCarExpensesAuto() {
-  const isMobile = useIsMobile(768);
-  return isMobile ? <AllInCarExpensesMobile /> : <AllInCarExpensesDesktop />;
+  // TEMP: mobile view currently renders dark cards that are unreadable on ALL IN.
+  // Use the desktop (white-card) layout everywhere until the mobile component is updated.
+  // This keeps the page usable immediately.
+  return <AllInCarExpensesDesktop />;
 }
