@@ -79,8 +79,15 @@ export default function AllInIncoming() {
     (async () => {
       try {
         setLocErr("");
-        const shops = await apiGetLocations();
+        const shopsRaw: any = await apiGetLocations();
         if (!alive) return;
+        // apiGetLocations() egyes verziókban tömböt ad, máskor { items: [...] }
+        const shops: any[] = Array.isArray(shopsRaw)
+          ? shopsRaw
+          : Array.isArray(shopsRaw?.items)
+          ? shopsRaw.items
+          : [];
+
         // map shops -> Location
         const locs: Location[] = shops.map((s: any) => ({
           id: s.id,
@@ -250,25 +257,16 @@ export default function AllInIncoming() {
     }
   };
 
-  const finalizeBatch = async (batchId: string) => {
-    if (!batchId) return;
-    setHistoryErr("");
-    setSaveErr("");
-    try {
-      await apiCommitIncomingBatch(batchId);
-      setSaveOk(`Véglegesítve: ${batchId}`);
-      // a Raktár most már tud frissülni (incoming -> product + stock)
-      notifyIncomingChanged();
-      window.dispatchEvent(new Event("allin:incoming-updated"));
-      void loadHistory();
-    } catch (e: any) {
-      setHistoryErr(e?.message || "Véglegesítés sikertelen.");
-    }
-  };
-
   const commitSelectedBatch = async () => {
     if (!selectedBatchId) return;
-    return finalizeBatch(selectedBatchId);
+    setHistoryErr("");
+    try {
+      await apiCommitIncomingBatch(selectedBatchId);
+      setSaveOk(`Commit: ${selectedBatchId}`);
+      void loadHistory();
+    } catch (e: any) {
+      setHistoryErr(e?.message || "Commit sikertelen.");
+    }
   };
 
   const openDeleteConfirm = (batchId: string) => {
@@ -392,19 +390,16 @@ export default function AllInIncoming() {
           <div className="p-4">
             {tab === "import" ? <IncomingImport locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
             {tab === "manual" ? <IncomingManualEntry locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
-            {tab === "transfer" ? <IncomingTransfer locations={locations} incoming={incoming} transfer={transfer} onChange={setTransfer} /> : null}
+            {tab === "transfer" ? (
+              <IncomingTransfer locations={locations} incoming={incoming} incomingMeta={incomingMeta} transfer={transfer} onChange={setTransfer} />
+            ) : null}
             {tab === "docs" ? <IncomingDocs locations={locations} transfer={transfer} incomingCount={incoming.length} /> : null}
             {tab === "bom" ? <IncomingBOM /> : null}
 
             {tab === "history" ? (
               <div className="grid gap-3">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="grid gap-1">
-                    <div className="text-[12px] font-semibold text-slate-800">Incoming előzmények (utolsó 50)</div>
-                    <div className="text-[11px] text-slate-500">
-                      Mentés után a batch <span className="text-slate-700">draft</span> marad. A készlet és a Raktár terméklista csak a <span className="text-slate-700">Véglegesítés</span> után frissül.
-                    </div>
-                  </div>
+                  <div className="text-[12px] font-semibold text-slate-800">Incoming előzmények (utolsó 50)</div>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -418,9 +413,9 @@ export default function AllInIncoming() {
                       disabled={!selectedBatchId}
                       onClick={commitSelectedBatch}
                       className="h-9 px-3 rounded-xl bg-slate-900 text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="A kijelölt batch véglegesítése (draft -> committed)"
+                      title="Batch commit (draft -> committed)"
                     >
-                      Véglegesítés
+                      Commit
                     </button>
                   </div>
                 </div>
@@ -470,19 +465,8 @@ export default function AllInIncoming() {
                                   name="selectedBatch"
                                   checked={selectedBatchId === b.id}
                                   onChange={() => setSelectedBatchId(b.id)}
-                                  title="Kijelölés véglegesítéshez"
+                                  title="Kijelölés commit-hoz"
                                 />
-                                {b.status === "draft" ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => finalizeBatch(b.id)}
-                                    className="h-8 px-3 rounded-xl bg-slate-900 text-white text-[12px] font-semibold hover:opacity-90"
-                                    title="Véglegesítés: termékek létrehozása a Raktárban + készlet könyvelése"
-                                  >
-                                    Véglegesítés
-                                  </button>
-                                ) : null}
-
                                 <button
                                   type="button"
                                   onClick={() => openDeleteConfirm(b.id)}
