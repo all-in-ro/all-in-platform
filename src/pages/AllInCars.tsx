@@ -57,6 +57,9 @@ const CUPE = {
   green: "#108D8B",
 } as const;
 
+const LIGHT_CARD_STYLE: React.CSSProperties = { backgroundColor: '#ffffff', color: '#0f172a' };
+const LIGHT_HEADER_STYLE: React.CSSProperties = { backgroundColor: '#f8fafc', color: '#475569' };
+
 /* ---------- Helpers ---------- */
 function normalizeItpYearsLike(obj: any): number {
   const c = obj || {};
@@ -229,7 +232,7 @@ function Chip({ label, days }: { label: string; days: number | null }) {
   const style = lvl === "ok" ? { backgroundColor: CUPE.green } : undefined;
   return (
     <div
-      className={"px-2 py-[3px] rounded text-[11px] font-medium " + toneFor(lvl)}
+      className={"px-2 py-[3px] rounded text-[11px] font-normal " + toneFor(lvl)}
       style={style}
       title={`${label} ${days == null ? "-" : days + " nap"}`}
     >
@@ -250,7 +253,7 @@ function Kpi({
   tone?: string;
 }) {
   return (
-    <Card className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
+    <Card style={LIGHT_CARD_STYLE} className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
       <CardContent className="p-3 md:p-3">
         <div className="text-[12px] text-slate-600">{title}</div>
 	        <div className="text-2xl font-normal">{value}</div>
@@ -263,7 +266,7 @@ function Kpi({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="grid gap-1">
-      <span className="text-[12px] text-slate-600 font-medium tracking-wide">
+      <span className="text-[12px] text-slate-600 font-normal tracking-wide">
         {label}
       </span>
       {children}
@@ -274,14 +277,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /* ---------- Views ---------- */
 function BoardView({ rows }: { rows: any[] }) {
   // Force CUPE-style light cards even if a global dark theme tries to override.
-  const colCls = "rounded-xl border border-slate-300 !bg-white !text-slate-800 shadow-sm";
+  const colCls = "rounded-xl border border-slate-300 shadow-sm";
   const expiredRows = rows.filter((r) => r.hasExpired);
   const soonRows = rows.filter((r) => r.hasSoon);
   const okRows = rows.filter((r) => !r.hasExpired && !r.hasSoon);
   const renderCard = (c: any) => (
     <div
       key={String(c.id ?? c.plate)}
-      className="rounded-lg !bg-white border border-slate-200 p-3 !text-slate-800"
+      style={LIGHT_CARD_STYLE} className="rounded-lg border border-slate-200 p-3"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="truncate">
@@ -315,22 +318,22 @@ function BoardView({ rows }: { rows: any[] }) {
   );
   return (
     <div className="grid md:grid-cols-3 gap-4">
-      <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+      <div style={LIGHT_CARD_STYLE} className={colCls}>
+        <div style={LIGHT_HEADER_STYLE} className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
           <Bell className="w-4 h-4" />
           <span>Lejárt</span>
         </div>
         <div className="p-3 grid gap-3">{expiredRows.map(renderCard)}</div>
       </div>
-      <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+      <div style={LIGHT_CARD_STYLE} className={colCls}>
+        <div style={LIGHT_HEADER_STYLE} className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span>Közelgő</span>
         </div>
         <div className="p-3 grid gap-3">{soonRows.map(renderCard)}</div>
       </div>
-      <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+      <div style={LIGHT_CARD_STYLE} className={colCls}>
+        <div style={LIGHT_HEADER_STYLE} className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
           <CalendarDays className="w-4 h-4" />
           <span>Rendben</span>
         </div>
@@ -365,8 +368,8 @@ function ListView({
   }, [expandedDefault, rows]);
 
   return (
-    <div className="rounded-xl border border-slate-300 !bg-white !text-slate-800 overflow-hidden shadow-sm">
-      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-slate-50 text-slate-600 border-b border-slate-200">
+    <div style={LIGHT_CARD_STYLE} className="rounded-xl border border-slate-300 overflow-hidden shadow-sm">
+      <div style={LIGHT_HEADER_STYLE} className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 border-b border-slate-200">
         <div>Autó</div>
         <div className="text-center">ITP</div>
         <div className="text-center">RCA</div>
