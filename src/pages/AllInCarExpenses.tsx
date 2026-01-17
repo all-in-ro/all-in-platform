@@ -13,6 +13,7 @@ import {
   Edit,
   Trash2,
   X,
+  ArrowLeft,
 } from "lucide-react";
 
 import AllInCarExpensesMobile from "./AllInCarExpensesMobile";
@@ -46,9 +47,6 @@ const CUPE = {
   bgBlue: "#2E3A4A",
   green: "#108D8B",
 } as const;
-
-const LIGHT_CARD_STYLE: React.CSSProperties = { backgroundColor: '#ffffff', color: '#0f172a' };
-const LIGHT_HEADER_STYLE: React.CSSProperties = { backgroundColor: '#f8fafc', color: '#475569' };
 
 /* ---------- Helpers ---------- */
 const justDate = (s?: string | null) => (s ? String(s).slice(0, 10) : "");
@@ -370,18 +368,22 @@ function AllInCarExpenses() {
       {/* Header */}
       <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
         <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-	          <div className="text-white font-normal">Autó kiadások - Javítások</div>
+          <div className="text-white font-semibold">Autó kiadások - Javítások</div>
           <div className="flex items-center gap-2">
             <Button
-  type="button"
-  variant="outline"
-  className="h-8 px-3 text-white border-white/40"
-  onClick={() => window.history.back()}
-  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#495465"; }}
-  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
->
-  Vissza
-</Button>
+              type="button"
+              variant="outline"
+              className="h-8 px-3 text-white border-white/40"
+              onClick={() => window.history.back()}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#495465";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "transparent";
+              }}
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" /> Vissza
+            </Button>
             <Button
               type="button"
               className="h-8 px-3 text-white"
@@ -404,7 +406,7 @@ function AllInCarExpenses() {
 
       <div className="mx-auto max-w-6xl px-4 py-6">
         {/* Filters & tools */}
-        <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
+        <Card className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
           <CardContent className="p-3 md:p-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative">
@@ -486,30 +488,30 @@ function AllInCarExpenses() {
 
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-          <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800">
-	          <CardContent className="p-3 md:p-3">
+          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+            <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összes tétel</div>
-	            <div className="text-2xl font-normal">{enriched.length}</div>
+              <div className="text-2xl font-semibold">{enriched.length}</div>
             </CardContent>
           </Card>
-          <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Időszak</div>
               <div className="text-sm">{dateFrom} → {dateTo}</div>
             </CardContent>
           </Card>
-          <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800">
-	          <CardContent className="p-3 md:p-3">
+          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+            <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összeg (RON)</div>
-	            <div className="text-2xl font-normal"><Money value={total} /></div>
+              <div className="text-2xl font-semibold"><Money value={total} /></div>
             </CardContent>
           </Card>
         </div>
 
         {/* List */}
-        <div style={LIGHT_CARD_STYLE} className="rounded-xl border border-slate-300 overflow-hidden shadow-sm">
+        <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
           {/* HEADER: fixed widths + centered labels */}
-	          <div style={LIGHT_HEADER_STYLE} className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 border-b border-slate-200 h-[36px]">
+          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-white text-slate-800 border-b border-slate-300 shadow-sm h-[36px] items-center">
             <div className="text-center">Dátum</div>
             <div className="text-center">Autó</div>
             <div className="text-center pl-6">km óra</div>
@@ -530,15 +532,15 @@ function AllInCarExpenses() {
                 );
               })
               .map((r) => (
-	                <div key={r.id || Math.random()} className="px-4 py-2.5 hover:bg-slate-50">
+                <div key={r.id || Math.random()} className="px-4 py-2.5">
                   {/* ROW: match header grid exactly; center content */}
                   <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),180px,110px] items-center gap-2 h-[36px]">
                     <div className="flex items-center justify-end gap-2 pr-2">
                       <CalendarDays className="w-4 h-4 text-slate-600" />
                       <span>{justDate(r.date)}</span>
                     </div>
-	                    <div className="truncate text-center">
-	                      <div className="font-normal text-[#344154] truncate">{r.plate || "Ismeretlen"}</div>
+                    <div className="truncate text-center">
+                      <div className="font-semibold text-[#344154] truncate">{r.plate || "Ismeretlen"}</div>
                       <div className="text-[12px] text-slate-600 truncate">{r.make_model || "—"}</div>
                     </div>
                     <div className="grid place-items-center text-center h-[36px] m-0 p-0">{r.odometer_km ? r.odometer_km : "—"}</div>
@@ -547,7 +549,7 @@ function AllInCarExpenses() {
                       <span>{r.category || "—"}</span>
                     </div>
                     <div className="truncate text-center">{r.description || "—"}</div>
-                    <div className="font-normal text-left pl-2"><Money value={r.cost} /> {r.currency || ""}</div>
+                    <div className="font-medium text-left pl-2"><Money value={r.cost} /> {r.currency || ""}</div>
                     <div className="flex items-center justify-end gap-2 pr-2">
                       <button
                         className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
@@ -729,7 +731,7 @@ function AllInCarExpenses() {
       {confirmOpen && (
         <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
           <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-	            <div className="text-white font-normal">{confirmTitle}</div>
+            <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               {confirmVariant === "confirm" && (
@@ -743,11 +745,11 @@ function AllInCarExpenses() {
               )}
               <button
                 type="button"
-	                className={
-	                  confirmVariant === "confirm"
-	                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white"
-	                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white"
-	                }
+                className={
+                  confirmVariant === "confirm"
+                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
+                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
+                }
                 onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
               >
                 OK
