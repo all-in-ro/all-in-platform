@@ -11,6 +11,102 @@ function uid(prefix = "m") {
 
 type TableParsed = { headers: string[]; rows: string[][] };
 
+function normKey(s: string) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[()]/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function adaptSupplierTable(parsed: TableParsed): TableParsed {
+  const headers = parsed.headers || [];
+  const rows = parsed.rows || [];
+
+  const keys = headers.map(normKey);
+
+  const isRomanianInvoice =
+    keys.includes("nr. culoare") ||
+    keys.includes("culoare") ||
+    keys.includes("marime") ||
+    keys.includes("categorie") ||
+    keys.includes("cantitate") ||
+    keys.some((k) => k.includes("pretul net unitar"));
+
+  if (!isRomanianInvoice) return parsed;
+
+  const idx = (k: string) => keys.indexOf(k);
+
+  const iIndex = idx("index");
+  const iName = idx("denumirea produsului");
+  const iGender = idx("gender");
+  const iColorCode = idx("nr. culoare");
+  const iColorName = idx("culoare");
+  const iSize = idx("marime");
+  const iCat = idx("categorie");
+  const iQty = idx("cantitate");
+  const iBuy = keys.findIndex((k) => k.includes("pretul net unitar"));
+
+  const outHeaders = [
+    "Kód",
+    "Márka",
+    "Terméknév",
+    "Nem",
+    "Színkód",
+    "Szín",
+    "Méret",
+    "Kategória",
+    "Beszerzési ár",
+    "Db",
+  ];
+
+  const get = (r: string[], i: number) => (i >= 0 ? String(r?.[i] ?? "").trim() : "");
+  const toNum = (s: string) => {
+    const t = String(s || "")
+      .replace(/\s+/g, "")
+      .replace(/\.(?=\d{3}(\D|$))/g, "") // remove thousand separators like 1.234,56
+      .replace(",", ".");
+    const n = Number(t);
+    return Number.isFinite(n) ? n : NaN;
+  };
+
+  const outRows = rows
+    .filter((r) => Array.isArray(r) && r.length)
+    .map((r) => {
+      const code = get(r, iIndex);
+      const name = get(r, iName);
+      const size = get(r, iSize);
+      const qtyRaw = get(r, iQty);
+      const qty = toNum(qtyRaw);
+
+      // Drop totals/summary rows
+      if (!code || !name || !size || !Number.isFinite(qty) || qty <= 0) return null;
+
+      const buyRaw = get(r, iBuy);
+      const buy = toNum(buyRaw);
+
+      return [
+        code, // Kód
+        "", // Márka
+        name, // Terméknév
+        get(r, iGender), // Nem
+        get(r, iColorCode), // Színkód
+        get(r, iColorName), // Szín
+        size, // Méret
+        get(r, iCat), // Kategória
+        Number.isFinite(buy) ? String(buy) : "", // Beszerzési ár
+        String(Math.floor(qty)), // Db
+      ];
+    })
+    .filter(Boolean) as string[][];
+
+  return { headers: outHeaders, rows: outRows };
+}
+
 function extLower(name: string) {
   const i = name.lastIndexOf(".");
   return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
@@ -89,10 +185,11 @@ export default function IncomingImport(props: {
         setError("Üres vagy nem értelmezhető fájl (CSV/XLSX/XLS). ");
         return;
       }
-      setPreview(parsed);
+      const adapted = adaptSupplierTable(parsed);
+      setPreview(adapted);
 
       const mappedRows = mapTableToIncomingRows(
-        { headers: parsed.headers, rows: parsed.rows },
+        { headers: adapted.headers, rows: adapted.rows },
         { source: "auto", parseCode: true }
       );
       setMapped(mappedRows);
