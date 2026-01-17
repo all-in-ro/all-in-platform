@@ -273,14 +273,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /* ---------- Views ---------- */
 function BoardView({ rows }: { rows: any[] }) {
-  const colCls = "rounded-xl border border-slate-300 bg-white text-slate-800";
+  // Force CUPE-style light cards even if a global dark theme tries to override.
+  const colCls = "rounded-xl border border-slate-300 !bg-white !text-slate-800 shadow-sm";
   const expiredRows = rows.filter((r) => r.hasExpired);
   const soonRows = rows.filter((r) => r.hasSoon);
   const okRows = rows.filter((r) => !r.hasExpired && !r.hasSoon);
   const renderCard = (c: any) => (
     <div
       key={String(c.id ?? c.plate)}
-      className="rounded-lg bg-white border border-slate-300 p-3 text-slate-800"
+      className="rounded-lg !bg-white border border-slate-200 p-3 !text-slate-800"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="truncate">
@@ -291,7 +292,7 @@ function BoardView({ rows }: { rows: any[] }) {
             {c.make_model || "—"}
           </div>
         </div>
-        <div className="w-20 h-14 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
+        <div className="w-20 h-14 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-200">
           {c.photo_url ? (
             <img src={c.photo_url} className="w-full h-full object-cover" />
           ) : (
@@ -301,7 +302,7 @@ function BoardView({ rows }: { rows: any[] }) {
           )}
         </div>
       </div>
-      <div className="border-t border-slate-300/60 my-2" />
+      <div className="border-t border-slate-200 my-2" />
       <div className="mt-2 flex flex-wrap gap-2">
         {c.itp_date && c.itp != null && <Chip label="ITP" days={c.itp} />}
         {c.rca_date && c.rca != null && <Chip label="RCA" days={c.rca} />}
@@ -315,21 +316,21 @@ function BoardView({ rows }: { rows: any[] }) {
   return (
     <div className="grid md:grid-cols-3 gap-4">
       <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
           <Bell className="w-4 h-4" />
           <span>Lejárt</span>
         </div>
         <div className="p-3 grid gap-3">{expiredRows.map(renderCard)}</div>
       </div>
       <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span>Közelgő</span>
         </div>
         <div className="p-3 grid gap-3">{soonRows.map(renderCard)}</div>
       </div>
       <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
           <CalendarDays className="w-4 h-4" />
           <span>Rendben</span>
         </div>
@@ -364,8 +365,8 @@ function ListView({
   }, [expandedDefault, rows]);
 
   return (
-    <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
-	      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-slate-50 text-slate-600 border-b border-slate-300">
+    <div className="rounded-xl border border-slate-300 !bg-white !text-slate-800 overflow-hidden shadow-sm">
+      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-slate-50 text-slate-600 border-b border-slate-200">
         <div>Autó</div>
         <div className="text-center">ITP</div>
         <div className="text-center">RCA</div>
@@ -379,10 +380,10 @@ function ListView({
           const key = String(c.id ?? c.plate ?? Math.random());
           const open = !!expanded[key];
           return (
-	            <div key={key} className="px-4 py-2.5 hover:bg-slate-50">
+            <div key={key} className="px-4 py-2.5 hover:bg-slate-50">
               <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
+                  <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-200">
                     {c.photo_url ? (
                       <img src={c.photo_url} className="w-full h-full object-cover" />
                     ) : (
