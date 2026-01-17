@@ -7,8 +7,8 @@ import pg from "pg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-import createCarsRouter from "./api/routes/cars.js";
-import createCarExpensesRouter from "./api/routes/car-expenses.js";
+import createCarsRouter from "./server/api/routes/cars.js";
+import createCarExpensesRouter from "./server/api/routes/car-expenses.js";
 
 const { Pool } = pg;
 
@@ -94,6 +94,11 @@ function requireAdmin(req, res, next) {
 }
 
 function requireAuthed(req, res, next) {
+  // Allow x-admin-secret to bypass login (useful for curl / server-to-server).
+  // UI stays the same; this is mainly for admin diagnostics and automation.
+  const secret = String(req.headers["x-admin-secret"] || "").trim();
+  if (secret && secret === ADMIN_PASSWORD) return next();
+
   const sid = getSid(req);
   const s = sid ? sessions.get(sid) : null;
   if (!s) return res.status(401).send("Not authorized");
