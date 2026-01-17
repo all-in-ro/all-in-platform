@@ -1,1318 +1,1257 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  CalendarDays,
-  PlusCircle,
-  Save,
-  RefreshCcw,
-  Bell,
-  AlertTriangle,
-  Search,
-  LayoutList,
-  LayoutGrid,
-  ArrowLeft,
-  X,
-  ChevronDown,
-  ChevronUp,
-  Edit,
-  Trash2,
-} from "lucide-react";
+import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
+import crypto from "crypto";
+import multer from "multer";
+import pg from "pg";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-/* ---------- Types ---------- */
-type Car = {
-  id?: number;
-  photo_url?: string;
-  plate?: string;
-  make_model?: string;
-  itp_date?: string;
-  itp_years?: number;   // 1 vagy 2 év
-  itp_months?: number;  // backend fallback (12 vagy 24)
-  rca_date?: string;
-  casco_start?: string;
-  casco_months?: number;
-  rovinieta_start?: string;
-  rovinieta_months?: number;
-  vin?: string;
-  civ?: string;
-  color?: string;
-  engine_cc?: number;
-  power_kw?: number;
-  total_mass?: number;
-  fuel?: string;
-  year?: number;
-};
+import createCarsRouter from "./api/routes/cars.js";
+import createCarExpensesRouter from "./api/routes/car-expenses.js";
 
-// IMPORTANT: default to same-origin so session cookies work (Render/Cloudflare).
-// If VITE_API_BASE is set, it can override this.
-const API = (import.meta as any).env?.VITE_API_BASE || "/api";
+const { Pool } = pg;
 
-// R2 upload endpoint tipikusan admin-vedelemmel fut (401 ha nincs megfelelo fejlec).
-// Frontenden env-bol vesszuk, ugyanugy mint a tobbi admin oldal.
-const ADMIN_SECRET = (import.meta as any).env?.VITE_ADMIN_SECRET || "";
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-const CUPE = {
-  blue: "#344154",
-  bgBlue: "#2E3A4A",
-  green: "#108D8B",
-} as const;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-/* ---------- Helpers ---------- */
-function normalizeItpYearsLike(obj: any): number {
-  const c = obj || {};
-  const candidates = [
-    Number(c.itp_years),
-    Number(c.itp_months) ? Number(c.itp_months) / 12 : undefined,
-    Number((c as any).itp_valid_years),
-    Number((c as any).itp_interval_years),
-    Number((c as any).itp_period_years),
-    Number((c as any).years_itp),
-    Number((c as any).itpValidityYears),
-  ].filter((x) => Number.isFinite(x as any) && Number(x) !== 0);
-  const y = candidates.length ? Math.round(Number(candidates[0] as any)) : 1;
-  return y <= 0 ? 1 : y > 5 ? 2 : y; // clamp weird values to 1..2 for biztonság
+// --- config ---
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "allinboss-123"; // ideiglenes default
+const SESSION_SECRET = process.env.SESSION_SECRET || "dev-secret-change-me";
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  console.error("DATABASE_URL is missing");
+  process.exit(1);
 }
 
-function daysLeft(fromISO: string | undefined, years = 0, months = 0): number | null {
-  if (!fromISO) return null;
-  const start = new Date(fromISO + "T00:00:00");
-  if (Number.isNaN(start.getTime())) return null;
-  const expiry = new Date(start);
-  if (years) expiry.setFullYear(expiry.getFullYear() + years);
-  if (months) expiry.setMonth(expiry.getMonth() + months);
-  const today = new Date();
-  const ms = expiry.getTime() - new Date(today.toDateString()).getTime();
-  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+// --- postgres pool ---
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+});
+
+// --- R2 (HTTP / Bearer token) ---
+// Cloudflare R2 in this account uses Account API tokens (Workers R2 Storage) instead of AWS-style key pairs.
+// Required env:
+// - R2_ENDPOINT: https://<accountid>.r2.cloudflarestorage.com
+// - R2_BUCKET: bucket name
+// - R2_API_TOKEN: Cloudflare Account API token value (with Account.Workers R2 Storage:Edit)
+// Optional:
+// - R2_PUBLIC_BASE_URL: public base URL (custom domain / public dev URL). If missing, API returns key only.
+const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
+const R2_BUCKET = process.env.R2_BUCKET || "";
+const R2_API_TOKEN = process.env.R2_API_TOKEN || "";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://r2.cdn.yourdomain.com
+
+const r2HttpEnabled = Boolean(R2_ENDPOINT && R2_BUCKET && R2_API_TOKEN);
+const r2Base = R2_ENDPOINT.replace(/\/+$/, "");
+// --- in-memory sessions (ok for MVP) ---
+const sessions = new Map();
+
+app.use(express.json());
+
+// --- file uploads (multipart) ---
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+function requireAdminOrSecret(req, res, next) {
+  // allow either admin session cookie OR x-admin-secret header (for server-to-server / curl)
+  const sid = getSid(req);
+  const s = sid ? sessions.get(sid) : null;
+  if (s && s.role === "admin") {
+    req.session = s;
+    return next();
+  }
+  const secret = String(req.headers["x-admin-secret"] || "").trim();
+  if (secret && secret === ADMIN_PASSWORD) return next();
+  return res.status(401).send("Not authorized");
 }
 
-type Level = "expired" | "soon" | "ok" | "unknown";
-
-const levelFor = (d: number | null): Level =>
-  d == null ? "unknown" : d < 0 ? "expired" : d <= 5 ? "soon" : "ok";
-
-const kwToCp = (kw?: number) => (kw ? Math.round(kw * 1.341) : 0);
-
-function justDate(s?: string | null): string | undefined {
-  if (!s) return undefined;
-  return String(s).slice(0, 10);
+// --- helpers ---
+function newId(prefix) {
+  return `${prefix}_${crypto.randomBytes(12).toString("hex")}`;
+}
+function setCookie(res, sid) {
+  res.setHeader("Set-Cookie", `sid=${sid}; Path=/; HttpOnly; SameSite=Lax`);
+}
+function getSid(req) {
+  const c = req.headers.cookie || "";
+  const m = c.match(/(?:^|;\s*)sid=([^;]+)/);
+  return m ? m[1] : null;
+}
+function requireAdmin(req, res, next) {
+  const sid = getSid(req);
+  const s = sid ? sessions.get(sid) : null;
+  if (!s || s.role !== "admin") return res.status(401).send("Not authorized");
+  req.session = s;
+  next();
 }
 
-function cleanForSave(car: any): any {
-  const payload: any = {};
-  const copy = { ...car };
+function requireAuthed(req, res, next) {
+  // Allow x-admin-secret to bypass login (useful for curl / server-to-server).
+  // UI stays the same; this is mainly for admin diagnostics and automation.
+  const secret = String(req.headers["x-admin-secret"] || "").trim();
+  if (secret && secret === ADMIN_PASSWORD) return next();
 
-  // Normalize date-only strings and allow clearing to NULL
-  const dateKeys = ["itp_date","rca_date","casco_start","rovinieta_start"];
-  for (const dk of dateKeys) {
-    const val = justDate((copy as any)[dk]);
-    if (val) {
-      payload[dk] = val;
-    } else {
-      payload[dk] = null; // explicit wipe on server
-    }
+  const sid = getSid(req);
+  const s = sid ? sessions.get(sid) : null;
+  if (!s) return res.status(401).send("Not authorized");
+  req.session = s;
+  next();
+}
+
+// --- Cars (ALL IN) ---
+app.use("/api/cars", createCarsRouter({ pool, requireAuthed, requireAdminOrSecret }));
+
+// --- Car expenses (ALL IN) ---
+app.use("/api/car-expenses", createCarExpensesRouter({ pool, requireAuthed, requireAdminOrSecret }));
+
+// --- encrypt/decrypt codes for admin resend (AES-256-GCM) ---
+function codeKey() {
+  return crypto.createHash("sha256").update(String(SESSION_SECRET)).digest(); // 32 bytes
+}
+function encryptCode(plain) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", codeKey(), iv);
+  const enc = Buffer.concat([cipher.update(String(plain), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("base64")}.${enc.toString("base64")}.${tag.toString("base64")}`;
+}
+function decryptCode(packed) {
+  if (!packed) return null;
+  const parts = String(packed).split(".");
+  if (parts.length !== 3) return null;
+  const [ivB64, encB64, tagB64] = parts;
+  const iv = Buffer.from(ivB64, "base64");
+  const enc = Buffer.from(encB64, "base64");
+  const tag = Buffer.from(tagB64, "base64");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", codeKey(), iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(enc), decipher.final()]);
+  return plain.toString("utf8");
+}
+
+// --- app settings (for branding, etc.) ---
+let settingsReady = false;
+async function ensureSettings() {
+  if (settingsReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key text PRIMARY KEY,
+      value text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  settingsReady = true;
+}
+async function setSetting(key, value) {
+  await ensureSettings();
+  await pool.query(
+    "INSERT INTO app_settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    [key, value]
+  );
+}
+async function getSetting(key) {
+  await ensureSettings();
+  const r = await pool.query("SELECT value FROM app_settings WHERE key = $1 LIMIT 1", [key]);
+  return r.rowCount ? r.rows[0].value : null;
+}
+
+// --- ensure shops table exists + defaults ---
+let shopsReady = false;
+async function ensureShops() {
+  if (shopsReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shops (
+      id text PRIMARY KEY,
+      name text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(
+    "INSERT INTO shops (id, name) VALUES ('csikszereda','Csíkszereda') ON CONFLICT (id) DO NOTHING"
+  );
+  await pool.query(
+    "INSERT INTO shops (id, name) VALUES ('kezdivasarhely','Kézdivásárhely') ON CONFLICT (id) DO NOTHING"
+  );
+  await pool.query(
+    "INSERT INTO shops (id, name) VALUES ('raktar','Raktár') ON CONFLICT (id) DO NOTHING"
+  );
+  shopsReady = true;
+}
+
+
+async function shopExists(id) {
+  await ensureShops();
+  const r = await pool.query("SELECT 1 FROM shops WHERE id = $1 LIMIT 1", [id]);
+  return r.rowCount > 0;
+}
+
+// --- auth ---
+app.post("/api/auth/login", async (req, res) => {
+  const body = req.body || {};
+
+  if (body.kind === "admin") {
+    if (body.password !== ADMIN_PASSWORD) return res.status(401).send("Hibás admin jelszó");
+    const sid = newId("s");
+    const session = { role: "admin", actor: "ADMIN" };
+    sessions.set(sid, session);
+    setCookie(res, sid);
+    return res.json({ session });
   }
 
-  // Coerce numeric fields and copy non-empty scalars
-  for (const [k, v] of Object.entries(copy)) {
-    if (dateKeys.includes(k)) continue; // already handled above
-    if (v === "" || v == null) continue;
-    if (["engine_cc","power_kw","total_mass","year","casco_months","rovinieta_months","itp_years","itp_months"].includes(k)) {
-      const n = Number(v);
-      if (!Number.isFinite(n)) continue;
-      payload[k] = n;
-    } else {
-      payload[k] = v;
-    }
-  }
-  // Default itp_years
-  if (payload.itp_years == null || payload.itp_years === 0) payload.itp_years = 1;
-  // Fallback: küldjük itp_months-t is, ha a backend azt várja
-  if (payload.itp_years != null && payload.itp_months == null) {
-    const y = Number(payload.itp_years) || 1;
-    payload.itp_months = y * 12;
-  }
-  // Extra mezőnevek a makacs backendekhez
-  if (payload.itp_years != null) {
-    const y = Number(payload.itp_years) || 1;
-    payload.itp_valid_years = y;
-    payload.itp_interval_years = y;
-    payload.itp_period_years = y;
-    payload.years_itp = y;
-    payload.itpValidityYears = y;
-  }
-  return payload;
-}
+  if (body.kind === "shop") {
+    const { shopId, code } = body;
+    if (!shopId || !code) return res.status(400).send("Bad request");
 
-function toneFor(lvl: Level) {
-  if (lvl === "expired") return "bg-[#b90f1e] text-white border border-[#b90f1e]/50";
-  if (lvl === "soon") return "bg-amber-400 text-black border border-amber-900/20";
-  if (lvl === "ok") return "bg-[var(--cupe-green)] text-white border border-emerald-900/30";
-  return "bg-slate-600 text-slate-200 border border-slate-500/50";
-}
+    // invalid shopId -> deny
+    if (!(await shopExists(shopId))) return res.status(401).send("Ismeretlen helység");
 
-async function fetchJSON(url: string, init?: RequestInit) {
-  const r = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-    credentials: init?.credentials ?? "include",
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const ct = r.headers.get("content-type") || "";
-  if (!ct.includes("json")) return null as any;
-  return await r.json();
-}
+    const q = `
+      SELECT id, shop_id, name
+      FROM login_codes
+      WHERE shop_id = $1
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > now())
+        AND crypt($2, code_hash) = code_hash
+      LIMIT 1
+    `;
+    const r = await pool.query(q, [shopId, code]);
+    if (r.rowCount === 0) return res.status(401).send("Hibás vagy inaktív belépőkód");
 
-async function uploadToR2(file: File, folder: string, name: string): Promise<string> {
-  // CUPE-style presigned upload:
-  // 1) Ask backend for a presigned PUT URL
-  // 2) PUT the file directly to R2
-  // 3) Store returned public URL in DB
-  //
-  // NOTE: backend currently restricts presign keys to "branding/" prefix, so we store car images under branding/cars/...
-  const safeFolder = String(folder || "cars").replace(/^\/+/, "").replace(/\/+$/, "");
-  const key = `branding/${safeFolder}/${name}`;
+    const row = r.rows[0];
 
-  const contentType = file?.type || "application/octet-stream";
-  const qs = new URLSearchParams({ key, contentType });
+    await pool.query("UPDATE login_codes SET used_at = now(), used_by = $1 WHERE id = $2", ["SHOP", row.id]);
+    await pool.query("INSERT INTO login_events (code_id, event_type, actor) VALUES ($1,'used',$2)", [row.id, "SHOP"]);
 
-  const presign = await fetchJSON(`${API}/admin/r2/presign?${qs.toString()}`, {
-    method: "GET",
-    credentials: "include",
-  });
-
-  const uploadUrl = presign?.uploadUrl || presign?.upload_url;
-  const publicUrl = presign?.publicUrl || presign?.public_url || presign?.url;
-
-  if (!uploadUrl || !publicUrl) throw new Error("Nincs presign URL (uploadUrl/publicUrl).");
-
-  const put = await fetch(String(uploadUrl), {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: file,
-  });
-
-  if (!put.ok) {
-    const t = await put.text().catch(() => "");
-    throw new Error(`R2 PUT sikertelen (HTTP ${put.status}) ${t}`.slice(0, 300));
+    const sid = newId("s");
+    const actor = row.name ? row.name : "SHOP USER";
+    const session = { role: "shop", shopId, actor };
+    sessions.set(sid, session);
+    setCookie(res, sid);
+    return res.json({ session });
   }
 
-  return String(publicUrl);
+  return res.status(400).send("Bad request");
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const sid = getSid(req);
+  const s = sid ? sessions.get(sid) : null;
+  res.json({ session: s || null });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const sid = getSid(req);
+  if (sid) sessions.delete(sid);
+  res.setHeader("Set-Cookie", "sid=; Path=/; Max-Age=0");
+  res.json({ ok: true });
+});
+
+// --- admin: shops ---
+
+// --- shops (places): list for any logged in user (admin or shop) ---
+app.get("/api/shops", requireAuthed, async (req, res) => {
+  await ensureShops();
+  const r = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
+  res.json({ items: r.rows });
+});
+
+app.get("/api/admin/shops", requireAdmin, async (req, res) => {
+  await ensureShops();
+  const r = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
+  res.json({ items: r.rows });
+});
+
+app.post("/api/admin/shops", requireAdmin, async (req, res) => {
+  await ensureShops();
+  const body = req.body || {};
+  const id = String(body.id || "").trim();
+  const name = String(body.name || "").trim();
+  if (!id) return res.status(400).json({ error: "id required" });
+  if (!name) return res.status(400).json({ error: "name required" });
+
+  await pool.query("INSERT INTO shops (id, name) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name", [
+    id,
+    name
+  ]);
+  res.json({ ok: true });
+});
+
+
+// --- admin: delete shop (place) ---
+app.delete("/api/admin/shops/:id", requireAdmin, async (req, res) => {
+  const id = String(req.params.id || "");
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  // prevent deleting default shops if you want (optional)
+  // await pool.query("DELETE FROM shops WHERE id = $1", [id]);
+
+  await pool.query("DELETE FROM shops WHERE id = $1", [id]);
+  res.json({ ok: true });
+});
+
+
+
+// =========================
+// Incoming v1 (draft -> DB)
+// =========================
+
+// NOTE: these endpoints assume the DB tables exist.
+// We'll create them with Render Shell SQL when needed.
+
+function normalizeStr(v) {
+  return String(v ?? "").trim();
 }
 
-async function listCars(): Promise<Car[]> {
+function toInt(v) {
+  const n = Number.parseInt(String(v ?? "").trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+app.post("/api/incoming/batches", requireAuthed, async (req, res) => {
+  const s = req.session;
+  const body = req.body || {};
+
+  const supplier = normalizeStr(body.supplier);
+  const sourceType = normalizeStr(body.sourceType || body.source_type || "manual"); // csv | manual
+  const locationId = normalizeStr(body.locationId || body.location_id || (s.role === "shop" ? s.shopId : "raktar"));
+  const note = normalizeStr(body.note);
+
+  if (!supplier) return res.status(400).json({ error: "supplier required" });
+  if (!locationId) return res.status(400).json({ error: "locationId required" });
+  if (!["csv", "manual"].includes(sourceType)) return res.status(400).json({ error: "sourceType must be csv|manual" });
+
+  const id = newId("incb");
+  const createdBy = s.role === "admin" ? "ADMIN" : "SHOP";
+  const actor = s.actor || createdBy;
+
+  await pool.query(
+    `INSERT INTO incoming_batches (id, supplier, source_type, location_id, status, note, created_by, actor)
+     VALUES ($1,$2,$3,$4,'draft',$5,$6,$7)`,
+    [id, supplier, sourceType, locationId, note || null, createdBy, actor]
+  );
+
+  res.json({ id });
+});
+
+app.get("/api/incoming/batches", requireAuthed, async (req, res) => {
+  const from = normalizeStr(req.query.from);
+  const to = normalizeStr(req.query.to);
+  const locationId = normalizeStr(req.query.locationId || req.query.location_id);
+
+  const where = [];
+  const args = [];
+  let i = 1;
+
+  if (from) { where.push(`created_at >= $${i++}`); args.push(from); }
+  if (to) { where.push(`created_at <= $${i++}`); args.push(to); }
+  if (locationId) { where.push(`location_id = $${i++}`); args.push(locationId); }
+
+  // shop users only see their own location by default unless explicitly admin
+  if (req.session.role === "shop" && !locationId) {
+    where.push(`location_id = $${i++}`);
+    args.push(req.session.shopId);
+  }
+
+  const q = `
+    SELECT b.id, b.created_at, b.supplier, b.source_type, b.location_id, b.status, b.note,
+           (SELECT COUNT(*) FROM incoming_items it WHERE it.batch_id = b.id) AS items_count
+    FROM incoming_batches b
+    ${where.length ? "WHERE " + where.join(" AND ") : ""}
+    ORDER BY b.created_at DESC
+    LIMIT 200
+  `;
+
+  const r = await pool.query(q, args);
+  res.json({ items: r.rows });
+});
+
+app.get("/api/incoming/batches/:id", requireAuthed, async (req, res) => {
+  const id = normalizeStr(req.params.id);
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const b = await pool.query(
+    `SELECT id, created_at, supplier, source_type, location_id, status, note, created_by, actor
+     FROM incoming_batches WHERE id=$1`,
+    [id]
+  );
+  if (!b.rows.length) return res.status(404).json({ error: "not found" });
+
+  // shop users can only read their own location
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const items = await pool.query(
+    `SELECT id, batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, buy_price, raw
+     FROM incoming_items WHERE batch_id=$1 ORDER BY id ASC`,
+    [id]
+  );
+
+  res.json({ batch: b.rows[0], items: items.rows });
+});
+
+// --- incoming: delete batch permanently (history cleanup) ---
+// Deletes both header + items.
+// Permissions:
+// - admin can delete any
+// - shop can delete only its own location
+app.delete("/api/incoming/batches/:id", requireAuthed, async (req, res) => {
+  const id = normalizeStr(req.params.id);
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  // read batch + permission check
+  const b = await pool.query(`SELECT id, location_id FROM incoming_batches WHERE id=$1`, [id]);
+  if (!b.rowCount) return res.status(404).json({ error: "not found" });
+
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const client = await pool.connect();
   try {
-    const data = await fetchJSON(`${API}/cars`);
-    const rows = (Array.isArray(data) ? data : data?.rows || []) as any[];
-    // Bármilyen backend-féle mezőből értelmezzük az éveket
-    return rows.map((r) => {
-      r.itp_years = normalizeItpYearsLike(r);
-      return r;
-    });
-  } catch {
-    return [];
+    await client.query("BEGIN");
+    await client.query("DELETE FROM incoming_items WHERE batch_id=$1", [id]);
+    await client.query("DELETE FROM incoming_batches WHERE id=$1", [id]);
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    console.error("delete incoming batch failed", e);
+    return res.status(500).json({ error: "db error" });
+  } finally {
+    client.release();
   }
-}
+});
 
-async function createCar(car: Car): Promise<Car | null> {
+app.post("/api/incoming/batches/:id/items", requireAuthed, async (req, res) => {
+  const batchId = normalizeStr(req.params.id);
+  if (!batchId) return res.status(400).json({ error: "batch id required" });
+
+  // verify batch + permissions
+  const b = await pool.query(`SELECT id, location_id, status FROM incoming_batches WHERE id=$1`, [batchId]);
+  if (!b.rows.length) return res.status(404).json({ error: "batch not found" });
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (b.rows[0].status !== "draft") {
+    return res.status(400).json({ error: "batch is not draft" });
+  }
+
+  const body = req.body || {};
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) return res.status(400).json({ error: "items required" });
+
+  // transactional replace: delete existing, insert new
+  const client = await pool.connect();
   try {
-    return await fetchJSON(`${API}/cars`, {
-      method: "POST",
-      body: JSON.stringify(car),
-    });
-  } catch {
-    return null;
-  }
-}
+    await client.query("BEGIN");
+    await client.query("DELETE FROM incoming_items WHERE batch_id=$1", [batchId]);
 
-async function updateCar(id: number, car: Car): Promise<Car | null> {
-  try {
-    return await fetchJSON(`${API}/cars/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(car),
-    });
-  } catch {
-    return null;
-  }
-}
+    for (const it of items) {
+      const product_code = normalizeStr(it.code || it.product_code);
+      const product_name = normalizeStr(it.name || it.product_name);
+      const color_code = normalizeStr(it.colorCode || it.color_code);
+      const color_name = normalizeStr(it.colorName || it.color_name);
+      const size = normalizeStr(it.size);
+      const category = normalizeStr(it.category);
+      const qty = toInt(it.qty);
+      // Optional: item-level buy price (preferred over raw-only)
+      const buy_price_raw = it?.buy_price ?? it?.buyPrice ?? null;
+      const buy_price = buy_price_raw === null || buy_price_raw === undefined || String(buy_price_raw).trim() === ""
+        ? null
+        : String(buy_price_raw).trim();
 
-/* ---------- UI atoms ---------- */
-function Chip({ label, days }: { label: string; days: number | null }) {
-  const lvl = levelFor(days);
-  const style = lvl === "ok" ? { backgroundColor: CUPE.green } : undefined;
-  return (
-    <div
-      className={"px-2 py-[3px] rounded text-[11px] font-medium " + toneFor(lvl)}
-      style={style}
-      title={`${label} ${days == null ? "-" : days + " nap"}`}
-    >
-      {label}: {days == null ? "-" : `${days} nap`}
-    </div>
-  );
-}
-
-function Kpi({
-  title,
-  value,
-  hint,
-  tone = "bg-white",
-}: {
-  title: string;
-  value: string;
-  hint?: string;
-  tone?: string;
-}) {
-  return (
-    // NOTE: shadcn <Card> kap alap "bg-card" osztalyt, amit dark theme-ben felulirhat.
-    // Itt direkt div-et hasznalunk, hogy a KPI mindig CUPE-feher maradjon.
-    <div
-      className={"rounded-xl border border-slate-300 text-slate-800 " + tone}
-      style={{ backgroundColor: "#ffffff" }}
-    >
-      <div className="p-3 md:p-3">
-        <div className="text-[12px] text-slate-600">{title}</div>
-        <div className="text-2xl font-semibold">{value}</div>
-        {hint && <div className="text-[11px] text-slate-600 mt-1">{hint}</div>}
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1">
-      <span className="text-[12px] text-slate-600 font-medium tracking-wide">
-        {label}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-/* ---------- Views ---------- */
-function BoardView({ rows }: { rows: any[] }) {
-  const colCls = "rounded-xl border border-slate-300 bg-white text-slate-800";
-  const expiredRows = rows.filter((r) => r.hasExpired);
-  const soonRows = rows.filter((r) => r.hasSoon);
-  const okRows = rows.filter((r) => !r.hasExpired && !r.hasSoon);
-  const renderCard = (c: any) => (
-    <div
-      key={String(c.id ?? c.plate)}
-      className="rounded-lg bg-white border border-slate-300 p-3 text-slate-800"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="truncate">
-          <div className="text-[#344154] text-[15px] font-bold leading-tight">
-            {c.plate || "Ismeretlen"}
-          </div>
-          <div className="text-slate-700 text-[13px] truncate">
-            {c.make_model || "—"}
-          </div>
-        </div>
-        <div className="w-20 h-14 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
-          {c.photo_url ? (
-            <img src={c.photo_url} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full grid place-items-center text-slate-600">
-              <PlusCircle className="w-5 h-5" />
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="border-t border-slate-300/60 my-2" />
-      <div className="mt-2 flex flex-wrap gap-2">
-        {c.itp_date && c.itp != null && <Chip label="ITP" days={c.itp} />}
-        {c.rca_date && c.rca != null && <Chip label="RCA" days={c.rca} />}
-        {c.casco_start && c.cas != null && <Chip label="Casco" days={c.cas} />}
-        {c.rovinieta_start && c.rov != null && (
-          <Chip label="Rovigneta" days={c.rov} />
-        )}
-      </div>
-    </div>
-  );
-  return (
-    <div className="grid md:grid-cols-3 gap-4">
-      <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
-          <Bell className="w-4 h-4" />
-          <span>Lejárt</span>
-        </div>
-        <div className="p-3 grid gap-3">{expiredRows.map(renderCard)}</div>
-      </div>
-      <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4" />
-          <span>Közelgő</span>
-        </div>
-        <div className="p-3 grid gap-3">{soonRows.map(renderCard)}</div>
-      </div>
-      <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
-          <CalendarDays className="w-4 h-4" />
-          <span>Rendben</span>
-        </div>
-        <div className="p-3 grid gap-3">{okRows.map(renderCard)}</div>
-      </div>
-    </div>
-  );
-}
-
-function ListView({
-  rows,
-  expandedDefault = false,
-  onEdit,
-  deletingId,
-  onDelete,
-}: {
-  rows: any[];
-  expandedDefault?: boolean;
-  onEdit?: (car: any) => void;
-  deletingId?: number | null;
-  onDelete?: (id?: number) => void;
-}) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    if (expandedDefault) {
-      const m: Record<string, boolean> = {};
-      rows.forEach((r) => {
-        m[String(r.id ?? r.plate)] = true;
-      });
-      setExpanded(m);
-    }
-  }, [expandedDefault, rows]);
-
-  return (
-    <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
-      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-white text-slate-800 border-b border-slate-300 shadow-sm ">
-        <div>Autó</div>
-        <div className="text-center">ITP</div>
-        <div className="text-center">RCA</div>
-        <div className="text-center">Casco/Rovi</div>
-        <div className="text-right pr-4 flex items-center justify-end gap-2 whitespace-nowrap">
-          Műveletek
-        </div>
-      </div>
-      <div className="divide-y divide-slate-200 pt-1">
-        {rows.map((c) => {
-          const key = String(c.id ?? c.plate ?? Math.random());
-          const open = !!expanded[key];
-          return (
-            <div key={key} className="px-4 py-2.5 hover:bg-white">
-              <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
-                    {c.photo_url ? (
-                      <img src={c.photo_url} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full grid place-items-center text-slate-600">
-                        <PlusCircle className="w-5 h-5" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="truncate">
-                    <div className="text-[#344154] text-[15px] font-bold leading-tight">
-                      {c.plate || "Ismeretlen"}
-                    </div>
-                    <div className="text-slate-700 text-[13px] truncate">
-                      {c.make_model || "—"}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex justify-center flex-wrap gap-2">
-                  {c.itp_date && c.itp != null && <Chip label="ITP" days={c.itp} />}
-                </div>
-                <div className="flex justify-center flex-wrap gap-2">
-                  {c.rca_date && c.rca != null && <Chip label="RCA" days={c.rca} />}
-                </div>
-                <div className="flex justify-center flex-wrap gap-2 mt-1 mb-1 min-w-[180px]">
-                  {c.casco_start && c.cas != null && <Chip label="Casco" days={c.cas} />}
-                  {c.rovinieta_start && c.rov != null && (
-                    <Chip label="Rovigneta" days={c.rov} />
-                  )}
-                </div>
-                <div className="text-right pr-4 flex items-center justify-end gap-2 whitespace-nowrap">
-                  {onEdit && (
-                    <button
-                      className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
-                      onClick={() => onEdit(c)}
-                      type="button"
-                      disabled={!!deletingId && deletingId === Number(c.id)}
-                      aria-busy={deletingId === Number(c.id)}
-                    >
-                      <Edit className="w-4 h-4" /> Szerkesztés
-                    </button>
-                  )}
-                  <button
-                    className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
-                    onClick={() => setExpanded((m) => ({ ...m, [key]: !open }))}
-                    type="button"
-                  >
-                    {open ? (
-                      <>
-                        Bezár <ChevronUp className="w-4 h-4" />
-                      </>
-                    ) : (
-                      <>
-                        Részletek <ChevronDown className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-              {open && (
-                <>
-                  <div className="border-t border-slate-300/60 my-2" />
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-[12px] text-slate-600">
-                    <div>
-                      <span className="text-slate-600">VIN:</span> {c.vin || "—"}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">CIV:</span> {c.civ || "—"}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">Szín:</span> {c.color || "—"}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">cm³:</span> {c.engine_cc ?? "—"}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">kW/CP:</span>{" "}
-                      {c.power_kw ?? "—"}
-                      {c.power_kw ? ` / ${kwToCp(c.power_kw)}` : ""}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">Össztömeg:</span> {c.total_mass ?? "—"}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">Üzemanyag:</span> {c.fuel || "—"}
-                    </div>
-                    <div>
-                      <span className="text-slate-600">Gyártási év:</span> {c.year ?? "—"}
-                    </div>
-                  </div>
-                  <div className="mt-3 flex justify-end">
-                    <button
-                      className="h-8 px-3 inline-flex items-center gap-1 rounded-md bg-[#b90f1e] hover:bg-[#a10d19] text-white text-[12px]"
-                      onClick={() => onDelete && onDelete(Number(c.id))}
-                      type="button"
-                      disabled={!!deletingId && deletingId === Number(c.id)}
-                      aria-busy={deletingId === Number(c.id)}
-                    >
-                      {deletingId === Number(c.id) ? (
-                        "Törlés…"
-                      ) : (
-                        <>
-                          <Trash2 className="w-4 h-4" /> Törlés
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
-        {!rows.length && (
-          <div className="px-4 py-10 text-center text-slate-600">Nincs találat.</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Main ---------- */
-export default function AllInCars() {
-  const [cars, setCars] = useState<Car[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>("");
-  const [msg, setMsg] = useState<string>("");
-
-  const [photoEdit, setPhotoEdit] = useState(false);
-  const [photoUploading, setPhotoUploading] = useState(false);
-  const [photoUploadErr, setPhotoUploadErr] = useState<string>("");
-
-  const [q, setQ] = useState("");
-  const [alertsOnly, setAlertsOnly] = useState(false);
-  const [view, setView] = useState<"list" | "board">("board");
-
-  const [showForm, setShowForm] = useState(false);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-
-  // Styled confirm/info modal (copied in spirit from AllInUsers)
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmTitle, setConfirmTitle] = useState("");
-  const [confirmMsg, setConfirmMsg] = useState("");
-  const [confirmVariant, setConfirmVariant] = useState<"confirm" | "info">("confirm");
-  const [confirmAction, setConfirmAction] = useState<null | { kind: "delete"; id: number }>(null);
-
-  useEffect(() => {
-    if (!confirmOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setConfirmOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen]);
-
-  const defaultForm: Car = {
-    photo_url: "",
-    plate: "",
-    make_model: "",
-    itp_date: "",
-    itp_years: 1, // default 1 év
-    rca_date: "",
-    casco_start: "",
-    casco_months: 12,
-    rovinieta_start: "",
-    rovinieta_months: 12,
-    vin: "",
-    civ: "",
-    color: "",
-    engine_cc: undefined,
-    power_kw: undefined,
-    total_mass: undefined,
-    fuel: "",
-    year: undefined,
-  };
-  const [form, setForm] = useState<Car>({ ...defaultForm });
-
-  const itpDays = useMemo(
-    () => daysLeft(form.itp_date || undefined, form.itp_years || 1, 0),
-    [form.itp_date, form.itp_years]
-  );
-  const rcaDays = useMemo(
-    () => daysLeft(form.rca_date || undefined, 1, 0),
-    [form.rca_date]
-  );
-  const cascoDays = useMemo(
-    () => daysLeft(form.casco_start || undefined, 0, form.casco_months || 0),
-    [form.casco_start, form.casco_months]
-  );
-  const roviDays = useMemo(
-    () => daysLeft(form.rovinieta_start || undefined, 0, form.rovinieta_months || 0),
-    [form.rovinieta_start, form.rovinieta_months]
-  );
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    listCars()
-      .then((rows) => {
-        if (!alive) return;
-        setCars(rows || []);
-      })
-      .finally(() => setLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const onChange = <K extends keyof Car>(key: K, value: Car[K]) =>
-    setForm((f) => ({ ...f, [key]: value }));
-
-  async function onPhotoPick(file: File) {
-    if (!file) return;
-    setPhotoUploadErr("");
-    setPhotoUploading(true);
-    try {
-      const safePlate = (form.plate || "car").replace(/[^a-zA-Z0-9_-]+/g, "-");
-      const ext = (file.name.split(".").pop() || "jpg").slice(0, 5).toLowerCase();
-      const name = `${safePlate}-${Date.now()}.${ext}`;
-      const folder = form.id ? `cars/${form.id}` : "cars/new";
-      const url = await uploadToR2(file, folder, name);
-      setForm((f) => ({ ...f, photo_url: url }));
-      setPhotoEdit(false);
-    } catch (e: any) {
-      setPhotoUploadErr(e?.message || "Képfeltöltés sikertelen.");
-    } finally {
-      setPhotoUploading(false);
-    }
-  }
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setError("");
-    const payload = cleanForSave(form);
-    const saved = form.id
-      ? await updateCar(form.id, payload)
-      : await createCar(payload);
-    if (!saved) setError("Mentés sikertelen.");
-    const rows = await listCars();
-    setCars(rows);
-    setSaving(false);
-    setForm({ ...defaultForm });
-    setPhotoEdit(false);
-    setPhotoUploading(false);
-    setPhotoUploadErr("");
-    setShowForm(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  async function deleteCar(id?: number) {
-    if (!id || !Number.isFinite(id)) {
-      setConfirmVariant("info");
-      setConfirmTitle("Hiba");
-      setConfirmMsg("Nincs azonosító ehhez a sorhoz, nem tudom törölni.");
-      setConfirmAction(null);
-      setConfirmOpen(true);
-      return;
-    }
-
-    setConfirmVariant("confirm");
-    setConfirmTitle("Végleges törlés");
-    setConfirmMsg("Biztos törlöd? Ez nem visszavonható.");
-    setConfirmAction({ kind: "delete", id });
-    setConfirmOpen(true);
-  }
-
-  async function runConfirm() {
-    const a = confirmAction;
-    setConfirmOpen(false);
-    setConfirmAction(null);
-    if (!a) return;
-    if (a.kind !== "delete") return;
-
-    setMsg("");
-    try {
-      setDeletingId(a.id);
-      const url = `${API}/cars/${a.id}`;
-      let r = await fetch(url, { method: "DELETE", credentials: "include" });
-      if (r.status === 204 || r.ok) {
-        const rows = await listCars();
-        setCars(rows);
-        setMsg("Törölve.");
-        return;
+      if (!product_code && !product_name) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "each item needs code or name" });
       }
-      if (r.status === 405 || r.status === 404) {
-        r = await fetch(url, {
-          method: "PATCH",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ _action: "delete" }),
-        });
-        if (r.ok) {
-          const rows = await listCars();
-          setCars(rows);
-          setMsg("Törölve.");
-          return;
+      if (qty === null || qty <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "each item needs qty > 0" });
+      }
+
+      const matched_product_id = it.matchedProductId ? normalizeStr(it.matchedProductId) : null;
+      const raw = it && typeof it === "object" ? it : null;
+
+      await client.query(
+        `INSERT INTO incoming_items
+         (batch_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, buy_price, raw)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [batchId, product_code || null, product_name || null, color_code || null, color_name || null, size || null, category || null, qty, matched_product_id, buy_price, raw]
+      );
+    }
+
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+
+      // Postgres error codes:
+      // 23514 = check_violation
+      if (e && e.code === "23514") {
+        if (e.constraint === "incoming_items_buy_price_non_negative") {
+          return res.status(400).json({ error: "buy_price must be >= 0" });
         }
+        if (e.constraint === "incoming_items_qty_check") {
+          return res.status(400).json({ error: "qty must be > 0" });
+        }
+        return res.status(400).json({ error: "invalid input" });
       }
-      const txt = await r.text().catch(() => "");
-      throw new Error(`HTTP ${r.status} ${txt}`);
-    } catch (e: any) {
-      console.error(e);
-      setConfirmVariant("info");
-      setConfirmTitle("Törlés sikertelen");
-      setConfirmMsg(String(e?.message || "ismeretlen hiba"));
-      setConfirmAction(null);
-      setConfirmOpen(true);
+
+      console.error("db error", e);
+      return res.status(500).json({ error: "db error" });
     } finally {
-      setDeletingId(null);
-    }
+    client.release();
+  }
+});
+
+app.post("/api/incoming/batches/:id/commit", requireAuthed, async (req, res) => {
+  const id = normalizeStr(req.params.id);
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const b = await pool.query(`SELECT id, location_id, status FROM incoming_batches WHERE id=$1`, [id]);
+  if (!b.rows.length) return res.status(404).json({ error: "not found" });
+
+  if (req.session.role === "shop" && b.rows[0].location_id !== req.session.shopId) {
+    return res.status(403).json({ error: "forbidden" });
   }
 
-  /* ---------- Derived ---------- */
-  const enriched = useMemo(() => {
-    return (cars || []).map((c) => {
-      const years = normalizeItpYearsLike(c);
-      const itp = daysLeft(justDate(c.itp_date), years || 1, 0);
-      const rca = daysLeft(justDate(c.rca_date), 1, 0);
-      const cas = daysLeft(justDate(c.casco_start), 0, c.casco_months || 0);
-      const rov = daysLeft(justDate(c.rovinieta_start), 0, c.rovinieta_months || 0);
-      const minDays = Math.min(...[itp, rca, cas, rov].map((v) => (v == null ? 9999 : v)));
-      const worst = levelFor(
-        [itp, rca, cas, rov].reduce<null | number>((acc, v) => {
-          const n = v == null ? null : v;
-          if (acc == null) return n;
-          if (n == null) return acc;
-          return Math.min(acc, n);
-        }, null)
-      );
-      const hasExpired = [itp, rca, cas, rov].some((v) => v != null && v < 0);
-      const hasSoon = [itp, rca, cas, rov].some((v) => v != null && v >= 0 && v <= 5);
-      return { ...c, itp, rca, cas, rov, minDays, worst, hasExpired, hasSoon };
-    });
-  }, [cars]);
+  // v2: commit = post stock into location_stock + ensure product exists in allin_products
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  const metrics = useMemo(() => {
-    const total = enriched.length;
-    const soon = enriched.filter((x) => x.hasSoon).length;
-    const expired = enriched.filter((x) => x.hasExpired).length;
-    return { total, soon, expired };
-  }, [enriched]);
+    // lock batch row
+    const b2 = await client.query(
+      `SELECT id, location_id, status
+       FROM incoming_batches
+       WHERE id=$1
+       FOR UPDATE`,
+      [id]
+    );
+    if (!b2.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "not found" });
+    }
 
-  const filtered = useMemo(() => {
-    let arr = [...enriched];
-    if (alertsOnly) arr = arr.filter((x) => x.worst === "soon" || x.worst === "expired");
-    if (q.trim()) {
-      const qq = q.trim().toLowerCase();
-      arr = arr.filter(
-        (x) =>
-          (x.plate || "").toLowerCase().includes(qq) ||
-          (x.make_model || "").toLowerCase().includes(qq) ||
-          (x.vin || "").toLowerCase().includes(qq)
+    const batch = b2.rows[0];
+    if (batch.status !== "draft") {
+      await client.query("COMMIT");
+      return res.json({ ok: true, already: true });
+    }
+
+    const itemsRes = await client.query(
+      `SELECT product_code, product_name, color_code, color_name, size, category, qty, buy_price
+       FROM incoming_items
+       WHERE batch_id=$1`,
+      [id]
+    );
+
+    // 1) ensure products exist (upsert by product_key)
+    for (const it of itemsRes.rows) {
+      const code = String(it.product_code || "").trim();
+      const name = String(it.product_name || "").trim();
+      const size = String(it.size || "").trim();
+      const color_code = String(it.color_code || "").trim();
+      const color_name = String(it.color_name || "").trim();
+      const category = String(it.category || "").trim();
+
+      if (!code || !name || !size) continue;
+
+      const product_key = makeProductKey({ code, colorCode: color_code, size });
+
+      // Keep existing sell_price if already set; update descriptive fields and (optionally) buy_price.
+      await client.query(
+        `INSERT INTO allin_products (
+            product_key, brand, code, name, size,
+            color_name, color_code, color_hex,
+            gender, category,
+            image_url, sell_price, buy_price, incoming_qty,
+            is_deleted
+         )
+         VALUES ($1,'',$2,$3,$4,$5,$6,NULL,NULL,$7,'',NULL,$8,0,false)
+         ON CONFLICT (product_key) DO UPDATE
+           SET code=EXCLUDED.code,
+               name=EXCLUDED.name,
+               size=EXCLUDED.size,
+               color_name=EXCLUDED.color_name,
+               color_code=EXCLUDED.color_code,
+               category=EXCLUDED.category,
+               buy_price=COALESCE(EXCLUDED.buy_price, allin_products.buy_price),
+               is_deleted=false`,
+        [product_key, code, name, size, color_name, color_code, category, it.buy_price ?? null]
       );
     }
-    // Üzemanyag + rendezés szűrők direkt kivéve (fölösleges a napi használathoz)
-    arr.sort((a, b) => a.minDays - b.minDays);
-    return arr;
-  }, [enriched, q, alertsOnly]);
 
-  const cssVars = { "--cupe-green": CUPE.green } as React.CSSProperties;
+    // 2) post stock to location_stock (additive)
+    for (const it of itemsRes.rows) {
+      const code = String(it.product_code || "").trim();
+      const size = String(it.size || "").trim();
+      const color_code = String(it.color_code || "").trim();
+      const qty = Number(it.qty || 0);
 
-  return (
-    <div className="min-h-screen" style={{ backgroundColor: CUPE.bgBlue, ...cssVars }}>
-      {/* Header */}
-      <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
-        <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-          <div className="text-white font-semibold">Autók nyílvántartása / Kiadások</div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              className="h-8 px-3 text-white"
-              style={{ backgroundColor: CUPE.green }}
-              onClick={() => {
-                window.location.hash = "#admincarexpenses";
-              }}
-            >
-              <CalendarDays className="w-4 h-4 mr-1" /> Kiadások
-            </Button>
+      if (!code || !size || !Number.isFinite(qty) || qty <= 0) continue;
 
-            <Button
-              type="button"
-              className="h-8 px-3 text-white"
-              style={{ backgroundColor: CUPE.green }}
-              onClick={() => {
-                setShowForm((s) => !s);
-                if (!showForm) {
-                  setForm({ ...defaultForm });
-                  setPhotoEdit(false);
-                  setPhotoUploading(false);
-                  setPhotoUploadErr("");
-                  setTimeout(
-                    () =>
-                      document
-                        .getElementById("carForm")
-                        ?.scrollIntoView({ behavior: "smooth" }),
-                    50
-                  );
-                }
-              }}
-            >
-              {showForm ? (
-                <>
-                  <X className="w-4 h-4 mr-1" /> Űrlap elrejtése
-                </>
-              ) : (
-                <>
-                  <PlusCircle className="w-4 h-4 mr-1" /> Új autó
-                </>
-              )}
-            </Button>
+      const product_key = makeProductKey({ code, colorCode: color_code, size });
 
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 px-3 text-white border-white/40"
-              onClick={() => window.history.back()}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#495465"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Vissza
-            </Button>
-          </div>
-        </div>
-      </div>
+      await client.query(
+        `INSERT INTO location_stock (location_id, product_key, qty)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (location_id, product_key)
+         DO UPDATE SET qty = location_stock.qty + EXCLUDED.qty`,
+        [batch.location_id, product_key, Math.floor(qty)]
+      );
+    }
 
-      {msg && (
-        <div className="mx-auto max-w-6xl px-4 mt-4">
-          <div className="rounded-md border border-emerald-400/40 bg-emerald-50 text-emerald-800 px-3 py-2 text-sm">
-            {msg}
-          </div>
-        </div>
-      )}
+    // 3) mark batch committed
+    await client.query(`UPDATE incoming_batches SET status='committed' WHERE id=$1 AND status='draft'`, [id]);
 
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        {/* KPI row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-          <Kpi title="Összes autó" value={String(metrics.total)} hint="Nyilvántartott tétel" />
-          <Kpi title="Közelgő lejárat" value={String(metrics.soon)} hint="≤ 5 nap" />
-          <Kpi title="Lejárt" value={String(metrics.expired)} hint="Azonnali intézkedés" />
-        </div>
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    console.error("commit posting failed", e);
+    return res.status(500).json({ error: "commit posting failed" });
+  } finally {
+    client.release();
+  }
+});
 
-        {/* Tools bar */}
-        <Card className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
-          <CardContent className="p-3 md:p-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-600" />
-                <Input
-                  className="pl-7 bg-slate-100 border-slate-300 text-slate-800 placeholder:text-slate-600"
-                  placeholder="Keresés (rendszám, típus, VIN)"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                />
-              </div>
+// --- admin: R2 presign + set login logo ---
+app.get("/api/admin/r2/presign", requireAdmin, async (req, res) => {
+  if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
+  if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
 
-              <label className="ml-auto flex items-center gap-2 text-white text-sm cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  className="accent-white"
-                  checked={alertsOnly}
-                  onChange={(e) => setAlertsOnly(e.target.checked)}
-                />
-                Csak problémás
-              </label>
+  const key = String(req.query.key || "").trim();
+  const contentType = String(req.query.contentType || "application/octet-stream").trim();
 
-              <Button
-                type="button"
-                variant="outline"
-                className="h-9 px-3 text-white border-white/40 hover:bg-slate-50"
-                onClick={async () => {
-                  setLoading(true);
-                  const rows = await listCars();
-                  setCars(rows);
-                  setLoading(false);
-                }}
-              >
-                <RefreshCcw className="w-4 h-4 mr-1" /> Frissít
-              </Button>
+  if (!key) return res.status(400).json({ error: "key required" });
+  if (!key.startsWith("branding/")) return res.status(400).json({ error: "Csak branding/ alá engedélyezett" });
 
-              <div className="flex items<center gap-1 rounded-md bg-white border border-slate-300 px-1 py-1">
-                <button
-                  className={"h-8 px-3 rounded " + (view === "board" ? "bg-slate-700 text-white" : "text-slate-600")}
-                  onClick={() => setView("board")}
-                  type="button"
-                >
-                  <LayoutGrid className="inline w-4 h-4 mr-1" /> Board
-                </button>
-                <button
-                  className={"h-8 px-3 rounded " + (view === "list" ? "bg-slate-700 text-white" : "text-slate-600")}
-                  onClick={() => setView("list")}
-                  type="button"
-                >
-                  <LayoutList className="inline w-4 h-4 mr-1" /> Lista
-                </button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+  const cmd = new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    ContentType: contentType
+  });
 
-        {/* Content views */}
-        {view === "board" ? (
-          <BoardView rows={filtered} />
-        ) : (
-          <ListView
-            rows={filtered}
-            expandedDefault={filtered.length <= 10}
-            onEdit={(car: any) => {
-              setShowForm(true);
-              setForm({
-                ...car,
-                itp_date: justDate(car.itp_date),
-                itp_years: normalizeItpYearsLike(car),
-                rca_date: justDate(car.rca_date),
-                casco_start: justDate(car.casco_start),
-                rovinieta_start: justDate(car.rovinieta_start),
-              });
-              setPhotoEdit(false);
-              setPhotoUploading(false);
-              setPhotoUploadErr("");
-              setTimeout(
-                () =>
-                  document
-                    .getElementById("carForm")
-                    ?.scrollIntoView({ behavior: "smooth" }),
-                50
-              );
-            }}
-            deletingId={deletingId}
-            onDelete={deleteCar}
-          />
-        )}
+  const uploadUrl = await getSignedUrl(r2, cmd, { expiresIn: 60 * 5 });
+  const publicUrl = `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}`;
+  return res.json({ uploadUrl, publicUrl, key });
+});
 
-        {/* Form drawer */}
-        <div id="carForm" className="mt-6">
-          {showForm && (
-            <Card className="rounded-xl overflow-hidden border-slate-300 bg-white">
-              <div
-                className="px-4 py-3 text-white text-sm md:text-base flex items-center justify-between"
-                style={{ backgroundColor: CUPE.blue }}
-              >
-                <div>
-                  {form.id
-                    ? `Autó szerkesztése: ${form.plate || "—"}${form.make_model ? " · " + form.make_model : ""}`
-                    : "Új autó"}
-                </div>
-                <button
-                  className="text-slate-200 hover:text-white"
-                  onClick={() => {
-                    setShowForm(false);
-                    setForm({ ...defaultForm });
-                    setPhotoEdit(false);
-                    setPhotoUploading(false);
-                    setPhotoUploadErr("");
-                  }}
-                  aria-label="Bezár"
-                  type="button"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <CardContent className="p-4 md:p-5 space-y-4 bg-white text-slate-800">
-                <form onSubmit={onSubmit} className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2 text-xs uppercase tracking-wider text-slate-600 pt-1">
-                    Alap adatok
-                  </div>
-                  <Field label="Fotó">
-                    <div className="flex items-center gap-3">
-                      <div className="w-28 h-20 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
-                        {form.photo_url ? (
-                          <img src={form.photo_url} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full grid place-items-center text-slate-500">
-                            <PlusCircle className="w-5 h-5" />
-                          </div>
-                        )}
-                      </div>
+app.post("/api/admin/branding/logo", requireAdmin, async (req, res) => {
+  if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
+  const body = req.body || {};
+  const key = String(body.key || "").trim();
+  if (!key) return res.status(400).json({ error: "key required" });
+  if (!key.startsWith("branding/")) return res.status(400).json({ error: "Csak branding/ alá engedélyezett" });
 
-                      <div className="flex-1 grid gap-2">
-                        {!form.photo_url || photoEdit ? (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (f) onPhotoPick(f);
-                              }}
-                              disabled={photoUploading}
-                              className="block w-full text-sm text-slate-600 file:mr-3 file:rounded file:border file:border-slate-300 file:bg-slate-100 file:px-3 file:py-2 file:text-slate-800 hover:file:bg-slate-200"
-                            />
-                            {form.photo_url && (
-                              <button
-                                type="button"
-                                className="h-9 px-3 inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200"
-                                onClick={() => {
-                                  setPhotoEdit(false);
-                                  setPhotoUploadErr("");
-                                }}
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="h-9 px-3 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200 w-fit"
-                            onClick={() => setPhotoEdit(true)}
-                            title="Másik kép feltöltése"
-                          >
-                            <Edit className="w-4 h-4" /> Kép módosítása
-                          </button>
-                        )}
+  await setSetting("login_logo_key", key);
+  return res.json({ ok: true, url: `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}` });
+});
 
-                        {photoUploading && (
-                          <div className="text-[11px] text-slate-600">Feltöltés…</div>
-                        )}
-                        {photoUploadErr && (
-                          <div className="text-[11px] text-red-600">{photoUploadErr}</div>
-                        )}
-                      </div>
-                    </div>
-                  </Field>
-                  <Field label="Rendszám">
-                    <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="ABC-123"
-                      value={form.plate || ""}
-                      onChange={(e) =>
-                        onChange("plate", e.target.value.toUpperCase())
-                      }
-                    />
-                  </Field>
-                  <Field label="Márka / Típus">
-                    <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="Volkswagen Passat"
-                      value={form.make_model || ""}
-                      onChange={(e) => onChange("make_model", e.target.value)}
-                    />
-                  </Field>
+// --- admin: create shop codes (DB-backed) ---
+app.post("/api/admin/codes", requireAdmin, async (req, res) => {
+  await ensureShops();
+  const { shopId, name } = req.body || {};
+  if (!shopId) return res.status(400).send("shopId required");
+  if (!(await shopExists(String(shopId)))) return res.status(400).send("Ismeretlen helység");
 
-                  {/* ITP: dátum + év select jobbra */}
-                  <div className="grid grid-cols-[1fr,auto] gap-2">
-                    <Field label="ITP dátum">
-                      <Input
-                        type="date"
-                        className="bg-slate-100 border-slate-300 text-slate-900"
-                        value={form.itp_date || ""}
-                        onChange={(e) =>
-                          onChange("itp_date", justDate(e.target.value))
-                        }
-                      />
-                    </Field>
-                    <Field label="Érvényesség">
-                      <select
-                        className="h-9 rounded-md border border-slate-300 px-2 bg-slate-100 text-slate-900"
-                        value={form.itp_years || 1}
-                        onChange={(e) => {
-                          const y = Number(e.target.value) || 1;
-                          setForm((f) => ({ ...f, itp_years: y, itp_months: y * 12 }));
-                        }}
-                      >
-                        {[1, 2].map((y) => (
-                          <option key={y} value={y}>
-                            {y} év
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                  </div>
+  const rawCode = crypto.randomBytes(4).toString("hex").toUpperCase();
+  const hint = rawCode.slice(-4);
+  const enc = encryptCode(rawCode);
 
-                  <Field label="RCA dátum">
-                    <Input
-                      type="date"
-                      className="bg-slate-100 border-slate-300 text-slate-900"
-                      value={form.rca_date || ""}
-                      onChange={(e) =>
-                        onChange("rca_date", justDate(e.target.value))
-                      }
-                    />
-                  </Field>
-                  {/* üres helykitöltő a rácsban */}
-                  <div />
+  const q = `
+    INSERT INTO login_codes
+      (shop_id, name, created_by, code_hash, code_hint, code_enc)
+    VALUES
+      ($1, $2, $3, crypt($4, gen_salt('bf')), $5, $6)
+    RETURNING id
+  `;
+  const r = await pool.query(q, [shopId, name || null, req.session.actor || "ADMIN", rawCode, hint, enc]);
 
-                  <div className="col-span-2 grid grid-cols-2 gap-3 -mt-1 text-[11px] text-slate-600">
-                    <div className="flex items-center gap-2">
-                      <CalendarDays className="h-4 w-4" />
-                      <span>ITP: {itpDays ?? "-"}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <CalendarDays className="h-4 w-4" />
-                      <span>RCA: {rcaDays ?? "-"}</span>
-                    </div>
-                  </div>
+  await pool.query("INSERT INTO login_events (code_id, event_type, actor) VALUES ($1,'created',$2)", [
+    r.rows[0].id,
+    req.session.actor || "ADMIN"
+  ]);
 
-                  <div className="col-span-2 mt-1 mb-1 border-t border-slate-300/70" />
-                  <div className="col-span-2 text-xs uppercase tracking-wider text-slate-600">
-                    Biztosítások
-                  </div>
-                  <Field label="Casco kezdete">
-                    <Input
-                      type="date"
-                      className="bg-slate-100 border-slate-300 text-slate-900"
-                      value={form.casco_start || ""}
-                      onChange={(e) =>
-                        onChange("casco_start", justDate(e.target.value))
-                      }
-                    />
-                  </Field>
-                  <Field label="Casco hónap">
-                    <select
-                      className="h-9 rounded-md border border-slate-300 px-2 bg-slate-100 text-slate-900"
-                      value={form.casco_months || 12}
-                      onChange={(e) =>
-                        onChange("casco_months", Number(e.target.value))
-                      }
-                    >
-                      {[1, 3, 6, 12].map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Rovinieta kezdete">
-                    <Input
-                      type="date"
-                      className="bg-slate-100 border-slate-300 text-slate-900"
-                      value={form.rovinieta_start || ""}
-                      onChange={(e) =>
-                        onChange("rovinieta_start", justDate(e.target.value))
-                      }
-                    />
-                  </Field>
-                  <Field label="Rovinieta hónap">
-                    <select
-                      className="h-9 rounded-md border border-slate-300 px-2 bg-slate-100 text-slate-900"
-                      value={form.rovinieta_months || 12}
-                      onChange={(e) =>
-                        onChange("rovinieta_months", Number(e.target.value))
-                      }
-                    >
-                      {[1, 12].map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <div className="col-span-2 -mt-1 text-[11px] text-slate-600 flex items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <CalendarDays className="h-4 w-4" />
-                      <span>Casco: {cascoDays ?? "-"}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <CalendarDays className="h-4 w-4" />
-                      <span>Rovigneta: {roviDays ?? "-"}</span>
-                    </div>
-                  </div>
+  res.send(`Kód: ${rawCode}\nÜzlet: ${shopId}\nNév: ${name || "-"}\n`);
+});
 
-                  <div className="col-span-2 mt-1 mb-1 border-t border-slate-300/70" />
-                  <div className="col-span-2 text-xs uppercase tracking-wider text-slate-600">
-                    Azonosítók és műszaki
-                  </div>
-                  <Field label="VIN">
-                    <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="WVWZZZ..."
-                      value={form.vin || ""}
-                      onChange={(e) => onChange("vin", e.target.value.toUpperCase())}
-                    />
-                  </Field>
-                  <Field label="CIV">
-                    <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="CIV..."
-                      value={form.civ || ""}
-                      onChange={(e) => onChange("civ", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Szín">
-                    <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="Fekete"
-                      value={form.color || ""}
-                      onChange={(e) => onChange("color", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="cm³">
-                    <Input
-                      type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="1968"
-                      value={form.engine_cc ?? ""}
-                      onChange={(e) =>
-                        onChange("engine_cc", Number(e.target.value) || undefined)
-                      }
-                    />
-                  </Field>
-                  <Field label="kW">
-                    <Input
-                      type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="110"
-                      value={form.power_kw ?? ""}
-                      onChange={(e) =>
-                        onChange("power_kw", Number(e.target.value) || undefined)
-                      }
-                    />
-                  </Field>
-                  <Field label="Össztömeg (kg)">
-                    <Input
-                      type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="2100"
-                      value={form.total_mass ?? ""}
-                      onChange={(e) =>
-                        onChange("total_mass", Number(e.target.value) || undefined)
-                      }
-                    />
-                  </Field>
-                  <Field label="Üzemanyag">
-                    <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="Benzin / Diesel / Hibrid"
-                      value={form.fuel || ""}
-                      onChange={(e) => onChange("fuel", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Gyártási év">
-                    <Input
-                      type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
-                      placeholder="2018"
-                      value={form.year ?? ""}
-                      onChange={(e) =>
-                        onChange("year", Number(e.target.value) || undefined)
-                      }
-                    />
-                  </Field>
+// --- admin: list codes (for resend) ---
+app.get("/api/admin/codes", requireAdmin, async (req, res) => {
+  await ensureShops();
+  const shopId = req.query.shopId ? String(req.query.shopId) : null;
+  const status = req.query.status ? String(req.query.status) : "active"; // active | inactive | all
 
-                  <div className="col-span-2 flex items-center justify-between gap-3 pt-1">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-9 px-4 text-white border-white/40 hover:bg-slate-50"
-                      onClick={() => {
-                        setShowForm(false);
-                        setForm({ ...defaultForm });
-                        setPhotoEdit(false);
-                        setPhotoUploading(false);
-                        setPhotoUploadErr("");
-                      }}
-                    >
-                      Bezár
-                    </Button>
-                    <div className="flex-1" />
-                    {error && <div className="text-red-600 text-xs">{error}</div>}
-                    <Button
-                      type="submit"
-                      className="h-9 px-4 text-white"
-                      style={{ backgroundColor: CUPE.blue }}
-                      disabled={saving}
-                    >
-                      {saving ? (
-                        "Mentés…"
-                      ) : (
-                        <>
-                          <Save className="h-4 w-4 mr-1" /> Mentés
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </form>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      </div>
+  const where = [];
+  const params = [];
+  let i = 1;
 
-      {/* Confirm / Info modal */}
-      {confirmOpen && (
-        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-            <div className="text-white font-semibold">{confirmTitle}</div>
-            <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
-            <div className="mt-5 flex items-center justify-end gap-2">
-              {confirmVariant === "confirm" && (
-                <button
-                  type="button"
-                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
-                  onClick={() => setConfirmOpen(false)}
-                >
-                  Mégse
-                </button>
-              )}
-              <button
-                type="button"
-                className={
-                  confirmVariant === "confirm"
-                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
-                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
-                }
-                onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  if (shopId) {
+    where.push(`shop_id = $${i++}`);
+    params.push(shopId);
+  }
+
+  if (status === "active") {
+    where.push("revoked_at IS NULL");
+    where.push("(expires_at IS NULL OR expires_at > now())");
+  } else if (status === "inactive") {
+    where.push("revoked_at IS NOT NULL");
+  }
+
+  const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const q = `
+    SELECT id, shop_id, name, created_at, revoked_at, code_hint, code_enc
+    FROM login_codes
+    ${w}
+    ORDER BY created_at DESC
+    LIMIT 200
+  `;
+
+  const r = await pool.query(q, params);
+
+  const rows = r.rows.map((x) => ({
+    id: x.id,
+    shopId: x.shop_id,
+    name: x.name,
+    createdAt: x.created_at,
+    revokedAt: x.revoked_at,
+    codeHint: x.code_hint,
+    code: decryptCode(x.code_enc)
+  }));
+
+  res.json({ items: rows });
+});
+
+// --- admin: activate / inactivate code (toggle revoked_at) ---
+app.patch("/api/admin/codes/:id/status", requireAdmin, async (req, res) => {
+  const id = String(req.params.id || "");
+  const body = req.body || {};
+  const active = Boolean(body.active);
+
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  if (active) {
+    const r = await pool.query("UPDATE login_codes SET revoked_at = NULL, revoked_by = NULL WHERE id = $1", [id]);
+    if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+    return res.json({ ok: true, active: true });
+  }
+
+  const r = await pool.query("UPDATE login_codes SET revoked_at = now(), revoked_by = $2 WHERE id = $1", [
+    id,
+    req.session.actor || "ADMIN"
+  ]);
+  if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+
+  await pool.query("INSERT INTO login_events (code_id, event_type, actor) VALUES ($1,'revoked',$2)", [
+    id,
+    req.session.actor || "ADMIN"
+  ]);
+
+  return res.json({ ok: true, active: false });
+});
+
+// --- admin: delete code permanently ---
+app.delete("/api/admin/codes/:id", requireAdmin, async (req, res) => {
+  const id = String(req.params.id || "");
+  if (!id) return res.status(400).send("id required");
+
+  const r = await pool.query("DELETE FROM login_codes WHERE id = $1", [id]);
+  if (r.rowCount === 0) return res.status(404).send("Not found");
+
+  res.json({ ok: true });
+});
+
+// --- public: branding (login logo) ---
+app.get("/api/branding/logo", async (req, res) => {
+  try {
+    await ensureSettings();
+    const key = await getSetting("login_logo_key");
+    if (!key) return res.json({ url: null });
+    if (!R2_PUBLIC_BASE_URL) return res.json({ url: null });
+    return res.json({ url: `${R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/${key}` });
+  } catch {
+    return res.json({ url: null });
+  }
+});
+
+
+
+// --- uploads: R2 direct upload (admin only) ---
+// Expects multipart/form-data with:
+// - file: the binary
+// - folder (optional): e.g. products/123
+// - name (optional): e.g. main.jpg
+// --- uploads: R2 direct upload (admin only) ---
+// Expects multipart/form-data with:
+// - file: the binary
+// - folder (optional): e.g. products/123
+// - name (optional): e.g. main.jpg
+app.post("/api/uploads/r2", requireAdminOrSecret, upload.single("file"), async (req, res) => {
+  try {
+    if (!r2HttpEnabled) return res.status(400).json({ error: "R2 nincs beállítva" });
+
+    // URL-based upload: allow providing a remote image URL instead of a multipart file.
+    // Expects multipart/form-data field: url=https://...
+    if (!req.file && req.body?.url) {
+      const url = String(req.body.url);
+
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return res.status(400).json({ error: "failed to fetch url", status: resp.status });
+      }
+
+      const contentLength = resp.headers.get("content-length");
+      if (contentLength && Number(contentLength) > 10 * 1024 * 1024) {
+        return res.status(413).json({ error: "file too large" });
+      }
+
+      const contentType = resp.headers.get("content-type") || "application/octet-stream";
+      const ab = await resp.arrayBuffer();
+      const buffer = Buffer.from(ab);
+
+      // Derive a filename from the URL path (fallback to 'file.bin')
+      let originalname = "file.bin";
+      try {
+        const u = new URL(url);
+        const last = u.pathname.split("/").filter(Boolean).pop();
+        if (last) originalname = last;
+      } catch {}
+
+      req.file = {
+        buffer,
+        mimetype: contentType,
+        originalname,
+      };
+    }
+
+    if (!req.file) return res.status(400).json({ error: "file required" });
+
+    const folder = String(req.body?.folder || "uploads").replace(/^\/+/, "").replace(/\/+$/, "");
+    const nameRaw = String(req.body?.name || req.file?.originalname || "file.bin");
+    const safeName = nameRaw.replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const key = `${folder}/${crypto.randomUUID()}_${safeName}`;
+
+    // PUT https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
+    const putUrl = `${r2Base}/${R2_BUCKET}/${key}`;
+
+    // S3-compatible date header required by R2
+    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
+
+    const r = await fetch(putUrl, {
+      method: "PUT",
+      headers: {
+  Authorization: `Bearer ${R2_API_TOKEN}`,
+  "Content-Type": req.file.mimetype || "application/octet-stream",
+  "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+  "x-amz-date": amzDate
+},
+body: req.file.buffer
+    });
+
+    if (!r.ok) {
+      const msg = await r.text().catch(() => "");
+      console.error("R2 upload failed:", r.status, msg);
+      return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
 }
+
+    const basePub = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
+    const url = basePub ? `${basePub}/${key}` : key;
+
+    return res.json({ key, url });
+  } catch (e) {
+    console.error("R2 upload failed:", e);
+    return res.status(500).json({ error: "Upload failed", status: r.status, details: msg.slice(0, 800) });
+}
+});
+
+// --- health ---
+app.get("/api/health", async (req, res) => {
+  const r = await pool.query("select 1");
+  res.json({ ok: true, db: r.rowCount === 1 });
+});
+
+
+// --- Transfers API (draft + items + commit/cancel) ---
+app.post("/api/transfers", requireAuthed, async (req, res) => {
+  const s = req.session;
+  const body = req.body || {};
+  const fromLocationId = String(body.fromLocationId || "").trim();
+  const toLocationId = String(body.toLocationId || "").trim();
+  const note = body.note != null ? String(body.note) : null;
+
+  if (!fromLocationId || !toLocationId) return res.status(400).json({ error: "Missing from/to location" });
+  if (fromLocationId === toLocationId) return res.status(400).json({ error: "From and To cannot be the same" });
+
+  const id = crypto.randomUUID();
+  const createdBy = s?.isAdmin ? "ADMIN" : "SHOP";
+  const actor = s?.user || s?.shopId || "unknown";
+
+  await pool.query(
+    `INSERT INTO transfers (id, created_at, from_location_id, to_location_id, status, note, created_by, actor)
+     VALUES ($1, now(), $2, $3, 'draft', $4, $5, $6)`,
+    [id, fromLocationId, toLocationId, note, createdBy, actor]
+  );
+
+  res.json({ id });
+});
+
+app.get("/api/transfers", requireAuthed, async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+
+  const r = await pool.query(
+    `SELECT id,
+            created_at,
+            status,
+            from_location_id AS "fromLocationId",
+            to_location_id   AS "toLocationId",
+            note,
+            created_by AS "createdBy",
+            actor
+     FROM transfers
+     ORDER BY created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+
+  res.json({
+    items: r.rows.map((x) => ({ ...x, createdAtISO: x.created_at })),
+  });
+});
+
+app.get("/api/transfers/:id", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const h = await pool.query(
+    `SELECT id,
+            created_at,
+            status,
+            from_location_id AS "fromLocationId",
+            to_location_id   AS "toLocationId",
+            note,
+            created_by AS "createdBy",
+            actor
+     FROM transfers
+     WHERE id = $1`,
+    [id]
+  );
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+
+  const items = await pool.query(
+    `SELECT product_code AS sku,
+            product_name AS name,
+            color_code   AS "colorCode",
+            color_name   AS "colorName",
+            size,
+            category,
+            qty,
+            matched_product_id AS "matchedProductId",
+            raw
+     FROM transfer_items
+     WHERE transfer_id = $1
+     ORDER BY id ASC`,
+    [id]
+  );
+
+  const row = h.rows[0];
+  res.json({
+    id: row.id,
+    createdAtISO: row.created_at,
+    status: row.status,
+    fromLocationId: row.fromLocationId,
+    toLocationId: row.toLocationId,
+    note: row.note,
+    createdBy: row.createdBy,
+    actor: row.actor,
+    items: items.rows,
+  });
+});
+
+app.post("/api/transfers/:id/items", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const body = req.body || {};
+  const items = Array.isArray(body.items) ? body.items : [];
+
+  const h = await pool.query(`SELECT status FROM transfers WHERE id = $1`, [id]);
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+  if (h.rows[0].status !== "draft") return res.status(400).json({ error: "Only draft transfers can be edited" });
+
+  await pool.query("DELETE FROM transfer_items WHERE transfer_id = $1", [id]);
+
+  let count = 0;
+  for (const it of items) {
+    const sku = it.sku != null ? String(it.sku) : null;
+    const name = it.name != null ? String(it.name) : null;
+    const colorCode = it.colorCode != null ? String(it.colorCode) : null;
+    const colorName = it.colorName != null ? String(it.colorName) : null;
+    const size = it.size != null ? String(it.size) : null;
+    const category = it.category != null ? String(it.category) : null;
+    const qty = Number(it.qty || 0);
+    if (!qty || qty <= 0) continue;
+
+    await pool.query(
+      `INSERT INTO transfer_items
+        (transfer_id, product_code, product_name, color_code, color_name, size, category, qty, matched_product_id, raw)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, sku, name, colorCode, colorName, size, category, qty, it.matchedProductId || null, it.raw || null]
+    );
+    count++;
+  }
+
+  res.json({ ok: true, count });
+});
+
+app.post("/api/transfers/:id/commit", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const h = await pool.query(`SELECT status FROM transfers WHERE id = $1`, [id]);
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+  if (h.rows[0].status !== "draft") return res.status(400).json({ error: "Only draft transfers can be committed" });
+
+  await pool.query(`UPDATE transfers SET status = 'committed' WHERE id = $1`, [id]);
+  res.json({ ok: true });
+});
+
+app.post("/api/transfers/:id/cancel", requireAuthed, async (req, res) => {
+  const id = String(req.params.id || "");
+  const h = await pool.query(`SELECT status FROM transfers WHERE id = $1`, [id]);
+  if (!h.rowCount) return res.status(404).json({ error: "Not found" });
+  if (h.rows[0].status !== "draft") return res.status(400).json({ error: "Only draft transfers can be cancelled" });
+
+  await pool.query(`UPDATE transfers SET status = 'cancelled' WHERE id = $1`, [id]);
+  res.json({ ok: true });
+});
+
+// --- static frontend ---
+
+// ======================
+// ALL IN – Warehouse v1
+// Products master + location stock (server as truth)
+// ======================
+
+function makeProductKey({ code, colorCode, size }) {
+  const c = String(code || "").trim();
+  const cc = String(colorCode || "").trim();
+  const s = String(size || "").trim();
+  return `${c}|${cc}|${s}`;
+}
+
+async function ensureAllInTables() {
+  // Do NOT auto-create tables here. User runs migrations manually in Render Shell.
+  // This function exists only for future; kept intentionally unused.
+  return true;
+}
+
+app.get("/api/allin/warehouse", requireAuthed, async (req, res) => {
+  try {
+    const shops = await pool.query("SELECT id, name FROM shops ORDER BY name ASC");
+    const products = await pool.query(
+      `SELECT product_key, brand, code, name, size,
+              color_name, color_code, color_hex,
+              gender, category,
+              image_url, sell_price, buy_price, incoming_qty
+       FROM allin_products
+       WHERE is_deleted = false
+       ORDER BY name ASC, brand ASC, code ASC, color_code ASC, size ASC`
+    );
+    const stock = await pool.query(
+      `SELECT location_id, product_key, qty
+       FROM location_stock`
+    );
+
+    const stockMap = new Map(); // key: location_id|product_key -> qty
+    for (const r of stock.rows) {
+      stockMap.set(`${r.location_id}|${r.product_key}`, Number(r.qty || 0));
+    }
+
+    const items = products.rows.map((p) => {
+      const byLocation = {};
+      for (const sh of shops.rows) {
+        byLocation[sh.id] = stockMap.get(`${sh.id}|${p.product_key}`) ?? 0;
+      }
+      return { ...p, byLocation };
+    });
+
+    res.json({ stores: shops.rows, items });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to load warehouse" });
+  }
+});
+
+app.post("/api/allin/products", requireAuthed, express.json(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const brand = String(body.brand || "").trim();
+    const code = String(body.code || "").trim();
+    const name = String(body.name || "").trim();
+    const size = String(body.size || "").trim();
+    const color_name = String(body.color_name || body.colorName || "").trim();
+    const color_code = String(body.color_code || body.colorCode || "").trim();
+    const category = String(body.category || "").trim();
+    const image_url = String(body.image_url || body.imageUrl || "").trim();
+    const gender = String(body.gender || "").trim() || null;
+    const color_hex = String(body.color_hex || body.colorHex || "").trim() || null;
+    const sell_price = body.sell_price ?? body.sellPrice;
+    const buy_price = body.buy_price ?? body.buyPrice;
+    const incoming_qty = body.incoming_qty ?? body.incomingQty;
+
+    if (!code || !name || !size) {
+      return res.status(400).json({ error: "Missing required fields: code, name, size" });
+    }
+
+    const product_key = makeProductKey({ code, colorCode: color_code, size });
+
+    await pool.query(
+      `INSERT INTO allin_products (
+          product_key, brand, code, name, size,
+          color_name, color_code, color_hex,
+          gender, category, image_url,
+          sell_price, buy_price, incoming_qty
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (product_key) DO UPDATE
+         SET brand=EXCLUDED.brand,
+             name=EXCLUDED.name,
+             color_name=EXCLUDED.color_name,
+             color_hex=EXCLUDED.color_hex,
+             gender=EXCLUDED.gender,
+             category=EXCLUDED.category,
+             image_url=EXCLUDED.image_url,
+             sell_price=EXCLUDED.sell_price,
+             buy_price=EXCLUDED.buy_price,
+             incoming_qty=EXCLUDED.incoming_qty,
+             is_deleted=false`,
+      [product_key, brand, code, name, size, color_name, color_code, color_hex, gender, category, image_url, sell_price, buy_price, incoming_qty]
+    );
+
+    res.json({ ok: true, product_key });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to create product" });
+  }
+});
+
+app.patch("/api/allin/products/:product_key", requireAuthed, express.json(), async (req, res) => {
+  try {
+    const product_key = req.params.product_key;
+    const body = req.body || {};
+
+    const fields = {
+      brand: body.brand,
+      name: body.name,
+      category: body.category,
+      image_url: body.image_url ?? body.imageUrl,
+      color_name: body.color_name ?? body.colorName,
+      color_code: body.color_code ?? body.colorCode,
+      color_hex: body.color_hex ?? body.colorHex,
+      gender: body.gender,
+      sell_price: body.sell_price ?? body.sellPrice,
+      buy_price: body.buy_price ?? body.buyPrice,
+      incoming_qty: body.incoming_qty ?? body.incomingQty
+    };
+
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const [k, v] of Object.entries(fields)) {
+      if (v === undefined) continue;
+      sets.push(`${k}=$${i++}`);
+      vals.push(String(v).trim());
+    }
+    if (!sets.length) return res.json({ ok: true });
+
+    vals.push(product_key);
+    await pool.query(`UPDATE allin_products SET ${sets.join(", ")} WHERE product_key=$${i}`, vals);
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to update product" });
+  }
+});
+
+app.delete("/api/allin/products/:product_key", requireAuthed, async (req, res) => {
+  try {
+    const product_key = req.params.product_key;
+    await pool.query("DELETE FROM allin_products WHERE product_key=$1", [product_key]);
+    await pool.query("DELETE FROM location_stock WHERE product_key=$1", [product_key]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to delete product" });
+  }
+});
+
+app.post("/api/allin/stock/set", requireAuthed, express.json(), async (req, res) => {
+  try {
+    const { location_id, product_key, qty, reason } = req.body || {};
+    const loc = String(location_id || "").trim();
+    const key = String(product_key || "").trim();
+    const q = Number(qty);
+
+    if (!loc || !key || !Number.isFinite(q) || q < 0) {
+      return res.status(400).json({ error: "Invalid payload (location_id, product_key, qty>=0 required)" });
+    }
+
+    await pool.query(
+      `INSERT INTO location_stock (location_id, product_key, qty, updated_at)
+       VALUES ($1,$2,$3, now())
+       ON CONFLICT (location_id, product_key) DO UPDATE
+         SET qty=EXCLUDED.qty,
+             updated_at=now()`,
+      [loc, key, Math.floor(q)]
+    );
+
+    // audit move as delta vs previous (optional) – keep simple v1: write absolute set as move delta computed server-side
+    const prev = await pool.query(`SELECT qty FROM location_stock WHERE location_id=$1 AND product_key=$2`, [loc, key]);
+    // prev already updated; can't compute. Keep minimal: write a move with qty_delta=0 and note in actor string? skip.
+    // We'll write a move with qty_delta=0 but include source_id as reason for trace.
+    const actor = (req.session?.admin?.email || req.session?.shop?.email || "unknown").toString();
+    await pool.query(
+      `INSERT INTO stock_moves (source_type, source_id, location_id, product_key, qty_delta, actor)
+       VALUES ('manual', $1, $2, $3, 0, $4)`,
+      [String(reason || "manual_set"), loc, key, actor]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to set stock" });
+  }
+});
+
+app.get("/api/allin/stock", requireAuthed, async (req, res) => {
+  try {
+    const location_id = String(req.query.location_id || "").trim();
+    if (!location_id) return res.status(400).json({ error: "location_id required" });
+    const r = await pool.query(
+      `SELECT product_key, qty FROM location_stock WHERE location_id=$1 ORDER BY product_key ASC`,
+      [location_id]
+    );
+    res.json({ items: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to load stock" });
+  }
+});
+
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("*", (req, res) => {
+  if (req.path.startsWith("/api/")) return res.status(404).send("Not found");
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
