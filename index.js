@@ -563,7 +563,7 @@ app.post("/api/incoming/batches/:id/commit", requireAuthed, async (req, res) => 
             image_url, sell_price, buy_price, incoming_qty,
             is_deleted
          )
-         VALUES ($1,'',$2,$3,$4,$5,$6,NULL,NULL,$7,'',NULL,$8,NULL,false)
+         VALUES ($1,'',$2,$3,$4,$5,$6,NULL,NULL,$7,'',NULL,$8,0,false)
          ON CONFLICT (product_key) DO UPDATE
            SET code=EXCLUDED.code,
                name=EXCLUDED.name,
