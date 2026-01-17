@@ -141,11 +141,41 @@ async function parseFileToTable(f: File): Promise<TableParsed> {
       blankrows: false,
     }) as any[];
 
-    const first = Array.isArray(matrix?.[0]) ? (matrix[0] as any[]) : [];
-    const headers = first.map((x) => String(x ?? "").trim());
+    const rows0 = (matrix as any[]).filter((r) => Array.isArray(r)) as any[][];
 
-    const rows = (matrix.slice(1) as any[])
-      .filter((r) => Array.isArray(r))
+    // Some supplier XLSX files have title rows above the real header.
+    // Detect the first row that looks like a header (within the first ~25 rows).
+    const wantAny = [
+      "index",
+      "denumirea produsului",
+      "categorie",
+      "cantitate",
+      "marime",
+      "nr. culoare",
+      "culoare",
+      "pretul net unitar",
+    ];
+
+    let headerRowIdx = 0;
+    let bestScore = -1;
+
+    for (let i = 0; i < Math.min(rows0.length, 25); i++) {
+      const row = rows0[i] || [];
+      const rowKeys = row.map((x) => normKey(String(x ?? "")));
+      const score = wantAny.reduce((acc, k) => acc + (rowKeys.some((rk) => (k === "pretul net unitar" ? rk.includes(k) : rk === k)) ? 1 : 0), 0);
+      if (score > bestScore) {
+        bestScore = score;
+        headerRowIdx = i;
+      }
+      // If we already found a very good header, stop early.
+      if (score >= 5) break;
+    }
+
+    const headerRow = rows0[headerRowIdx] || [];
+    const headers = headerRow.map((x) => String(x ?? "").trim());
+
+    const rows = rows0
+      .slice(headerRowIdx + 1)
       .map((r) => (r as any[]).map((x) => String(x ?? "").trim()));
 
     return { headers, rows };
