@@ -16,11 +16,13 @@ function normKey(s: string) {
     .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/[()]/g, "")
+    .replace(/[̀-ͯ]/g, "") // strip diacritics
+    .replace(/\([^)]*\)/g, "") // drop parenthesized notes
+    .replace(/[.,:;\/\\]/g, " ") // punctuation -> space (Nr. -> Nr)
     .replace(/[–—]/g, "-")
-    .replace(/-+/g, "-");
+    .replace(/[^a-z0-9\-\s]/g, " ") // remaining junk -> space
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function adaptSupplierTable(parsed: TableParsed): TableParsed {
@@ -30,7 +32,7 @@ function adaptSupplierTable(parsed: TableParsed): TableParsed {
   const keys = headers.map(normKey);
 
   const isRomanianInvoice =
-    keys.includes("nr. culoare") ||
+    keys.includes("nr culoare") ||
     keys.includes("culoare") ||
     keys.includes("marime") ||
     keys.includes("categorie") ||
@@ -39,17 +41,28 @@ function adaptSupplierTable(parsed: TableParsed): TableParsed {
 
   if (!isRomanianInvoice) return parsed;
 
-  const idx = (k: string) => keys.indexOf(k);
+  const findIdx = (need: string | string[], mode: "eq" | "includes" = "eq") => {
+    const wants = Array.isArray(need) ? need : [need];
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i] || "";
+      for (const w of wants) {
+        if (!w) continue;
+        if (mode === "eq" && k === w) return i;
+        if (mode === "includes" && k.includes(w)) return i;
+      }
+    }
+    return -1;
+  };
 
-  const iIndex = idx("index");
-  const iName = idx("denumirea produsului");
-  const iGender = idx("gender");
-  const iColorCode = idx("nr. culoare");
-  const iColorName = idx("culoare");
-  const iSize = idx("marime");
-  const iCat = idx("categorie");
-  const iQty = idx("cantitate");
-  const iBuy = keys.findIndex((k) => k.includes("pretul net unitar"));
+  const iIndex = findIdx(["index", "cod", "sku"], "includes");
+  const iName = findIdx(["denumirea produsului", "denumire produs", "produs"], "includes");
+  const iGender = findIdx(["gender", "gen"], "includes");
+  const iColorCode = findIdx(["nr culoare", "nr culoare cod", "cod culoare"], "includes");
+  const iColorName = findIdx(["culoare"], "eq");
+  const iSize = findIdx(["marime", "mărime"], "includes");
+  const iCat = findIdx(["categorie", "categoria"], "includes");
+  const iQty = findIdx(["cantitate", "qty", "cant"], "includes");
+  const iBuy = findIdx(["pretul net unitar"], "includes");
 
   const outHeaders = [
     "Kód",
@@ -151,7 +164,7 @@ async function parseFileToTable(f: File): Promise<TableParsed> {
       "categorie",
       "cantitate",
       "marime",
-      "nr. culoare",
+      "nr culoare",
       "culoare",
       "pretul net unitar",
     ];
