@@ -180,6 +180,8 @@ export default function AllInIncoming() {
       }
 
       setSaveOk("Mentve a szerverre (batch-ek létrehozva).");
+      // Warehouse oldal frissítése (ha nyitva van)
+      window.dispatchEvent(new Event("allin:incoming-updated"));
       // refresh history silently
       void loadHistory();
     } catch (e: any) {
@@ -256,6 +258,7 @@ export default function AllInIncoming() {
     try {
       await apiCommitIncomingBatch(selectedBatchId);
       setSaveOk(`Commit: ${selectedBatchId}`);
+      window.dispatchEvent(new Event("allin:incoming-updated"));
       void loadHistory();
     } catch (e: any) {
       setHistoryErr(e?.message || "Commit sikertelen.");
@@ -275,6 +278,7 @@ export default function AllInIncoming() {
       await deleteIncomingBatchPermanently(confirmBatchId);
       setSaveOk(`Törölve: ${confirmBatchId}`);
       setSaveErr("");
+      window.dispatchEvent(new Event("allin:incoming-updated"));
       setConfirmOpen(false);
       setConfirmBatchId("");
       void loadHistory();
@@ -384,7 +388,7 @@ export default function AllInIncoming() {
             {tab === "import" ? <IncomingImport locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
             {tab === "manual" ? <IncomingManualEntry locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
             {tab === "transfer" ? (
-              <IncomingTransfer locations={locations} incoming={incoming} incomingMeta={incomingMeta} transfer={transfer} onChange={setTransfer} />
+              <IncomingTransfer locations={locations} incoming={incoming} transfer={transfer} onChange={setTransfer} />
             ) : null}
             {tab === "docs" ? <IncomingDocs locations={locations} transfer={transfer} incomingCount={incoming.length} /> : null}
             {tab === "bom" ? <IncomingBOM /> : null}
