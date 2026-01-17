@@ -521,9 +521,7 @@ export default function AllInCars() {
   const [photoUploadErr, setPhotoUploadErr] = useState<string>("");
 
   const [q, setQ] = useState("");
-  const [fuel, setFuel] = useState<string>("");
   const [alertsOnly, setAlertsOnly] = useState(false);
-  const [sort, setSort] = useState<"urgency" | "plate" | "make">("urgency");
   const [view, setView] = useState<"list" | "board">("board");
 
   const [showForm, setShowForm] = useState(false);
@@ -745,12 +743,10 @@ export default function AllInCars() {
           (x.vin || "").toLowerCase().includes(qq)
       );
     }
-    if (fuel) arr = arr.filter((x) => (x.fuel || "").toLowerCase() === fuel.toLowerCase());
-    if (sort === "plate") arr.sort((a, b) => (a.plate || "").localeCompare(b.plate || ""));
-    else if (sort === "make") arr.sort((a, b) => (a.make_model || "").localeCompare(b.make_model || ""));
-    else arr.sort((a, b) => a.minDays - b.minDays);
+    // Üzemanyag + rendezés szűrők direkt kivéve (fölösleges a napi használathoz)
+    arr.sort((a, b) => a.minDays - b.minDays);
     return arr;
-  }, [enriched, q, fuel, alertsOnly, sort]);
+  }, [enriched, q, alertsOnly]);
 
   const cssVars = { "--cupe-green": CUPE.green } as React.CSSProperties;
 
@@ -847,28 +843,6 @@ export default function AllInCars() {
                   onChange={(e) => setQ(e.target.value)}
                 />
               </div>
-
-              <select
-                value={fuel}
-                onChange={(e) => setFuel(e.target.value)}
-                className="h-9 rounded-md bg-slate-100 border border-slate-300 text-slate-800 px-2"
-              >
-                <option value="">Üzemanyag: mind</option>
-                <option value="Benzin">Benzin</option>
-                <option value="Diesel">Diesel</option>
-                <option value="Hibrid">Hibrid</option>
-                <option value="Elektromos">Elektromos</option>
-              </select>
-
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as any)}
-                className="h-9 rounded-md bg-slate-100 border border-slate-300 text-slate-800 px-2"
-              >
-                <option value="urgency">Rendezés: lejárat</option>
-                <option value="plate">Rendezés: rendszám</option>
-                <option value="make">Rendezés: márka/típus</option>
-              </select>
 
               <label className="ml-auto flex items-center gap-2 text-white text-sm cursor-pointer select-none">
                 <input
