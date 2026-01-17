@@ -251,13 +251,18 @@ function Kpi({
   tone?: string;
 }) {
   return (
-    <Card className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
-      <CardContent className="p-3 md:p-3">
+    // NOTE: shadcn <Card> kap alap "bg-card" osztalyt, amit dark theme-ben felulirhat.
+    // Itt direkt div-et hasznalunk, hogy a KPI mindig CUPE-feher maradjon.
+    <div
+      className={"rounded-xl border border-slate-300 text-slate-800 " + tone}
+      style={{ backgroundColor: "#ffffff" }}
+    >
+      <div className="p-3 md:p-3">
         <div className="text-[12px] text-slate-600">{title}</div>
         <div className="text-2xl font-semibold">{value}</div>
         {hint && <div className="text-[11px] text-slate-600 mt-1">{hint}</div>}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
