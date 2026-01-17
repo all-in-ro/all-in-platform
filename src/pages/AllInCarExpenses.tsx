@@ -47,6 +47,9 @@ const CUPE = {
   green: "#108D8B",
 } as const;
 
+const LIGHT_CARD_STYLE: React.CSSProperties = { backgroundColor: '#ffffff', color: '#0f172a' };
+const LIGHT_HEADER_STYLE: React.CSSProperties = { backgroundColor: '#f8fafc', color: '#475569' };
+
 /* ---------- Helpers ---------- */
 const justDate = (s?: string | null) => (s ? String(s).slice(0, 10) : "");
 
@@ -401,7 +404,7 @@ function AllInCarExpenses() {
 
       <div className="mx-auto max-w-6xl px-4 py-6">
         {/* Filters & tools */}
-        <Card className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
+        <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
           <CardContent className="p-3 md:p-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative">
@@ -483,19 +486,19 @@ function AllInCarExpenses() {
 
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800">
 	          <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összes tétel</div>
 	            <div className="text-2xl font-normal">{enriched.length}</div>
             </CardContent>
           </Card>
-          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Időszak</div>
               <div className="text-sm">{dateFrom} → {dateTo}</div>
             </CardContent>
           </Card>
-          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card style={LIGHT_CARD_STYLE} className="rounded-xl border-slate-300 bg-white text-slate-800">
 	          <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összeg (RON)</div>
 	            <div className="text-2xl font-normal"><Money value={total} /></div>
@@ -504,9 +507,9 @@ function AllInCarExpenses() {
         </div>
 
         {/* List */}
-        <div className="rounded-xl border border-slate-300 !bg-white !text-slate-800 overflow-hidden shadow-sm">
+        <div style={LIGHT_CARD_STYLE} className="rounded-xl border border-slate-300 overflow-hidden shadow-sm">
           {/* HEADER: fixed widths + centered labels */}
-	          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-slate-50 text-slate-600 border-b border-slate-200 h-[36px]">
+	          <div style={LIGHT_HEADER_STYLE} className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 border-b border-slate-200 h-[36px]">
             <div className="text-center">Dátum</div>
             <div className="text-center">Autó</div>
             <div className="text-center pl-6">km óra</div>
