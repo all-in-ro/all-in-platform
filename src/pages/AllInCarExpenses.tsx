@@ -367,7 +367,7 @@ function AllInCarExpenses() {
       {/* Header */}
       <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
         <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-          <div className="text-white font-semibold">Autó kiadások - Javítások</div>
+	          <div className="text-white font-normal">Autó kiadások - Javítások</div>
           <div className="flex items-center gap-2">
             <Button
   type="button"
@@ -484,9 +484,9 @@ function AllInCarExpenses() {
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
           <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
-            <CardContent className="p-3 md:p-3">
+	          <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összes tétel</div>
-              <div className="text-2xl font-semibold">{enriched.length}</div>
+	            <div className="text-2xl font-normal">{enriched.length}</div>
             </CardContent>
           </Card>
           <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
@@ -496,9 +496,9 @@ function AllInCarExpenses() {
             </CardContent>
           </Card>
           <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
-            <CardContent className="p-3 md:p-3">
+	          <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összeg (RON)</div>
-              <div className="text-2xl font-semibold"><Money value={total} /></div>
+	            <div className="text-2xl font-normal"><Money value={total} /></div>
             </CardContent>
           </Card>
         </div>
@@ -506,7 +506,7 @@ function AllInCarExpenses() {
         {/* List */}
         <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
           {/* HEADER: fixed widths + centered labels */}
-          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-white text-slate-800 border-b border-slate-300 shadow-sm h-[36px] items-center">
+	          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-slate-50 text-slate-600 border-b border-slate-300 h-[36px]">
             <div className="text-center">Dátum</div>
             <div className="text-center">Autó</div>
             <div className="text-center pl-6">km óra</div>
@@ -527,15 +527,15 @@ function AllInCarExpenses() {
                 );
               })
               .map((r) => (
-                <div key={r.id || Math.random()} className="px-4 py-2.5">
+	                <div key={r.id || Math.random()} className="px-4 py-2.5 hover:bg-slate-50">
                   {/* ROW: match header grid exactly; center content */}
                   <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),180px,110px] items-center gap-2 h-[36px]">
                     <div className="flex items-center justify-end gap-2 pr-2">
                       <CalendarDays className="w-4 h-4 text-slate-600" />
                       <span>{justDate(r.date)}</span>
                     </div>
-                    <div className="truncate text-center">
-                      <div className="font-semibold text-[#344154] truncate">{r.plate || "Ismeretlen"}</div>
+	                    <div className="truncate text-center">
+	                      <div className="font-normal text-[#344154] truncate">{r.plate || "Ismeretlen"}</div>
                       <div className="text-[12px] text-slate-600 truncate">{r.make_model || "—"}</div>
                     </div>
                     <div className="grid place-items-center text-center h-[36px] m-0 p-0">{r.odometer_km ? r.odometer_km : "—"}</div>
@@ -726,7 +726,7 @@ function AllInCarExpenses() {
       {confirmOpen && (
         <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
           <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-            <div className="text-white font-semibold">{confirmTitle}</div>
+	            <div className="text-white font-normal">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               {confirmVariant === "confirm" && (
@@ -740,11 +740,11 @@ function AllInCarExpenses() {
               )}
               <button
                 type="button"
-                className={
-                  confirmVariant === "confirm"
-                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
-                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
-                }
+	                className={
+	                  confirmVariant === "confirm"
+	                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white"
+	                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white"
+	                }
                 onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
               >
                 OK
