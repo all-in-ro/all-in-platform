@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 
+import AllInCarExpensesMobile from "./AllInCarExpensesMobile";
 /* ---------- Types ---------- */
 type Car = {
   id: number;
@@ -482,19 +483,19 @@ function AllInCarExpenses() {
 
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card className="rounded-xl border-slate-300 text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összes tétel</div>
               <div className="text-2xl font-semibold">{enriched.length}</div>
             </CardContent>
           </Card>
-          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card className="rounded-xl border-slate-300 text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Időszak</div>
               <div className="text-sm">{dateFrom} → {dateTo}</div>
             </CardContent>
           </Card>
-          <Card className="rounded-xl border-slate-300 bg-white text-slate-800">
+          <Card className="rounded-xl border-slate-300 text-slate-800">
             <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összeg (RON)</div>
               <div className="text-2xl font-semibold"><Money value={total} /></div>
@@ -760,9 +761,19 @@ function AllInCarExpenses() {
 /* ====== Auto mobile/desktop switch (car expenses) ====== */
 export const AllInCarExpensesDesktop = AllInCarExpenses;
 
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = React.useState(
+    () => typeof window !== "undefined" && window.innerWidth <= breakpoint
+  );
+  React.useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 export default function AllInCarExpensesAuto() {
-  // TEMP: mobile view currently renders dark cards that are unreadable on ALL IN.
-  // Use the desktop (white-card) layout everywhere until the mobile component is updated.
-  // This keeps the page usable immediately.
-  return <AllInCarExpensesDesktop />;
+  const isMobile = useIsMobile(768);
+  return isMobile ? <AllInCarExpensesMobile /> : <AllInCarExpensesDesktop />;
 }
