@@ -30,6 +30,11 @@ function mergeKey(it: { sku: string; size: string; colorCode: string; category: 
   return [it.sku || "", it.size || "", it.colorCode || "", it.category || "", it.name || ""].join("|").toLowerCase();
 }
 
+function notifyIncomingChanged() {
+  // AllInWarehouse hallgatja, hogy frissítse a bejövő oszlopot / listát.
+  window.dispatchEvent(new CustomEvent("allin:incoming-changed"));
+}
+
 export default function AllInIncoming() {
   const [tab, setTab] = useState<TabKey>("import");
 
@@ -81,8 +86,17 @@ export default function AllInIncoming() {
         setLocErr("");
         const shops = await apiGetLocations();
         if (!alive) return;
+        // apiGetLocations() egyes verziókban tömböt ad, máskor {items:[...]}.
+        const shopArr: any[] = Array.isArray(shops)
+          ? shops
+          : Array.isArray((shops as any)?.items)
+            ? (shops as any).items
+            : Array.isArray((shops as any)?.stores)
+              ? (shops as any).stores
+              : [];
+
         // map shops -> Location
-        const locs: Location[] = shops.map((s: any) => ({
+        const locs: Location[] = shopArr.map((s: any) => ({
           id: s.id,
           name: s.name || s.label || s.id,
           kind: s.kind || (s.id === "raktar" ? "warehouse" : "shop"),
@@ -180,10 +194,9 @@ export default function AllInIncoming() {
       }
 
       setSaveOk("Mentve a szerverre (batch-ek létrehozva).");
-      // Warehouse oldal frissítése (ha nyitva van)
-      window.dispatchEvent(new Event("allin:incoming-updated"));
       // refresh history silently
       void loadHistory();
+      notifyIncomingChanged();
     } catch (e: any) {
       setSaveErr(e?.message || "Mentés sikertelen.");
     } finally {
@@ -258,8 +271,8 @@ export default function AllInIncoming() {
     try {
       await apiCommitIncomingBatch(selectedBatchId);
       setSaveOk(`Commit: ${selectedBatchId}`);
-      window.dispatchEvent(new Event("allin:incoming-updated"));
       void loadHistory();
+      notifyIncomingChanged();
     } catch (e: any) {
       setHistoryErr(e?.message || "Commit sikertelen.");
     }
@@ -278,10 +291,10 @@ export default function AllInIncoming() {
       await deleteIncomingBatchPermanently(confirmBatchId);
       setSaveOk(`Törölve: ${confirmBatchId}`);
       setSaveErr("");
-      window.dispatchEvent(new Event("allin:incoming-updated"));
       setConfirmOpen(false);
       setConfirmBatchId("");
       void loadHistory();
+      notifyIncomingChanged();
     } catch (e: any) {
       setHistoryErr(e?.message || "Törlés sikertelen.");
     } finally {
@@ -388,7 +401,7 @@ export default function AllInIncoming() {
             {tab === "import" ? <IncomingImport locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
             {tab === "manual" ? <IncomingManualEntry locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
             {tab === "transfer" ? (
-              <IncomingTransfer locations={locations} incoming={incoming} transfer={transfer} onChange={setTransfer} />
+              <IncomingTransfer locations={locations} incoming={incoming} incomingMeta={incomingMeta} transfer={transfer} onChange={setTransfer} />
             ) : null}
             {tab === "docs" ? <IncomingDocs locations={locations} transfer={transfer} incomingCount={incoming.length} /> : null}
             {tab === "bom" ? <IncomingBOM /> : null}
