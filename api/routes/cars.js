@@ -1,210 +1,247 @@
-/**
- * server/api/routes/cars.js (ESM)
- * Express router a "cars" erőforráshoz – kompatibilis "type: module" környezetben.
- * Javítva: ITP érvényesség kezelése (itp_years / itp_months) GET/POST/PATCH-ben.
- */
+// api/routes/cars.js (ESM)
+// Factory router: export default (ctx) => router
+// ctx: { pool, requireAuthed, requireAdminOrSecret }
+
 import express from "express";
-import { Pool } from "pg";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("neon.tech")
-    ? { rejectUnauthorized: true }
-    : undefined,
-});
-
-async function q(text, params) {
-  const client = await pool.connect();
-  try {
-    const res = await client.query(text, params);
-    return res;
-  } finally {
-    client.release();
-  }
-}
-
-const router = express.Router();
-
-/* ---------------- Helpers ---------------- */
 function normInt(v) {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+
+function normText(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+
 function normDate(v) {
   if (!v) return null;
+  // accept Date, ISO, YYYY-MM-DD
   const s = String(v).slice(0, 10);
   return s || null;
 }
-/** Normalizáljuk az ITP érvényességet:
- *  - év és/vagy hónap is jöhet
- *  - ha csak év jött, hónap=év*12
- *  - év értékét 1..2 közé szorítjuk; hónapot 12/24-re
- */
-function normalizeItpFromBody(b = {}) {
-  let years = normInt(b.itp_years);
-  let months = normInt(b.itp_months);
 
-  // aliasok, ha a kliens több néven küld
-  if (years == null) {
-    years = normInt(b.itp_valid_years) ?? normInt(b.itp_interval_years) ?? normInt(b.itp_period_years) ?? normInt(b.years_itp) ?? normInt(b.itpValidityYears);
-  }
-  if (months == null && years != null) months = years * 12;
+function normalizeItpValidity(body) {
+  // Accept either itp_years or itp_months or both.
+  // If years provided but months missing => months = 0 (explicit)
+  // If months provided but years missing => years = 0 (explicit)
+  const years = normInt(body.itp_years);
+  const months = normInt(body.itp_months);
+  const hasY = years !== null;
+  const hasM = months !== null;
 
-  if (years != null) {
-    years = Math.max(1, Math.min(2, years));
-  }
-  if (months != null) {
-    // 12 vagy 24 hónapra kerekítjük
-    months = months <= 12 ? 12 : 24;
-  }
-
-  if (years != null && months == null) months = years * 12;
-  if (months != null && years == null) years = months <= 12 ? 1 : 2;
-
-  return { years, months };
+  if (!hasY && !hasM) return { itp_years: null, itp_months: null };
+  return {
+    itp_years: hasY ? years : 0,
+    itp_months: hasM ? months : 0,
+  };
 }
 
-/* ---------------- Routes ---------------- */
-
-// GET /api/cars  → lista (most már visszaadja itp_years és itp_months-t is)
-router.get("/", async (_req, res) => {
-  try {
-    const { rows } = await q(
-      `select id, photo_url, plate, make_model, itp_date, itp_years, itp_months, rca_date,
-              casco_start, casco_months, rovinieta_start, rovinieta_months, vin, civ, color,
-              engine_cc, power_kw, total_mass, fuel, year, created_at, updated_at
-         from public.cars
-        order by plate nulls last, id asc`
-    );
-    res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
+export default function createCarsRouter(ctx) {
+  const { pool, requireAuthed, requireAdminOrSecret } = ctx || {};
+  if (!pool || typeof pool.query !== "function") {
+    throw new Error("cars router requires ctx.pool (pg pool)");
   }
-});
+  if (typeof requireAuthed !== "function") {
+    throw new Error("cars router requires ctx.requireAuthed middleware");
+  }
+  if (typeof requireAdminOrSecret !== "function") {
+    throw new Error("cars router requires ctx.requireAdminOrSecret middleware");
+  }
 
-// POST /api/cars  → új beszúrás (kezeli az itp_years / itp_months párost)
-router.post("/", express.json(), async (req, res) => {
-  const b = req.body || {};
-  const cascoMonths = [1,3,6,12].includes(Number(b.casco_months)) ? Number(b.casco_months) : 12;
-  const roviMonths  = [1,12].includes(Number(b.rovinieta_months)) ? Number(b.rovinieta_months) : 12;
+  const router = express.Router();
 
-  const itp = normalizeItpFromBody(b);
+  // GET /api/cars
+  router.get("/", requireAuthed, async (_req, res) => {
+    try {
+      const r = await pool.query(
+        `
+        select
+          id,
+          photo_url,
+          plate,
+          make_model,
+          itp_date,
+          itp_years,
+          itp_months,
+          rca_date,
+          casco_start,
+          casco_months,
+          rovinieta_start,
+          rovinieta_months,
+          vin,
+          civ,
+          color,
+          engine_cc,
+          power_kw,
+          total_mass,
+          fuel,
+          year,
+          created_at,
+          updated_at
+        from cars
+        order by id desc
+        `
+      );
+      res.json(r.rows);
+    } catch (e) {
+      res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
+    }
+  });
 
-  try {
-    const { rows } = await q(
-      `insert into public.cars
-         (photo_url, plate, make_model, itp_date, itp_years, itp_months, rca_date, casco_start, casco_months,
-          rovinieta_start, rovinieta_months, vin, civ, color, engine_cc, power_kw, total_mass,
-          fuel, year)
-       values
-         ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-       returning *`,
-      [
-        b.photo_url ?? null,
-        b.plate ?? null,
-        b.make_model ?? null,
+  // POST /api/cars
+  router.post("/", requireAdminOrSecret, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const itp = normalizeItpValidity(b);
+
+      const cols = [
+        "photo_url",
+        "plate",
+        "make_model",
+        "itp_date",
+        "itp_years",
+        "itp_months",
+        "rca_date",
+        "casco_start",
+        "casco_months",
+        "rovinieta_start",
+        "rovinieta_months",
+        "vin",
+        "civ",
+        "color",
+        "engine_cc",
+        "power_kw",
+        "total_mass",
+        "fuel",
+        "year",
+      ];
+
+      const vals = [
+        normText(b.photo_url),
+        normText(b.plate),
+        normText(b.make_model),
         normDate(b.itp_date),
-        itp.years ?? 1,
-        itp.months ?? 12,
+        itp.itp_years,
+        itp.itp_months,
         normDate(b.rca_date),
         normDate(b.casco_start),
-        cascoMonths,
+        normInt(b.casco_months),
         normDate(b.rovinieta_start),
-        roviMonths,
-        normInt(b.vin) ? String(b.vin) : (b.vin ?? null),
-        b.civ ?? null,
-        b.color ?? null,
+        normInt(b.rovinieta_months),
+        normText(b.vin),
+        normText(b.civ),
+        normText(b.color),
         normInt(b.engine_cc),
         normInt(b.power_kw),
         normInt(b.total_mass),
-        b.fuel ?? null,
+        normText(b.fuel),
         normInt(b.year),
-      ]
-    );
-    res.status(201).json(rows[0]);
-  } catch (e) {
-    const msg = String(e?.message || e);
-    if (msg.includes("duplicate key")) {
-      return res.status(409).json({ error: "duplicate", field: "plate" });
+      ];
+
+      const placeholders = vals.map((_, i) => `$${i + 1}`).join(",");
+
+      const r = await pool.query(
+        `insert into cars (${cols.join(",")}) values (${placeholders}) returning *`,
+        vals
+      );
+
+      res.status(201).json(r.rows[0]);
+    } catch (e) {
+      res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
     }
-    res.status(500).json({ error: "db_error", detail: msg });
-  }
-});
+  });
 
-// PATCH /api/cars/:id  → részleges módosítás (most már írja itp_years / itp_months-t is)
-router.patch("/:id", express.json(), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid_id" });
-  const b = req.body || {};
+  // PATCH /api/cars/:id (also supports { _action: 'delete' } fallback)
+  router.patch("/:id", requireAdminOrSecret, async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid_id" });
 
-  // ide felvesszük az új mezőket is
-  const fields = [
-    "photo_url","plate","make_model","itp_date","itp_years","itp_months","rca_date","casco_start","casco_months",
-    "rovinieta_start","rovinieta_months","vin","civ","color","engine_cc","power_kw",
-    "total_mass","fuel","year"
-  ];
+    const b = req.body || {};
 
-  // először normalizáljuk az itp párost
-  const itp = normalizeItpFromBody(b);
-  if (itp.years != null && !Object.prototype.hasOwnProperty.call(b, "itp_years")) b.itp_years = itp.years;
-  if (itp.months != null && !Object.prototype.hasOwnProperty.call(b, "itp_months")) b.itp_months = itp.months;
-
-  // értékek összerakása
-  const sets = [];
-  const vals = [];
-  for (const k of fields) {
-    if (Object.prototype.hasOwnProperty.call(b, k)) {
-      if (k === "itp_date" || k === "rca_date" || k === "casco_start" || k === "rovinieta_start") {
-        sets.push(`${k} = $${vals.length + 1}`);
-        vals.push(normDate(b[k]));
-      } else if (k === "itp_years") {
-        sets.push(`${k} = $${vals.length + 1}`);
-        vals.push(itp.years ?? null);
-      } else if (k === "itp_months") {
-        sets.push(`${k} = $${vals.length + 1}`);
-        vals.push(itp.months ?? null);
-      } else if (["engine_cc","power_kw","total_mass","year","casco_months","rovinieta_months"].includes(k)) {
-        sets.push(`${k} = $${vals.length + 1}`);
-        vals.push(normInt(b[k]));
-      } else {
-        sets.push(`${k} = $${vals.length + 1}`);
-        vals.push(b[k] ?? null);
+    // Fallback delete action
+    if (b && b._action === "delete") {
+      try {
+        const del = await pool.query(`delete from cars where id = $1`, [id]);
+        if (!del.rowCount) return res.status(404).json({ error: "not_found" });
+        return res.json({ ok: true });
+      } catch (e) {
+        return res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
       }
     }
-  }
 
-  if (!sets.length) return res.status(400).json({ error: "empty_patch" });
-  vals.push(id);
+    try {
+      const itp = ("itp_years" in b || "itp_months" in b) ? normalizeItpValidity(b) : null;
 
-  try {
-    const { rows } = await q(
-      `update public.cars set ${sets.join(", ")} where id = $${vals.length} returning *`,
-      vals
-    );
-    if (!rows.length) return res.status(404).json({ error: "not_found" });
-    res.json(rows[0]);
-  } catch (e) {
-    const msg = String(e?.message || e);
-    if (msg.includes("duplicate key")) {
-      return res.status(409).json({ error: "duplicate", field: "plate" });
+      const map = {
+        photo_url: () => normText(b.photo_url),
+        plate: () => normText(b.plate),
+        make_model: () => normText(b.make_model),
+        itp_date: () => normDate(b.itp_date),
+        itp_years: () => (itp ? itp.itp_years : normInt(b.itp_years)),
+        itp_months: () => (itp ? itp.itp_months : normInt(b.itp_months)),
+        rca_date: () => normDate(b.rca_date),
+        casco_start: () => normDate(b.casco_start),
+        casco_months: () => normInt(b.casco_months),
+        rovinieta_start: () => normDate(b.rovinieta_start),
+        rovinieta_months: () => normInt(b.rovinieta_months),
+        vin: () => normText(b.vin),
+        civ: () => normText(b.civ),
+        color: () => normText(b.color),
+        engine_cc: () => normInt(b.engine_cc),
+        power_kw: () => normInt(b.power_kw),
+        total_mass: () => normInt(b.total_mass),
+        fuel: () => normText(b.fuel),
+        year: () => normInt(b.year),
+      };
+
+      const sets = [];
+      const params = [];
+
+      for (const k of Object.keys(map)) {
+        if (!(k in b)) continue;
+        params.push(map[k]());
+        sets.push(`${k} = $${params.length}`);
+      }
+
+      // always update updated_at
+      sets.push(`updated_at = now()`);
+
+      if (sets.length === 1) {
+        // only updated_at
+        const r0 = await pool.query(`select * from cars where id = $1`, [id]);
+        if (!r0.rowCount) return res.status(404).json({ error: "not_found" });
+        return res.json(r0.rows[0]);
+      }
+
+      params.push(id);
+
+      const r = await pool.query(
+        `update cars set ${sets.join(", ")} where id = $${params.length} returning *`,
+        params
+      );
+
+      if (!r.rowCount) return res.status(404).json({ error: "not_found" });
+      res.json(r.rows[0]);
+    } catch (e) {
+      res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
     }
-    res.status(500).json({ error: "db_error", detail: msg });
-  }
-});
+  });
 
-// (opcionális) DELETE /api/cars/:id
-router.delete("/:id", async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid_id" });
-  try {
-    const { rowCount } = await q(`delete from public.cars where id = $1`, [id]);
-    if (!rowCount) return res.status(404).json({ error: "not_found" });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
-  }
-});
+  // DELETE /api/cars/:id (hard delete)
+  router.delete("/:id", requireAdminOrSecret, async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid_id" });
+    try {
+      const r = await pool.query(`delete from cars where id = $1`, [id]);
+      if (!r.rowCount) return res.status(404).json({ error: "not_found" });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: "db_error", detail: String(e?.message || e) });
+    }
+  });
 
-export default router;
-export { router };
+  return router;
+}
