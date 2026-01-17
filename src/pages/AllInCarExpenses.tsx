@@ -9,10 +9,10 @@ import {
   Search,
   CalendarDays,
   Wrench,
+  FileSpreadsheet,
   Edit,
   Trash2,
   X,
-  ArrowLeft,
 } from "lucide-react";
 
 import AllInCarExpensesMobile from "./AllInCarExpensesMobile";
@@ -131,6 +131,41 @@ async function deleteExpense(id: number) {
   return false;
 }
 
+/* ---------- CSV ---------- */
+function toCSV(rows: any[]) {
+  const cols = [
+    "date",
+    "plate",
+    "make_model",
+    "odometer_km",
+    "category",
+    "description",
+    "cost",
+    "currency",
+    "vendor",
+    "invoice_no",
+  ];
+  const header = cols.join(",");
+  const lines = rows.map((r) =>
+    cols
+      .map((k) => {
+        const v = r[k] == null ? "" : String(r[k]).replace(/"/g, '""');
+        return /[",\n]/.test(v) ? `"${v}"` : v;
+      })
+      .join(",")
+  );
+  return [header, ...lines].join("\n");
+}
+
+function downloadCSV(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 /* ---------- UI subcomponents ---------- */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -320,6 +355,10 @@ function AllInCarExpenses() {
     setTimeout(() => setMsg(""), 2000);
   }
 
+  function exportCSV() {
+    const csv = toCSV(enriched);
+    downloadCSV(`auto-kiadasok_${dateFrom}_to_${dateTo}.csv`, csv);
+  }
 
   const cssVars = { "--cupe-green": CUPE.green } as React.CSSProperties;
 
@@ -331,26 +370,22 @@ function AllInCarExpenses() {
           <div className="text-white font-semibold">Autó kiadások - Javítások</div>
           <div className="flex items-center gap-2">
             <Button
+  type="button"
+  variant="outline"
+  className="h-8 px-3 text-white border-white/40"
+  onClick={() => window.history.back()}
+  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#495465"; }}
+  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+>
+  Vissza
+</Button>
+            <Button
               type="button"
               className="h-8 px-3 text-white"
               style={{ backgroundColor: CUPE.green }}
               onClick={() => onEdit()}
             >
               <PlusCircle className="w-4 h-4 mr-1" /> Új tétel
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 px-3 text-white border-white/40"
-              onClick={() => window.history.back()}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = "#495465";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = "transparent";
-              }}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Vissza
             </Button>
           </div>
         </div>
@@ -433,31 +468,39 @@ function AllInCarExpenses() {
               >
                 <RefreshCcw className="w-4 h-4 mr-1" /> Szűrés
               </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 px-3 text-white border-white/40 hover:bg-slate-50"
+                onClick={exportCSV}
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-1" /> CSV export
+              </Button>
             </div>
           </CardContent>
         </Card>
 
         {/* Totals */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
-          {/* NOTE: div-et hasznalunk, hogy dark theme ne tudja felulirni a feher kartya hatteret */}
-          <div className="rounded-xl border border-slate-300 text-slate-800" style={{ backgroundColor: "#ffffff" }}>
-            <div className="p-3 md:p-3">
+          <Card className="rounded-xl border-slate-300 text-slate-800">
+            <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összes tétel</div>
               <div className="text-2xl font-semibold">{enriched.length}</div>
-            </div>
-          </div>
-          <div className="rounded-xl border border-slate-300 text-slate-800" style={{ backgroundColor: "#ffffff" }}>
-            <div className="p-3 md:p-3">
+            </CardContent>
+          </Card>
+          <Card className="rounded-xl border-slate-300 text-slate-800">
+            <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Időszak</div>
               <div className="text-sm">{dateFrom} → {dateTo}</div>
-            </div>
-          </div>
-          <div className="rounded-xl border border-slate-300 text-slate-800" style={{ backgroundColor: "#ffffff" }}>
-            <div className="p-3 md:p-3">
+            </CardContent>
+          </Card>
+          <Card className="rounded-xl border-slate-300 text-slate-800">
+            <CardContent className="p-3 md:p-3">
               <div className="text-[12px] text-slate-600">Összeg (RON)</div>
               <div className="text-2xl font-semibold"><Money value={total} /></div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         </div>
 
         {/* List */}
