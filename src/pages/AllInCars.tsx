@@ -164,28 +164,40 @@ async function fetchJSON(url: string, init?: RequestInit) {
 }
 
 async function uploadToR2(file: File, folder: string, name: string): Promise<string> {
-  const fd = new FormData();
-  fd.append("file", file);
-  fd.append("folder", folder);
-  fd.append("name", name);
+  // CUPE-style presigned upload:
+  // 1) Ask backend for a presigned PUT URL
+  // 2) PUT the file directly to R2
+  // 3) Store returned public URL in DB
+  //
+  // NOTE: backend currently restricts presign keys to "branding/" prefix, so we store car images under branding/cars/...
+  const safeFolder = String(folder || "cars").replace(/^\/+/, "").replace(/\/+$/, "");
+  const key = `branding/${safeFolder}/${name}`;
 
-  const r = await fetch(`${API}/uploads/r2`, {
-    method: "POST",
-    body: fd,
-    headers: ADMIN_SECRET ? ({ "x-admin-secret": ADMIN_SECRET } as any) : undefined,
+  const contentType = file?.type || "application/octet-stream";
+  const qs = new URLSearchParams({ key, contentType });
+
+  const presign = await fetchJSON(`${API}/admin/r2/presign?${qs.toString()}`, {
+    method: "GET",
     credentials: "include",
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const data: any = await r.json().catch(() => ({}));
-  const url =
-    data?.url ||
-    data?.public_url ||
-    data?.publicUrl ||
-    data?.result?.url ||
-    data?.data?.url ||
-    data?.data?.publicUrl;
-  if (!url || typeof url !== "string") throw new Error("Nincs URL az upload válaszban.");
-  return url;
+
+  const uploadUrl = presign?.uploadUrl || presign?.upload_url;
+  const publicUrl = presign?.publicUrl || presign?.public_url || presign?.url;
+
+  if (!uploadUrl || !publicUrl) throw new Error("Nincs presign URL (uploadUrl/publicUrl).");
+
+  const put = await fetch(String(uploadUrl), {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: file,
+  });
+
+  if (!put.ok) {
+    const t = await put.text().catch(() => "");
+    throw new Error(`R2 PUT sikertelen (HTTP ${put.status}) ${t}`.slice(0, 300));
+  }
+
+  return String(publicUrl);
 }
 
 async function listCars(): Promise<Car[]> {
