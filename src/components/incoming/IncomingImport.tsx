@@ -16,13 +16,29 @@ function normKey(s: string) {
     .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "") // strip diacritics
-    .replace(/\([^)]*\)/g, "") // drop parenthesized notes
-    .replace(/[.,:;\/\\]/g, " ") // punctuation -> space (Nr. -> Nr)
+    .replace(/[\u0300-\u036f]/g, "") // remove diacritics
+    .replace(/\([^)]*\)/g, " ") // drop bracketed text
+    .replace(/[\.,:;\/\\]/g, " ") // punctuation -> space (Nr. -> Nr)
     .replace(/[–—]/g, "-")
-    .replace(/[^a-z0-9\-\s]/g, " ") // remaining junk -> space
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function pickIdx(keys: string[], candidates: string[]) {
+  for (const c of candidates) {
+    const i = keys.indexOf(c);
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+function pickIdxContains(keys: string[], needleParts: string[]) {
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (!k) continue;
+    if (needleParts.every((p) => k.includes(p))) return i;
+  }
+  return -1;
 }
 
 function adaptSupplierTable(parsed: TableParsed): TableParsed {
@@ -31,38 +47,35 @@ function adaptSupplierTable(parsed: TableParsed): TableParsed {
 
   const keys = headers.map(normKey);
 
-  const isRomanianInvoice =
-    keys.includes("nr culoare") ||
-    keys.includes("culoare") ||
-    keys.includes("marime") ||
-    keys.includes("categorie") ||
-    keys.includes("cantitate") ||
-    keys.some((k) => k.includes("pretul net unitar"));
+  // Detect supplier-style tables (Romanian headers or mixed invoices)
+  const isLikelySupplier =
+    keys.some((k) => k === "cantitate" || k === "quantity" || k === "qty") &&
+    keys.some((k) => k === "marime" || k === "size" || k.includes("marim"));
 
-  if (!isRomanianInvoice) return parsed;
+  if (!isLikelySupplier) return parsed;
 
-  const findIdx = (need: string | string[], mode: "eq" | "includes" = "eq") => {
-    const wants = Array.isArray(need) ? need : [need];
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i] || "";
-      for (const w of wants) {
-        if (!w) continue;
-        if (mode === "eq" && k === w) return i;
-        if (mode === "includes" && k.includes(w)) return i;
-      }
-    }
-    return -1;
-  };
+  // column picks (accept multiple header variants)
+  const iCode = pickIdx(keys, ["index", "cod", "sku", "product code", "cod produs", "cod cn", "cod ean"]) ;
+  const iName = pickIdx(keys, [
+    "denumirea produsului",
+    "denumire produs",
+    "denumire",
+    "produs",
+    "articol",
+    "denumirea articolului conform clientului",
+  ]);
+  const iBrand = pickIdx(keys, ["brand", "marca", "marca produs", "brand produs"]);
+  const iGender = pickIdx(keys, ["gender", "gen", "sex"]);
+  const iColorCode = pickIdxContains(keys, ["nr", "culoare"]) >= 0 ? pickIdxContains(keys, ["nr", "culoare"]) : pickIdx(keys, ["color code", "cod culoare"]);
+  const iColorName = pickIdx(keys, ["culoare", "color"]);
+  const iSize = pickIdx(keys, ["marime", "size", "marimea"]);
+  const iCat = pickIdx(keys, ["categorie", "category"]);
+  const iQty = pickIdx(keys, ["cantitate", "qty", "quantity", "cant"]);
 
-  const iIndex = findIdx(["index", "cod", "sku"], "includes");
-  const iName = findIdx(["denumirea produsului", "denumire produs", "produs"], "includes");
-  const iGender = findIdx(["gender", "gen"], "includes");
-  const iColorCode = findIdx(["nr culoare", "nr culoare cod", "cod culoare"], "includes");
-  const iColorName = findIdx(["culoare"], "eq");
-  const iSize = findIdx(["marime", "mărime"], "includes");
-  const iCat = findIdx(["categorie", "categoria"], "includes");
-  const iQty = findIdx(["cantitate", "qty", "cant"], "includes");
-  const iBuy = findIdx(["pretul net unitar"], "includes");
+  // buy price: either net unit price OR purchase price with VAT
+  let iBuy = pickIdxContains(keys, ["pretul", "net", "unitar"]);
+  if (iBuy < 0) iBuy = pickIdxContains(keys, ["pret", "achizitie", "tva"]);
+  if (iBuy < 0) iBuy = pickIdxContains(keys, ["pret", "unitar"]);
 
   const outHeaders = [
     "Kód",
@@ -81,7 +94,7 @@ function adaptSupplierTable(parsed: TableParsed): TableParsed {
   const toNum = (s: string) => {
     const t = String(s || "")
       .replace(/\s+/g, "")
-      .replace(/\.(?=\d{3}(\D|$))/g, "") // remove thousand separators like 1.234,56
+      .replace(/\.(?=\d{3}(\D|$))/g, "") // thousand separator
       .replace(",", ".");
     const n = Number(t);
     return Number.isFinite(n) ? n : NaN;
@@ -90,29 +103,27 @@ function adaptSupplierTable(parsed: TableParsed): TableParsed {
   const outRows = rows
     .filter((r) => Array.isArray(r) && r.length)
     .map((r) => {
-      const code = get(r, iIndex);
+      const code = get(r, iCode);
       const name = get(r, iName);
       const size = get(r, iSize);
-      const qtyRaw = get(r, iQty);
-      const qty = toNum(qtyRaw);
+      const qty = toNum(get(r, iQty));
 
-      // Drop totals/summary rows
+      // Drop totals/summary rows (no code/name/size or qty)
       if (!code || !name || !size || !Number.isFinite(qty) || qty <= 0) return null;
 
-      const buyRaw = get(r, iBuy);
-      const buy = toNum(buyRaw);
+      const buy = toNum(get(r, iBuy));
 
       return [
-        code, // Kód
-        "", // Márka
-        name, // Terméknév
-        get(r, iGender), // Nem
-        get(r, iColorCode), // Színkód
-        get(r, iColorName), // Szín
-        size, // Méret
-        get(r, iCat), // Kategória
-        Number.isFinite(buy) ? String(buy) : "", // Beszerzési ár
-        String(Math.floor(qty)), // Db
+        code,
+        get(r, iBrand),
+        name,
+        get(r, iGender),
+        get(r, iColorCode),
+        get(r, iColorName),
+        size,
+        get(r, iCat),
+        Number.isFinite(buy) ? String(buy) : "",
+        String(Math.floor(qty)),
       ];
     })
     .filter(Boolean) as string[][];
@@ -156,32 +167,40 @@ async function parseFileToTable(f: File): Promise<TableParsed> {
 
     const rows0 = (matrix as any[]).filter((r) => Array.isArray(r)) as any[][];
 
-    // Some supplier XLSX files have title rows above the real header.
-    // Detect the first row that looks like a header (within the first ~25 rows).
-    const wantAny = [
+    // Some supplier files have title/blank rows above the real header.
+    // Find the best header-like row within the first ~40 rows.
+    const want = [
       "index",
+      "cod",
+      "sku",
       "denumirea produsului",
-      "categorie",
+      "produs",
       "cantitate",
+      "qty",
+      "quantity",
       "marime",
-      "nr culoare",
-      "culoare",
-      "pretul net unitar",
+      "size",
+      "categorie",
+      "brand",
+      "gen",
+      "gender",
+      "pret",
     ];
 
     let headerRowIdx = 0;
     let bestScore = -1;
 
-    for (let i = 0; i < Math.min(rows0.length, 25); i++) {
+    for (let i = 0; i < Math.min(rows0.length, 40); i++) {
       const row = rows0[i] || [];
-      const rowKeys = row.map((x) => normKey(String(x ?? "")));
-      const score = wantAny.reduce((acc, k) => acc + (rowKeys.some((rk) => (k === "pretul net unitar" ? rk.includes(k) : rk === k)) ? 1 : 0), 0);
+      const rowKeys = row.map((x) => normKey(String(x ?? ""))).filter(Boolean);
+      if (!rowKeys.length) continue;
+
+      const score = want.reduce((acc, w) => acc + (rowKeys.some((rk) => rk === w || rk.includes(w)) ? 1 : 0), 0);
       if (score > bestScore) {
         bestScore = score;
         headerRowIdx = i;
       }
-      // If we already found a very good header, stop early.
-      if (score >= 5) break;
+      if (score >= 6) break;
     }
 
     const headerRow = rows0[headerRowIdx] || [];
