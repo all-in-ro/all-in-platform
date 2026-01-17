@@ -295,9 +295,9 @@ function BoardView({ rows }: { rows: any[] }) {
             {c.make_model || "—"}
           </div>
         </div>
-        <div className="w-20 h-14 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
+        <div className="w-24 h-16 rounded bg-slate-100 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
           {c.photo_url ? (
-            <img src={c.photo_url} className="w-full h-full object-cover" />
+            <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
           ) : (
             <div className="w-full h-full grid place-items-center text-slate-600">
               <PlusCircle className="w-5 h-5" />
@@ -386,9 +386,9 @@ function ListView({
             <div key={key} className="px-4 py-2.5 hover:bg-white">
               <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
-                    {c.photo_url ? (
-                      <img src={c.photo_url} className="w-full h-full object-cover" />
+	                  <div className="w-20 h-14 rounded bg-slate-100 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
+	                    {c.photo_url ? (
+	                      <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
                     ) : (
                       <div className="w-full h-full grid place-items-center text-slate-600">
                         <PlusCircle className="w-5 h-5" />
