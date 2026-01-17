@@ -28,7 +28,8 @@ type Car = {
 };
 
 /* ---------- API ---------- */
-const API = (import.meta as any).env?.VITE_API_BASE || "https://cupe.onrender.com/api";
+// IMPORTANT: default to same-origin so session cookies work (Render/Cloudflare).
+const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 
 /* ---------- Theme ---------- */
 const CUPE = { blue: "#344154", bgBlue: "#2E3A4A", green: "#108D8B" } as const;
