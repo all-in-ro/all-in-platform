@@ -628,7 +628,7 @@ app.post("/api/incoming/batches/:id/commit", requireAuthed, async (req, res) => 
 });
 
 // --- admin: R2 presign + set login logo ---
-app.get("/api/admin/r2/presign", requireAdmin, async (req, res) => {
+app.get("/api/admin/r2/presign", requireAdminOrSecret, async (req, res) => {
   if (!r2Enabled || !r2) return res.status(400).json({ error: "R2 nincs beállítva" });
   if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
 
@@ -649,7 +649,7 @@ app.get("/api/admin/r2/presign", requireAdmin, async (req, res) => {
   return res.json({ uploadUrl, publicUrl, key });
 });
 
-app.post("/api/admin/branding/logo", requireAdmin, async (req, res) => {
+app.post("/api/admin/branding/logo", requireAdminOrSecret, async (req, res) => {
   if (!R2_PUBLIC_BASE_URL) return res.status(400).json({ error: "R2_PUBLIC_BASE_URL hiányzik" });
   const body = req.body || {};
   const key = String(body.key || "").trim();
