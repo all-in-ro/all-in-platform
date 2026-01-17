@@ -64,6 +64,11 @@ function Chip({ label, days }: { label: string; days: number | null }) {
   );
 }
 
+function hasValueDate(s?: string | null): boolean {
+  const d = justDate(s);
+  return !!d;
+}
+
 async function fetchJSON(url: string, init?: RequestInit) {
   const r = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) }, credentials: init?.credentials ?? "include" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -94,16 +99,20 @@ function BoardView({ rows }:{ rows: any[] }) {
                 <div className="text-[#344154] text-[15px] font-bold leading-tight truncate whitespace-nowrap">{c.plate || "Ismeretlen"}</div>
                 <div className="text-slate-700 text-[13px] whitespace-normal break-words">{c.make_model || "—"}</div>
               </div>
-              <div className="w-20 h-14 rounded bg-white overflow-hidden shrink-0 border border-slate-300">
-                {c.photo_url ? <img src={c.photo_url} className="w-full h-full object-cover" /> : <div className="w-full h-full grid place-items-center text-slate-600"><PlusCircle className="w-5 h-5" /></div>}
+              <div className="w-24 h-16 rounded bg-slate-100 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
+                {c.photo_url ? (
+                  <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
+                ) : (
+                  <div className="w-full h-full grid place-items-center text-slate-600"><PlusCircle className="w-5 h-5" /></div>
+                )}
               </div>
             </div>
             <div className="border-t border-slate-300/60 my-2" />
             <div className="mt-2 flex flex-wrap gap-2">
-              <Chip label="ITP" days={itp} />
-              <Chip label="RCA" days={rca} />
-              <Chip label="Casco" days={cas} />
-              <Chip label="Rovigneta" days={rov} />
+              {hasValueDate(c.itp_date) && <Chip label="ITP" days={itp} />}
+              {hasValueDate(c.rca_date) && <Chip label="RCA" days={rca} />}
+              {hasValueDate(c.casco_start) && <Chip label="Casco" days={cas} />}
+              {hasValueDate(c.rovinieta_start) && <Chip label="Rovigneta" days={rov} />}
             </div>
           </div>
         );
@@ -137,8 +146,12 @@ function ListView({ rows, expandedDefault=false, onEdit }:{ rows:any[]; expanded
             <div key={key} className="px-3 py-2.5">
               <div className="[grid-template-columns:minmax(0,1.6fr)_minmax(0,1fr)_auto] grid items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0 w-full">
-                  <div className="w-14 h-11 rounded bg-white overflow-hidden shrink-0 border border-slate-300">
-                    {c.photo_url ? <img src={c.photo_url} className="w-full h-full object-cover" /> : <div className="w-full h-full grid place-items-center text-slate-600"><PlusCircle className="w-5 h-5" /></div>}
+                  <div className="w-20 h-14 rounded bg-slate-100 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
+                    {c.photo_url ? (
+                      <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
+                    ) : (
+                      <div className="w-full h-full grid place-items-center text-slate-600"><PlusCircle className="w-5 h-5" /></div>
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     {/* plate stays on one line */}
@@ -172,10 +185,18 @@ function ListView({ rows, expandedDefault=false, onEdit }:{ rows:any[]; expanded
                     <div><span className="text-slate-600">Össztömeg:</span> {c.total_mass ?? "—"}</div>
                     <div><span className="text-slate-600">Üzemanyag:</span> {c.fuel || "—"}</div>
                     <div><span className="text-slate-600">Gyártási év:</span> {c.year ?? "—"}</div>
-                    <div><span className="text-slate-600">ITP:</span> {daysLeft(justDate(c.itp_date), 1, 0) ?? "—"}</div>
-                    <div><span className="text-slate-600">RCA:</span> {daysLeft(justDate(c.rca_date), 1, 0) ?? "—"}</div>
-                    <div><span className="text-slate-600">Casco:</span> {daysLeft(justDate(c.casco_start), 0, c.casco_months || 0) ?? "—"}</div>
-                    <div><span className="text-slate-600">Rovigneta:</span> {daysLeft(justDate(c.rovinieta_start), 0, c.rovinieta_months || 0) ?? "—"}</div>
+                    {hasValueDate(c.itp_date) && (
+                      <div><span className="text-slate-600">ITP:</span> {daysLeft(justDate(c.itp_date), 1, 0) ?? "—"}</div>
+                    )}
+                    {hasValueDate(c.rca_date) && (
+                      <div><span className="text-slate-600">RCA:</span> {daysLeft(justDate(c.rca_date), 1, 0) ?? "—"}</div>
+                    )}
+                    {hasValueDate(c.casco_start) && (
+                      <div><span className="text-slate-600">Casco:</span> {daysLeft(justDate(c.casco_start), 0, c.casco_months || 0) ?? "—"}</div>
+                    )}
+                    {hasValueDate(c.rovinieta_start) && (
+                      <div><span className="text-slate-600">Rovigneta:</span> {daysLeft(justDate(c.rovinieta_start), 0, c.rovinieta_months || 0) ?? "—"}</div>
+                    )}
                   </div>
                 </>
               ) : null}
