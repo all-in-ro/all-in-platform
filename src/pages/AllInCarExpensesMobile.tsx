@@ -40,8 +40,8 @@ type CarExpense = {
 };
 
 /* ---------- Config ---------- */
-const API =
-  (import.meta as any).env?.VITE_API_BASE || "https://cupe.onrender.com/api";
+// IMPORTANT: default to same-origin so session cookies work (Render/Cloudflare).
+const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 
 const CUPE = {
   blue: "#344154",
