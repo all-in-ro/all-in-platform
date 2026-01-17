@@ -20,6 +20,8 @@ import {
   Trash2,
 } from "lucide-react";
 
+import AllInCarsMobile from "./AllInCarsMobile";
+
 /* ---------- Types ---------- */
 type Car = {
   id?: number;
@@ -507,7 +509,7 @@ function ListView({
 }
 
 /* ---------- Main ---------- */
-export default function AllInCars() {
+function AllInCarsDesktop() {
   const [cars, setCars] = useState<Car[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1297,4 +1299,48 @@ export default function AllInCars() {
       )}
     </div>
   );
+}
+
+/* ====== Auto mobile/desktop switch (cars) ====== */
+export const AllInCarsDesktopPage = AllInCarsDesktop;
+
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia
+      ? window.matchMedia(`(max-width: ${breakpoint}px)`).matches
+      : window.innerWidth <= breakpoint;
+  });
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia ? window.matchMedia(`(max-width: ${breakpoint}px)`) : null;
+    const update = () => {
+      const v = mq ? mq.matches : window.innerWidth <= breakpoint;
+      setIsMobile(v);
+    };
+
+    update();
+    if (!mq) {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
+
+    // Safari compatibility
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", update);
+      return () => mq.removeEventListener("change", update);
+    }
+    // @ts-ignore
+    mq.addListener(update);
+    // @ts-ignore
+    return () => mq.removeListener(update);
+  }, [breakpoint]);
+
+  return isMobile;
+}
+
+export default function AllInCarsAuto() {
+  const isMobile = useIsMobile(768);
+  return isMobile ? <AllInCarsMobile /> : <AllInCarsDesktop />;
 }
