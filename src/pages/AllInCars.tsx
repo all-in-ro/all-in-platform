@@ -43,8 +43,9 @@ type Car = {
   year?: number;
 };
 
-const API =
-  (import.meta as any).env?.VITE_API_BASE || "https://cupe.onrender.com/api";
+// IMPORTANT: default to same-origin so session cookies work (Render/Cloudflare).
+// If VITE_API_BASE is set, it can override this.
+const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 
 // R2 upload endpoint tipikusan admin-vedelemmel fut (401 ha nincs megfelelo fejlec).
 // Frontenden env-bol vesszuk, ugyanugy mint a tobbi admin oldal.
