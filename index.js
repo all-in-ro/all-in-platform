@@ -7,6 +7,9 @@ import pg from "pg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+import createCarsRouter from "./server/api/routes/cars.js";
+import createCarExpensesRouter from "./server/api/routes/car-expenses.js";
+
 const { Pool } = pg;
 
 const app = express();
@@ -97,6 +100,12 @@ function requireAuthed(req, res, next) {
   req.session = s;
   next();
 }
+
+// --- Cars (ALL IN) ---
+app.use("/api/cars", createCarsRouter({ pool, requireAuthed, requireAdminOrSecret }));
+
+// --- Car expenses (ALL IN) ---
+app.use("/api/car-expenses", createCarExpensesRouter({ pool, requireAuthed, requireAdminOrSecret }));
 
 // --- encrypt/decrypt codes for admin resend (AES-256-GCM) ---
 function codeKey() {
