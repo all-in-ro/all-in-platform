@@ -15,6 +15,7 @@ import AllInProductMoves from "./pages/AllInProductMoves";
 import AllInVacations from "./pages/AllInVacations";
 import AllInUsers from "./pages/AllInUsers";
 import AllInCars from "./pages/AllInCars";
+import AllInCarExpenses from "./pages/AllInCarExpenses";
 
 type ShopId = "csikszereda" | "kezdivasarhely";
 type ScreenName =
@@ -30,7 +31,8 @@ type ScreenName =
   | "productmoves"
   | "vacations"
   | "users"
-  | "cars";
+  | "cars"
+  | "carexpenses";
 
 type Screen = { name: ScreenName };
 
@@ -69,6 +71,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "vacations") return { name: "vacations" };
   if (key === "users") return { name: "users" };
   if (key === "cars") return { name: "cars" };
+  if (key === "carexpenses" || key === "car-expenses") return { name: "carexpenses" };
 
   // ALL IN aliases used by buttons/pages
   if (key === "allin" || key === "allin-home") return { name: "home" };
@@ -85,6 +88,9 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allinvacations") return { name: "vacations" };
   if (key === "allinusers") return { name: "users" };
   if (key === "allincars") return { name: "cars" };
+  if (key === "allincarexpenses" || key === "allin-carexpenses" || key === "allin-car-expenses") return { name: "carexpenses" };
+  if (key === "admincarexpenses") return { name: "carexpenses" };
+  if (key === "adminextras") return { name: "admin" };
 
   // empty/unknown -> login
   return { name: "login" };
@@ -195,6 +201,7 @@ export default function App() {
       {screen.name === "productmoves" && <AllInProductMoves {...(commonProps as any)} />}
       {screen.name === "vacations" && <AllInVacations {...(commonProps as any)} />}
       {screen.name === "users" && <AllInUsers {...(commonProps as any)} />}
+      {screen.name === "carexpenses" && <AllInCarExpenses {...(commonProps as any)} />}
       {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
     </>
   );
