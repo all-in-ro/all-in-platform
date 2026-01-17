@@ -12,6 +12,7 @@ import {
   Search,
   LayoutList,
   LayoutGrid,
+  ArrowLeft,
   X,
   ChevronDown,
   ChevronUp,
@@ -56,9 +57,6 @@ const CUPE = {
   bgBlue: "#2E3A4A",
   green: "#108D8B",
 } as const;
-
-const LIGHT_CARD_STYLE: React.CSSProperties = { backgroundColor: '#ffffff', color: '#0f172a' };
-const LIGHT_HEADER_STYLE: React.CSSProperties = { backgroundColor: '#f8fafc', color: '#475569' };
 
 /* ---------- Helpers ---------- */
 function normalizeItpYearsLike(obj: any): number {
@@ -232,7 +230,7 @@ function Chip({ label, days }: { label: string; days: number | null }) {
   const style = lvl === "ok" ? { backgroundColor: CUPE.green } : undefined;
   return (
     <div
-      className={"px-2 py-[3px] rounded text-[11px] font-normal " + toneFor(lvl)}
+      className={"px-2 py-[3px] rounded text-[11px] font-medium " + toneFor(lvl)}
       style={style}
       title={`${label} ${days == null ? "-" : days + " nap"}`}
     >
@@ -253,10 +251,10 @@ function Kpi({
   tone?: string;
 }) {
   return (
-    <Card style={LIGHT_CARD_STYLE} className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
+    <Card className={"rounded-xl border-slate-300 bg-white text-slate-800 " + tone}>
       <CardContent className="p-3 md:p-3">
         <div className="text-[12px] text-slate-600">{title}</div>
-	        <div className="text-2xl font-normal">{value}</div>
+        <div className="text-2xl font-semibold">{value}</div>
         {hint && <div className="text-[11px] text-slate-600 mt-1">{hint}</div>}
       </CardContent>
     </Card>
@@ -266,7 +264,7 @@ function Kpi({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="grid gap-1">
-      <span className="text-[12px] text-slate-600 font-normal tracking-wide">
+      <span className="text-[12px] text-slate-600 font-medium tracking-wide">
         {label}
       </span>
       {children}
@@ -276,26 +274,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /* ---------- Views ---------- */
 function BoardView({ rows }: { rows: any[] }) {
-  // Force CUPE-style light cards even if a global dark theme tries to override.
-  const colCls = "rounded-xl border border-slate-300 shadow-sm";
+  const colCls = "rounded-xl border border-slate-300 bg-white text-slate-800";
   const expiredRows = rows.filter((r) => r.hasExpired);
   const soonRows = rows.filter((r) => r.hasSoon);
   const okRows = rows.filter((r) => !r.hasExpired && !r.hasSoon);
   const renderCard = (c: any) => (
     <div
       key={String(c.id ?? c.plate)}
-      style={LIGHT_CARD_STYLE} className="rounded-lg border border-slate-200 p-3"
+      className="rounded-lg bg-white border border-slate-300 p-3 text-slate-800"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="truncate">
-	          <div className="text-[#344154] text-[15px] font-normal leading-tight">
+          <div className="text-[#344154] text-[15px] font-bold leading-tight">
             {c.plate || "Ismeretlen"}
           </div>
           <div className="text-slate-700 text-[13px] truncate">
             {c.make_model || "—"}
           </div>
         </div>
-        <div className="w-20 h-14 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-200">
+        <div className="w-20 h-14 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
           {c.photo_url ? (
             <img src={c.photo_url} className="w-full h-full object-cover" />
           ) : (
@@ -305,7 +302,7 @@ function BoardView({ rows }: { rows: any[] }) {
           )}
         </div>
       </div>
-      <div className="border-t border-slate-200 my-2" />
+      <div className="border-t border-slate-300/60 my-2" />
       <div className="mt-2 flex flex-wrap gap-2">
         {c.itp_date && c.itp != null && <Chip label="ITP" days={c.itp} />}
         {c.rca_date && c.rca != null && <Chip label="RCA" days={c.rca} />}
@@ -318,22 +315,22 @@ function BoardView({ rows }: { rows: any[] }) {
   );
   return (
     <div className="grid md:grid-cols-3 gap-4">
-      <div style={LIGHT_CARD_STYLE} className={colCls}>
-        <div style={LIGHT_HEADER_STYLE} className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+      <div className={colCls}>
+        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
           <Bell className="w-4 h-4" />
           <span>Lejárt</span>
         </div>
         <div className="p-3 grid gap-3">{expiredRows.map(renderCard)}</div>
       </div>
-      <div style={LIGHT_CARD_STYLE} className={colCls}>
-        <div style={LIGHT_HEADER_STYLE} className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+      <div className={colCls}>
+        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           <span>Közelgő</span>
         </div>
         <div className="p-3 grid gap-3">{soonRows.map(renderCard)}</div>
       </div>
-      <div style={LIGHT_CARD_STYLE} className={colCls}>
-        <div style={LIGHT_HEADER_STYLE} className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+      <div className={colCls}>
+        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
           <CalendarDays className="w-4 h-4" />
           <span>Rendben</span>
         </div>
@@ -368,8 +365,8 @@ function ListView({
   }, [expandedDefault, rows]);
 
   return (
-    <div style={LIGHT_CARD_STYLE} className="rounded-xl border border-slate-300 overflow-hidden shadow-sm">
-      <div style={LIGHT_HEADER_STYLE} className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 border-b border-slate-200">
+    <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
+      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-white text-slate-800 border-b border-slate-300 shadow-sm ">
         <div>Autó</div>
         <div className="text-center">ITP</div>
         <div className="text-center">RCA</div>
@@ -383,10 +380,10 @@ function ListView({
           const key = String(c.id ?? c.plate ?? Math.random());
           const open = !!expanded[key];
           return (
-            <div key={key} className="px-4 py-2.5 hover:bg-slate-50">
+            <div key={key} className="px-4 py-2.5 hover:bg-white">
               <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-200">
+                  <div className="w-16 h-11 rounded bg-slate-700 overflow-hidden shrink-0 border border-slate-300">
                     {c.photo_url ? (
                       <img src={c.photo_url} className="w-full h-full object-cover" />
                     ) : (
@@ -396,7 +393,7 @@ function ListView({
                     )}
                   </div>
                   <div className="truncate">
-	                    <div className="text-[#344154] text-[15px] font-normal leading-tight">
+                    <div className="text-[#344154] text-[15px] font-bold leading-tight">
                       {c.plate || "Ismeretlen"}
                     </div>
                     <div className="text-slate-700 text-[13px] truncate">
@@ -757,7 +754,7 @@ export default function AllInCars() {
       {/* Header */}
       <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
         <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-	          <div className="text-white font-normal">Autók nyílvántartása / Kiadások</div>
+          <div className="text-white font-semibold">Autók nyílvántartása / Kiadások</div>
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -767,7 +764,7 @@ export default function AllInCars() {
                 window.location.hash = "#admincarexpenses";
               }}
             >
-              Kiadások
+              <CalendarDays className="w-4 h-4 mr-1" /> Kiadások
             </Button>
 
             <Button
@@ -791,18 +788,15 @@ export default function AllInCars() {
                 }
               }}
             >
-              {showForm ? "Űrlap elrejtése" : "Új autó"}
-            </Button>
-
-            <Button
-              type="button"
-              className="h-8 px-3 text-white"
-              style={{ backgroundColor: CUPE.blue }}
-              onClick={() => {
-                window.location.hash = "#adminextras";
-              }}
-            >
-              Egyebek
+              {showForm ? (
+                <>
+                  <X className="w-4 h-4 mr-1" /> Űrlap elrejtése
+                </>
+              ) : (
+                <>
+                  <PlusCircle className="w-4 h-4 mr-1" /> Új autó
+                </>
+              )}
             </Button>
 
             <Button
@@ -813,7 +807,7 @@ export default function AllInCars() {
               onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#495465"; }}
               onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
             >
-              Vissza
+              <ArrowLeft className="w-4 h-4 mr-1" /> Vissza
             </Button>
           </div>
         </div>
@@ -871,7 +865,7 @@ export default function AllInCars() {
                 <option value="make">Rendezés: márka/típus</option>
               </select>
 
-              <label className="ml-auto flex items-center gap-2 text-slate-600 text-sm cursor-pointer select-none">
+              <label className="ml-auto flex items-center gap-2 text-white text-sm cursor-pointer select-none">
                 <input
                   type="checkbox"
                   className="accent-white"
@@ -1301,7 +1295,7 @@ export default function AllInCars() {
       {confirmOpen && (
         <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
           <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-	            <div className="text-white font-normal">{confirmTitle}</div>
+            <div className="text-white font-semibold">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               {confirmVariant === "confirm" && (
@@ -1315,11 +1309,11 @@ export default function AllInCars() {
               )}
               <button
                 type="button"
-	                className={
-	                  confirmVariant === "confirm"
-	                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-normal"
-	                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-normal"
-	                }
+                className={
+                  confirmVariant === "confirm"
+                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
+                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
+                }
                 onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
               >
                 OK
