@@ -270,11 +270,11 @@ export default function AllInIncoming() {
     setHistoryErr("");
     try {
       await apiCommitIncomingBatch(selectedBatchId);
-      setSaveOk(`Commit: ${selectedBatchId}`);
+      setSaveOk(`Véglegesítve: ${selectedBatchId}`);
       void loadHistory();
       notifyIncomingChanged();
     } catch (e: any) {
-      setHistoryErr(e?.message || "Commit sikertelen.");
+      setHistoryErr(e?.message || "Véglegesítés sikertelen.");
     }
   };
 
@@ -423,9 +423,9 @@ export default function AllInIncoming() {
                       disabled={!selectedBatchId}
                       onClick={commitSelectedBatch}
                       className="h-9 px-3 rounded-xl bg-slate-900 text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Batch commit (draft -> committed)"
+                      title="Batch véglegesítése (tervezet → végleges)"
                     >
-                      Commit
+                      Véglegesítés
                     </button>
                   </div>
                 </div>
@@ -465,7 +465,7 @@ export default function AllInIncoming() {
                                     : "bg-slate-50 text-slate-800 border-slate-200")
                                 }
                               >
-                                {b.status}
+                                {b.status === "committed" ? "végleges" : b.status === "cancelled" ? "törölt" : "tervezet"}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-right">
@@ -475,7 +475,7 @@ export default function AllInIncoming() {
                                   name="selectedBatch"
                                   checked={selectedBatchId === b.id}
                                   onChange={() => setSelectedBatchId(b.id)}
-                                  title="Kijelölés commit-hoz"
+                                  title="Kijelölés véglegesítéshez"
                                 />
                                 <button
                                   type="button"
