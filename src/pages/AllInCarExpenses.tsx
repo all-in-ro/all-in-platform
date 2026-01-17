@@ -504,9 +504,9 @@ function AllInCarExpenses() {
         </div>
 
         {/* List */}
-        <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
+        <div className="rounded-xl border border-slate-300 !bg-white !text-slate-800 overflow-hidden shadow-sm">
           {/* HEADER: fixed widths + centered labels */}
-	          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-slate-50 text-slate-600 border-b border-slate-300 h-[36px]">
+	          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-slate-50 text-slate-600 border-b border-slate-200 h-[36px]">
             <div className="text-center">Dátum</div>
             <div className="text-center">Autó</div>
             <div className="text-center pl-6">km óra</div>
@@ -544,7 +544,7 @@ function AllInCarExpenses() {
                       <span>{r.category || "—"}</span>
                     </div>
                     <div className="truncate text-center">{r.description || "—"}</div>
-                    <div className="font-medium text-left pl-2"><Money value={r.cost} /> {r.currency || ""}</div>
+                    <div className="font-normal text-left pl-2"><Money value={r.cost} /> {r.currency || ""}</div>
                     <div className="flex items-center justify-end gap-2 pr-2">
                       <button
                         className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
