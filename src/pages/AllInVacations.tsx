@@ -354,8 +354,13 @@ export default function AllInVacations({ api }: { api?: string }) {
       {/* Native <select> dropdowns love forcing bright blue highlights.
           Override option backgrounds so the dropdown uses our palette. */}
       <style>{`
-        select.allin-select option { background: #354153; color: #ffffff; }
-        select.allin-select option:checked { background: #208d8b; color: #ffffff; }
+        select.allin-select { color-scheme: dark; accent-color: #208d8b; }
+        select.allin-select option { background-color: #354153 !important; color: #ffffff !important; }
+        select.allin-select option:hover,
+        select.allin-select option:focus,
+        select.allin-select option:active { background-color: #3c5069 !important; color: #ffffff !important; }
+        select.allin-select option:checked,
+        select.allin-select option:checked:hover { background-color: #208d8b !important; color: #ffffff !important; }
       `}</style>
       <div className="w-full max-w-6xl mx-auto px-4 py-6">
         <div className={card}>
@@ -367,9 +372,12 @@ export default function AllInVacations({ api }: { api?: string }) {
 
             <div className="flex items-center gap-2 ml-auto">
               <Button className={btn} type="button" onClick={downloadYearPdf} disabled={yearBusy}>
-                {yearBusy ? "PDF…" : "PDF"}
+                <span className="inline-flex items-center gap-2">
+                  <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png" alt="PDF" className="h-5 w-5" />
+                  <span>{yearBusy ? "PDF…" : "PDF"}</span>
+                </span>
               </Button>
-              <Button className={btn} type="button" onClick={openYearSummary} disabled={yearBusy}>
+              <Button className={btnPrimary} type="button" onClick={openYearSummary} disabled={yearBusy}>
                 {yearBusy ? "Frissítés…" : "Összesítés"}
               </Button>
               <Button className={btn} onClick={() => (window.location.hash = "#allinadmin")} type="button">
