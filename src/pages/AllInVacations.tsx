@@ -617,12 +617,20 @@ export default function AllInVacations({ api }: { api?: string }) {
         {listErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-2">{listErr}</div> : null}
 
         <div className="mt-3 rounded-xl border border-white/30 overflow-hidden">
-          <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
-            <div className="col-span-4">Dátum</div>
-            <div className="col-span-4">Típus</div>
-            <div className="col-span-3">Megjegyzés</div>
-            <div className="col-span-1 text-right"> </div>
-          </div>
+          {isMobile ? (
+            <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+              <div className="col-span-4">Dátum</div>
+              <div className="col-span-7">Típus</div>
+              <div className="col-span-1 text-right"> </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+              <div className="col-span-4">Dátum</div>
+              <div className="col-span-4">Típus</div>
+              <div className="col-span-3">Megjegyzés</div>
+              <div className="col-span-1 text-right"> </div>
+            </div>
+          )}
 
           {grouped.length === 0 ? (
             <div className="px-3 py-6 text-white/60 text-sm">Nincs bejegyzés ebben a hónapban.</div>
@@ -630,25 +638,53 @@ export default function AllInVacations({ api }: { api?: string }) {
             grouped.map((g) => (
               <div key={g.day} className="border-t border-white/10">
                 {g.items.map((it) => (
-                  <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
-                    <div className="col-span-4 text-white text-sm">{it.day}</div>
-                    <div className="col-span-4 text-white/80 text-sm">
-                      {fmtKind(it.kind)}
-                      {it.kind === "short" ? <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span> : null}
+                  isMobile ? (
+                    <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
+                      <div className="col-span-4 text-white text-sm">{it.day}</div>
+                      <div className="col-span-7 text-white/80 text-sm">
+                        <div>
+                          {fmtKind(it.kind)}
+                          {it.kind === "short" ? (
+                            <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span>
+                          ) : null}
+                        </div>
+                        {it.note ? (
+                          <div className="text-white/60 text-xs mt-1 break-words">{it.note}</div>
+                        ) : null}
+                      </div>
+                      <div className="col-span-1 text-right">
+                        <button
+                          type="button"
+                          aria-label="Törlés"
+                          title="Törlés"
+                          className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                          onClick={() => openDelete(it.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="col-span-3 text-white/70 text-sm break-words">{it.note || "-"}</div>
-                    <div className="col-span-1 text-right">
-                      <button
-                        type="button"
-                        aria-label="Törlés"
-                        title="Törlés"
-                        className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
-                        onClick={() => openDelete(it.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                  ) : (
+                    <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
+                      <div className="col-span-4 text-white text-sm">{it.day}</div>
+                      <div className="col-span-4 text-white/80 text-sm">
+                        {fmtKind(it.kind)}
+                        {it.kind === "short" ? <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span> : null}
+                      </div>
+                      <div className="col-span-3 text-white/70 text-sm break-words">{it.note || "-"}</div>
+                      <div className="col-span-1 text-right">
+                        <button
+                          type="button"
+                          aria-label="Törlés"
+                          title="Törlés"
+                          className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                          onClick={() => openDelete(it.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )
                 ))}
               </div>
             ))
@@ -808,26 +844,47 @@ export default function AllInVacations({ api }: { api?: string }) {
             {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
 
             <div className="mt-4 rounded-xl border border-white/30 overflow-hidden">
-              <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
-                <div className="col-span-6">Név</div>
-                <div className="col-span-2 text-right">Szabadság (nap)</div>
-                <div className="col-span-2 text-right">Elkérezés (nap)</div>
-                <div className="col-span-2 text-right">Elkérezés (óra)</div>
-              </div>
+              {isMobile ? (
+                <div className="grid grid-cols-10 gap-0 bg-white/5 text-white/70 text-[11px] px-3 py-2">
+                  <div className="col-span-4">Név</div>
+                  <div className="col-span-2 text-right">Szab. (nap)</div>
+                  <div className="col-span-2 text-right">Elk. (nap)</div>
+                  <div className="col-span-2 text-right">Elk. (óra)</div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+                  <div className="col-span-6">Név</div>
+                  <div className="col-span-2 text-right">Szabadság (nap)</div>
+                  <div className="col-span-2 text-right">Elkérezés (nap)</div>
+                  <div className="col-span-2 text-right">Elkérezés (óra)</div>
+                </div>
+              )}
 
               {yearRows.length === 0 ? (
                 <div className="px-3 py-6 text-white/60 text-sm">Nincs adat.</div>
               ) : (
                 yearRows.map((r) => (
-                  <div
-                    key={r.employeeName}
-                    className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10"
-                  >
-                    <div className="col-span-6 text-white text-sm">{r.employeeName}</div>
-                    <div className="col-span-2 text-right text-white/80 text-sm">{r.vacationDays}</div>
-                    <div className="col-span-2 text-right text-white/80 text-sm">{r.shortDays}</div>
-                    <div className="col-span-2 text-right text-white/80 text-sm">{r.shortHours}</div>
-                  </div>
+                  isMobile ? (
+                    <div
+                      key={r.employeeName}
+                      className="grid grid-cols-10 gap-0 px-3 py-3 items-center border-t border-white/10"
+                    >
+                      <div className="col-span-4 text-white text-sm truncate">{r.employeeName}</div>
+                      <div className="col-span-2 text-right text-white/80 text-sm">{r.vacationDays}</div>
+                      <div className="col-span-2 text-right text-white/80 text-sm">{r.shortDays}</div>
+                      <div className="col-span-2 text-right text-white/80 text-sm">{r.shortHours}</div>
+                    </div>
+                  ) : (
+                    <div
+                      key={r.employeeName}
+                      className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10"
+                    >
+                      <div className="col-span-6 text-white text-sm">{r.employeeName}</div>
+                      <div className="col-span-2 text-right text-white/80 text-sm">{r.vacationDays}</div>
+                      <div className="col-span-2 text-right text-white/80 text-sm">{r.shortDays}</div>
+                      <div className="col-span-2 text-right text-white/80 text-sm">{r.shortHours}</div>
+                    </div>
+                  )
                 ))
               )}
             </div>
