@@ -7,6 +7,7 @@ import pg from "pg";
 
 import createCarsRouter from "./api/routes/cars.js";
 import createCarExpensesRouter from "./api/routes/car-expenses.js";
+import createVacationsRouter from "./api/routes/vacations.js";
 
 const { Pool } = pg;
 
@@ -109,6 +110,9 @@ app.use("/api/cars", createCarsRouter({ pool, requireAuthed, requireAdminOrSecre
 
 // --- Car expenses (ALL IN) ---
 app.use("/api/car-expenses", createCarExpensesRouter({ pool, requireAuthed, requireAdminOrSecret }));
+
+// --- Vacations / time-off (ALL IN) ---
+app.use("/api/admin/vacations", createVacationsRouter({ pool, requireAdminOrSecret }));
 
 // --- encrypt/decrypt codes for admin resend (AES-256-GCM) ---
 function codeKey() {
