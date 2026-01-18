@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Trash2 } from "lucide-react";
 
 type Employee = { name: string };
@@ -503,16 +504,29 @@ export default function AllInVacations({ api }: { api?: string }) {
 
                   <div className="grid gap-2">
                     <div className={label}>Típus</div>
-                    <select
-                      className={
-                        "allin-select w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
-                      }
-                      value={kind}
-                      onChange={(e) => setKind(e.target.value as any)}
-                    >
-                      <option value="vacation">Szabadság nap</option>
-                      <option value="short">Elkérezés (óra)</option>
-                    </select>
+                    <Select value={kind} onValueChange={(v) => setKind(v as any)}>
+                      <SelectTrigger
+                        className={
+                          "w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
+                        }
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="border border-white/30 bg-[#354153] text-white">
+                        <SelectItem
+                          value="vacation"
+                          className="text-white data-[highlighted]:bg-[#354153] data-[state=checked]:bg-[#208d8b] data-[state=checked]:text-white"
+                        >
+                          Szabadság nap
+                        </SelectItem>
+                        <SelectItem
+                          value="short"
+                          className="text-white data-[highlighted]:bg-[#354153] data-[state=checked]:bg-[#208d8b] data-[state=checked]:text-white"
+                        >
+                          Elkérezés (óra)
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   {kind === "vacation" ? (
