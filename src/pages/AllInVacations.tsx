@@ -17,6 +17,8 @@ type TimeEvent = {
 
 type SummaryRow = { employeeName: string; vacationDays: number; shortDays: number };
 
+type YearSummaryRow = { employeeName: string; vacationDays: number; shortDays: number; shortHours: number };
+
 function normBase(s: string) {
   return s.replace(/\/+$/, "");
 }
@@ -91,16 +93,27 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [confirmMsg, setConfirmMsg] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
+  // Year summary + PDF
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryYear, setSummaryYear] = useState<number>(new Date().getFullYear());
+  const [yearRows, setYearRows] = useState<YearSummaryRow[]>([]);
+  const [yearErr, setYearErr] = useState("");
+  const [yearBusy, setYearBusy] = useState(false);
+
+
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!confirmOpen) return;
+    if (!confirmOpen && !summaryOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setConfirmOpen(false);
+      if (e.key === "Escape") {
+        setConfirmOpen(false);
+        setSummaryOpen(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen]);
+  }, [confirmOpen, summaryOpen]);
 
   const fetchEmployees = async () => {
     setEmpErr("");
@@ -117,6 +130,56 @@ export default function AllInVacations({ api }: { api?: string }) {
       setEmployees([]);
     } finally {
       setEmpBusy(false);
+    }
+  };
+
+  const fetchYearSummary = async (year?: number) => {
+    const y = Number(year ?? summaryYear);
+    if (!Number.isFinite(y) || y < 2000 || y > 2100) return;
+    setYearErr("");
+    setYearBusy(true);
+    try {
+      const r = await fetch(`${apiBase}/admin/vacations/summary?year=${encodeURIComponent(String(y))}`, { credentials: "include" });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
+      setYearRows(Array.isArray(j?.items) ? j.items : []);
+    } catch (e: any) {
+      setYearErr(String(e?.message || e || "Hiba"));
+      setYearRows([]);
+    } finally {
+      setYearBusy(false);
+    }
+  };
+
+  const openYearSummary = async () => {
+    setSummaryOpen(true);
+    await fetchYearSummary(summaryYear);
+  };
+
+  const downloadYearPdf = async () => {
+    const y = Number(summaryYear);
+    if (!Number.isFinite(y)) return;
+    setYearErr("");
+    setYearBusy(true);
+    try {
+      const r = await fetch(`${apiBase}/admin/vacations/summary.pdf?year=${encodeURIComponent(String(y))}`, { credentials: "include" });
+      if (!r.ok) {
+        const j = await r.json().catch(() => null);
+        throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `allin-osszefoglalo-${y}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setYearErr(String(e?.message || e || "Hiba PDF-nél"));
+    } finally {
+      setYearBusy(false);
     }
   };
 
@@ -293,8 +356,11 @@ export default function AllInVacations({ api }: { api?: string }) {
             </div>
 
             <div className="flex items-center gap-2 ml-auto">
-              <Button className={btn} type="button" onClick={fetchEmployees} disabled={empBusy}>
-                {empBusy ? "Frissítés…" : "Dolgozók frissítése"}
+              <Button className={btn} type="button" onClick={downloadYearPdf} disabled={yearBusy}>
+                {yearBusy ? "PDF…" : "PDF"}
+              </Button>
+              <Button className={btn} type="button" onClick={openYearSummary} disabled={yearBusy}>
+                {yearBusy ? "Frissítés…" : "Összesítés"}
               </Button>
               <Button className={btn} onClick={() => (window.location.hash = "#allinadmin")} type="button">
                 Vissza
@@ -418,13 +484,13 @@ export default function AllInVacations({ api }: { api?: string }) {
                     <div className={label}>Típus</div>
                     <select
                       className={
-                        "w-full h-11 rounded-xl px-4 border border-white/30 bg-[#354153] text-white outline-none focus:ring-2 focus:ring-white/20"
+                        "w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
                       }
                       value={kind}
                       onChange={(e) => setKind(e.target.value as any)}
                     >
                       <option value="vacation">Szabadság nap</option>
-                      <option value="short">Elkérezés (óra megadható)</option>
+                      <option value="short">Elkérezés (óra)</option>
                     </select>
                   </div>
 
@@ -517,6 +583,71 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
         </div>
       </div>
+
+      
+
+      {summaryOpen && (
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-black/50 px-4">
+          <div className="w-full max-w-3xl rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-white font-medium">Összesítés ({summaryYear})</div>
+                <div className="text-white/70 text-sm mt-1">Alkalmazottak éves szabadság napok + elkérezés órák.</div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={2000}
+                  max={2100}
+                  className="h-10 w-28 rounded-xl px-3 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
+                  value={summaryYear}
+                  onChange={(e) => setSummaryYear(Number(e.target.value))}
+                />
+                <button
+                  type="button"
+                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => fetchYearSummary(summaryYear)}
+                  disabled={yearBusy}
+                >
+                  {yearBusy ? "Frissítés…" : "Frissítés"}
+                </button>
+                <button
+                  type="button"
+                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => setSummaryOpen(false)}
+                >
+                  Mégse
+                </button>
+              </div>
+            </div>
+
+            {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
+
+            <div className="mt-4 rounded-xl border border-white/30 overflow-hidden">
+              <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+                <div className="col-span-6">Név</div>
+                <div className="col-span-2 text-right">Szabadság (nap)</div>
+                <div className="col-span-2 text-right">Elkérezés (nap)</div>
+                <div className="col-span-2 text-right">Elkérezés (óra)</div>
+              </div>
+
+              {yearRows.length === 0 ? (
+                <div className="px-3 py-6 text-white/60 text-sm">Nincs adat.</div>
+              ) : (
+                yearRows.map((r) => (
+                  <div key={r.employeeName} className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10">
+                    <div className="col-span-6 text-white text-sm">{r.employeeName}</div>
+                    <div className="col-span-2 text-right text-white/80 text-sm">{r.vacationDays}</div>
+                    <div className="col-span-2 text-right text-white/80 text-sm">{r.shortDays}</div>
+                    <div className="col-span-2 text-right text-white/80 text-sm">{r.shortHours}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmOpen && (
         <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
