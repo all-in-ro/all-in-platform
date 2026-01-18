@@ -360,12 +360,12 @@ export default function AllInCarExpensesMobile() {
 
       {/* Filters collapsed for mobile */}
       <div className="p-3">
-        <Card className="rounded-lg border-slate-300 bg-white text-slate-800" style={{ backgroundColor: "#fff" }}>
+        <Card className="rounded-lg border border-slate-300 bg-white text-slate-800 overflow-hidden">
           <button
   type="button"
   onClick={() => setFiltersOpen((s) => !s)}
   aria-expanded={filtersOpen}
-  className="w-full flex items-center justify-between px-3 py-2 border-b border-slate-200 text-left bg-white hover:bg-slate-50"
+  className="w-full flex items-center justify-between px-3 py-2 border-b border-slate-200 text-left hover:bg-slate-50 rounded-lg"
 >
   <div className="flex flex-col">
     <div className="text-[13px] font-medium text-slate-700">Szűrők és eszközök</div>
@@ -375,7 +375,7 @@ export default function AllInCarExpensesMobile() {
     {filtersOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
   </span>
 </button>{filtersOpen && (
-	            <CardContent className="p-3 grid gap-3 bg-white" style={{ backgroundColor: "#fff" }}>
+            <CardContent className="p-3 grid gap-3">
               <div className="relative">
                 <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-600" />
                 <Input
@@ -451,20 +451,20 @@ export default function AllInCarExpensesMobile() {
 
       {/* Totals */}
       <div className="p-3 grid grid-cols-3 gap-2">
-        <Card className="rounded-md border-slate-300 bg-white text-slate-800" style={{ backgroundColor: "#fff" }}>
-          <CardContent className="p-2 bg-white">
+        <Card className="rounded-md border-slate-300 bg-white text-slate-800">
+          <CardContent className="p-2">
             <div className="text-[10px] text-slate-600">Tételek</div>
             <div className="text-lg font-semibold">{enriched.length}</div>
           </CardContent>
         </Card>
-        <Card className="rounded-md border-slate-300 bg-white text-slate-800" style={{ backgroundColor: "#fff" }}>
-          <CardContent className="p-2 bg-white">
+        <Card className="rounded-md border-slate-300 bg-white text-slate-800">
+          <CardContent className="p-2">
             <div className="text-[10px] text-slate-600">Időszak</div>
             <div className="text-[11px] leading-tight">{dateFrom}<br/>→ {dateTo}</div>
           </CardContent>
         </Card>
-        <Card className="rounded-md border-slate-300 bg-white text-slate-800" style={{ backgroundColor: "#fff" }}>
-          <CardContent className="p-2 bg-white">
+        <Card className="rounded-md border-slate-300 bg-white text-slate-800">
+          <CardContent className="p-2">
             <div className="text-[10px] text-slate-600">Összeg (RON)</div>
             <div className="text-lg font-semibold"><Money value={total} /></div>
           </CardContent>
