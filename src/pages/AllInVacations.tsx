@@ -156,6 +156,19 @@ export default function AllInVacations({ api }: { api?: string }) {
     return s || { employeeName: selected, vacationDays: 0, shortDays: 0 };
   }, [summary, selected]);
 
+  const selectedShortHours = useMemo(() => {
+    const emp = selected.trim();
+    if (!emp) return 0;
+    let sum = 0;
+    for (const it of items) {
+      if (it.employeeName !== emp) continue;
+      if (it.kind !== "short") continue;
+      const h = Number(it.hoursOff ?? 0);
+      if (Number.isFinite(h) && h > 0) sum += h;
+    }
+    return sum;
+  }, [items, selected]);
+
   const save = async () => {
     setSaveErr("");
     const emp = selected.trim();
@@ -276,7 +289,7 @@ export default function AllInVacations({ api }: { api?: string }) {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <div className="text-white text-xl font-medium">SZABADSÁGOK</div>
-              <div className="text-white/60 text-xs mt-1">Szabadság napok és Elkérezés napok külön kezelve.</div>
+              <div className="text-white/60 text-xs mt-1">Szabadság napok és Elkérezés órák külön kezelve.</div>
             </div>
 
             <div className="flex items-center gap-2 ml-auto">
@@ -365,8 +378,8 @@ export default function AllInVacations({ api }: { api?: string }) {
               <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
                 <div className="text-white/80 text-sm">Gyors összegzés ({month})</div>
                 <div className="mt-2 text-white/70 text-sm">
-                  Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés napok: {" "}
-                  <span className="text-white">{selectedSummary.shortDays}</span>
+                  Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés órák: {" "}
+                  <span className="text-white">{selectedShortHours}</span>
                 </div>
               </div>
 
@@ -375,9 +388,9 @@ export default function AllInVacations({ api }: { api?: string }) {
 
                 <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-3">
                   {kind === "vacation" ? (
-                    <div className="grid gap-2 sm:col-span-2">
-                      <div className={label}>Szabadság periódus</div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <>
+                      <div className="grid gap-2">
+                        <div className={label}>Kezdő nap</div>
                         <input
                           type="date"
                           className={input}
@@ -385,14 +398,15 @@ export default function AllInVacations({ api }: { api?: string }) {
                           onChange={(e) => {
                             const v = e.target.value;
                             setDay(v);
-                            // if end is empty or earlier, snap it to start
                             if (!dayTo || dayTo.trim() === "" || (dayTo.trim() && dayTo.trim() < v)) setDayTo(v);
                           }}
                         />
+                      </div>
+                      <div className="grid gap-2">
+                        <div className={label}>Vége</div>
                         <input type="date" className={input} value={dayTo} onChange={(e) => setDayTo(e.target.value)} />
                       </div>
-                      <div className="text-white/50 text-xs">Kezdő nap (bal) · Vége (jobb). Ha ugyanaz, egy napot jelent.</div>
-                    </div>
+                    </>
                   ) : (
                     <div className="grid gap-2">
                       <div className={label}>Dátum</div>
@@ -414,6 +428,10 @@ export default function AllInVacations({ api }: { api?: string }) {
                     </select>
                   </div>
 
+                  {kind === "vacation" ? (
+                    <div className="sm:col-span-3 text-white/50 text-xs">Kezdő nap · Vége. Ha ugyanaz, egy napot jelent.</div>
+                  ) : null}
+
                   {kind === "short" ? (
                     <div className="grid gap-2">
                       <div className={label}>Óra</div>
@@ -429,7 +447,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     </div>
                   ) : null}
 
-                  <div className="grid gap-2">
+                  <div className="grid gap-2 sm:col-span-3">
                     <div className={label}>Megjegyzés (opcionális)</div>
                     <input className={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Pl. orvos" />
                   </div>
