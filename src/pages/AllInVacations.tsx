@@ -1058,23 +1058,29 @@ export default function AllInVacations({ api }: { api?: string }) {
                   </div>
                 </div>
               ) : (
-                <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start border-t border-white/10">
-                  <div className="col-span-3 text-white text-sm">{it.day}</div>
-                  <div className="col-span-3 text-white/80 text-sm">{labelType}</div>
-                  <div className="col-span-2 text-right text-white/80 text-sm">{dayVal || "-"}</div>
-                  <div className="col-span-2 text-right text-white/80 text-sm">{hourVal || "-"}</div>
-                  <div className="col-span-1 text-white/70 text-sm break-words">{it.note}</div>
-                  <div className="col-span-1 text-right">
-                    <button
-                      type="button"
-                      aria-label="Törlés"
-                      title="Törlés"
-                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
-                      onClick={() => openDeleteComp(it.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                <div key={it.id} className="border-t border-white/10 px-3 py-3">
+                  <div className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-3 text-white text-sm">{it.day}</div>
+                    <div className="col-span-3 text-white/80 text-sm">{labelType}</div>
+                    <div className="col-span-2 text-right text-white/80 text-sm">{dayVal || "-"}</div>
+                    <div className="col-span-2 text-right text-white/80 text-sm">{hourVal || "-"}</div>
+                    <div className="col-span-2 text-right">
+                      <button
+                        type="button"
+                        aria-label="Törlés"
+                        title="Törlés"
+                        className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                        onClick={() => openDeleteComp(it.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
+                  {it.note && (
+                    <div className="mt-2 text-white/70 text-sm whitespace-normal break-words">
+                      {it.note}
+                    </div>
+                  )}
                 </div>
               );
             })
