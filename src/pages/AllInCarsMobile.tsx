@@ -12,6 +12,8 @@ type Car = {
   plate?: string;
   make_model?: string;
   itp_date?: string;
+  itp_years?: number;   // 1 vagy 2 év (backend)
+  itp_months?: number;  // backend fallback (12 vagy 24)
   rca_date?: string;
   casco_start?: string;
   casco_months?: number;
@@ -33,6 +35,25 @@ const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 
 /* ---------- Theme ---------- */
 const CUPE = { blue: "#344154", bgBlue: "#2E3A4A", green: "#108D8B" } as const;
+
+function normalizeItpYearsLike(obj: any): number {
+  const c = obj || {};
+  const candidates = [
+    Number(c.itp_years),
+    Number(c.itp_months) ? Number(c.itp_months) / 12 : undefined,
+    Number((c as any).itp_valid_years),
+    Number((c as any).itp_interval_years),
+    Number((c as any).itp_period_years),
+    Number((c as any).years_itp),
+    Number((c as any).itpValidityYears),
+  ].filter((x) => Number.isFinite(x as any) && Number(x) !== 0);
+
+  const y = candidates.length ? Math.round(Number(candidates[0] as any)) : 1;
+  // clamp weird values to 1..2 (ITP realisztikusan 1-2 év)
+  if (y <= 0) return 1;
+  if (y > 5) return 2;
+  return Math.max(1, Math.min(2, y));
+}
 
 /* ---------- Helpers ---------- */
 function daysLeft(fromISO: string | undefined, years = 0, months = 0): number | null {
@@ -79,7 +100,12 @@ async function fetchJSON(url: string, init?: RequestInit) {
 async function listCars(): Promise<Car[]> {
   try {
     const data = await fetchJSON(`${API}/cars`);
-    return Array.isArray(data) ? data : data?.rows || [];
+    const rows = (Array.isArray(data) ? data : data?.rows || []) as any[];
+    // Backend mezők eltérhetnek: normalizáljuk az ITP érvényességet, hogy mobilon se hazudjon.
+    return rows.map((r) => {
+      r.itp_years = normalizeItpYearsLike(r);
+      return r;
+    });
   } catch { return []; }
 }
 
@@ -88,7 +114,8 @@ function BoardView({ rows }:{ rows: any[] }) {
   return (
     <div className="grid grid-cols-1 gap-2">
       {rows.map((c:any) => {
-        const itp = daysLeft(justDate(c.itp_date), 1, 0);
+        const itpYears = normalizeItpYearsLike(c);
+        const itp = daysLeft(justDate(c.itp_date), itpYears || 1, 0);
         const rca = daysLeft(justDate(c.rca_date), 1, 0);
         const cas = daysLeft(justDate(c.casco_start), 0, c.casco_months || 0);
         const rov = daysLeft(justDate(c.rovinieta_start), 0, c.rovinieta_months || 0);
@@ -142,6 +169,7 @@ function ListView({ rows, expandedDefault=false, onEdit }:{ rows:any[]; expanded
         {rows.map((c:any) => {
           const key = String(c.id ?? c.plate ?? Math.random());
           const open = !!expanded[key];
+          const itpYears = normalizeItpYearsLike(c);
           return (
             <div key={key} className="px-3 py-2.5">
               <div className="[grid-template-columns:minmax(0,1.6fr)_minmax(0,1fr)_auto] grid items-center gap-2">
@@ -186,7 +214,7 @@ function ListView({ rows, expandedDefault=false, onEdit }:{ rows:any[]; expanded
                     <div><span className="text-slate-600">Üzemanyag:</span> {c.fuel || "—"}</div>
                     <div><span className="text-slate-600">Gyártási év:</span> {c.year ?? "—"}</div>
                     {hasValueDate(c.itp_date) && (
-                      <div><span className="text-slate-600">ITP:</span> {daysLeft(justDate(c.itp_date), 1, 0) ?? "—"}</div>
+                      <div><span className="text-slate-600">ITP:</span> {daysLeft(justDate(c.itp_date), itpYears || 1, 0) ?? "—"}</div>
                     )}
                     {hasValueDate(c.rca_date) && (
                       <div><span className="text-slate-600">RCA:</span> {daysLeft(justDate(c.rca_date), 1, 0) ?? "—"}</div>
@@ -227,12 +255,13 @@ export default function AllInCarsMobile() {
 
   const enriched = useMemo(() => {
     return (cars || []).map((c) => {
-      const itp = daysLeft(justDate(c.itp_date), 1, 0);
+      const itpYears = normalizeItpYearsLike(c);
+      const itp = daysLeft(justDate(c.itp_date), itpYears || 1, 0);
       const rca = daysLeft(justDate(c.rca_date), 1, 0);
       const cas = daysLeft(justDate(c.casco_start), 0, c.casco_months || 0);
       const rov = daysLeft(justDate(c.rovinieta_start), 0, c.rovinieta_months || 0);
       const minDays = Math.min(...[itp, rca, cas, rov].map((v) => (v == null ? 9999 : v)));
-      return { ...c, itp, rca, cas, rov, minDays };
+      return { ...c, itp_years: itpYears, itp, rca, cas, rov, minDays };
     });
   }, [cars]);
 
