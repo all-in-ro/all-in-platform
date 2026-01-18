@@ -29,7 +29,7 @@ function yyyymmNow() {
 }
 
 function fmtKind(k: TimeEvent["kind"]) {
-  return k === "vacation" ? "Szabadság" : "Elkérés";
+  return k === "vacation" ? "Szabadság" : "Elkérezés";
 }
 
 export default function AllInVacations({ api }: { api?: string }) {
@@ -183,7 +183,7 @@ export default function AllInVacations({ api }: { api?: string }) {
     if (kind === "short") {
       const h = Number(shortHours);
       if (!Number.isFinite(h) || h < 1 || h > 12) {
-        setSaveErr("Az elkérés óraszáma 1 és 12 között kell legyen.");
+        setSaveErr("Az elkérezés óraszáma 1 és 12 között kell legyen.");
         return;
       }
     }
@@ -276,7 +276,7 @@ export default function AllInVacations({ api }: { api?: string }) {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <div className="text-white text-xl font-medium">SZABADSÁGOK</div>
-              <div className="text-white/60 text-xs mt-1">Szabadság napok és 4 órás napok (elkérés) külön kezelve.</div>
+              <div className="text-white/60 text-xs mt-1">Szabadság napok és Elkérezés napok külön kezelve.</div>
             </div>
 
             <div className="flex items-center gap-2 ml-auto">
@@ -327,7 +327,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                         <div>
                           <div className="text-white text-sm">{e.name}</div>
                           <div className="text-white/60 text-xs mt-1">
-                            {month} · Szabadság: {v} · 4 órás: {sh}
+                            {month} · Szabadság: {v} · Elkérezés: {sh}
                           </div>
                         </div>
                         <div className="text-white/40 text-xs">▸</div>
@@ -365,7 +365,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
                 <div className="text-white/80 text-sm">Gyors összegzés ({month})</div>
                 <div className="mt-2 text-white/70 text-sm">
-                  Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · 4 órás napok: {" "}
+                  Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés napok: {" "}
                   <span className="text-white">{selectedSummary.shortDays}</span>
                 </div>
               </div>
@@ -373,9 +373,9 @@ export default function AllInVacations({ api }: { api?: string }) {
               <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
                 <div className="text-white/80 text-sm">Új bejegyzés</div>
 
-                <div className="mt-3 grid gap-3 grid-cols-1 md:grid-cols-3">
+                <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-3">
                   {kind === "vacation" ? (
-                    <div className="grid gap-2 md:col-span-2">
+                    <div className="grid gap-2 sm:col-span-2">
                       <div className={label}>Szabadság periódus</div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <input
@@ -410,7 +410,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                       onChange={(e) => setKind(e.target.value as any)}
                     >
                       <option value="vacation">Szabadság nap</option>
-                      <option value="short">Elkérés (óra megadható)</option>
+                      <option value="short">Elkérezés (óra megadható)</option>
                     </select>
                   </div>
 
