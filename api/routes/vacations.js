@@ -220,51 +220,87 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       }
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename=allin-osszefoglalo-${Math.trunc(year)}.pdf`);
+      res.setHeader("Content-Disposition", `attachment; filename=titan-situatie-concedii-invoiri-${Math.trunc(year)}.pdf`);
 
       const doc = new PDFDocument({ size: "A4", margin: 36 });
       doc.pipe(res);
 
-      doc.fontSize(16).text("ALL IN - Szabadsagok osszesites", { align: "left" });
-      doc.moveDown(0.25);
-      doc.fontSize(12).text(`Ev: ${Math.trunc(year)}`);
-      doc.moveDown(0.5);
+      // Official RO-style header (keep ASCII to avoid font/diacritics issues on servers).
+      const COMPANY = "TITAN EURO-COM SRL";
+      const CIF = "RO17495362";
+      const YEAR = Math.trunc(year);
+      const genDate = new Date().toISOString().slice(0, 10);
 
-      // Table header
+      // Header
+      doc.fontSize(11).fillColor("#000000").text(COMPANY, { align: "left" });
+      doc.fontSize(10).text(`CIF: ${CIF}`, { align: "left" });
+      doc.moveDown(0.6);
+
+      doc.fontSize(14).text("SITUATIE CONCEDII SI INVOIRI", { align: "center" });
+      doc.moveDown(0.2);
+      doc.fontSize(11).text(`Anul: ${YEAR}`, { align: "center" });
+      doc.moveDown(0.8);
+
+      // Table
       const x0 = doc.x;
-      const y0 = doc.y;
       const col = {
-        name: 260,
+        name: 270,
         vac: 90,
         sday: 90,
-        sh: 90,
-      }
+        sh: 80,
+      };
       const rowH = 18;
 
-      doc.fontSize(10).fillColor("#000000");
-      doc.text("Nev", x0, y0, { width: col.name });
-      doc.text("Szabadsag (nap)", x0 + col.name, y0, { width: col.vac, align: "right" });
-      doc.text("Elkerezes (nap)", x0 + col.name + col.vac, y0, { width: col.sday, align: "right" });
-      doc.text("Elkerezes (ora)", x0 + col.name + col.vac + col.sday, y0, { width: col.sh, align: "right" });
+      const tableW = col.name + col.vac + col.sday + col.sh;
 
-      let y = y0 + rowH;
-      doc.moveTo(x0, y0 + rowH - 3).lineTo(x0 + col.name + col.vac + col.sday + col.sh, y0 + rowH - 3).strokeColor("#999999").stroke();
+      // Header row background
+      const yHeader = doc.y;
+      doc.save();
+      doc.rect(x0, yHeader - 2, tableW, rowH).fill("#F2F2F2");
+      doc.restore();
+
+      doc.fontSize(10).fillColor("#000000");
+      doc.text("Nume", x0 + 4, yHeader + 3, { width: col.name - 8 });
+      doc.text("Concediu (zile)", x0 + col.name, yHeader + 3, { width: col.vac, align: "right" });
+      doc.text("Invoire (zile)", x0 + col.name + col.vac, yHeader + 3, { width: col.sday, align: "right" });
+      doc.text("Invoire (ore)", x0 + col.name + col.vac + col.sday, yHeader + 3, { width: col.sh, align: "right" });
+
+      // Header line
+      doc.moveTo(x0, yHeader + rowH).lineTo(x0 + tableW, yHeader + rowH).strokeColor("#999999").stroke();
+
+      let y = yHeader + rowH + 2;
 
       for (const row of r.rows) {
-        if (y > doc.page.height - doc.page.margins.bottom - rowH) {
+        if (y > doc.page.height - doc.page.margins.bottom - rowH - 80) {
           doc.addPage();
           y = doc.y;
         }
-        doc.strokeColor("#DDDDDD");
-        doc.text(String(row.employeeName || ""), x0, y, { width: col.name });
-        doc.text(String(row.vacationDays ?? 0), x0 + col.name, y, { width: col.vac, align: "right" });
-        doc.text(String(row.shortDays ?? 0), x0 + col.name + col.vac, y, { width: col.sday, align: "right" });
-        doc.text(String(row.shortHours ?? 0), x0 + col.name + col.vac + col.sday, y, { width: col.sh, align: "right" });
+
+        doc.fontSize(10).fillColor("#000000");
+        doc.text(String(row.employeeName || ""), x0 + 4, y + 3, { width: col.name - 8 });
+        doc.text(String(row.vacationDays ?? 0), x0 + col.name, y + 3, { width: col.vac, align: "right" });
+        doc.text(String(row.shortDays ?? 0), x0 + col.name + col.vac, y + 3, { width: col.sday, align: "right" });
+        doc.text(String(row.shortHours ?? 0), x0 + col.name + col.vac + col.sday, y + 3, { width: col.sh, align: "right" });
+
+        // Row separator
+        doc.moveTo(x0, y + rowH).lineTo(x0 + tableW, y + rowH).strokeColor("#E0E0E0").stroke();
         y += rowH;
       }
 
-      doc.moveDown(0.75);
-      doc.fontSize(9).fillColor("#555555").text(`Keszult: ${new Date().toISOString().slice(0, 10)}`);
+      doc.moveDown(1.2);
+      doc.fontSize(9).fillColor("#333333").text(`Data generarii: ${genDate}`, { align: "left" });
+      doc.moveDown(1.6);
+
+      // Signatures
+      const sigY = doc.y;
+      const half = (tableW - 20) / 2;
+      doc.fontSize(10).fillColor("#000000");
+      doc.text("Administrator", x0, sigY, { width: half, align: "left" });
+      doc.text("Intocmit", x0 + half + 20, sigY, { width: half, align: "left" });
+      doc.moveDown(0.4);
+      const lineY = doc.y + 10;
+      doc.moveTo(x0, lineY).lineTo(x0 + half, lineY).strokeColor("#000000").stroke();
+      doc.moveTo(x0 + half + 20, lineY).lineTo(x0 + half + 20 + half, lineY).strokeColor("#000000").stroke();
 
       doc.end();
     } catch (e) {
