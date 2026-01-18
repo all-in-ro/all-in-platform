@@ -351,6 +351,12 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   return (
     <div className="min-h-screen w-screen" style={{ backgroundColor: "#474c59" }}>
+      {/* Native <select> dropdowns love forcing bright blue highlights.
+          Override option backgrounds so the dropdown uses our palette. */}
+      <style>{`
+        select.allin-select option { background: #354153; color: #ffffff; }
+        select.allin-select option:checked { background: #208d8b; color: #ffffff; }
+      `}</style>
       <div className="w-full max-w-6xl mx-auto px-4 py-6">
         <div className={card}>
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -491,7 +497,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     <div className={label}>Típus</div>
                     <select
                       className={
-                        "w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
+                        "allin-select w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
                       }
                       value={kind}
                       onChange={(e) => setKind(e.target.value as any)}
