@@ -153,6 +153,10 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [compDay, setCompDay] = useState<string>(new Date().toISOString().slice(0, 10));
   const [compUnit, setCompUnit] = useState<"day" | "hour">("hour");
   const [compDir, setCompDir] = useState<"credit" | "debit">("credit");
+  const [compDirOpen, setCompDirOpen] = useState(false);
+  const [compUnitOpen, setCompUnitOpen] = useState(false);
+  const compDirRef = useRef<HTMLDivElement | null>(null);
+  const compUnitRef = useRef<HTMLDivElement | null>(null);
   const [compAmount, setCompAmount] = useState<number>(2);
   const [compNote, setCompNote] = useState<string>("");
   const [compChecked, setCompChecked] = useState(false);
@@ -182,19 +186,52 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [yearErr, setYearErr] = useState("");
   const [yearBusy, setYearBusy] = useState(false);
 
+  // PDF settings modal (desktop only)
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const [pdfYear, setPdfYear] = useState<number>(new Date().getFullYear());
+  const [pdfEmployee, setPdfEmployee] = useState<string>(""); // empty = all
+  const [pdfEmpOpen, setPdfEmpOpen] = useState(false);
+  const pdfEmpRef = useRef<HTMLDivElement | null>(null);
+
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!confirmOpen && !summaryOpen) return;
+    if (!confirmOpen && !summaryOpen && !pdfOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setConfirmOpen(false);
         setSummaryOpen(false);
+        setPdfOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen, summaryOpen]);
+  }, [confirmOpen, summaryOpen, pdfOpen]);
+
+  // Custom dropdowns for Compensation + PDF (avoid OS/browser blue highlights)
+  useEffect(() => {
+    if (!compDirOpen && !compUnitOpen && !pdfEmpOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (compDirOpen && compDirRef.current && !compDirRef.current.contains(t)) setCompDirOpen(false);
+      if (compUnitOpen && compUnitRef.current && !compUnitRef.current.contains(t)) setCompUnitOpen(false);
+      if (pdfEmpOpen && pdfEmpRef.current && !pdfEmpRef.current.contains(t)) setPdfEmpOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setCompDirOpen(false);
+        setCompUnitOpen(false);
+        setPdfEmpOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [compDirOpen, compUnitOpen, pdfEmpOpen]);
 
   // Custom "Típus" dropdown: force ONLY our colors (no OS/browser blue highlight).
   useEffect(() => {
@@ -264,19 +301,24 @@ export default function AllInVacations({ api }: { api?: string }) {
     await fetchYearSummary(summaryYear);
   };
 
-  const downloadYearPdf = async () => {
-    const y = Number(summaryYear);
-    if (!Number.isFinite(y)) return;
+  const openPdf = () => {
+    setYearErr("");
+    setPdfYear(Number.isFinite(summaryYear) ? summaryYear : new Date().getFullYear());
+    setPdfEmployee("");
+    setPdfOpen(true);
+  };
 
-    // Open directly so the browser handles download + cookies reliably.
-    // If the server returns an error page/JSON, the user will still SEE something.
+  const downloadPdf = async () => {
+    const y = Number(pdfYear);
+    if (!Number.isFinite(y)) return;
     setYearErr("");
     try {
-      const url = `${apiBase}/admin/vacations/summary.pdf?year=${encodeURIComponent(String(y))}`;
+      const params = new URLSearchParams();
+      params.set("year", String(y));
+      if (pdfEmployee.trim()) params.set("employee", pdfEmployee.trim());
+      const url = `${apiBase}/admin/vacations/summary.pdf?${params.toString()}`;
       const w = window.open(url, "_blank", "noopener,noreferrer");
-      if (!w) {
-        setYearErr("A böngésző letiltotta az új ablakot a PDF-hez.");
-      }
+      if (!w) setYearErr("A böngésző letiltotta az új ablakot a PDF-hez.");
     } catch (e: any) {
       setYearErr(String(e?.message || e || "Hiba PDF-nél"));
     }
@@ -807,32 +849,110 @@ export default function AllInVacations({ api }: { api?: string }) {
 
           <div className="grid gap-2">
             <div className={label}>Típus</div>
-            <select
-              className={input + " allin-select"}
-              value={compDir}
-              onChange={(e) => setCompDir(e.target.value as any)}
-            >
-              <option value="credit">Tartozunk neki (+)</option>
-              <option value="debit">Kiegyenlítve (-)</option>
-            </select>
+	          <div ref={compDirRef} className="relative">
+	            <button
+	              type="button"
+	              className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
+	              onClick={() => setCompDirOpen((v) => !v)}
+	              aria-haspopup="listbox"
+	              aria-expanded={compDirOpen}
+	            >
+	              <span className="text-sm">{compDir === "credit" ? "Tartozunk neki (+)" : "Kiegyenlítve (-)"}</span>
+	              <span className="text-white/70 text-xs">▾</span>
+	            </button>
+
+	            {compDirOpen && (
+	              <div
+	                role="listbox"
+	                className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
+	                style={{ backgroundColor: "#354153" }}
+	              >
+	                <button
+	                  type="button"
+	                  role="option"
+	                  aria-selected={compDir === "credit"}
+	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+	                  style={{ backgroundColor: compDir === "credit" ? "#208d8b" : "#354153" }}
+	                  onClick={() => {
+	                    setCompDir("credit");
+	                    setCompDirOpen(false);
+	                  }}
+	                >
+	                  Tartozunk neki (+)
+	                </button>
+	
+	                <button
+	                  type="button"
+	                  role="option"
+	                  aria-selected={compDir === "debit"}
+	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+	                  style={{ backgroundColor: compDir === "debit" ? "#208d8b" : "#354153" }}
+	                  onClick={() => {
+	                    setCompDir("debit");
+	                    setCompDirOpen(false);
+	                  }}
+	                >
+	                  Kiegyenlítve (-)
+	                </button>
+	              </div>
+	            )}
+	          </div>
           </div>
 
           <div className="grid gap-2">
             <div className={label}>Mérték</div>
-            <select
-              className={input + " allin-select"}
-              value={compUnit}
-              onChange={(e) => {
-                const u = e.target.value as any;
-                setCompUnit(u);
-                // sane default
-                if (u === "day" && compAmount > 31) setCompAmount(1);
-                if (u === "hour" && compAmount > 12) setCompAmount(2);
-              }}
-            >
-              <option value="hour">Óra</option>
-              <option value="day">Nap</option>
-            </select>
+	          <div ref={compUnitRef} className="relative">
+	            <button
+	              type="button"
+	              className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
+	              onClick={() => setCompUnitOpen((v) => !v)}
+	              aria-haspopup="listbox"
+	              aria-expanded={compUnitOpen}
+	            >
+	              <span className="text-sm">{compUnit === "hour" ? "Óra" : "Nap"}</span>
+	              <span className="text-white/70 text-xs">▾</span>
+	            </button>
+
+	            {compUnitOpen && (
+	              <div
+	                role="listbox"
+	                className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
+	                style={{ backgroundColor: "#354153" }}
+	              >
+	                <button
+	                  type="button"
+	                  role="option"
+	                  aria-selected={compUnit === "hour"}
+	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+	                  style={{ backgroundColor: compUnit === "hour" ? "#208d8b" : "#354153" }}
+	                  onClick={() => {
+	                    const u = "hour" as const;
+	                    setCompUnit(u);
+	                    if (compAmount > 12) setCompAmount(2);
+	                    setCompUnitOpen(false);
+	                  }}
+	                >
+	                  Óra
+	                </button>
+	
+	                <button
+	                  type="button"
+	                  role="option"
+	                  aria-selected={compUnit === "day"}
+	                  className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+	                  style={{ backgroundColor: compUnit === "day" ? "#208d8b" : "#354153" }}
+	                  onClick={() => {
+	                    const u = "day" as const;
+	                    setCompUnit(u);
+	                    if (compAmount > 31) setCompAmount(1);
+	                    setCompUnitOpen(false);
+	                  }}
+	                >
+	                  Nap
+	                </button>
+	              </div>
+	            )}
+	          </div>
           </div>
 
           <div className="grid gap-2">
@@ -1074,7 +1194,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
             <div className="flex items-center gap-2 ml-auto">
               {/* Mobilon a PDF generálás nem kell. */}
-              <Button className={btn + " hidden sm:inline-flex"} type="button" onClick={downloadYearPdf} disabled={yearBusy}>
+              <Button className={btn + " hidden sm:inline-flex"} type="button" onClick={openPdf} disabled={yearBusy}>
                 <span className="inline-flex items-center gap-2">
                   <img
                     src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png"
@@ -1284,6 +1404,104 @@ export default function AllInVacations({ api }: { api?: string }) {
                 })
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {pdfOpen && (
+        <div className="fixed inset-0 z-[125] grid place-items-center bg-black/50 px-4">
+          <div className="w-full max-w-2xl rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-white font-medium">PDF generálás</div>
+                <div className="text-white/70 text-sm mt-1">
+                  Év + (opcionálisan) alkalmazott. Ha választasz alkalmazottat, lesz aláírási rész is.
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={2000}
+                  max={2100}
+                  className="h-10 w-28 rounded-xl px-3 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
+                  value={pdfYear}
+                  onChange={(e) => setPdfYear(Number(e.target.value))}
+                />
+
+                <div ref={pdfEmpRef} className="relative">
+                  <button
+                    type="button"
+                    className="h-10 min-w-[220px] px-3 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10 flex items-center justify-between gap-2"
+                    onClick={() => setPdfEmpOpen((v) => !v)}
+                    aria-haspopup="listbox"
+                    aria-expanded={pdfEmpOpen}
+                  >
+                    <span className="text-sm truncate">
+                      {pdfEmployee.trim() ? pdfEmployee.trim() : "Összes dolgozó"}
+                    </span>
+                    <span className="text-white/70 text-xs">▾</span>
+                  </button>
+
+                  {pdfEmpOpen && (
+                    <div
+                      role="listbox"
+                      className="absolute right-0 z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
+                      style={{ backgroundColor: "#354153" }}
+                    >
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={!pdfEmployee.trim()}
+                        className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+                        style={{ backgroundColor: !pdfEmployee.trim() ? "#208d8b" : "#354153" }}
+                        onClick={() => {
+                          setPdfEmployee("");
+                          setPdfEmpOpen(false);
+                        }}
+                      >
+                        Összes dolgozó
+                      </button>
+
+                      {employees.map((e) => (
+                        <button
+                          key={e.name}
+                          type="button"
+                          role="option"
+                          aria-selected={pdfEmployee.trim() === e.name}
+                          className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+                          style={{ backgroundColor: pdfEmployee.trim() === e.name ? "#208d8b" : "#354153" }}
+                          onClick={() => {
+                            setPdfEmployee(e.name);
+                            setPdfEmpOpen(false);
+                          }}
+                        >
+                          {e.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  onClick={downloadPdf}
+                >
+                  PDF
+                </button>
+
+                <button
+                  type="button"
+                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => setPdfOpen(false)}
+                >
+                  Mégse
+                </button>
+              </div>
+            </div>
+
+            {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
           </div>
         </div>
       )}
