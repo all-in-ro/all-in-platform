@@ -452,20 +452,20 @@ export default function AllInCarExpensesMobile() {
       {/* Totals */}
       <div className="p-3 grid grid-cols-3 gap-2 bg-transparent">
         <Card
-          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm"
+          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm overflow-hidden"
           style={{ backgroundColor: "#fff" }}
         >
-          <CardContent className="p-3 bg-white">
+          <CardContent className="p-3 bg-white h-[72px] flex flex-col items-center justify-center text-center">
             <div className="text-[11px] text-slate-600">Tételek</div>
             <div className="text-2xl leading-none font-semibold mt-1">{enriched.length}</div>
           </CardContent>
         </Card>
 
         <Card
-          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm"
+          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm overflow-hidden"
           style={{ backgroundColor: "#fff" }}
         >
-          <CardContent className="p-3 bg-white">
+          <CardContent className="p-3 bg-white h-[72px] flex flex-col items-center justify-center text-center">
             <div className="text-[11px] text-slate-600">Időszak</div>
             <div className="text-[12px] leading-tight mt-1">
               {dateFrom}
@@ -475,10 +475,10 @@ export default function AllInCarExpensesMobile() {
         </Card>
 
         <Card
-          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm"
+          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm overflow-hidden"
           style={{ backgroundColor: "#fff" }}
         >
-          <CardContent className="p-3 bg-white">
+          <CardContent className="p-3 bg-white h-[72px] flex flex-col items-center justify-center text-center">
             <div className="text-[11px] text-slate-600">Összeg (RON)</div>
             <div className="text-xl leading-none font-semibold mt-1">
               <Money value={total} />
@@ -500,8 +500,8 @@ export default function AllInCarExpensesMobile() {
             );
           })
           .map((r) => (
-            <Card key={r.id || Math.random()} className="rounded-lg border-slate-300 bg-white text-slate-800" style={{ backgroundColor: "#fff" }}>
-              <CardContent className="p-3 grid gap-2 bg-white">
+            <Card key={r.id || Math.random()} className="rounded-lg border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff" }}>
+              <CardContent className="p-3 bg-white flex flex-col gap-2 items-center">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-[13px]">
                     <CalendarDays className="w-4 h-4 text-slate-600" />
@@ -512,7 +512,7 @@ export default function AllInCarExpensesMobile() {
                   </div>
                 </div>
 
-                <div className="grid gap-1 text-[12px]">
+                <div className="w-full grid gap-1 text-[12px] text-left">
                   <div>
                     <span className="text-slate-500">Autó:</span>{" "}
                     <span className="font-medium">{r.plate || "Ismeretlen"}</span>
@@ -528,7 +528,7 @@ export default function AllInCarExpensesMobile() {
                   <div><span className="text-slate-500">Számla:</span> {r.invoice_no || "—"}</div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-1">
+                <div className="w-full flex items-center justify-center gap-2 pt-1">
                   <button
                     className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900 text-[12px]"
                     onClick={() => onEdit(r)}
