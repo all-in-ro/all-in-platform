@@ -451,22 +451,26 @@ export default function AllInCarExpensesMobile() {
 
       {/* Totals */}
       <div className="p-3 grid grid-cols-3 gap-2">
-        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden px-2" style={{ backgroundColor: "#fff" }}>
+        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff" }}>
           <CardContent className="p-2">
             <div className="text-[10px] text-slate-600">Tételek</div>
-            <div className="text-lg font-semibold">{enriched.length}</div>
+            <div className="text-[20px] font-semibold whitespace-nowrap">{enriched.length}</div>
           </CardContent>
         </Card>
-        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden px-2" style={{ backgroundColor: "#fff" }}>
+        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff" }}>
           <CardContent className="p-2">
             <div className="text-[10px] text-slate-600">Időszak</div>
-            <div className="text-[11px] leading-tight">{dateFrom}<br/>→ {dateTo}</div>
+            <div className="text-[10.5px] leading-tight">
+              <span className="whitespace-nowrap">{dateFrom}</span>
+              <br />
+              <span className="whitespace-nowrap">→ {dateTo}</span>
+            </div>
           </CardContent>
         </Card>
-        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden px-2" style={{ backgroundColor: "#fff" }}>
+        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff" }}>
           <CardContent className="p-2">
             <div className="text-[10px] text-slate-600">Összeg (RON)</div>
-            <div className="text-lg font-semibold"><Money value={total} /></div>
+            <div className="text-[18px] font-semibold whitespace-nowrap"><Money value={total} /></div>
           </CardContent>
         </Card>
       </div>
