@@ -469,7 +469,7 @@ export default function AllInCarExpensesMobile() {
         </Card>
         <Card className="rounded-md border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff" }}>
           <CardContent className="p-2">
-            <div className="text-[10px] text-slate-600">Összeg <span className="text-[10px]">(RON)</span></div>
+            <div className="text-[10px] text-slate-600 whitespace-nowrap inline-flex items-baseline gap-1">Összeg <span className="text-[10px]">(RON)</span></div>
             <div className="text-[18px] font-semibold whitespace-nowrap"><Money value={total} /></div>
           </CardContent>
         </Card>
