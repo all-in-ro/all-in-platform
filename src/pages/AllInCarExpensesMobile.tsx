@@ -491,7 +491,7 @@ export default function AllInCarExpensesMobile() {
           })
           .map((r) => (
             <Card key={r.id || Math.random()} className="rounded-lg border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff", color: "#0f172a" }} >
-              <CardContent className="p-3 grid gap-2" style={{ backgroundColor: "#fff" }}>
+              <CardContent className="p-3 pt-4 grid gap-2" style={{ backgroundColor: "#fff" }}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-[13px]">
                     <CalendarDays className="w-4 h-4 text-slate-600" />
