@@ -17,7 +17,39 @@ type TimeEvent = {
 
 type SummaryRow = { employeeName: string; vacationDays: number; shortDays: number; shortHours: number };
 
-type YearSummaryRow = { employeeName: string; vacationDays: number; shortDays: number; shortHours: number };
+type CompEvent = {
+  id: string;
+  employeeName: string;
+  day: string; // YYYY-MM-DD
+  unit: "day" | "hour";
+  amount: number; // + = tartozunk neki, - = kompenzaltuk
+  note: string;
+  createdAt: string;
+  createdBy: string | null;
+};
+
+type CompSummaryRow = {
+  employeeName: string;
+  creditDays: number;
+  creditHours: number;
+  debitDays: number;
+  debitHours: number;
+  balanceDays: number;
+  balanceHours: number;
+};
+
+type YearSummaryRow = {
+  employeeName: string;
+  vacationDays: number;
+  shortDays: number;
+  shortHours: number;
+  compCreditDays?: number;
+  compCreditHours?: number;
+  compDebitDays?: number;
+  compDebitHours?: number;
+  compBalanceDays?: number;
+  compBalanceHours?: number;
+};
 
 function normBase(s: string) {
   return s.replace(/\/+$/, "");
@@ -92,6 +124,8 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [month, setMonth] = useState<string>(yyyymmNow());
   const [items, setItems] = useState<TimeEvent[]>([]);
   const [summary, setSummary] = useState<SummaryRow[]>([]);
+  const [compItems, setCompItems] = useState<CompEvent[]>([]);
+  const [compSummary, setCompSummary] = useState<CompSummaryRow[]>([]);
   const [listErr, setListErr] = useState("");
   const [listBusy, setListBusy] = useState(false);
 
@@ -115,6 +149,16 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [saveErr, setSaveErr] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
 
+  // Compensation (tartozas / kompenzacio)
+  const [compDay, setCompDay] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [compUnit, setCompUnit] = useState<"day" | "hour">("hour");
+  const [compDir, setCompDir] = useState<"credit" | "debit">("credit");
+  const [compAmount, setCompAmount] = useState<number>(2);
+  const [compNote, setCompNote] = useState<string>("");
+  const [compChecked, setCompChecked] = useState(false);
+  const [compErr, setCompErr] = useState<string>("");
+  const [compBusy, setCompBusy] = useState(false);
+
   // Keep period end sane when switching types / changing start day.
   useEffect(() => {
     if (kind !== "vacation") return;
@@ -129,6 +173,7 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [confirmTitle, setConfirmTitle] = useState("");
   const [confirmMsg, setConfirmMsg] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"deleteTime" | "deleteComp" | "saveComp" | null>(null);
 
   // Year summary + PDF
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -249,6 +294,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       const jSum = await rSum.json().catch(() => null);
       if (!rSum.ok) throw new Error(String(jSum?.error || jSum?.message || `HTTP ${rSum.status}`));
       setSummary(Array.isArray(jSum?.summary) ? jSum.summary : []);
+      setCompSummary(Array.isArray(jSum?.compSummary) ? jSum.compSummary : []);
 
       // 2) Then load the events list for the SELECTED employee (right panel).
       if (emp) {
@@ -257,13 +303,17 @@ export default function AllInVacations({ api }: { api?: string }) {
         const jItems = await rItems.json().catch(() => null);
         if (!rItems.ok) throw new Error(String(jItems?.error || jItems?.message || `HTTP ${rItems.status}`));
         setItems(Array.isArray(jItems?.items) ? jItems.items : []);
+        setCompItems(Array.isArray(jItems?.compItems) ? jItems.compItems : []);
       } else {
         setItems([]);
+        setCompItems([]);
       }
     } catch (e: any) {
       setListErr(String(e?.message || e || "Hiba"));
       setItems([]);
       setSummary([]);
+      setCompItems([]);
+      setCompSummary([]);
     } finally {
       setListBusy(false);
     }
@@ -284,6 +334,21 @@ export default function AllInVacations({ api }: { api?: string }) {
     const s = summary.find((x) => x.employeeName === selected);
     return s || { employeeName: selected, vacationDays: 0, shortDays: 0, shortHours: 0 };
   }, [summary, selected]);
+
+  const selectedComp = useMemo(() => {
+    const s = compSummary.find((x) => x.employeeName === selected);
+    return (
+      s || {
+        employeeName: selected,
+        creditDays: 0,
+        creditHours: 0,
+        debitDays: 0,
+        debitHours: 0,
+        balanceDays: 0,
+        balanceHours: 0,
+      }
+    );
+  }, [compSummary, selected]);
 
   const selectedShortHours = useMemo(() => {
     const emp = selected.trim();
@@ -363,30 +428,138 @@ export default function AllInVacations({ api }: { api?: string }) {
     }
   };
 
-  const openDelete = (id: string) => {
-    setConfirmTitle("Törlés");
-    setConfirmMsg("Biztos törlöd? Ez csak a bejegyzést törli, nem a dolgozót.");
-    setConfirmId(id);
-    setConfirmOpen(true);
-  };
+  async function saveComp() {
+    setCompErr("");
+    const emp = selected.trim();
+    if (!emp) {
+      setCompErr("Válassz alkalmazottat.");
+      return;
+    }
+    if (!/\d{4}-\d{2}-\d{2}/.test(compDay)) {
+      setCompErr("A dátum formátuma hibás.");
+      return;
+    }
+    if (!compNote.trim()) {
+      setCompErr("A megjegyzés kötelező (ez a bizonyíték).");
+      return;
+    }
 
-  const runDelete = async () => {
-    const id = confirmId;
-    setConfirmOpen(false);
-    setConfirmId(null);
-    if (!id) return;
+    const a = Math.trunc(Number(compAmount));
+    if (!Number.isFinite(a) || a <= 0) {
+      setCompErr("A mennyiség legyen pozitív szám.");
+      return;
+    }
+    if (compUnit === "hour" && a > 12) {
+      setCompErr("Óránál maximum 12 legyen.");
+      return;
+    }
+    if (compUnit === "day" && a > 31) {
+      setCompErr("Napnál maximum 31 legyen.");
+      return;
+    }
 
-    setListErr("");
+    const signed = compDir === "credit" ? a : -a;
+
+    setCompBusy(true);
     try {
-      const r = await fetch(`${apiBase}/admin/vacations/${encodeURIComponent(id)}`, {
-        method: "DELETE",
+      const payload = {
+        employeeName: emp,
+        day: compDay,
+        unit: compUnit,
+        amount: signed,
+        note: compNote.trim(),
+      };
+
+      const r = await fetch(`${apiBase}/admin/vacations/comp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Accept: "application/json" },
         credentials: "include",
+        body: JSON.stringify(payload),
       });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
-      await fetchList();
+
+      setCompNote("");
+      setCompChecked(false);
+      await fetchList(emp);
     } catch (e: any) {
-      setListErr(String(e?.message || e || "Hiba törlésnél"));
+      setCompErr(String(e?.message || e || "Hiba"));
+    } finally {
+      setCompBusy(false);
+    }
+  }
+
+  const openDeleteTime = (id: string) => {
+    setConfirmTitle("Törlés");
+    setConfirmMsg("Biztos törlöd? Ez csak a bejegyzést törli, nem a dolgozót.");
+    setConfirmId(id);
+    setConfirmAction("deleteTime");
+    setConfirmOpen(true);
+  };
+
+  const openDeleteComp = (id: string) => {
+    setConfirmTitle("Törlés");
+    setConfirmMsg("Biztos törlöd ezt a kompenzációs bejegyzést?");
+    setConfirmId(id);
+    setConfirmAction("deleteComp");
+    setConfirmOpen(true);
+  };
+
+  const openSaveCompConfirm = () => {
+    setConfirmTitle("Kompenzáció mentése");
+    setConfirmMsg(
+      "Biztos mented? Ez kompenzációs esemény lesz (tartozás / kiegyenlítés), és nem csökkenti a rendes szabadságot."
+    );
+    setConfirmId(null);
+    setConfirmAction("saveComp");
+    setConfirmOpen(true);
+  };
+
+  const runConfirm = async () => {
+    const action = confirmAction;
+    const id = confirmId;
+    setConfirmOpen(false);
+    setConfirmId(null);
+    setConfirmAction(null);
+
+    if (!action) return;
+
+    if (action === "deleteTime") {
+      if (!id) return;
+      setListErr("");
+      try {
+        const r = await fetch(`${apiBase}/admin/vacations/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
+        await fetchList();
+      } catch (e: any) {
+        setListErr(String(e?.message || e || "Hiba törlésnél"));
+      }
+      return;
+    }
+
+    if (action === "deleteComp") {
+      if (!id) return;
+      setListErr("");
+      try {
+        const r = await fetch(`${apiBase}/admin/vacations/comp/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
+        await fetchList();
+      } catch (e: any) {
+        setListErr(String(e?.message || e || "Hiba törlésnél"));
+      }
+      return;
+    }
+
+    if (action === "saveComp") {
+      await saveComp();
     }
   };
 
@@ -488,6 +661,8 @@ export default function AllInVacations({ api }: { api?: string }) {
         <div className="mt-2 text-white/70 text-sm">
           Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés órák:{" "}
           <span className="text-white">{selectedShortHours}</span>
+          <span className="text-white/50"> · </span>
+          Tartozás egyenleg: <span className="text-white">{selectedComp.balanceDays}</span> nap, <span className="text-white">{selectedComp.balanceHours}</span> óra
         </div>
       </div>
 
@@ -610,6 +785,183 @@ export default function AllInVacations({ api }: { api?: string }) {
         </div>
       </div>
 
+      <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-white/80 text-sm">Kompenzáció (tartozás)</div>
+            <div className="text-white/50 text-xs mt-1">
+              Ha hivatalos szabadság alatt dolgozik vagy túlórázik: te tartozol. Ha kiadod/kompenzálod: kiegyenlítés.
+            </div>
+          </div>
+          <div className="text-white/70 text-sm">
+            Egyenleg ({month}):{" "}
+            <span className="text-white">{selectedComp.balanceDays}</span> nap, <span className="text-white">{selectedComp.balanceHours}</span> óra
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-4">
+          <div className="grid gap-2">
+            <div className={label}>Dátum</div>
+            <input type="date" className={input} value={compDay} onChange={(e) => setCompDay(e.target.value)} />
+          </div>
+
+          <div className="grid gap-2">
+            <div className={label}>Típus</div>
+            <select
+              className={input + " allin-select"}
+              value={compDir}
+              onChange={(e) => setCompDir(e.target.value as any)}
+            >
+              <option value="credit">Tartozunk neki (+)</option>
+              <option value="debit">Kiegyenlítve (-)</option>
+            </select>
+          </div>
+
+          <div className="grid gap-2">
+            <div className={label}>Mérték</div>
+            <select
+              className={input + " allin-select"}
+              value={compUnit}
+              onChange={(e) => {
+                const u = e.target.value as any;
+                setCompUnit(u);
+                // sane default
+                if (u === "day" && compAmount > 31) setCompAmount(1);
+                if (u === "hour" && compAmount > 12) setCompAmount(2);
+              }}
+            >
+              <option value="hour">Óra</option>
+              <option value="day">Nap</option>
+            </select>
+          </div>
+
+          <div className="grid gap-2">
+            <div className={label}>Mennyiség</div>
+            <input
+              type="number"
+              min={1}
+              max={compUnit === "hour" ? 12 : 31}
+              step={1}
+              className={input}
+              value={compAmount}
+              onChange={(e) => setCompAmount(Number(e.target.value))}
+            />
+          </div>
+
+          <div className="grid gap-2 sm:col-span-4">
+            <div className={label}>Megjegyzés (kötelező)</div>
+            <input
+              className={input}
+              value={compNote}
+              onChange={(e) => setCompNote(e.target.value)}
+              placeholder="Pl. behívva szabadság alatt / túlóra / kompenzáció kiadva"
+            />
+          </div>
+
+          <div className="sm:col-span-4 flex items-center justify-between gap-3 flex-wrap">
+            <label className="inline-flex items-center gap-2 text-white/80 text-sm select-none">
+              <input
+                type="checkbox"
+                checked={compChecked}
+                onChange={(e) => setCompChecked(e.target.checked)}
+                className="h-4 w-4 accent-[#208d8b]"
+              />
+              Kompenzációs esemény (nem csökkenti a rendes szabadságot)
+            </label>
+
+            <Button
+              type="button"
+              className={btnPrimary}
+              disabled={compBusy || !selected}
+              onClick={() => {
+                setCompErr("");
+                if (!compChecked) {
+                  setCompErr("Előbb pipáld ki, hogy ez kompenzáció (külön tábla), majd mentés.");
+                  return;
+                }
+                openSaveCompConfirm();
+              }}
+            >
+              {compBusy ? "Mentés…" : "Mentés"}
+            </Button>
+          </div>
+        </div>
+
+        {compErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{compErr}</div> : null}
+
+        <div className="mt-4 rounded-xl border border-white/30 overflow-hidden">
+          {isMobile ? (
+            <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+              <div className="col-span-4">Dátum</div>
+              <div className="col-span-7">Típus</div>
+              <div className="col-span-1 text-right"> </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+              <div className="col-span-3">Dátum</div>
+              <div className="col-span-3">Típus</div>
+              <div className="col-span-2 text-right">Nap</div>
+              <div className="col-span-2 text-right">Óra</div>
+              <div className="col-span-1">Megjegyzés</div>
+              <div className="col-span-1 text-right"> </div>
+            </div>
+          )}
+
+          {compItems.length === 0 ? (
+            <div className="px-3 py-6 text-white/60 text-sm">Nincs kompenzáció ebben a hónapban.</div>
+          ) : (
+            compItems.map((it) => {
+              const isDay = it.unit === "day";
+              const isCredit = Number(it.amount) > 0;
+              const labelType = isCredit ? "Tartozás (+)" : "Kiegyenlítés (-)";
+              const dayVal = isDay ? Math.abs(Number(it.amount) || 0) : 0;
+              const hourVal = !isDay ? Math.abs(Number(it.amount) || 0) : 0;
+              return isMobile ? (
+                <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start border-t border-white/10">
+                  <div className="col-span-4 text-white text-sm">{it.day}</div>
+                  <div className="col-span-7 text-white/80 text-sm">
+                    <div>
+                      {labelType} · {isDay ? `${dayVal} nap` : `${hourVal} óra`}
+                    </div>
+                    <div className="text-white/60 text-xs mt-1 break-words">{it.note}</div>
+                  </div>
+                  <div className="col-span-1 text-right">
+                    <button
+                      type="button"
+                      aria-label="Törlés"
+                      title="Törlés"
+                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                      onClick={() => openDeleteComp(it.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start border-t border-white/10">
+                  <div className="col-span-3 text-white text-sm">{it.day}</div>
+                  <div className="col-span-3 text-white/80 text-sm">{labelType}</div>
+                  <div className="col-span-2 text-right text-white/80 text-sm">{dayVal || "-"}</div>
+                  <div className="col-span-2 text-right text-white/80 text-sm">{hourVal || "-"}</div>
+                  <div className="col-span-1 text-white/70 text-sm break-words">{it.note}</div>
+                  <div className="col-span-1 text-right">
+                    <button
+                      type="button"
+                      aria-label="Törlés"
+                      title="Törlés"
+                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                      onClick={() => openDeleteComp(it.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
       <div className="mt-4">
         <div className="flex items-center justify-between gap-2">
           <div className="text-white/80 text-sm">Bejegyzések ({month})</div>
@@ -658,7 +1010,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                           aria-label="Törlés"
                           title="Törlés"
                           className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
-                          onClick={() => openDelete(it.id)}
+                          onClick={() => openDeleteTime(it.id)}
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -678,7 +1030,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                           aria-label="Törlés"
                           title="Törlés"
                           className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
-                          onClick={() => openDelete(it.id)}
+                          onClick={() => openDeleteTime(it.id)}
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -888,6 +1240,50 @@ export default function AllInVacations({ api }: { api?: string }) {
                 ))
               )}
             </div>
+
+            <div className="mt-4 rounded-xl border border-white/30 overflow-hidden">
+              {isMobile ? (
+                <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-[11px] px-3 py-2">
+                  <div className="col-span-4">Név</div>
+                  <div className="col-span-4 text-right">Tartozás egyenleg (nap)</div>
+                  <div className="col-span-4 text-right">Tartozás egyenleg (óra)</div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+                  <div className="col-span-6">Név</div>
+                  <div className="col-span-3 text-right">Tartozás egyenleg (nap)</div>
+                  <div className="col-span-3 text-right">Tartozás egyenleg (óra)</div>
+                </div>
+              )}
+
+              {yearRows.length === 0 ? (
+                <div className="px-3 py-6 text-white/60 text-sm">Nincs adat.</div>
+              ) : (
+                yearRows.map((r) => {
+                  const bd = Number(r.compBalanceDays ?? 0) || 0;
+                  const bh = Number(r.compBalanceHours ?? 0) || 0;
+                  return isMobile ? (
+                    <div
+                      key={r.employeeName + "__comp"}
+                      className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10"
+                    >
+                      <div className="col-span-4 text-white text-sm truncate">{r.employeeName}</div>
+                      <div className="col-span-4 text-right text-white/80 text-sm">{bd}</div>
+                      <div className="col-span-4 text-right text-white/80 text-sm">{bh}</div>
+                    </div>
+                  ) : (
+                    <div
+                      key={r.employeeName + "__comp"}
+                      className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10"
+                    >
+                      <div className="col-span-6 text-white text-sm">{r.employeeName}</div>
+                      <div className="col-span-3 text-right text-white/80 text-sm">{bd}</div>
+                      <div className="col-span-3 text-right text-white/80 text-sm">{bh}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -907,8 +1303,11 @@ export default function AllInVacations({ api }: { api?: string }) {
               </button>
               <button
                 type="button"
-                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium"
-                onClick={runDelete}
+                className={
+                  "h-10 px-4 rounded-xl text-white font-medium " +
+                  (confirmAction === "saveComp" ? "bg-[#208d8b] hover:bg-[#1b7a78]" : "bg-red-600 hover:bg-red-700")
+                }
+                onClick={runConfirm}
               >
                 OK
               </button>
