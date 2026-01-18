@@ -146,7 +146,8 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
   // POST /api/admin/vacations
   // Body:
-  // { employeeName, day: 'YYYY-MM-DD', kind: 'vacation'|'short', hoursOff?: number, note?: string }
+  // Vacation can be a single day or a period:
+  // { employeeName, day?: 'YYYY-MM-DD', dayFrom?: 'YYYY-MM-DD', dayTo?: 'YYYY-MM-DD', kind: 'vacation'|'short', hoursOff?: number, note?: string }
   router.post("/", requireAdminOrSecret, express.json(), async (req, res) => {
     try {
       await ensureTables();
@@ -154,6 +155,8 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       const body = req.body || {};
       const employeeName = norm(body.employeeName);
       const day = norm(body.day);
+      const dayFrom = norm(body.dayFrom);
+      const dayTo = norm(body.dayTo);
       const kind = norm(body.kind);
       const note = body.note != null ? String(body.note) : null;
 
@@ -163,30 +166,85 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         : Number(hoursOffRaw);
 
       if (!employeeName) return res.status(400).json({ error: "employeeName required" });
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day must be YYYY-MM-DD" });
       if (!['vacation','short'].includes(kind)) return res.status(400).json({ error: "kind must be vacation|short" });
+
+      // Vacation: support single day OR period.
+      // - Prefer dayFrom/dayTo if present.
+      // - Fallback to day.
+      const startDay = dayFrom || day;
+      const endDay = dayTo || startDay;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDay)) return res.status(400).json({ error: "day/dayFrom must be YYYY-MM-DD" });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(endDay)) return res.status(400).json({ error: "dayTo must be YYYY-MM-DD" });
+
+      const startDate = new Date(`${startDay}T00:00:00Z`);
+      const endDate = new Date(`${endDay}T00:00:00Z`);
+      if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+        return res.status(400).json({ error: "Invalid date" });
+      }
+      if (endDate.getTime() < startDate.getTime()) {
+        return res.status(400).json({ error: "dayTo must be on or after dayFrom" });
+      }
+
+      // Guardrail: humans love clicking too much.
+      // Keep it sane (max 62 days).
+      const diffDays = Math.floor((endDate.getTime() - startDate.getTime()) / (24 * 3600 * 1000)) + 1;
+      if (diffDays > 62) {
+        return res.status(400).json({ error: "Vacation period too long (max 62 days)" });
+      }
 
       let hours = null;
       if (kind === "short") {
         // Default to 4 hours if nothing provided.
-        const h = Number.isFinite(hoursOff) ? Math.floor(hoursOff) : 4;
-        if (h <= 0 || h > 12) return res.status(400).json({ error: "hoursOff must be between 1 and 12" });
+        // Allow 1..12 hours (user requested that it can be 1 hour too).
+        const h = Number.isFinite(hoursOff) ? Math.trunc(hoursOff) : 4;
+        if (h < 1 || h > 12) return res.status(400).json({ error: "hoursOff must be between 1 and 12" });
         hours = h;
       }
 
-      const id = crypto.randomUUID();
       const createdBy = String(req.session?.actor || req.session?.role || "ADMIN");
 
-      await pool.query(
-        `
-        INSERT INTO allin_time_events (id, employee_name, day, kind, hours_off, note, created_by)
-        VALUES ($1,$2,$3::date,$4,$5,$6,$7)
-        ON CONFLICT (employee_name, day, kind)
-        DO UPDATE SET hours_off = EXCLUDED.hours_off,
-                      note = EXCLUDED.note
-        `,
-        [id, employeeName, day, kind, hours, note, createdBy]
-      );
+      // Save:
+      // - short: exactly one day
+      // - vacation: one or many days (period)
+      if (kind === "short") {
+        const id = crypto.randomUUID();
+        await pool.query(
+          `
+          INSERT INTO allin_time_events (id, employee_name, day, kind, hours_off, note, created_by)
+          VALUES ($1,$2,$3::date,$4,$5,$6,$7)
+          ON CONFLICT (employee_name, day, kind)
+          DO UPDATE SET hours_off = EXCLUDED.hours_off,
+                        note = EXCLUDED.note
+          `,
+          [id, employeeName, startDay, kind, hours, note, createdBy]
+        );
+      } else {
+        await pool.query("BEGIN");
+        try {
+          for (let n = 0; n < diffDays; n++) {
+            const d = new Date(startDate.getTime() + n * 24 * 3600 * 1000);
+            const yyyy = d.getUTCFullYear();
+            const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+            const dd = String(d.getUTCDate()).padStart(2, "0");
+            const dayStr = `${yyyy}-${mm}-${dd}`;
+            const id = crypto.randomUUID();
+
+            await pool.query(
+              `
+              INSERT INTO allin_time_events (id, employee_name, day, kind, hours_off, note, created_by)
+              VALUES ($1,$2,$3::date,'vacation',NULL,$4,$5)
+              ON CONFLICT (employee_name, day, kind)
+              DO UPDATE SET note = EXCLUDED.note
+              `,
+              [id, employeeName, dayStr, note, createdBy]
+            );
+          }
+          await pool.query("COMMIT");
+        } catch (e) {
+          await pool.query("ROLLBACK");
+          throw e;
+        }
+      }
 
       res.json({ ok: true });
     } catch (e) {
