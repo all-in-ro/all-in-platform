@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Trash2 } from "lucide-react";
+import { Trash2, Users2, ClipboardList, ArrowLeft } from "lucide-react";
 
 type Employee = { name: string };
 
@@ -34,6 +34,30 @@ function fmtKind(k: TimeEvent["kind"]) {
   return k === "vacation" ? "Szabadság" : "Elkérezés";
 }
 
+function useIsMobile(breakpointPx = 640) {
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia(`(max-width: ${breakpointPx - 1}px)`).matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(`(max-width: ${breakpointPx - 1}px)`);
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+
+    if ("addEventListener" in mq) mq.addEventListener("change", onChange);
+    else (mq as any).addListener(onChange);
+
+    return () => {
+      if ("removeEventListener" in mq) mq.removeEventListener("change", onChange);
+      else (mq as any).removeListener(onChange);
+    };
+  }, [breakpointPx]);
+
+  return isMobile;
+}
+
 export default function AllInVacations({ api }: { api?: string }) {
   const apiBase = useMemo(() => {
     const fromProp = typeof api === "string" && api.trim() ? api.trim() : "";
@@ -41,6 +65,8 @@ export default function AllInVacations({ api }: { api?: string }) {
     const base = fromProp || fromEnv || "/api";
     return normBase(base);
   }, [api]);
+
+  const isMobile = useIsMobile();
 
   const card = "rounded-lg border border-white/30 bg-white/5 shadow-sm px-4 sm:px-6 py-6 sm:py-8";
   const label = "text-white/80 text-sm";
@@ -69,6 +95,15 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [listErr, setListErr] = useState("");
   const [listBusy, setListBusy] = useState(false);
 
+  // Mobile UI state
+  const [mobilePane, setMobilePane] = useState<"employees" | "details">("employees");
+  useEffect(() => {
+    if (!isMobile) return;
+    // If we already have a selected employee, land on details; otherwise employees list.
+    setMobilePane(selected ? "details" : "employees");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile]);
+
   // Create
   const [day, setDay] = useState<string>(new Date().toISOString().slice(0, 10));
   const [dayTo, setDayTo] = useState<string>(new Date().toISOString().slice(0, 10));
@@ -79,10 +114,6 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [note, setNote] = useState<string>("");
   const [saveErr, setSaveErr] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
-
-  const kindLabel = useMemo(() => {
-    return kind === "vacation" ? "Szabadság nap" : "Elkérezés (óra)";
-  }, [kind]);
 
   // Keep period end sane when switching types / changing start day.
   useEffect(() => {
@@ -105,7 +136,6 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [yearRows, setYearRows] = useState<YearSummaryRow[]>([]);
   const [yearErr, setYearErr] = useState("");
   const [yearBusy, setYearBusy] = useState(false);
-
 
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -152,7 +182,10 @@ export default function AllInVacations({ api }: { api?: string }) {
       if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
       const list: Employee[] = Array.isArray(j?.items) ? j.items : [];
       setEmployees(list);
-      if (!selected && list.length) setSelected(list[0].name);
+      if (!selected && list.length) {
+        setSelected(list[0].name);
+        if (isMobile) setMobilePane("details");
+      }
     } catch (e: any) {
       setEmpErr(String(e?.message || e || "Hiba"));
       setEmployees([]);
@@ -167,7 +200,9 @@ export default function AllInVacations({ api }: { api?: string }) {
     setYearErr("");
     setYearBusy(true);
     try {
-      const r = await fetch(`${apiBase}/admin/vacations/summary?year=${encodeURIComponent(String(y))}`, { credentials: "include" });
+      const r = await fetch(`${apiBase}/admin/vacations/summary?year=${encodeURIComponent(String(y))}`, {
+        credentials: "include",
+      });
       const j = await r.json().catch(() => null);
       if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
       setYearRows(Array.isArray(j?.items) ? j.items : []);
@@ -201,7 +236,6 @@ export default function AllInVacations({ api }: { api?: string }) {
       setYearErr(String(e?.message || e || "Hiba PDF-nél"));
     }
   };
-
 
   const fetchList = async (employeeName?: string) => {
     const emp = (employeeName ?? selected).trim();
@@ -377,6 +411,257 @@ export default function AllInVacations({ api }: { api?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
+  const EmployeesPane = (
+    <div>
+      <div className="text-white/80 text-sm">Alkalmazottak</div>
+      <div className="mt-2">
+        <input className={input} placeholder="Keresés név szerint…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+
+      {empErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{empErr}</div> : null}
+
+      <div ref={listRef} className="mt-3 rounded-xl border border-white/30 bg-white/5 max-h-[60vh] overflow-y-auto">
+        {filteredEmployees.length === 0 ? (
+          <div className="px-4 py-4 text-white/60 text-sm">Nincs dolgozó a listában.</div>
+        ) : (
+          filteredEmployees.map((e) => {
+            const active = e.name === selected;
+            const s = summary.find((x) => x.employeeName === e.name);
+            const v = s?.vacationDays ?? 0;
+            const sh = s?.shortDays ?? 0;
+            const shh = s?.shortHours ?? 0;
+            return (
+              <button
+                key={e.name}
+                data-emp={e.name}
+                type="button"
+                className={
+                  "w-full px-4 py-3 text-left flex items-center justify-between gap-3 border-t border-white/10 first:border-t-0 " +
+                  (active ? "bg-white/10" : "hover:bg-white/5")
+                }
+                onClick={() => {
+                  setSelected(e.name);
+                  if (isMobile) setMobilePane("details");
+                }}
+              >
+                <div>
+                  <div className="text-white text-sm">{e.name}</div>
+                  <div className="text-white/60 text-xs mt-1">
+                    {month} · Szabadság: {v} · Elkérezés: {sh} ({shh} óra)
+                  </div>
+                </div>
+                <div className="text-white/40 text-xs">▸</div>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+
+  const DetailsPane = (
+    <div>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <div className="text-white/80 text-sm">Kiválasztva</div>
+          <div className="text-white text-lg font-medium mt-1">{selected || "-"}</div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className={label}>Hónap</div>
+          <input
+            type="month"
+            className={
+              "h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
+            }
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+          />
+          <Button type="button" className={btn} onClick={() => fetchList()} disabled={listBusy}>
+            {listBusy ? "Frissítés…" : "Frissítés"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
+        <div className="text-white/80 text-sm">Gyors összegzés ({month})</div>
+        <div className="mt-2 text-white/70 text-sm">
+          Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés órák:{" "}
+          <span className="text-white">{selectedShortHours}</span>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
+        <div className="text-white/80 text-sm">Új bejegyzés</div>
+
+        <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-3">
+          {kind === "vacation" ? (
+            <>
+              <div className="grid gap-2">
+                <div className={label}>Kezdő nap</div>
+                <input
+                  type="date"
+                  className={input}
+                  value={day}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setDay(v);
+                    if (!dayTo || dayTo.trim() === "" || (dayTo.trim() && dayTo.trim() < v)) setDayTo(v);
+                  }}
+                />
+              </div>
+              <div className="grid gap-2">
+                <div className={label}>Vége</div>
+                <input type="date" className={input} value={dayTo} onChange={(e) => setDayTo(e.target.value)} />
+              </div>
+            </>
+          ) : (
+            <div className="grid gap-2">
+              <div className={label}>Dátum</div>
+              <input type="date" className={input} value={day} onChange={(e) => setDay(e.target.value)} />
+            </div>
+          )}
+
+          <div className="grid gap-2">
+            <div className={label}>Típus</div>
+            <div ref={kindRef} className="relative">
+              <button
+                type="button"
+                className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
+                onClick={() => setKindOpen((v) => !v)}
+                aria-haspopup="listbox"
+                aria-expanded={kindOpen}
+              >
+                <span className="text-sm">{kind === "vacation" ? "Szabadság nap" : "Elkérezés (óra)"}</span>
+                <span className="text-white/70 text-xs">▾</span>
+              </button>
+
+              {kindOpen && (
+                <div
+                  role="listbox"
+                  className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
+                  style={{ backgroundColor: "#354153" }}
+                >
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={kind === "vacation"}
+                    className={
+                      "w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0 "
+                    }
+                    style={{ backgroundColor: kind === "vacation" ? "#208d8b" : "#354153" }}
+                    onClick={() => {
+                      setKind("vacation");
+                      setKindOpen(false);
+                    }}
+                  >
+                    Szabadság nap
+                  </button>
+
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={kind === "short"}
+                    className={"w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"}
+                    style={{ backgroundColor: kind === "short" ? "#208d8b" : "#354153" }}
+                    onClick={() => {
+                      setKind("short");
+                      setKindOpen(false);
+                    }}
+                  >
+                    Elkérezés (óra)
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {kind === "vacation" ? (
+            <div className="sm:col-span-3 text-white/50 text-xs">Kezdő nap · Vége. Ha ugyanaz, egy napot jelent.</div>
+          ) : null}
+
+          {kind === "short" ? (
+            <div className="grid gap-2">
+              <div className={label}>Óra</div>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                step={1}
+                className={input}
+                value={shortHours}
+                onChange={(e) => setShortHours(Number(e.target.value))}
+              />
+            </div>
+          ) : null}
+
+          <div className="grid gap-2 sm:col-span-3">
+            <div className={label}>Megjegyzés (opcionális)</div>
+            <input className={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Pl. orvos" />
+          </div>
+        </div>
+
+        {saveErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{saveErr}</div> : null}
+
+        <div className="mt-4 flex items-center justify-end">
+          <Button type="button" className={btnPrimary} disabled={saveBusy || !selected} onClick={save}>
+            {saveBusy ? "Mentés…" : "Mentés"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-white/80 text-sm">Bejegyzések ({month})</div>
+        </div>
+        {listErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-2">{listErr}</div> : null}
+
+        <div className="mt-3 rounded-xl border border-white/30 overflow-hidden">
+          <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
+            <div className="col-span-4">Dátum</div>
+            <div className="col-span-4">Típus</div>
+            <div className="col-span-3">Megjegyzés</div>
+            <div className="col-span-1 text-right"> </div>
+          </div>
+
+          {grouped.length === 0 ? (
+            <div className="px-3 py-6 text-white/60 text-sm">Nincs bejegyzés ebben a hónapban.</div>
+          ) : (
+            grouped.map((g) => (
+              <div key={g.day} className="border-t border-white/10">
+                {g.items.map((it) => (
+                  <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
+                    <div className="col-span-4 text-white text-sm">{it.day}</div>
+                    <div className="col-span-4 text-white/80 text-sm">
+                      {fmtKind(it.kind)}
+                      {it.kind === "short" ? <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span> : null}
+                    </div>
+                    <div className="col-span-3 text-white/70 text-sm break-words">{it.note || "-"}</div>
+                    <div className="col-span-1 text-right">
+                      <button
+                        type="button"
+                        aria-label="Törlés"
+                        title="Törlés"
+                        className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                        onClick={() => openDelete(it.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="pt-4 text-xs text-white/60">
+          API base: <span className="text-white/70">{apiBase}</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen w-screen" style={{ backgroundColor: "#474c59" }}>
       {/* Native <select> dropdowns love forcing bright blue highlights.
@@ -390,6 +675,7 @@ export default function AllInVacations({ api }: { api?: string }) {
         select.allin-select option:checked,
         select.allin-select option:checked:hover { background-color: #208d8b !important; color: #ffffff !important; }
       `}</style>
+
       <div className="w-full max-w-6xl mx-auto px-4 py-6">
         <div className={card}>
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -399,9 +685,14 @@ export default function AllInVacations({ api }: { api?: string }) {
             </div>
 
             <div className="flex items-center gap-2 ml-auto">
-              <Button className={btn} type="button" onClick={downloadYearPdf} disabled={yearBusy}>
+              {/* Mobilon a PDF generálás nem kell. */}
+              <Button className={btn + " hidden sm:inline-flex"} type="button" onClick={downloadYearPdf} disabled={yearBusy}>
                 <span className="inline-flex items-center gap-2">
-                  <img src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png" alt="PDF" className="h-5 w-5" />
+                  <img
+                    src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png"
+                    alt="PDF"
+                    className="h-5 w-5"
+                  />
                   <span>{yearBusy ? "PDF…" : "PDF"}</span>
                 </span>
               </Button>
@@ -416,269 +707,67 @@ export default function AllInVacations({ api }: { api?: string }) {
 
           {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
 
-          <div className="mt-6 grid gap-4 grid-cols-1 lg:grid-cols-12">
-            {/* Left: employees */}
-            <div className="lg:col-span-4">
-              <div className="text-white/80 text-sm">Alkalmazottak</div>
-              <div className="mt-2">
-                <input
-                  className={input}
-                  placeholder="Keresés név szerint…"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                />
-              </div>
+          {/* Desktop/tablet layout */}
+          <div className="mt-6 hidden sm:grid gap-4 grid-cols-1 lg:grid-cols-12">
+            <div className="lg:col-span-4">{EmployeesPane}</div>
+            <div className="lg:col-span-8">{DetailsPane}</div>
+          </div>
 
-              {empErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{empErr}</div> : null}
-
-              <div ref={listRef} className="mt-3 rounded-xl border border-white/30 bg-white/5 max-h-[60vh] overflow-y-auto">
-                {filteredEmployees.length === 0 ? (
-                  <div className="px-4 py-4 text-white/60 text-sm">Nincs dolgozó a listában.</div>
-                ) : (
-                  filteredEmployees.map((e) => {
-                    const active = e.name === selected;
-                    const s = summary.find((x) => x.employeeName === e.name);
-                    const v = s?.vacationDays ?? 0;
-                    const sh = s?.shortDays ?? 0;
-                    const shh = s?.shortHours ?? 0;
-                    return (
-                      <button
-                        key={e.name}
-                        data-emp={e.name}
-                        type="button"
-                        className={
-                          "w-full px-4 py-3 text-left flex items-center justify-between gap-3 border-t border-white/10 first:border-t-0 " +
-                          (active ? "bg-white/10" : "hover:bg-white/5")
-                        }
-                        onClick={() => setSelected(e.name)}
-                      >
-                        <div>
-                          <div className="text-white text-sm">{e.name}</div>
-                          <div className="text-white/60 text-xs mt-1">
-                            {month} · Szabadság: {v} · Elkérezés: {sh} ({shh} óra)
-                          </div>
-                        </div>
-                        <div className="text-white/40 text-xs">▸</div>
-                      </button>
-                    );
-                  })
-                )}
+          {/* Mobile layout (automatic) */}
+          <div className="mt-6 sm:hidden">
+            <div className="rounded-xl border border-white/30 bg-white/5 overflow-hidden">
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  className={
+                    "flex-1 h-11 px-3 text-sm text-white border-r border-white/10 flex items-center justify-center gap-2 " +
+                    (mobilePane === "employees" ? "bg-white/10" : "bg-transparent")
+                  }
+                  onClick={() => setMobilePane("employees")}
+                >
+                  <Users2 className="h-4 w-4" />
+                  Dolgozók
+                </button>
+                <button
+                  type="button"
+                  className={
+                    "flex-1 h-11 px-3 text-sm text-white flex items-center justify-center gap-2 " +
+                    (mobilePane === "details" ? "bg-white/10" : "bg-transparent")
+                  }
+                  onClick={() => setMobilePane("details")}
+                  disabled={!selected}
+                  aria-disabled={!selected}
+                  title={!selected ? "Előbb válassz dolgozót" : ""}
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Részletek
+                </button>
               </div>
             </div>
 
-            {/* Right: editor */}
-            <div className="lg:col-span-8">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div>
-                  <div className="text-white/80 text-sm">Kiválasztva</div>
-                  <div className="text-white text-lg font-medium mt-1">{selected || "-"}</div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <div className={label}>Hónap</div>
-                  <input
-                    type="month"
-                    className={
-                      "h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
-                    }
-                    value={month}
-                    onChange={(e) => setMonth(e.target.value)}
-                  />
-                  <Button type="button" className={btn} onClick={() => fetchList()} disabled={listBusy}>
-                    {listBusy ? "Frissítés…" : "Frissítés"}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
-                <div className="text-white/80 text-sm">Gyors összegzés ({month})</div>
-                <div className="mt-2 text-white/70 text-sm">
-                  Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés órák: {" "}
-                  <span className="text-white">{selectedShortHours}</span>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
-                <div className="text-white/80 text-sm">Új bejegyzés</div>
-
-                <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-3">
-                  {kind === "vacation" ? (
-                    <>
-                      <div className="grid gap-2">
-                        <div className={label}>Kezdő nap</div>
-                        <input
-                          type="date"
-                          className={input}
-                          value={day}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setDay(v);
-                            if (!dayTo || dayTo.trim() === "" || (dayTo.trim() && dayTo.trim() < v)) setDayTo(v);
-                          }}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <div className={label}>Vége</div>
-                        <input type="date" className={input} value={dayTo} onChange={(e) => setDayTo(e.target.value)} />
-                      </div>
-                    </>
-                  ) : (
-                    <div className="grid gap-2">
-                      <div className={label}>Dátum</div>
-                      <input type="date" className={input} value={day} onChange={(e) => setDay(e.target.value)} />
-                    </div>
-                  )}
-
-                  <div className="grid gap-2">
-                    <div className={label}>Típus</div>
-                    <div ref={kindRef} className="relative">
-                      <button
-                        type="button"
-                        className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
-                        onClick={() => setKindOpen((v) => !v)}
-                        aria-haspopup="listbox"
-                        aria-expanded={kindOpen}
-                      >
-                        <span className="text-sm">
-                          {kind === "vacation" ? "Szabadság nap" : "Elkérezés (óra)"}
-                        </span>
-                        <span className="text-white/70 text-xs">▾</span>
-                      </button>
-
-                      {kindOpen && (
-                        <div
-                          role="listbox"
-                          className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
-                          style={{ backgroundColor: "#354153" }}
-                        >
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={kind === "vacation"}
-                            className={
-                              "w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0 " +
-                              (kind === "vacation" ? "" : "")
-                            }
-                            style={{ backgroundColor: kind === "vacation" ? "#208d8b" : "#354153" }}
-                            onClick={() => {
-                              setKind("vacation");
-                              setKindOpen(false);
-                            }}
-                          >
-                            Szabadság nap
-                          </button>
-
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={kind === "short"}
-                            className={
-                              "w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-                            }
-                            style={{ backgroundColor: kind === "short" ? "#208d8b" : "#354153" }}
-                            onClick={() => {
-                              setKind("short");
-                              setKindOpen(false);
-                            }}
-                          >
-                            Elkérezés (óra)
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {kind === "vacation" ? (
-                    <div className="sm:col-span-3 text-white/50 text-xs">Kezdő nap · Vége. Ha ugyanaz, egy napot jelent.</div>
-                  ) : null}
-
-                  {kind === "short" ? (
-                    <div className="grid gap-2">
-                      <div className={label}>Óra</div>
-                      <input
-                        type="number"
-                        min={1}
-                        max={12}
-                        step={1}
-                        className={input}
-                        value={shortHours}
-                        onChange={(e) => setShortHours(Number(e.target.value))}
-                      />
-                    </div>
-                  ) : null}
-
-                  <div className="grid gap-2 sm:col-span-3">
-                    <div className={label}>Megjegyzés (opcionális)</div>
-                    <input className={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Pl. orvos" />
-                  </div>
-                </div>
-
-                {saveErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{saveErr}</div> : null}
-
-                <div className="mt-4 flex items-center justify-end">
-                  <Button type="button" className={btnPrimary} disabled={saveBusy || !selected} onClick={save}>
-                    {saveBusy ? "Mentés…" : "Mentés"}
-                  </Button>
-                </div>
-              </div>
-
+            {mobilePane === "employees" ? (
+              <div className="mt-4">{EmployeesPane}</div>
+            ) : (
               <div className="mt-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-white/80 text-sm">Bejegyzések ({month})</div>
-                </div>
-                {listErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-2">{listErr}</div> : null}
-
-                <div className="mt-3 rounded-xl border border-white/30 overflow-hidden">
-                  <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
-                    <div className="col-span-3">Dátum</div>
-                    <div className="col-span-3">Típus</div>
-                    <div className="col-span-4">Megjegyzés</div>
-                    <div className="col-span-2 text-right">Művelet</div>
+                <div className="mb-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 h-10 px-3 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                    onClick={() => setMobilePane("employees")}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Dolgozók
+                  </button>
+                  <div className="text-white/70 text-sm truncate">
+                    {selected ? `Kiválasztva: ${selected}` : "Nincs kiválasztva"}
                   </div>
-
-                  {grouped.length === 0 ? (
-                    <div className="px-3 py-6 text-white/60 text-sm">Nincs bejegyzés ebben a hónapban.</div>
-                  ) : (
-                    grouped.map((g) => (
-                      <div key={g.day} className="border-t border-white/10">
-                        {g.items.map((it) => (
-                          <div key={it.id} className="grid grid-cols-12 gap-0 px-3 py-3 items-center">
-                            <div className="col-span-3 text-white text-sm">{it.day}</div>
-                            <div className="col-span-3 text-white/80 text-sm">
-                              {fmtKind(it.kind)}
-                              {it.kind === "short" ? (
-                                <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span>
-                              ) : null}
-                            </div>
-                            <div className="col-span-4 text-white/70 text-sm break-words">{it.note || "-"}</div>
-                            <div className="col-span-2 text-right">
-                              <button
-                                type="button"
-                                aria-label="Törlés"
-                                title="Törlés"
-                                className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
-                                onClick={() => openDelete(it.id)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ))
-                  )}
                 </div>
-
-                <div className="pt-4 text-xs text-white/60">
-                  API base: <span className="text-white/70">{apiBase}</span>
-                </div>
+                {DetailsPane}
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
-
-      
 
       {summaryOpen && (
         <div className="fixed inset-0 z-[120] grid place-items-center bg-black/50 px-4">
@@ -730,7 +819,10 @@ export default function AllInVacations({ api }: { api?: string }) {
                 <div className="px-3 py-6 text-white/60 text-sm">Nincs adat.</div>
               ) : (
                 yearRows.map((r) => (
-                  <div key={r.employeeName} className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10">
+                  <div
+                    key={r.employeeName}
+                    className="grid grid-cols-12 gap-0 px-3 py-3 items-center border-t border-white/10"
+                  >
                     <div className="col-span-6 text-white text-sm">{r.employeeName}</div>
                     <div className="col-span-2 text-right text-white/80 text-sm">{r.vacationDays}</div>
                     <div className="col-span-2 text-right text-white/80 text-sm">{r.shortDays}</div>
