@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Trash2 } from "lucide-react";
 
 type Employee = { name: string };
@@ -74,10 +73,16 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [day, setDay] = useState<string>(new Date().toISOString().slice(0, 10));
   const [dayTo, setDayTo] = useState<string>(new Date().toISOString().slice(0, 10));
   const [kind, setKind] = useState<TimeEvent["kind"]>("vacation");
+  const [kindOpen, setKindOpen] = useState(false);
+  const kindRef = useRef<HTMLDivElement | null>(null);
   const [shortHours, setShortHours] = useState<number>(4);
   const [note, setNote] = useState<string>("");
   const [saveErr, setSaveErr] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
+
+  const kindLabel = useMemo(() => {
+    return kind === "vacation" ? "Szabadság nap" : "Elkérezés (óra)";
+  }, [kind]);
 
   // Keep period end sane when switching types / changing start day.
   useEffect(() => {
@@ -115,6 +120,28 @@ export default function AllInVacations({ api }: { api?: string }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [confirmOpen, summaryOpen]);
+
+  // Custom "Típus" dropdown: force ONLY our colors (no OS/browser blue highlight).
+  useEffect(() => {
+    if (!kindOpen) return;
+
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (kindRef.current && !kindRef.current.contains(t)) setKindOpen(false);
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setKindOpen(false);
+    };
+
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [kindOpen]);
 
   const fetchEmployees = async () => {
     setEmpErr("");
@@ -504,29 +531,61 @@ export default function AllInVacations({ api }: { api?: string }) {
 
                   <div className="grid gap-2">
                     <div className={label}>Típus</div>
-                    <Select value={kind} onValueChange={(v) => setKind(v as any)}>
-                      <SelectTrigger
-                        className={
-                          "w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
-                        }
+                    <div ref={kindRef} className="relative">
+                      <button
+                        type="button"
+                        className="w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20 flex items-center justify-between"
+                        onClick={() => setKindOpen((v) => !v)}
+                        aria-haspopup="listbox"
+                        aria-expanded={kindOpen}
                       >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="border border-white/30 bg-[#354153] text-white">
-                        <SelectItem
-                          value="vacation"
-                          className="text-white data-[highlighted]:bg-[#354153] data-[state=checked]:bg-[#208d8b] data-[state=checked]:text-white"
+                        <span className="text-sm">
+                          {kind === "vacation" ? "Szabadság nap" : "Elkérezés (óra)"}
+                        </span>
+                        <span className="text-white/70 text-xs">▾</span>
+                      </button>
+
+                      {kindOpen && (
+                        <div
+                          role="listbox"
+                          className="absolute z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
+                          style={{ backgroundColor: "#354153" }}
                         >
-                          Szabadság nap
-                        </SelectItem>
-                        <SelectItem
-                          value="short"
-                          className="text-white data-[highlighted]:bg-[#354153] data-[state=checked]:bg-[#208d8b] data-[state=checked]:text-white"
-                        >
-                          Elkérezés (óra)
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={kind === "vacation"}
+                            className={
+                              "w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0 " +
+                              (kind === "vacation" ? "" : "")
+                            }
+                            style={{ backgroundColor: kind === "vacation" ? "#208d8b" : "#354153" }}
+                            onClick={() => {
+                              setKind("vacation");
+                              setKindOpen(false);
+                            }}
+                          >
+                            Szabadság nap
+                          </button>
+
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={kind === "short"}
+                            className={
+                              "w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
+                            }
+                            style={{ backgroundColor: kind === "short" ? "#208d8b" : "#354153" }}
+                            onClick={() => {
+                              setKind("short");
+                              setKindOpen(false);
+                            }}
+                          >
+                            Elkérezés (óra)
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {kind === "vacation" ? (
