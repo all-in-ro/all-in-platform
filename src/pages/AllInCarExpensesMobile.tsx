@@ -451,22 +451,38 @@ export default function AllInCarExpensesMobile() {
 
       {/* Totals */}
       <div className="p-3 grid grid-cols-3 gap-2 bg-transparent">
-        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm">
-          <CardContent className="p-2">
-            <div className="text-[10px] text-slate-600">Tételek</div>
-            <div className="text-lg font-semibold">{enriched.length}</div>
+        <Card
+          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm"
+          style={{ backgroundColor: "#fff" }}
+        >
+          <CardContent className="p-3 bg-white">
+            <div className="text-[11px] text-slate-600">Tételek</div>
+            <div className="text-2xl leading-none font-semibold mt-1">{enriched.length}</div>
           </CardContent>
         </Card>
-        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm">
-          <CardContent className="p-2">
-            <div className="text-[10px] text-slate-600">Időszak</div>
-            <div className="text-[11px] leading-tight">{dateFrom}<br/>→ {dateTo}</div>
+
+        <Card
+          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm"
+          style={{ backgroundColor: "#fff" }}
+        >
+          <CardContent className="p-3 bg-white">
+            <div className="text-[11px] text-slate-600">Időszak</div>
+            <div className="text-[12px] leading-tight mt-1">
+              {dateFrom}
+              <br />→ {dateTo}
+            </div>
           </CardContent>
         </Card>
-        <Card className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm">
-          <CardContent className="p-2">
-            <div className="text-[10px] text-slate-600">Összeg (RON)</div>
-            <div className="text-lg font-semibold"><Money value={total} /></div>
+
+        <Card
+          className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm"
+          style={{ backgroundColor: "#fff" }}
+        >
+          <CardContent className="p-3 bg-white">
+            <div className="text-[11px] text-slate-600">Összeg (RON)</div>
+            <div className="text-xl leading-none font-semibold mt-1">
+              <Money value={total} />
+            </div>
           </CardContent>
         </Card>
       </div>
