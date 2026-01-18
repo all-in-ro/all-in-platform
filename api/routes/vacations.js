@@ -9,6 +9,10 @@ import crypto from "crypto";
 //   kind:
 //     - vacation : full day off
 //     - short    : partial day (e.g. 4 hours "elkérezett")
+//
+// - allin_comp_events: compensation ledger (tartozas / kompenzacio)
+//   unit: 'day' | 'hour'
+//   amount: integer (positive = we owe employee, negative = we compensated/paid back)
 
 export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
   const router = express.Router();
@@ -47,6 +51,34 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       CREATE INDEX IF NOT EXISTS allin_time_events_employee
         ON allin_time_events (employee_name);
+
+      CREATE TABLE IF NOT EXISTS allin_comp_events (
+        id uuid PRIMARY KEY,
+        employee_name text NOT NULL,
+        day date NOT NULL,
+        unit text NOT NULL,
+        amount integer NOT NULL,
+        note text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        created_by text NULL
+      );
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'allin_comp_events_unit_check'
+        ) THEN
+          ALTER TABLE allin_comp_events
+            ADD CONSTRAINT allin_comp_events_unit_check
+            CHECK (unit IN ('day','hour'));
+        END IF;
+      END $$;
+
+      CREATE INDEX IF NOT EXISTS allin_comp_events_day
+        ON allin_comp_events (day);
+
+      CREATE INDEX IF NOT EXISTS allin_comp_events_employee
+        ON allin_comp_events (employee_name);
     `);
     ready = true;
   }
@@ -138,7 +170,43 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         args
       );
 
-      res.json({ items: events.rows, summary: summary.rows });
+      // Compensation ledger for the same filter (month + optional employee)
+      const compItems = await pool.query(
+        `
+        SELECT id,
+               employee_name AS "employeeName",
+               day::text AS day,
+               unit,
+               amount,
+               note,
+               created_at AS "createdAt",
+               created_by AS "createdBy"
+        FROM allin_comp_events
+        ${w}
+        ORDER BY day DESC, employee_name ASC, created_at DESC
+        LIMIT 2000
+        `,
+        args
+      );
+
+      const compSummary = await pool.query(
+        `
+        SELECT employee_name AS "employeeName",
+               SUM(CASE WHEN unit='day'  AND amount>0 THEN amount ELSE 0 END)::int AS "creditDays",
+               SUM(CASE WHEN unit='hour' AND amount>0 THEN amount ELSE 0 END)::int AS "creditHours",
+               SUM(CASE WHEN unit='day'  AND amount<0 THEN -amount ELSE 0 END)::int AS "debitDays",
+               SUM(CASE WHEN unit='hour' AND amount<0 THEN -amount ELSE 0 END)::int AS "debitHours",
+               (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "balanceDays",
+               (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "balanceHours"
+        FROM allin_comp_events
+        ${w}
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
+        `,
+        args
+      );
+
+      res.json({ items: events.rows, summary: summary.rows, compItems: compItems.rows, compSummary: compSummary.rows });
     } catch (e) {
       console.error("vacations list failed", e);
       res.status(500).json({ error: "Failed to load vacations" });
@@ -175,7 +243,52 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         [from, to]
       );
 
-      res.json({ year: Math.trunc(year), items: r.rows });
+      const c = await pool.query(
+        `
+        SELECT employee_name AS "employeeName",
+               SUM(CASE WHEN unit='day'  AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditDays",
+               SUM(CASE WHEN unit='hour' AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditHours",
+               SUM(CASE WHEN unit='day'  AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitDays",
+               SUM(CASE WHEN unit='hour' AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitHours",
+               (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "compBalanceDays",
+               (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
+        FROM allin_comp_events
+        WHERE day >= $1::date AND day < $2::date
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
+        `,
+        [from, to]
+      );
+
+      const compMap = new Map(c.rows.map((x) => [x.employeeName, x]));
+
+      const merged = r.rows.map((row) => {
+        const cc = compMap.get(row.employeeName) || {
+          compCreditDays: 0,
+          compCreditHours: 0,
+          compDebitDays: 0,
+          compDebitHours: 0,
+          compBalanceDays: 0,
+          compBalanceHours: 0,
+        };
+        return { ...row, ...cc };
+      });
+
+      // Employees that ONLY have compensation but no time events
+      for (const cc of c.rows) {
+        if (merged.some((m) => m.employeeName === cc.employeeName)) continue;
+        merged.push({
+          employeeName: cc.employeeName,
+          vacationDays: 0,
+          shortDays: 0,
+          shortHours: 0,
+          ...cc,
+        });
+      }
+
+      merged.sort((a, b) => String(a.employeeName).localeCompare(String(b.employeeName)));
+
+      res.json({ year: Math.trunc(year), items: merged });
     } catch (e) {
       console.error("vacations summary failed", e);
       res.status(500).json({ error: "Failed to load yearly summary" });
@@ -307,6 +420,68 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       console.error("vacations summary pdf failed", e);
       // If headers not sent yet, return JSON.
       if (!res.headersSent) res.status(500).json({ error: "Failed to generate PDF" });
+    }
+  });
+
+  // POST /api/admin/vacations/comp
+  // Body:
+  // { employeeName, day:'YYYY-MM-DD', unit:'day'|'hour', amount:number (positive=owe, negative=compensated), note:string }
+  router.post("/comp", requireAdminOrSecret, express.json(), async (req, res) => {
+    try {
+      await ensureTables();
+      const body = req.body || {};
+      const employeeName = norm(body.employeeName);
+      const day = norm(body.day);
+      const unit = norm(body.unit);
+      const noteRaw = body.note != null ? String(body.note) : "";
+      const note = noteRaw.trim();
+
+      const amountRaw = body.amount;
+      const amountNum = Number(amountRaw);
+      const amount = Number.isFinite(amountNum) ? Math.trunc(amountNum) : NaN;
+
+      if (!employeeName) return res.status(400).json({ error: "employeeName required" });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day must be YYYY-MM-DD" });
+      if (!['day','hour'].includes(unit)) return res.status(400).json({ error: "unit must be day|hour" });
+      if (!Number.isFinite(amount) || amount === 0) return res.status(400).json({ error: "amount must be non-zero" });
+      if (!note) return res.status(400).json({ error: "note required" });
+
+      // Guardrails
+      if (unit === "day" && (amount < -62 || amount > 62)) return res.status(400).json({ error: "day amount too large" });
+      if (unit === "hour" && (amount < -24 || amount > 24)) return res.status(400).json({ error: "hour amount too large" });
+
+      const id = crypto.randomUUID();
+      const createdBy = String(req.session?.actor || req.session?.role || "ADMIN");
+
+      await pool.query(
+        `
+        INSERT INTO allin_comp_events (id, employee_name, day, unit, amount, note, created_by)
+        VALUES ($1,$2,$3::date,$4,$5,$6,$7)
+        `,
+        [id, employeeName, day, unit, amount, note, createdBy]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("vacations comp create failed", e);
+      res.status(500).json({ error: "Failed to save compensation" });
+    }
+  });
+
+  // DELETE /api/admin/vacations/comp/:id
+  router.delete("/comp/:id", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const id = norm(req.params.id);
+      if (!id) return res.status(400).json({ error: "id required" });
+
+      const r = await pool.query(`DELETE FROM allin_comp_events WHERE id = $1`, [id]);
+      if (!r.rowCount) return res.status(404).json({ error: "Not found" });
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("vacations comp delete failed", e);
+      res.status(500).json({ error: "Failed to delete compensation" });
     }
   });
 
