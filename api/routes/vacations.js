@@ -144,7 +144,136 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     }
   });
 
-  // POST /api/admin/vacations
+  
+
+  // GET /api/admin/vacations/summary?year=YYYY
+  // Yearly totals per employee: vacation days + short days + short hours.
+  router.get("/summary", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const yearRaw = norm(req.query.year);
+      const year = yearRaw ? Number(yearRaw) : new Date().getUTCFullYear();
+      if (!Number.isFinite(year) || year < 2000 || year > 2100) {
+        return res.status(400).json({ error: "year must be a valid YYYY" });
+      }
+
+      const from = `${Math.trunc(year)}-01-01`;
+      const to = `${Math.trunc(year) + 1}-01-01`;
+
+      const r = await pool.query(
+        `
+        SELECT employee_name AS "employeeName",
+               SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
+               SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
+               SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
+        FROM allin_time_events
+        WHERE day >= $1::date AND day < $2::date
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
+        `,
+        [from, to]
+      );
+
+      res.json({ year: Math.trunc(year), items: r.rows });
+    } catch (e) {
+      console.error("vacations summary failed", e);
+      res.status(500).json({ error: "Failed to load yearly summary" });
+    }
+  });
+
+  // GET /api/admin/vacations/summary.pdf?year=YYYY
+  // Server-side PDF for bookkeeping.
+  router.get("/summary.pdf", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const yearRaw = norm(req.query.year);
+      const year = yearRaw ? Number(yearRaw) : new Date().getUTCFullYear();
+      if (!Number.isFinite(year) || year < 2000 || year > 2100) {
+        return res.status(400).json({ error: "year must be a valid YYYY" });
+      }
+
+      const from = `${Math.trunc(year)}-01-01`;
+      const to = `${Math.trunc(year) + 1}-01-01`;
+
+      const r = await pool.query(
+        `
+        SELECT employee_name AS "employeeName",
+               SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
+               SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
+               SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
+        FROM allin_time_events
+        WHERE day >= $1::date AND day < $2::date
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
+        `,
+        [from, to]
+      );
+
+      // Lazy import so the app doesn't crash if pdfkit isn't present.
+      let PDFDocument;
+      try {
+        const mod = await import("pdfkit");
+        PDFDocument = mod.default || mod;
+      } catch {
+        return res.status(500).json({ error: "PDF engine (pdfkit) is not installed on the server." });
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=allin-osszefoglalo-${Math.trunc(year)}.pdf`);
+
+      const doc = new PDFDocument({ size: "A4", margin: 36 });
+      doc.pipe(res);
+
+      doc.fontSize(16).text("ALL IN - Szabadsagok osszesites", { align: "left" });
+      doc.moveDown(0.25);
+      doc.fontSize(12).text(`Ev: ${Math.trunc(year)}`);
+      doc.moveDown(0.5);
+
+      // Table header
+      const x0 = doc.x;
+      const y0 = doc.y;
+      const col = {
+        name: 260,
+        vac: 90,
+        sday: 90,
+        sh: 90,
+      }
+      const rowH = 18;
+
+      doc.fontSize(10).fillColor("#000000");
+      doc.text("Nev", x0, y0, { width: col.name });
+      doc.text("Szabadsag (nap)", x0 + col.name, y0, { width: col.vac, align: "right" });
+      doc.text("Elkerezes (nap)", x0 + col.name + col.vac, y0, { width: col.sday, align: "right" });
+      doc.text("Elkerezes (ora)", x0 + col.name + col.vac + col.sday, y0, { width: col.sh, align: "right" });
+
+      let y = y0 + rowH;
+      doc.moveTo(x0, y0 + rowH - 3).lineTo(x0 + col.name + col.vac + col.sday + col.sh, y0 + rowH - 3).strokeColor("#999999").stroke();
+
+      for (const row of r.rows) {
+        if (y > doc.page.height - doc.page.margins.bottom - rowH) {
+          doc.addPage();
+          y = doc.y;
+        }
+        doc.strokeColor("#DDDDDD");
+        doc.text(String(row.employeeName || ""), x0, y, { width: col.name });
+        doc.text(String(row.vacationDays ?? 0), x0 + col.name, y, { width: col.vac, align: "right" });
+        doc.text(String(row.shortDays ?? 0), x0 + col.name + col.vac, y, { width: col.sday, align: "right" });
+        doc.text(String(row.shortHours ?? 0), x0 + col.name + col.vac + col.sday, y, { width: col.sh, align: "right" });
+        y += rowH;
+      }
+
+      doc.moveDown(0.75);
+      doc.fontSize(9).fillColor("#555555").text(`Keszult: ${new Date().toISOString().slice(0, 10)}`);
+
+      doc.end();
+    } catch (e) {
+      console.error("vacations summary pdf failed", e);
+      // If headers not sent yet, return JSON.
+      if (!res.headersSent) res.status(500).json({ error: "Failed to generate PDF" });
+    }
+  });
+
+// POST /api/admin/vacations
   // Body:
   // Vacation can be a single day or a period:
   // { employeeName, day?: 'YYYY-MM-DD', dayFrom?: 'YYYY-MM-DD', dayTo?: 'YYYY-MM-DD', kind: 'vacation'|'short', hoursOff?: number, note?: string }
