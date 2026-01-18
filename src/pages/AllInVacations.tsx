@@ -1037,15 +1037,9 @@ export default function AllInVacations({ api }: { api?: string }) {
               const dayVal = isDay ? Math.abs(Number(it.amount) || 0) : 0;
               const hourVal = !isDay ? Math.abs(Number(it.amount) || 0) : 0;
               return isMobile ? (
-                <div key={it.id} className="grid grid-cols-12 gap-2 px-3 py-3 items-start border-t border-white/10">
-                  <div className="col-span-4 text-white text-sm">{it.day}</div>
-                  <div className="col-span-7 text-white/80 text-sm">
-                    <div>
-                      {labelType} · {isDay ? `${dayVal} nap` : `${hourVal} óra`}
-                    </div>
-                    <div className="text-white/60 text-xs mt-1 break-words">{it.note}</div>
-                  </div>
-                  <div className="col-span-1 text-right">
+                <div key={it.id} className="border-t border-white/10 px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="text-white text-sm">{it.day}</div>
                     <button
                       type="button"
                       aria-label="Törlés"
@@ -1056,6 +1050,14 @@ export default function AllInVacations({ api }: { api?: string }) {
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
+
+                  <div className="mt-1 text-white/80 text-sm">
+                    {labelType} · {isDay ? `${dayVal} nap` : `${hourVal} óra`}
+                  </div>
+
+                  {it.note ? (
+                    <div className="mt-2 text-white/60 text-xs whitespace-normal break-words">{it.note}</div>
+                  ) : null}
                 </div>
               ) : (
                 <div key={it.id} className="border-t border-white/10 px-3 py-3">
