@@ -128,7 +128,8 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         `
         SELECT employee_name AS "employeeName",
                SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
-               SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays"
+               SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
+               SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
         FROM allin_time_events
         ${w}
         GROUP BY employee_name
