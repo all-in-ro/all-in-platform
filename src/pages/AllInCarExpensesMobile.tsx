@@ -346,8 +346,6 @@ export default function AllInCarExpensesMobile() {
     }
     await reload();
   }
-    await reload();
-  }
 
   function exportCSV() {
     const csv = toCSV(enriched);
