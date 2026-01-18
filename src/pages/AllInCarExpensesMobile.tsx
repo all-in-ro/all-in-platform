@@ -202,6 +202,21 @@ export default function AllInCarExpensesMobile() {
   const [error, setError] = useState<string>("");
   const [msg, setMsg] = useState<string>("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Confirm modal (CUPE-style)
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [confirmTitle, setConfirmTitle] = useState<string>("");
+  const [confirmMsg, setConfirmMsg] = useState<string>("");
+
+  useEffect(() => {
+    if (!confirmOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen]);
+
 
   // Filters
   const [carId, setCarId] = useState<number | "">("");
@@ -311,15 +326,26 @@ export default function AllInCarExpensesMobile() {
     setTimeout(() => setMsg(""), 2000);
   }
 
-  async function onDelete(id?: number) {
+    function onAskDelete(id?: number) {
     if (!id) return;
-    const yes = window.confirm("Biztos törlöd ezt a tételt?");
-    if (!yes) return;
+    setConfirmId(id);
+    setConfirmTitle("Tétel törlése");
+    setConfirmMsg("Biztos törlöd ezt a tételt? Ez nem visszavonható.");
+    setConfirmOpen(true);
+  }
+
+  async function runDelete() {
+    const id = confirmId;
+    setConfirmOpen(false);
+    setConfirmId(null);
+    if (!id) return;
     const ok = await deleteExpense(id);
     if (!ok) {
       alert("Törlés sikertelen.");
       return;
     }
+    await reload();
+  }
     await reload();
   }
 
@@ -528,9 +554,7 @@ export default function AllInCarExpensesMobile() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (window.confirm("Biztosan törlöd ezt a tételt?")) onDelete(r.id);
-                    }}
+                    onClick={() => onAskDelete(r.id)}
                     className="flex items-center justify-center gap-1 text-white text-[12px] font-medium rounded-[4px] shadow-sm"
                     style={{ backgroundColor: '#b60e21', height: '30px', padding: '0 10px', borderRadius: '4px' }}
                   >
@@ -548,6 +572,33 @@ export default function AllInCarExpensesMobile() {
       </div>
 
       
+
+
+      {/* Confirm modal */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+            <div className="text-white font-semibold">{confirmTitle}</div>
+            <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                onClick={() => setConfirmOpen(false)}
+              >
+                Mégse
+              </button>
+              <button
+                type="button"
+                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
+                onClick={runDelete}
+              >
+                Törlés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drawer / Form — strictly mobile-first, with "Autó" on its own row, then Dátum underneath */}
       {openForm && (
