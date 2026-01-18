@@ -455,7 +455,7 @@ export default function AllInCarExpensesMobile() {
           className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm overflow-hidden"
           style={{ backgroundColor: "#fff" }}
         >
-          <CardContent className="p-3 bg-white h-[72px] flex flex-col items-center justify-center text-center">
+          <CardContent className="p-3 bg-white flex flex-col items-center text-center">
             <div className="text-[11px] text-slate-600">Tételek</div>
             <div className="text-2xl leading-none font-semibold mt-1">{enriched.length}</div>
           </CardContent>
@@ -465,7 +465,7 @@ export default function AllInCarExpensesMobile() {
           className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm overflow-hidden"
           style={{ backgroundColor: "#fff" }}
         >
-          <CardContent className="p-3 bg-white h-[72px] flex flex-col items-center justify-center text-center">
+          <CardContent className="p-3 bg-white flex flex-col items-center text-center">
             <div className="text-[11px] text-slate-600">Időszak</div>
             <div className="text-[12px] leading-tight mt-1">
               {dateFrom}
@@ -478,7 +478,7 @@ export default function AllInCarExpensesMobile() {
           className="rounded-md border border-slate-300 bg-white text-slate-800 shadow-sm overflow-hidden"
           style={{ backgroundColor: "#fff" }}
         >
-          <CardContent className="p-3 bg-white h-[72px] flex flex-col items-center justify-center text-center">
+          <CardContent className="p-3 bg-white flex flex-col items-center text-center">
             <div className="text-[11px] text-slate-600">Összeg (RON)</div>
             <div className="text-xl leading-none font-semibold mt-1">
               <Money value={total} />
@@ -501,7 +501,7 @@ export default function AllInCarExpensesMobile() {
           })
           .map((r) => (
             <Card key={r.id || Math.random()} className="rounded-lg border border-slate-300 bg-white text-slate-800 overflow-hidden" style={{ backgroundColor: "#fff" }}>
-              <CardContent className="p-3 bg-white flex flex-col gap-2 items-center">
+              <CardContent className="p-3 bg-white flex flex-col gap-2 items-center justify-start">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-[13px]">
                     <CalendarDays className="w-4 h-4 text-slate-600" />
