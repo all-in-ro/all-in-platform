@@ -295,8 +295,10 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     }
   });
 
-  // GET /api/admin/vacations/summary.pdf?year=YYYY
-  // Server-side PDF for bookkeeping.
+  // GET /api/admin/vacations/summary.pdf?year=YYYY&employee=...
+  // Server-side PDF for bookkeeping. Can generate:
+  // - all employees summary (default)
+  // - single employee detailed statement (if employee is provided)
   router.get("/summary.pdf", requireAdminOrSecret, async (req, res) => {
     try {
       await ensureTables();
@@ -306,9 +308,233 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         return res.status(400).json({ error: "year must be a valid YYYY" });
       }
 
-      const from = `${Math.trunc(year)}-01-01`;
-      const to = `${Math.trunc(year) + 1}-01-01`;
+      const employee = norm(req.query.employee);
+      const YEAR = Math.trunc(year);
+      const from = `${YEAR}-01-01`;
+      const to = `${YEAR + 1}-01-01`;
 
+      // Lazy import so the app doesn't crash if pdfkit isn't present.
+      let PDFDocument;
+      try {
+        const mod = await import("pdfkit");
+        PDFDocument = mod.default || mod;
+      } catch {
+        return res.status(500).json({ error: "PDF engine (pdfkit) is not installed on the server." });
+      }
+
+      // Official RO-style header (keep ASCII to avoid font/diacritics issues on servers).
+      const COMPANY = "TITAN EURO-COM SRL";
+      const CIF = "RO17495362";
+      const genDate = new Date().toISOString().slice(0, 10);
+
+      res.setHeader("Content-Type", "application/pdf");
+      const safeEmp = employee ? employee.replace(/[^a-zA-Z0-9._ -]+/g, "").trim().replace(/\s+/g, "-") : "";
+      const fileName = employee
+        ? `titan-foaie-concedii-invoiri-comp-${safeEmp || "angajat"}-${YEAR}.pdf`
+        : `titan-situatie-concedii-invoiri-comp-${YEAR}.pdf`;
+      res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+
+      const doc = new PDFDocument({ size: "A4", margin: 36 });
+      doc.pipe(res);
+
+      const drawHeader = (title) => {
+        doc.fontSize(11).fillColor("#000000").text(COMPANY, { align: "left" });
+        doc.fontSize(10).text(`CIF: ${CIF}`, { align: "left" });
+        doc.moveDown(0.6);
+        doc.fontSize(14).text(title, { align: "center" });
+        doc.moveDown(0.2);
+        doc.fontSize(11).text(`Anul: ${YEAR}`, { align: "center" });
+        doc.moveDown(0.8);
+      };
+
+      const ensureSpace = (needH) => {
+        if (doc.y > doc.page.height - doc.page.margins.bottom - needH) doc.addPage();
+      };
+
+      // --- Single employee detailed statement ---
+      if (employee) {
+        // Totals (time events)
+        const t = await pool.query(
+          `
+          SELECT
+            SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
+            SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
+            SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
+          FROM allin_time_events
+          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          `,
+          [employee, from, to]
+        );
+
+        // Totals (comp)
+        const c = await pool.query(
+          `
+          SELECT
+            SUM(CASE WHEN unit='day'  AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditDays",
+            SUM(CASE WHEN unit='hour' AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditHours",
+            SUM(CASE WHEN unit='day'  AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitDays",
+            SUM(CASE WHEN unit='hour' AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitHours",
+            (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "compBalanceDays",
+            (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
+          FROM allin_comp_events
+          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          `,
+          [employee, from, to]
+        );
+
+        // Lists
+        const timeItems = await pool.query(
+          `
+          SELECT day::text AS day, kind, COALESCE(hours_off,0)::int AS hours, COALESCE(note,'') AS note
+          FROM allin_time_events
+          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          ORDER BY day ASC, kind ASC
+          LIMIT 4000
+          `,
+          [employee, from, to]
+        );
+        const compItems = await pool.query(
+          `
+          SELECT day::text AS day, unit, amount::int AS amount, COALESCE(note,'') AS note
+          FROM allin_comp_events
+          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          ORDER BY day ASC
+          LIMIT 4000
+          `,
+          [employee, from, to]
+        );
+
+        drawHeader("FOAIE CONCEDII / INVOIRI / COMPENSARI");
+        doc.fontSize(11).fillColor("#000000").text(`Angajat: ${employee}`, { align: "left" });
+        doc.moveDown(0.6);
+
+        const totalsT = t.rows?.[0] || { vacationDays: 0, shortDays: 0, shortHours: 0 };
+        const totalsC = c.rows?.[0] || {
+          compCreditDays: 0,
+          compCreditHours: 0,
+          compDebitDays: 0,
+          compDebitHours: 0,
+          compBalanceDays: 0,
+          compBalanceHours: 0,
+        };
+
+        doc.fontSize(10)
+          .fillColor("#000000")
+          .text(
+            `Concediu: ${totalsT.vacationDays ?? 0} zile   |   Invoire: ${totalsT.shortDays ?? 0} zile / ${totalsT.shortHours ?? 0} ore`,
+            { align: "left" }
+          );
+        doc.moveDown(0.2);
+        doc.text(
+          `Compensari (tartozas): +${totalsC.compCreditDays ?? 0} zile, +${totalsC.compCreditHours ?? 0} ore   |   Compensat: -${totalsC.compDebitDays ?? 0} zile, -${totalsC.compDebitHours ?? 0} ore`,
+          { align: "left" }
+        );
+        doc.moveDown(0.2);
+        doc.text(
+          `Echilibru (sold): ${totalsC.compBalanceDays ?? 0} zile, ${totalsC.compBalanceHours ?? 0} ore`,
+          { align: "left" }
+        );
+        doc.moveDown(0.8);
+
+        // Table 1: time events
+        doc.fontSize(11).text("Detalii concedii / invoiri", { align: "left" });
+        doc.moveDown(0.3);
+        const x0 = doc.x;
+        const rowH = 18;
+        const col1 = { day: 90, kind: 110, hours: 80, note: 255 };
+        const w1 = col1.day + col1.kind + col1.hours + col1.note;
+        const header1 = doc.y;
+        doc.save();
+        doc.rect(x0, header1 - 2, w1, rowH).fill("#F2F2F2");
+        doc.restore();
+        doc.fontSize(10).fillColor("#000000");
+        doc.text("Data", x0 + 4, header1 + 3, { width: col1.day - 8 });
+        doc.text("Tip", x0 + col1.day, header1 + 3, { width: col1.kind - 8 });
+        doc.text("Ore", x0 + col1.day + col1.kind, header1 + 3, { width: col1.hours - 8, align: "right" });
+        doc.text("Observatii", x0 + col1.day + col1.kind + col1.hours, header1 + 3, { width: col1.note - 8 });
+        doc.moveTo(x0, header1 + rowH).lineTo(x0 + w1, header1 + rowH).strokeColor("#999999").stroke();
+        let y = header1 + rowH + 2;
+        for (const row of timeItems.rows) {
+          ensureSpace(120);
+          if (y > doc.page.height - doc.page.margins.bottom - rowH - 80) {
+            doc.addPage();
+            y = doc.y;
+          }
+          const kindLabel = row.kind === "vacation" ? "Concediu" : "Invoire";
+          const hoursVal = row.kind === "short" ? String(row.hours || 0) : "-";
+          doc.fontSize(10).fillColor("#000000");
+          doc.text(String(row.day || ""), x0 + 4, y + 3, { width: col1.day - 8 });
+          doc.text(kindLabel, x0 + col1.day, y + 3, { width: col1.kind - 8 });
+          doc.text(hoursVal, x0 + col1.day + col1.kind, y + 3, { width: col1.hours - 8, align: "right" });
+          doc.text(String(row.note || ""), x0 + col1.day + col1.kind + col1.hours, y + 3, { width: col1.note - 8 });
+          doc.moveTo(x0, y + rowH).lineTo(x0 + w1, y + rowH).strokeColor("#E0E0E0").stroke();
+          y += rowH;
+        }
+
+        doc.moveDown(0.8);
+        ensureSpace(180);
+
+        // Table 2: compensation ledger
+        doc.fontSize(11).text("Detalii compensari (tartozas / echilibrare)", { align: "left" });
+        doc.moveDown(0.3);
+        const x2 = doc.x;
+        const col2 = { day: 90, dir: 150, val: 90, note: 205 };
+        const w2 = col2.day + col2.dir + col2.val + col2.note;
+        const header2 = doc.y;
+        doc.save();
+        doc.rect(x2, header2 - 2, w2, rowH).fill("#F2F2F2");
+        doc.restore();
+        doc.fontSize(10).fillColor("#000000");
+        doc.text("Data", x2 + 4, header2 + 3, { width: col2.day - 8 });
+        doc.text("Tip", x2 + col2.day, header2 + 3, { width: col2.dir - 8 });
+        doc.text("Valoare", x2 + col2.day + col2.dir, header2 + 3, { width: col2.val - 8, align: "right" });
+        doc.text("Observatii", x2 + col2.day + col2.dir + col2.val, header2 + 3, { width: col2.note - 8 });
+        doc.moveTo(x2, header2 + rowH).lineTo(x2 + w2, header2 + rowH).strokeColor("#999999").stroke();
+        let y2 = header2 + rowH + 2;
+        for (const row of compItems.rows) {
+          if (y2 > doc.page.height - doc.page.margins.bottom - rowH - 80) {
+            doc.addPage();
+            y2 = doc.y;
+          }
+          const isCredit = Number(row.amount || 0) > 0;
+          const unitLabel = row.unit === "day" ? "zile" : "ore";
+          const typeLabel = isCredit ? "Tartozim (+)" : "Echilibrat (-)";
+          const valueLabel = `${Math.abs(Number(row.amount || 0))} ${unitLabel}`;
+          doc.fontSize(10).fillColor("#000000");
+          doc.text(String(row.day || ""), x2 + 4, y2 + 3, { width: col2.day - 8 });
+          doc.text(typeLabel, x2 + col2.day, y2 + 3, { width: col2.dir - 8 });
+          doc.text(valueLabel, x2 + col2.day + col2.dir, y2 + 3, { width: col2.val - 8, align: "right" });
+          doc.text(String(row.note || ""), x2 + col2.day + col2.dir + col2.val, y2 + 3, { width: col2.note - 8 });
+          doc.moveTo(x2, y2 + rowH).lineTo(x2 + w2, y2 + rowH).strokeColor("#E0E0E0").stroke();
+          y2 += rowH;
+        }
+
+        doc.moveDown(1.2);
+        doc.fontSize(9).fillColor("#333333").text(`Data generarii: ${genDate}`, { align: "left" });
+        doc.moveDown(1.2);
+
+        // Signatures (3 columns)
+        ensureSpace(120);
+        const sigY = doc.y;
+        const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+        const gap = 16;
+        const third = (totalW - gap * 2) / 3;
+        doc.fontSize(10).fillColor("#000000");
+        doc.text("Administrator", doc.page.margins.left, sigY, { width: third });
+        doc.text("Intocmit", doc.page.margins.left + third + gap, sigY, { width: third });
+        doc.text("Angajat (luat la cunostinta)", doc.page.margins.left + (third + gap) * 2, sigY, { width: third });
+        doc.moveDown(0.6);
+        const lineY = doc.y + 10;
+        const xL = doc.page.margins.left;
+        doc.moveTo(xL, lineY).lineTo(xL + third, lineY).strokeColor("#000000").stroke();
+        doc.moveTo(xL + third + gap, lineY).lineTo(xL + third + gap + third, lineY).strokeColor("#000000").stroke();
+        doc.moveTo(xL + (third + gap) * 2, lineY).lineTo(xL + (third + gap) * 2 + third, lineY).strokeColor("#000000").stroke();
+
+        doc.end();
+        return;
+      }
+
+      // --- All employees summary ---
       const r = await pool.query(
         `
         SELECT employee_name AS "employeeName",
@@ -322,80 +548,59 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         `,
         [from, to]
       );
+      const c = await pool.query(
+        `
+        SELECT employee_name AS "employeeName",
+               (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "compBalanceDays",
+               (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
+        FROM allin_comp_events
+        WHERE day >= $1::date AND day < $2::date
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
+        `,
+        [from, to]
+      );
+      const compMap = new Map(c.rows.map((x) => [x.employeeName, x]));
+      const merged = r.rows.map((row) => {
+        const cc = compMap.get(row.employeeName) || { compBalanceDays: 0, compBalanceHours: 0 };
+        return { ...row, ...cc };
+      });
 
-      // Lazy import so the app doesn't crash if pdfkit isn't present.
-      let PDFDocument;
-      try {
-        const mod = await import("pdfkit");
-        PDFDocument = mod.default || mod;
-      } catch {
-        return res.status(500).json({ error: "PDF engine (pdfkit) is not installed on the server." });
-      }
+      drawHeader("SITUATIE CONCEDII / INVOIRI / COMPENSARI");
 
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename=titan-situatie-concedii-invoiri-${Math.trunc(year)}.pdf`);
-
-      const doc = new PDFDocument({ size: "A4", margin: 36 });
-      doc.pipe(res);
-
-      // Official RO-style header (keep ASCII to avoid font/diacritics issues on servers).
-      const COMPANY = "TITAN EURO-COM SRL";
-      const CIF = "RO17495362";
-      const YEAR = Math.trunc(year);
-      const genDate = new Date().toISOString().slice(0, 10);
-
-      // Header
-      doc.fontSize(11).fillColor("#000000").text(COMPANY, { align: "left" });
-      doc.fontSize(10).text(`CIF: ${CIF}`, { align: "left" });
-      doc.moveDown(0.6);
-
-      doc.fontSize(14).text("SITUATIE CONCEDII SI INVOIRI", { align: "center" });
-      doc.moveDown(0.2);
-      doc.fontSize(11).text(`Anul: ${YEAR}`, { align: "center" });
-      doc.moveDown(0.8);
-
-      // Table
       const x0 = doc.x;
-      const col = {
-        name: 270,
-        vac: 90,
-        sday: 90,
-        sh: 80,
-      };
       const rowH = 18;
+      const col = { name: 215, vac: 80, sday: 80, sh: 80, cbd: 80, cbh: 80 };
+      const tableW = col.name + col.vac + col.sday + col.sh + col.cbd + col.cbh;
 
-      const tableW = col.name + col.vac + col.sday + col.sh;
-
-      // Header row background
       const yHeader = doc.y;
       doc.save();
       doc.rect(x0, yHeader - 2, tableW, rowH).fill("#F2F2F2");
       doc.restore();
 
-      doc.fontSize(10).fillColor("#000000");
+      doc.fontSize(9).fillColor("#000000");
       doc.text("Nume", x0 + 4, yHeader + 3, { width: col.name - 8 });
-      doc.text("Concediu (zile)", x0 + col.name, yHeader + 3, { width: col.vac, align: "right" });
-      doc.text("Invoire (zile)", x0 + col.name + col.vac, yHeader + 3, { width: col.sday, align: "right" });
-      doc.text("Invoire (ore)", x0 + col.name + col.vac + col.sday, yHeader + 3, { width: col.sh, align: "right" });
+      doc.text("Concediu", x0 + col.name, yHeader + 3, { width: col.vac, align: "right" });
+      doc.text("Invoire(z)", x0 + col.name + col.vac, yHeader + 3, { width: col.sday, align: "right" });
+      doc.text("Invoire(o)", x0 + col.name + col.vac + col.sday, yHeader + 3, { width: col.sh, align: "right" });
+      doc.text("Sold(z)", x0 + col.name + col.vac + col.sday + col.sh, yHeader + 3, { width: col.cbd, align: "right" });
+      doc.text("Sold(o)", x0 + col.name + col.vac + col.sday + col.sh + col.cbd, yHeader + 3, { width: col.cbh, align: "right" });
 
-      // Header line
       doc.moveTo(x0, yHeader + rowH).lineTo(x0 + tableW, yHeader + rowH).strokeColor("#999999").stroke();
 
       let y = yHeader + rowH + 2;
-
-      for (const row of r.rows) {
+      for (const row of merged) {
         if (y > doc.page.height - doc.page.margins.bottom - rowH - 80) {
           doc.addPage();
           y = doc.y;
         }
-
         doc.fontSize(10).fillColor("#000000");
         doc.text(String(row.employeeName || ""), x0 + 4, y + 3, { width: col.name - 8 });
         doc.text(String(row.vacationDays ?? 0), x0 + col.name, y + 3, { width: col.vac, align: "right" });
         doc.text(String(row.shortDays ?? 0), x0 + col.name + col.vac, y + 3, { width: col.sday, align: "right" });
         doc.text(String(row.shortHours ?? 0), x0 + col.name + col.vac + col.sday, y + 3, { width: col.sh, align: "right" });
-
-        // Row separator
+        doc.text(String(row.compBalanceDays ?? 0), x0 + col.name + col.vac + col.sday + col.sh, y + 3, { width: col.cbd, align: "right" });
+        doc.text(String(row.compBalanceHours ?? 0), x0 + col.name + col.vac + col.sday + col.sh + col.cbd, y + 3, { width: col.cbh, align: "right" });
         doc.moveTo(x0, y + rowH).lineTo(x0 + tableW, y + rowH).strokeColor("#E0E0E0").stroke();
         y += rowH;
       }
@@ -418,7 +623,6 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       doc.end();
     } catch (e) {
       console.error("vacations summary pdf failed", e);
-      // If headers not sent yet, return JSON.
       if (!res.headersSent) res.status(500).json({ error: "Failed to generate PDF" });
     }
   });
