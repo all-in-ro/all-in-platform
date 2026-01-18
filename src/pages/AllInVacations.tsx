@@ -29,7 +29,7 @@ function yyyymmNow() {
 }
 
 function fmtKind(k: TimeEvent["kind"]) {
-  return k === "vacation" ? "Szabadság" : "4 órás nap";
+  return k === "vacation" ? "Szabadság" : "Elkérés";
 }
 
 export default function AllInVacations({ api }: { api?: string }) {
@@ -69,10 +69,21 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   // Create
   const [day, setDay] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [dayTo, setDayTo] = useState<string>(new Date().toISOString().slice(0, 10));
   const [kind, setKind] = useState<TimeEvent["kind"]>("vacation");
+  const [shortHours, setShortHours] = useState<number>(4);
   const [note, setNote] = useState<string>("");
   const [saveErr, setSaveErr] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
+
+  // Keep period end sane when switching types / changing start day.
+  useEffect(() => {
+    if (kind !== "vacation") return;
+    if (!dayTo) setDayTo(day);
+    // If start > end, align end to start.
+    if (day && dayTo && day > dayTo) setDayTo(day);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, day]);
 
   // Confirm modal
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -157,15 +168,40 @@ export default function AllInVacations({ api }: { api?: string }) {
       return;
     }
 
+    if (kind === "vacation") {
+      const end = (dayTo || day).trim();
+      if (!/\d{4}-\d{2}-\d{2}/.test(end)) {
+        setSaveErr("A periódus vége dátum formátuma hibás.");
+        return;
+      }
+      if (end < day) {
+        setSaveErr("A periódus vége nem lehet a kezdő dátum előtt.");
+        return;
+      }
+    }
+
+    if (kind === "short") {
+      const h = Number(shortHours);
+      if (!Number.isFinite(h) || h < 1 || h > 12) {
+        setSaveErr("Az elkérés óraszáma 1 és 12 között kell legyen.");
+        return;
+      }
+    }
+
     setSaveBusy(true);
     try {
       const payload: any = {
         employeeName: emp,
-        day,
         kind,
         note: note.trim() ? note.trim() : null,
       };
-      if (kind === "short") payload.hoursOff = 4;
+      if (kind === "short") {
+        payload.day = day;
+        payload.hoursOff = Math.trunc(Number(shortHours) || 4);
+      } else {
+        payload.dayFrom = day;
+        payload.dayTo = (dayTo || day).trim();
+      }
 
       const r = await fetch(`${apiBase}/admin/vacations`, {
         method: "POST",
@@ -338,10 +374,31 @@ export default function AllInVacations({ api }: { api?: string }) {
                 <div className="text-white/80 text-sm">Új bejegyzés</div>
 
                 <div className="mt-3 grid gap-3 grid-cols-1 md:grid-cols-3">
-                  <div className="grid gap-2">
-                    <div className={label}>Dátum</div>
-                    <input type="date" className={input} value={day} onChange={(e) => setDay(e.target.value)} />
-                  </div>
+                  {kind === "vacation" ? (
+                    <div className="grid gap-2 md:col-span-2">
+                      <div className={label}>Szabadság periódus</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="date"
+                          className={input}
+                          value={day}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setDay(v);
+                            // if end is empty or earlier, snap it to start
+                            if (!dayTo || dayTo.trim() === "" || (dayTo.trim() && dayTo.trim() < v)) setDayTo(v);
+                          }}
+                        />
+                        <input type="date" className={input} value={dayTo} onChange={(e) => setDayTo(e.target.value)} />
+                      </div>
+                      <div className="text-white/50 text-xs">Kezdő nap (bal) · Vége (jobb). Ha ugyanaz, egy napot jelent.</div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-2">
+                      <div className={label}>Dátum</div>
+                      <input type="date" className={input} value={day} onChange={(e) => setDay(e.target.value)} />
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <div className={label}>Típus</div>
@@ -353,9 +410,24 @@ export default function AllInVacations({ api }: { api?: string }) {
                       onChange={(e) => setKind(e.target.value as any)}
                     >
                       <option value="vacation">Szabadság nap</option>
-                      <option value="short">Csak 4 óra (elkérés)</option>
+                      <option value="short">Elkérés (óra megadható)</option>
                     </select>
                   </div>
+
+                  {kind === "short" ? (
+                    <div className="grid gap-2">
+                      <div className={label}>Óra</div>
+                      <input
+                        type="number"
+                        min={1}
+                        max={12}
+                        step={1}
+                        className={input}
+                        value={shortHours}
+                        onChange={(e) => setShortHours(Number(e.target.value))}
+                      />
+                    </div>
+                  ) : null}
 
                   <div className="grid gap-2">
                     <div className={label}>Megjegyzés (opcionális)</div>
@@ -396,7 +468,9 @@ export default function AllInVacations({ api }: { api?: string }) {
                             <div className="col-span-3 text-white text-sm">{it.day}</div>
                             <div className="col-span-3 text-white/80 text-sm">
                               {fmtKind(it.kind)}
-                              {it.kind === "short" ? <span className="text-white/50"> (4 óra)</span> : null}
+                              {it.kind === "short" ? (
+                                <span className="text-white/50"> ({it.hoursOff ?? 4} óra)</span>
+                              ) : null}
                             </div>
                             <div className="col-span-4 text-white/70 text-sm break-words">{it.note || "-"}</div>
                             <div className="col-span-2 text-right">
