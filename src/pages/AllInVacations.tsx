@@ -15,7 +15,7 @@ type TimeEvent = {
   createdBy: string | null;
 };
 
-type SummaryRow = { employeeName: string; vacationDays: number; shortDays: number };
+type SummaryRow = { employeeName: string; vacationDays: number; shortDays: number; shortHours: number };
 
 type YearSummaryRow = { employeeName: string; vacationDays: number; shortDays: number; shortHours: number };
 
@@ -159,41 +159,45 @@ export default function AllInVacations({ api }: { api?: string }) {
   const downloadYearPdf = async () => {
     const y = Number(summaryYear);
     if (!Number.isFinite(y)) return;
+
+    // Open directly so the browser handles download + cookies reliably.
+    // If the server returns an error page/JSON, the user will still SEE something.
     setYearErr("");
-    setYearBusy(true);
     try {
-      const r = await fetch(`${apiBase}/admin/vacations/summary.pdf?year=${encodeURIComponent(String(y))}`, { credentials: "include" });
-      if (!r.ok) {
-        const j = await r.json().catch(() => null);
-        throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
+      const url = `${apiBase}/admin/vacations/summary.pdf?year=${encodeURIComponent(String(y))}`;
+      const w = window.open(url, "_blank", "noopener,noreferrer");
+      if (!w) {
+        setYearErr("A böngésző letiltotta az új ablakot a PDF-hez.");
       }
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `allin-osszefoglalo-${y}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
     } catch (e: any) {
       setYearErr(String(e?.message || e || "Hiba PDF-nél"));
-    } finally {
-      setYearBusy(false);
     }
   };
+
 
   const fetchList = async (employeeName?: string) => {
     const emp = (employeeName ?? selected).trim();
     setListErr("");
     setListBusy(true);
+
     try {
-      const url = `${apiBase}/admin/vacations?month=${encodeURIComponent(month)}${emp ? `&employee=${encodeURIComponent(emp)}` : ""}`;
-      const r = await fetch(url, { credentials: "include" });
-      const j = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
-      setItems(Array.isArray(j?.items) ? j.items : []);
-      setSummary(Array.isArray(j?.summary) ? j.summary : []);
+      // 1) Always load the MONTHLY summary for ALL employees (left list must be correct without clicking).
+      const sumUrl = `${apiBase}/admin/vacations?month=${encodeURIComponent(month)}`;
+      const rSum = await fetch(sumUrl, { credentials: "include" });
+      const jSum = await rSum.json().catch(() => null);
+      if (!rSum.ok) throw new Error(String(jSum?.error || jSum?.message || `HTTP ${rSum.status}`));
+      setSummary(Array.isArray(jSum?.summary) ? jSum.summary : []);
+
+      // 2) Then load the events list for the SELECTED employee (right panel).
+      if (emp) {
+        const itemsUrl = `${apiBase}/admin/vacations?month=${encodeURIComponent(month)}&employee=${encodeURIComponent(emp)}`;
+        const rItems = await fetch(itemsUrl, { credentials: "include" });
+        const jItems = await rItems.json().catch(() => null);
+        if (!rItems.ok) throw new Error(String(jItems?.error || jItems?.message || `HTTP ${rItems.status}`));
+        setItems(Array.isArray(jItems?.items) ? jItems.items : []);
+      } else {
+        setItems([]);
+      }
     } catch (e: any) {
       setListErr(String(e?.message || e || "Hiba"));
       setItems([]);
@@ -216,7 +220,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const selectedSummary = useMemo(() => {
     const s = summary.find((x) => x.employeeName === selected);
-    return s || { employeeName: selected, vacationDays: 0, shortDays: 0 };
+    return s || { employeeName: selected, vacationDays: 0, shortDays: 0, shortHours: 0 };
   }, [summary, selected]);
 
   const selectedShortHours = useMemo(() => {
@@ -368,6 +372,8 @@ export default function AllInVacations({ api }: { api?: string }) {
             </div>
           </div>
 
+          {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
+
           <div className="mt-6 grid gap-4 grid-cols-1 lg:grid-cols-12">
             {/* Left: employees */}
             <div className="lg:col-span-4">
@@ -392,6 +398,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     const s = summary.find((x) => x.employeeName === e.name);
                     const v = s?.vacationDays ?? 0;
                     const sh = s?.shortDays ?? 0;
+                    const shh = s?.shortHours ?? 0;
                     return (
                       <button
                         key={e.name}
@@ -406,7 +413,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                         <div>
                           <div className="text-white text-sm">{e.name}</div>
                           <div className="text-white/60 text-xs mt-1">
-                            {month} · Szabadság: {v} · Elkérezés: {sh}
+                            {month} · Szabadság: {v} · Elkérezés: {sh} ({shh} óra)
                           </div>
                         </div>
                         <div className="text-white/40 text-xs">▸</div>
