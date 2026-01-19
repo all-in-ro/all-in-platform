@@ -229,47 +229,33 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       const from = `${Math.trunc(year)}-01-01`;
       const to = `${Math.trunc(year) + 1}-01-01`;
 
-      // IMPORTANT: Only count events that belong to a real employee name from login_codes.
-      // This avoids "ghost" rows caused by accidental trailing spaces or name variants.
       const r = await pool.query(
         `
-        WITH employees AS (
-          SELECT DISTINCT trim(name) AS name
-          FROM login_codes
-          WHERE name IS NOT NULL AND trim(name) <> ''
-        )
-        SELECT te.employee_name AS "employeeName",
-               SUM(CASE WHEN te.kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
-               SUM(CASE WHEN te.kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
-               SUM(CASE WHEN te.kind='short' THEN COALESCE(te.hours_off,0) ELSE 0 END)::int AS "shortHours"
-        FROM allin_time_events te
-        JOIN employees e ON e.name = te.employee_name
-        WHERE te.day >= $1::date AND te.day < $2::date
-        GROUP BY te.employee_name
-        ORDER BY te.employee_name ASC
+        SELECT employee_name AS "employeeName",
+               SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
+               SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
+               SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
+        FROM allin_time_events
+        WHERE day >= $1::date AND day < $2::date
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
         `,
         [from, to]
       );
 
       const c = await pool.query(
         `
-        WITH employees AS (
-          SELECT DISTINCT trim(name) AS name
-          FROM login_codes
-          WHERE name IS NOT NULL AND trim(name) <> ''
-        )
-        SELECT ce.employee_name AS "employeeName",
-               SUM(CASE WHEN ce.unit='day'  AND ce.amount>0 THEN ce.amount ELSE 0 END)::int AS "compCreditDays",
-               SUM(CASE WHEN ce.unit='hour' AND ce.amount>0 THEN ce.amount ELSE 0 END)::int AS "compCreditHours",
-               SUM(CASE WHEN ce.unit='day'  AND ce.amount<0 THEN -ce.amount ELSE 0 END)::int AS "compDebitDays",
-               SUM(CASE WHEN ce.unit='hour' AND ce.amount<0 THEN -ce.amount ELSE 0 END)::int AS "compDebitHours",
-               (SUM(CASE WHEN ce.unit='day'  THEN ce.amount ELSE 0 END))::int AS "compBalanceDays",
-               (SUM(CASE WHEN ce.unit='hour' THEN ce.amount ELSE 0 END))::int AS "compBalanceHours"
-        FROM allin_comp_events ce
-        JOIN employees e ON e.name = ce.employee_name
-        WHERE ce.day >= $1::date AND ce.day < $2::date
-        GROUP BY ce.employee_name
-        ORDER BY ce.employee_name ASC
+        SELECT employee_name AS "employeeName",
+               SUM(CASE WHEN unit='day'  AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditDays",
+               SUM(CASE WHEN unit='hour' AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditHours",
+               SUM(CASE WHEN unit='day'  AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitDays",
+               SUM(CASE WHEN unit='hour' AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitHours",
+               (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "compBalanceDays",
+               (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
+        FROM allin_comp_events
+        WHERE day >= $1::date AND day < $2::date
+        GROUP BY employee_name
+        ORDER BY employee_name ASC
         `,
         [from, to]
       );
@@ -348,7 +334,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         : `titan-situatie-concedii-invoiri-comp-${YEAR}.pdf`;
       res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
 
-      const doc = new PDFDocument({ size: "A4", margin: 36 });
+      const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 36 });
       doc.pipe(res);
 
       const drawHeader = (title) => {
@@ -512,7 +498,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           }
           const isCredit = Number(row.amount || 0) > 0;
           const unitLabel = row.unit === "day" ? "zile" : "ore";
-          const typeLabel = isCredit ? "Tartozim (+)" : "Echilibrat (-)";
+          const typeLabel = isCredit ? "De primit (+)" : "Compensat (-)";
           const valueLabel = `${Math.abs(Number(row.amount || 0))} ${unitLabel}`;
           doc.fontSize(10).fillColor("#000000");
           doc.text(String(row.day || ""), x2 + 4, y2 + 3, { width: col2.day - 8 });
@@ -528,7 +514,9 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         doc.moveDown(1.2);
 
         // Signatures (3 columns)
-        ensureSpace(120);
+        const sigBoxH = 80;
+        if (doc.y > doc.page.height - doc.page.margins.bottom - sigBoxH) doc.addPage();
+        doc.y = doc.page.height - doc.page.margins.bottom - sigBoxH;
         const sigY = doc.y;
         const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
         const gap = 16;
@@ -624,6 +612,9 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       doc.moveDown(1.6);
 
       // Signatures
+      const sigBoxH2 = 70;
+      if (doc.y > doc.page.height - doc.page.margins.bottom - sigBoxH2) doc.addPage();
+      doc.y = doc.page.height - doc.page.margins.bottom - sigBoxH2;
       const sigY = doc.y;
       const half = (tableW - 20) / 2;
       doc.fontSize(10).fillColor("#000000");
