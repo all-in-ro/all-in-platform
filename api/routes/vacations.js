@@ -85,6 +85,10 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
   const norm = (v) => String(v ?? "").trim();
 
+  // Normalize employee names at query-time (trim + collapse whitespace)
+  // This prevents "Kerekes  Zsolt" vs "Kerekes Zsolt " style ghosts.
+  const EMP_EXPR = "regexp_replace(trim(employee_name), '\\s+', ' ', 'g')";
+
   function monthRange(monthStr) {
     // monthStr: YYYY-MM
     const m = String(monthStr || "").trim();
@@ -146,7 +150,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       const events = await pool.query(
         `
-        SELECT id, employee_name AS "employeeName", day::text AS day, kind, hours_off AS "hoursOff", note,
+        SELECT id, ${EMP_EXPR} AS "employeeName", day::text AS day, kind, hours_off AS "hoursOff", note,
                created_at AS "createdAt", created_by AS "createdBy"
         FROM allin_time_events
         ${w}
@@ -158,14 +162,14 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       const summary = await pool.query(
         `
-        SELECT employee_name AS "employeeName",
+        SELECT ${EMP_EXPR} AS "employeeName",
                SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
                SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
                SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
         FROM allin_time_events
         ${w}
-        GROUP BY employee_name
-        ORDER BY employee_name ASC
+        GROUP BY ${EMP_EXPR}
+        ORDER BY ${EMP_EXPR} ASC
         `,
         args
       );
@@ -174,7 +178,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       const compItems = await pool.query(
         `
         SELECT id,
-               employee_name AS "employeeName",
+               ${EMP_EXPR} AS "employeeName",
                day::text AS day,
                unit,
                amount,
@@ -191,7 +195,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       const compSummary = await pool.query(
         `
-        SELECT employee_name AS "employeeName",
+        SELECT ${EMP_EXPR} AS "employeeName",
                SUM(CASE WHEN unit='day'  AND amount>0 THEN amount ELSE 0 END)::int AS "creditDays",
                SUM(CASE WHEN unit='hour' AND amount>0 THEN amount ELSE 0 END)::int AS "creditHours",
                SUM(CASE WHEN unit='day'  AND amount<0 THEN -amount ELSE 0 END)::int AS "debitDays",
@@ -200,8 +204,8 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
                (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "balanceHours"
         FROM allin_comp_events
         ${w}
-        GROUP BY employee_name
-        ORDER BY employee_name ASC
+        GROUP BY ${EMP_EXPR}
+        ORDER BY ${EMP_EXPR} ASC
         `,
         args
       );
@@ -231,21 +235,21 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       const r = await pool.query(
         `
-        SELECT employee_name AS "employeeName",
+        SELECT ${EMP_EXPR} AS "employeeName",
                SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
                SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
                SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
         FROM allin_time_events
         WHERE day >= $1::date AND day < $2::date
-        GROUP BY employee_name
-        ORDER BY employee_name ASC
+        GROUP BY ${EMP_EXPR}
+        ORDER BY ${EMP_EXPR} ASC
         `,
         [from, to]
       );
 
       const c = await pool.query(
         `
-        SELECT employee_name AS "employeeName",
+        SELECT ${EMP_EXPR} AS "employeeName",
                SUM(CASE WHEN unit='day'  AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditDays",
                SUM(CASE WHEN unit='hour' AND amount>0 THEN amount ELSE 0 END)::int AS "compCreditHours",
                SUM(CASE WHEN unit='day'  AND amount<0 THEN -amount ELSE 0 END)::int AS "compDebitDays",
@@ -254,8 +258,8 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
                (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
         FROM allin_comp_events
         WHERE day >= $1::date AND day < $2::date
-        GROUP BY employee_name
-        ORDER BY employee_name ASC
+        GROUP BY ${EMP_EXPR}
+        ORDER BY ${EMP_EXPR} ASC
         `,
         [from, to]
       );
@@ -361,7 +365,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
             SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
             SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
           FROM allin_time_events
-          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          WHERE ${EMP_EXPR} = $1 AND day >= $2::date AND day < $3::date
           `,
           [employee, from, to]
         );
@@ -377,7 +381,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
             (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "compBalanceDays",
             (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
           FROM allin_comp_events
-          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          WHERE ${EMP_EXPR} = $1 AND day >= $2::date AND day < $3::date
           `,
           [employee, from, to]
         );
@@ -387,7 +391,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           `
           SELECT day::text AS day, kind, COALESCE(hours_off,0)::int AS hours, COALESCE(note,'') AS note
           FROM allin_time_events
-          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          WHERE ${EMP_EXPR} = $1 AND day >= $2::date AND day < $3::date
           ORDER BY day ASC, kind ASC
           LIMIT 4000
           `,
@@ -397,7 +401,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           `
           SELECT day::text AS day, unit, amount::int AS amount, COALESCE(note,'') AS note
           FROM allin_comp_events
-          WHERE employee_name = $1 AND day >= $2::date AND day < $3::date
+          WHERE ${EMP_EXPR} = $1 AND day >= $2::date AND day < $3::date
           ORDER BY day ASC
           LIMIT 4000
           `,
@@ -537,26 +541,26 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       // --- All employees summary ---
       const r = await pool.query(
         `
-        SELECT employee_name AS "employeeName",
+        SELECT ${EMP_EXPR} AS "employeeName",
                SUM(CASE WHEN kind='vacation' THEN 1 ELSE 0 END)::int AS "vacationDays",
                SUM(CASE WHEN kind='short' THEN 1 ELSE 0 END)::int AS "shortDays",
                SUM(CASE WHEN kind='short' THEN COALESCE(hours_off,0) ELSE 0 END)::int AS "shortHours"
         FROM allin_time_events
         WHERE day >= $1::date AND day < $2::date
-        GROUP BY employee_name
-        ORDER BY employee_name ASC
+        GROUP BY ${EMP_EXPR}
+        ORDER BY ${EMP_EXPR} ASC
         `,
         [from, to]
       );
       const c = await pool.query(
         `
-        SELECT employee_name AS "employeeName",
+        SELECT ${EMP_EXPR} AS "employeeName",
                (SUM(CASE WHEN unit='day'  THEN amount ELSE 0 END))::int AS "compBalanceDays",
                (SUM(CASE WHEN unit='hour' THEN amount ELSE 0 END))::int AS "compBalanceHours"
         FROM allin_comp_events
         WHERE day >= $1::date AND day < $2::date
-        GROUP BY employee_name
-        ORDER BY employee_name ASC
+        GROUP BY ${EMP_EXPR}
+        ORDER BY ${EMP_EXPR} ASC
         `,
         [from, to]
       );
