@@ -66,6 +66,10 @@ function fmtKind(k: TimeEvent["kind"]) {
   return k === "vacation" ? "Szabadság" : "Elkérezés";
 }
 
+function empKey(name: string) {
+  return String(name || "").trim().replace(/\s+/g, " " ).toLowerCase();
+}
+
 function useIsMobile(breakpointPx = 640) {
   const [isMobile, setIsMobile] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -373,12 +377,12 @@ export default function AllInVacations({ api }: { api?: string }) {
   }, [month, selected, apiBase]);
 
   const selectedSummary = useMemo(() => {
-    const s = summary.find((x) => x.employeeName === selected);
+    const s = summary.find((x) => empKey(x.employeeName) === empKey(selected));
     return s || { employeeName: selected, vacationDays: 0, shortDays: 0, shortHours: 0 };
   }, [summary, selected]);
 
   const selectedComp = useMemo(() => {
-    const s = compSummary.find((x) => x.employeeName === selected);
+    const s = compSummary.find((x) => empKey(x.employeeName) === empKey(selected));
     return (
       s || {
         employeeName: selected,
@@ -397,7 +401,7 @@ export default function AllInVacations({ api }: { api?: string }) {
     if (!emp) return 0;
     let sum = 0;
     for (const it of items) {
-      if (it.employeeName !== emp) continue;
+      if (empKey(it.employeeName) != empKey(emp)) continue;
       if (it.kind !== "short") continue;
       const h = Number(it.hoursOff ?? 0);
       if (Number.isFinite(h) && h > 0) sum += h;
@@ -641,10 +645,13 @@ export default function AllInVacations({ api }: { api?: string }) {
         ) : (
           filteredEmployees.map((e) => {
             const active = e.name === selected;
-            const s = summary.find((x) => x.employeeName === e.name);
+            const s = summary.find((x) => empKey(x.employeeName) === empKey(e.name));
+            const c = compSummary.find((x) => empKey(x.employeeName) === empKey(e.name));
             const v = s?.vacationDays ?? 0;
             const sh = s?.shortDays ?? 0;
             const shh = s?.shortHours ?? 0;
+            const bd = c?.balanceDays ?? 0;
+            const bh = c?.balanceHours ?? 0;
             return (
               <button
                 key={e.name}
@@ -663,6 +670,13 @@ export default function AllInVacations({ api }: { api?: string }) {
                   <div className="text-white text-sm">{e.name}</div>
                   <div className="text-white/60 text-xs mt-1">
                     {month} · Szabadság: {v} · Elkérezés: {sh} ({shh} óra)
+                    <span className="text-white/50"> · </span>
+                    Tartozás: {cbd} nap, {cbh} óra {(() => {
+                      const c = compSummary.find((x) => empKey(x.employeeName) === empKey(e.name));
+                      const bd = Number(c?.balanceDays ?? 0) || 0;
+                      const bh = Number(c?.balanceHours ?? 0) || 0;
+                      return `${bd} nap, ${bh} óra`;
+                    })()}
                   </div>
                 </div>
                 <div className="text-white/40 text-xs">▸</div>
