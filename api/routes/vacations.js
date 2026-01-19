@@ -327,6 +327,14 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       const CIF = "RO17495362";
       const genDate = new Date().toISOString().slice(0, 10);
 
+      // RO official date format: DD.MM.YYYY
+      const fmtDateRO = (iso) => {
+        const s = String(iso ?? "").slice(0, 10);
+        const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(s);
+        if (!m) return s;
+        return `${m[3]}.${m[2]}.${m[1]}`;
+      };
+
       res.setHeader("Content-Type", "application/pdf");
       const safeEmp = employee ? employee.replace(/[^a-zA-Z0-9._ -]+/g, "").trim().replace(/\s+/g, "-") : "";
       const fileName = employee
@@ -334,7 +342,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         : `titan-situatie-concedii-invoiri-comp-${YEAR}.pdf`;
       res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
 
-      const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 36 });
+      const doc = new PDFDocument({ size: "A4", margin: 36 });
       doc.pipe(res);
 
       const drawHeader = (title) => {
@@ -426,7 +434,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           );
         doc.moveDown(0.2);
         doc.text(
-          `Compensari (tartozas): +${totalsC.compCreditDays ?? 0} zile, +${totalsC.compCreditHours ?? 0} ore   |   Compensat: -${totalsC.compDebitDays ?? 0} zile, -${totalsC.compDebitHours ?? 0} ore`,
+          `Compensari: +${totalsC.compCreditDays ?? 0} zile, +${totalsC.compCreditHours ?? 0} ore   |   Compensat: -${totalsC.compDebitDays ?? 0} zile, -${totalsC.compDebitHours ?? 0} ore`,
           { align: "left" }
         );
         doc.moveDown(0.2);
@@ -463,7 +471,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           const kindLabel = row.kind === "vacation" ? "Concediu" : "Invoire";
           const hoursVal = row.kind === "short" ? String(row.hours || 0) : "-";
           doc.fontSize(10).fillColor("#000000");
-          doc.text(String(row.day || ""), x0 + 4, y + 3, { width: col1.day - 8 });
+          doc.text(fmtDateRO(row.day), x0 + 4, y + 3, { width: col1.day - 8 });
           doc.text(kindLabel, x0 + col1.day, y + 3, { width: col1.kind - 8 });
           doc.text(hoursVal, x0 + col1.day + col1.kind, y + 3, { width: col1.hours - 8, align: "right" });
           doc.text(String(row.note || ""), x0 + col1.day + col1.kind + col1.hours, y + 3, { width: col1.note - 8 });
@@ -475,7 +483,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         ensureSpace(180);
 
         // Table 2: compensation ledger
-        doc.fontSize(11).text("Detalii compensari (tartozas / echilibrare)", { align: "left" });
+        doc.fontSize(11).text("Detalii compensari / echilibrare", { align: "left" });
         doc.moveDown(0.3);
         const x2 = doc.x;
         const col2 = { day: 90, dir: 150, val: 90, note: 205 };
@@ -498,10 +506,10 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           }
           const isCredit = Number(row.amount || 0) > 0;
           const unitLabel = row.unit === "day" ? "zile" : "ore";
-          const typeLabel = isCredit ? "De primit (+)" : "Compensat (-)";
+          const typeLabel = isCredit ? "Tartozim (+)" : "Echilibrat (-)";
           const valueLabel = `${Math.abs(Number(row.amount || 0))} ${unitLabel}`;
           doc.fontSize(10).fillColor("#000000");
-          doc.text(String(row.day || ""), x2 + 4, y2 + 3, { width: col2.day - 8 });
+          doc.text(fmtDateRO(row.day), x2 + 4, y2 + 3, { width: col2.day - 8 });
           doc.text(typeLabel, x2 + col2.day, y2 + 3, { width: col2.dir - 8 });
           doc.text(valueLabel, x2 + col2.day + col2.dir, y2 + 3, { width: col2.val - 8, align: "right" });
           doc.text(String(row.note || ""), x2 + col2.day + col2.dir + col2.val, y2 + 3, { width: col2.note - 8 });
@@ -510,13 +518,11 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         }
 
         doc.moveDown(1.2);
-        doc.fontSize(9).fillColor("#333333").text(`Data generarii: ${genDate}`, { align: "left" });
+        doc.fontSize(9).fillColor("#333333").text(`Data generarii: ${fmtDateRO(genDate)}`, { align: "left" });
         doc.moveDown(1.2);
 
         // Signatures (3 columns)
-        const sigBoxH = 80;
-        if (doc.y > doc.page.height - doc.page.margins.bottom - sigBoxH) doc.addPage();
-        doc.y = doc.page.height - doc.page.margins.bottom - sigBoxH;
+        ensureSpace(120);
         const sigY = doc.y;
         const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
         const gap = 16;
@@ -608,13 +614,10 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       }
 
       doc.moveDown(1.2);
-      doc.fontSize(9).fillColor("#333333").text(`Data generarii: ${genDate}`, { align: "left" });
+      doc.fontSize(9).fillColor("#333333").text(`Data generarii: ${fmtDateRO(genDate)}`, { align: "left" });
       doc.moveDown(1.6);
 
       // Signatures
-      const sigBoxH2 = 70;
-      if (doc.y > doc.page.height - doc.page.margins.bottom - sigBoxH2) doc.addPage();
-      doc.y = doc.page.height - doc.page.margins.bottom - sigBoxH2;
       const sigY = doc.y;
       const half = (tableW - 20) / 2;
       doc.fontSize(10).fillColor("#000000");
