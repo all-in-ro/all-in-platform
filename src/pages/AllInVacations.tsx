@@ -190,6 +190,22 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [yearErr, setYearErr] = useState("");
   const [yearBusy, setYearBusy] = useState(false);
 
+  // Only show employees in the yearly summary that actually have any data.
+  const yearRowsNonZero = useMemo(() => {
+    return (yearRows || []).filter((r) => {
+      const v = Number(r.vacationDays ?? 0) || 0;
+      const sd = Number(r.shortDays ?? 0) || 0;
+      const sh = Number(r.shortHours ?? 0) || 0;
+      const cbd = Number(r.compBalanceDays ?? 0) || 0;
+      const cbh = Number(r.compBalanceHours ?? 0) || 0;
+      const ccd = Number(r.compCreditDays ?? 0) || 0;
+      const cch = Number(r.compCreditHours ?? 0) || 0;
+      const cdd = Number(r.compDebitDays ?? 0) || 0;
+      const cdh = Number(r.compDebitHours ?? 0) || 0;
+      return v !== 0 || sd !== 0 || sh !== 0 || cbd !== 0 || cbh !== 0 || ccd !== 0 || cch !== 0 || cdd !== 0 || cdh !== 0;
+    });
+  }, [yearRows]);
+
   // PDF settings modal (desktop only)
   const [pdfOpen, setPdfOpen] = useState(false);
   const [pdfYear, setPdfYear] = useState<number>(new Date().getFullYear());
@@ -1348,10 +1364,10 @@ export default function AllInVacations({ api }: { api?: string }) {
                 </div>
               )}
 
-              {yearRows.length === 0 ? (
+              {yearRowsNonZero.length === 0 ? (
                 <div className="px-3 py-6 text-white/60 text-sm">Nincs adat.</div>
               ) : (
-                yearRows.map((r) => (
+                yearRowsNonZero.map((r) => (
                   isMobile ? (
                     <div
                       key={r.employeeName}
@@ -1392,10 +1408,10 @@ export default function AllInVacations({ api }: { api?: string }) {
                 </div>
               )}
 
-              {yearRows.length === 0 ? (
+              {yearRowsNonZero.length === 0 ? (
                 <div className="px-3 py-6 text-white/60 text-sm">Nincs adat.</div>
               ) : (
-                yearRows.map((r) => {
+                yearRowsNonZero.map((r) => {
                   const bd = Number(r.compBalanceDays ?? 0) || 0;
                   const bh = Number(r.compBalanceHours ?? 0) || 0;
                   return isMobile ? (
