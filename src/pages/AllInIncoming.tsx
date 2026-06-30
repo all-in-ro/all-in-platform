@@ -1,5 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Building2, CheckCircle, FileSpreadsheet, RefreshCw, UploadCloud } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  CheckCircle,
+  FileSpreadsheet,
+  MapPin,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  UploadCloud,
+  X,
+} from "lucide-react";
 import {
   AifImportBatchSummary,
   AifLocation,
@@ -7,6 +19,8 @@ import {
   AifSupplier,
   apiAifCommitImportBatch,
   apiAifCreateImportBatch,
+  apiAifCreateLocation,
+  apiAifDeleteLocation,
   apiAifListImportBatches,
   apiAifMeta,
   apiAifReplaceImportRows,
@@ -15,10 +29,23 @@ import { readAifWorkbook } from "../lib/aif/xls";
 
 type Props = { onLogout?: () => void };
 
-const card = "rounded-2xl border border-white/15 bg-white/8 p-5 shadow-lg font-normal";
-const input = "h-11 rounded-xl border border-white/20 bg-slate-900/40 px-3 text-white outline-none focus:border-white/50";
-const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const primaryBtn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-[#c90d22] px-4 text-sm text-white hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+type LocationType = "warehouse" | "shop" | "online" | "reserved" | "other";
+
+const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
+const wrap = "mx-auto max-w-7xl space-y-4";
+const topCard = "rounded-2xl border border-white/24 bg-[#465164] px-4 py-3 shadow-lg shadow-slate-950/10";
+const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-3 shadow-lg shadow-slate-950/15 sm:p-4 font-normal";
+const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20 font-normal";
+const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/86 font-normal";
+const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
+const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
+const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
+const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
+const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
+const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
+const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
+const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -27,6 +54,29 @@ function goHome() {
 function cell(v: unknown) {
   const s = String(v ?? "").trim();
   return s || "-";
+}
+
+function locationTypeLabel(v: string) {
+  const map: Record<string, string> = {
+    warehouse: "Raktár",
+    shop: "Üzlet / helyszín",
+    online: "Online",
+    reserved: "Foglalás",
+    other: "Egyéb",
+  };
+  return map[v] || "Egyéb";
+}
+
+function SectionTitle(props: { icon: React.ReactNode; title: string; right?: React.ReactNode }) {
+  return (
+    <div className={sectionHeader}>
+      <div className="flex items-center gap-2 text-sm uppercase tracking-[0.11em] text-white/94">
+        {props.icon}
+        <span>{props.title}</span>
+      </div>
+      {props.right}
+    </div>
+  );
 }
 
 export default function AllInIncoming(_props: Props) {
@@ -40,6 +90,10 @@ export default function AllInIncoming(_props: Props) {
   const [rows, setRows] = useState<AifParsedRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [newLocationName, setNewLocationName] = useState("");
+  const [newLocationType, setNewLocationType] = useState<LocationType>("warehouse");
+  const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
 
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === supplierId) || null,
@@ -56,15 +110,25 @@ export default function AllInIncoming(_props: Props) {
 
   async function loadMeta() {
     const meta = await apiAifMeta();
-    setSuppliers(meta.suppliers.filter((x) => x.is_active));
-    setLocations(meta.locations.filter((x) => x.is_active));
-    setSupplierId((current) => current || meta.suppliers.find((x) => x.code === "under_armour")?.id || meta.suppliers[0]?.id || "");
-    setLocationId((current) => current || meta.locations.find((x) => x.code === "main_warehouse")?.id || meta.locations[0]?.id || "");
+    const activeSuppliers = meta.suppliers.filter((x) => x.is_active);
+    const activeLocations = meta.locations.filter((x) => x.is_active);
+    setSuppliers(activeSuppliers);
+    setLocations(activeLocations);
+    setSupplierId((current) => current || activeSuppliers.find((x) => x.code === "under_armour")?.id || activeSuppliers[0]?.id || "");
+    setLocationId((current) => {
+      if (current && activeLocations.some((l) => l.id === current)) return current;
+      return activeLocations.find((x) => x.code === "main_warehouse")?.id || activeLocations[0]?.id || "";
+    });
   }
 
   async function loadBatches() {
     const data = await apiAifListImportBatches(25);
     setBatches(data.items || []);
+  }
+
+  async function reloadAll() {
+    await loadMeta();
+    await loadBatches();
   }
 
   useEffect(() => {
@@ -74,7 +138,7 @@ export default function AllInIncoming(_props: Props) {
         await loadMeta();
         if (alive) await loadBatches();
       } catch (e: any) {
-        if (alive) setMessage(e.message || "Nem sikerült betölteni az AIF adatokat.");
+        if (alive) setMessage(e.message || "Nem sikerült betölteni az adatokat.");
       }
     })();
     return () => {
@@ -91,7 +155,7 @@ export default function AllInIncoming(_props: Props) {
       const parsed = await readAifWorkbook(file, selectedSupplier);
       setFileName(file.name);
       setRows(parsed);
-      setMessage(`${parsed.length} sor beolvasva. Ez még csak előnézet, nem készletmozgás.`);
+      setMessage(`${parsed.length} sor beolvasva. Az adatok mentés előtt ellenőrizhetők.`);
     } catch (e: any) {
       setRows([]);
       setMessage(e.message || "Nem sikerült beolvasni az XLS/XLSX fájlt.");
@@ -108,13 +172,13 @@ export default function AllInIncoming(_props: Props) {
       const batch = await apiAifCreateImportBatch({
         supplierId,
         targetLocationId: locationId,
-        sourceFileName: fileName || "manual-import.xls",
+        sourceFileName: fileName || "import.xls",
         sourceFormat: "xls",
         note,
       });
       const saved = await apiAifReplaceImportRows(batch.id, rows);
       await loadBatches();
-      setMessage(`Import draft mentve: ${saved.rowCount} sor, hibás sor: ${saved.errorCount}.`);
+      setMessage(`Import mentve: ${saved.rowCount} sor, ellenőrzendő sor: ${saved.errorCount}.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni az importot.");
     } finally {
@@ -128,131 +192,241 @@ export default function AllInIncoming(_props: Props) {
     try {
       const result = await apiAifCommitImportBatch(id);
       await loadBatches();
-      setMessage(`Commit kész. Létrehozott/frissített variánsok: ${result.committed ?? 0}.`);
+      setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.`);
     } catch (e: any) {
-      setMessage(e.message || "A commit nem sikerült. Valószínűleg van hibás import sor.");
+      setMessage(e.message || "A készletre vétel nem sikerült. Ellenőrizd az import sorokat.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createLocation() {
+    if (!newLocationName.trim()) {
+      setMessage("A cél hely neve kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const created = await apiAifCreateLocation({ name: newLocationName, locationType: newLocationType });
+      setNewLocationName("");
+      setNewLocationType("warehouse");
+      await loadMeta();
+      setLocationId(created.item.id);
+      setMessage("Cél hely mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a cél helyet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDeleteLocation() {
+    if (!deleteLocationTarget) return;
+    const target = deleteLocationTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifDeleteLocation(target.id);
+      setDeleteLocationTarget(null);
+      await loadMeta();
+      setMessage(result.mode === "deleted" ? "Cél hely törölve." : "Cél hely inaktiválva, mert már kapcsolódik hozzá adat.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült törölni a cél helyet.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-[#4b5362] px-4 py-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm text-white/60">AllInFashion</p>
-            <h1 className="text-2xl font-normal tracking-tight">Áru bevételezés</h1>
-            <p className="mt-1 text-sm text-white/70">Beszállító kiválasztás, XLS előnézet, majd tiszta AIF import.</p>
+    <main className={page}>
+      {locationModalOpen && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="locations-title">
+          <div className={modalCard}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p id="locations-title" className="text-lg font-normal">Cél helyek kezelése</p>
+                <p className="mt-1 text-sm text-white/70">Raktárak, üzletek és egyéb cél helyek felvétele vagy törlése.</p>
+              </div>
+              <button className={neutralBtn} onClick={() => setLocationModalOpen(false)} type="button">
+                <X size={14} /> Bezárás
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/14 bg-[#435064] p-3">
+              <div className="grid gap-3 sm:grid-cols-[1fr_180px_auto] sm:items-end">
+                <label className={label}>
+                  Név
+                  <input
+                    className={`${input} w-full`}
+                    value={newLocationName}
+                    onChange={(e) => setNewLocationName(e.target.value)}
+                    placeholder="pl. Csíkszereda üzlet"
+                  />
+                </label>
+                <label className={label}>
+                  Típus
+                  <select className={`${input} w-full`} value={newLocationType} onChange={(e) => setNewLocationType(e.target.value as LocationType)}>
+                    <option value="warehouse">Raktár</option>
+                    <option value="shop">Üzlet / helyszín</option>
+                    <option value="online">Online</option>
+                    <option value="reserved">Foglalás</option>
+                    <option value="other">Egyéb</option>
+                  </select>
+                </label>
+                <button className={primaryBtn} onClick={createLocation} disabled={busy} type="button">
+                  <Save size={14} /> Mentés
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {locations.map((l) => (
+                <div key={l.id} className="flex flex-col gap-2 rounded-xl border border-white/12 bg-[#354153] p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm text-white">{l.name}</p>
+                    <p className="mt-1 text-xs text-white/60">{locationTypeLabel(l.location_type)}</p>
+                  </div>
+                  {deleteLocationTarget?.id === l.id ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button className={neutralBtn} onClick={() => setDeleteLocationTarget(null)} disabled={busy} type="button">
+                        <X size={14} /> Mégse
+                      </button>
+                      <button className={dangerBtn} onClick={confirmDeleteLocation} disabled={busy} type="button">
+                        <Trash2 size={14} /> Törlés
+                      </button>
+                    </div>
+                  ) : (
+                    <button className={dangerBtn} onClick={() => setDeleteLocationTarget(l)} disabled={busy} type="button">
+                      <Trash2 size={14} /> Törlés
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!locations.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Nincs aktív cél hely.</p>}
+            </div>
           </div>
-          <button className={btn} onClick={goHome}>
-            <ArrowLeft size={17} /> Vissza
-          </button>
+        </div>
+      )}
+
+      <div className={wrap}>
+        <header className={topCard}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.12em] text-emerald-100/82">AllInFashion</p>
+              <h1 className="mt-1 text-2xl font-normal tracking-tight text-white sm:text-3xl">Áru bevételezés</h1>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-white/78">Beszállító kiválasztás, XLS előnézet és AIF import.</p>
+            </div>
+            <button className={neutralBtn} onClick={goHome} type="button">
+              <ArrowLeft size={15} /> Vissza
+            </button>
+          </div>
         </header>
 
-        {message && <div className="rounded-xl border border-white/20 bg-slate-900/35 px-4 py-3 text-sm text-white/85">{message}</div>}
+        {message && <div className="rounded-xl border border-emerald-200/30 bg-emerald-400/12 px-3 py-2 text-sm text-white/92">{message}</div>}
 
         <section className={card}>
-          <div className="grid gap-4 lg:grid-cols-4">
-            <label className="grid gap-2 text-sm text-white/75">
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Import alapadatok" right={<span className="text-xs text-white/60">Beszállító, cél hely, fájl</span>} />
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
+            <label className={label}>
               Beszállító
-              <select className={input} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+              <select className={`${input} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
                 {suppliers.map((s) => (
-                  <option key={s.id} value={s.id} className="bg-slate-900">
-                    {s.name}
-                  </option>
+                  <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
             </label>
 
-            <label className="grid gap-2 text-sm text-white/75">
+            <label className={label}>
               Cél hely
-              <select className={input} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                {locations.map((l) => (
-                  <option key={l.id} value={l.id} className="bg-slate-900">
-                    {l.name}
-                  </option>
-                ))}
-              </select>
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <select className={`${input} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                  {locations.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+                <button className={neutralBtn} onClick={() => setLocationModalOpen(true)} type="button" title="Cél helyek kezelése">
+                  <MapPin size={14} /> Kezelés
+                </button>
+              </div>
             </label>
 
-            <label className="grid gap-2 text-sm text-white/75 lg:col-span-2">
+            <label className={label}>
               Megjegyzés
-              <input className={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="pl. Under Armour új lista" />
+              <input className={`${input} w-full`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="pl. Under Armour új lista" />
             </label>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <label className={primaryBtn}>
-              <FileSpreadsheet size={18} /> XLS / XLSX kiválasztás
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <label className={fileBtn}>
+              <FileSpreadsheet size={15} /> XLS / XLSX kiválasztás
               <input className="hidden" type="file" accept=".xls,.xlsx,.csv" onChange={onFileChange} />
             </label>
-            <button className={btn} onClick={saveDraft} disabled={busy || !rows.length || !supplierId || !locationId}>
-              <UploadCloud size={18} /> Draft mentése
+            <button className={primaryBtn} onClick={saveDraft} disabled={busy || !rows.length || !supplierId || !locationId} type="button">
+              <UploadCloud size={15} /> Import mentése
             </button>
-            <button className={btn} onClick={loadBatches} disabled={busy}>
-              <RefreshCw size={17} /> Frissítés
+            <button className={neutralBtn} onClick={reloadAll} disabled={busy} type="button">
+              <RefreshCw size={14} /> Frissítés
             </button>
-            <button className={btn} onClick={() => (window.location.hash = "#allinsuppliers")} type="button">
-              <Building2 size={17} /> Beszállítók kezelése
+            <button className={neutralBtn} onClick={() => (window.location.hash = "#allinsuppliers")} type="button">
+              <Building2 size={14} /> Beszállítók
             </button>
           </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-4">
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Fájl</p>
+          <div className="mt-4 grid gap-2 md:grid-cols-4">
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Fájl</p>
               <p className="mt-1 truncate text-sm">{fileName || "-"}</p>
             </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Beolvasott sor</p>
-              <p className="mt-1 text-lg">{rows.length}</p>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Beolvasott sorok</p>
+              <p className="mt-1 text-lg font-normal">{rows.length}</p>
             </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Gyanús sor</p>
-              <p className="mt-1 text-lg">{rowProblems}</p>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Ellenőrzendő sorok</p>
+              <p className="mt-1 text-lg font-normal">{rowProblems}</p>
             </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Státusz</p>
-              <p className="mt-1 text-sm">{busy ? "Dolgozom rajta" : rows.length ? "Előnézet kész" : "Nincs fájl"}</p>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Állapot</p>
+              <p className="mt-1 text-sm">{busy ? "Feldolgozás" : rows.length ? "Előnézet kész" : "Nincs fájl"}</p>
             </div>
           </div>
         </section>
 
         <section className={card}>
-          <h2 className="mb-3 text-lg font-normal">Előnézet</h2>
-          <div className="overflow-auto rounded-xl border border-white/10">
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Előnézet" right={<span className="text-xs text-white/60">Első 25 sor</span>} />
+          <div className="mt-3 overflow-auto rounded-xl border border-white/14">
             <table className="min-w-full text-left text-sm">
-              <thead className="bg-slate-900/50 text-xs uppercase text-white/55">
+              <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
                 <tr>
-                  <th className="px-3 py-3">Sor</th>
-                  <th className="px-3 py-3">Kód</th>
-                  <th className="px-3 py-3">Név</th>
-                  <th className="px-3 py-3">Szín</th>
-                  <th className="px-3 py-3">Méret</th>
-                  <th className="px-3 py-3">Db</th>
-                  <th className="px-3 py-3">Vételár</th>
+                  <th className="px-3 py-2 font-normal">Sorszám</th>
+                  <th className="px-3 py-2 font-normal">Termékkód</th>
+                  <th className="px-3 py-2 font-normal">Név</th>
+                  <th className="px-3 py-2 font-normal">Szín</th>
+                  <th className="px-3 py-2 font-normal">Méret</th>
+                  <th className="px-3 py-2 font-normal">Darab</th>
+                  <th className="px-3 py-2 font-normal">Vételár</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {preview.map((r, idx) => {
                   const n = r.normalized || {};
                   return (
-                    <tr key={`${r.rowNo || idx}-${idx}`} className="bg-white/[0.03]">
-                      <td className="px-3 py-3 text-white/55">{r.rowNo || idx + 1}</td>
-                      <td className="px-3 py-3">{cell(n.supplierProductCode || n.modelCode)}</td>
-                      <td className="px-3 py-3">{cell(n.titleRo)}</td>
-                      <td className="px-3 py-3">{cell(n.colorName || n.colorCode)}</td>
-                      <td className="px-3 py-3">{cell(n.size)}</td>
-                      <td className="px-3 py-3">{cell(n.qty)}</td>
-                      <td className="px-3 py-3">{cell(n.buyPrice)}</td>
+                    <tr key={`${r.rowNo || idx}-${idx}`} className="bg-[#445064] hover:bg-[#4b596f]">
+                      <td className="px-3 py-2.5 text-white/62">{r.rowNo || idx + 1}</td>
+                      <td className="px-3 py-2.5">{cell(n.supplierProductCode || n.modelCode)}</td>
+                      <td className="px-3 py-2.5">{cell(n.titleRo)}</td>
+                      <td className="px-3 py-2.5">{cell(n.colorName || n.colorCode)}</td>
+                      <td className="px-3 py-2.5">{cell(n.size)}</td>
+                      <td className="px-3 py-2.5">{cell(n.qty)}</td>
+                      <td className="px-3 py-2.5">{cell(n.buyPrice)}</td>
                     </tr>
                   );
                 })}
                 {!preview.length && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-white/55" colSpan={7}>
-                      Nincs beolvasott sor. Az Excel még csak néz minket, mint borjú az új kapura.
-                    </td>
+                    <td className="px-3 py-8 text-center text-white/60" colSpan={7}>Nincs beolvasott sor.</td>
                   </tr>
                 )}
               </tbody>
@@ -261,22 +435,22 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <h2 className="mb-3 text-lg font-normal">Import előzmények</h2>
-          <div className="grid gap-3">
+          <SectionTitle icon={<CheckCircle size={16} />} title="Import előzmények" right={<span className="text-xs text-white/60">Legutóbbi bevételezések</span>} />
+          <div className="mt-3 grid gap-2">
             {batches.map((b) => (
-              <div key={b.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-900/35 p-4">
+              <div key={b.id} className="flex flex-col gap-3 rounded-xl border border-white/12 bg-[#354153] p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm text-white">{b.supplier_name} • {b.source_file_name || "import"}</p>
-                  <p className="mt-1 text-xs text-white/55">
-                    {new Date(b.created_at).toLocaleString()} • {b.location_name || "-"} • sor: {b.row_count || 0} • hiba: {b.error_count || 0} • {b.status}
+                  <p className="mt-1 text-xs text-white/60">
+                    {new Date(b.created_at).toLocaleString()} • {b.location_name || "-"} • terméksor: {b.row_count || 0} • ellenőrzendő: {b.error_count || 0} • {b.status}
                   </p>
                 </div>
-                <button className={primaryBtn} disabled={busy || b.status === "committed"} onClick={() => commitBatch(b.id)}>
-                  <CheckCircle size={17} /> Commit
+                <button className={primaryBtn} disabled={busy || b.status === "committed"} onClick={() => commitBatch(b.id)} type="button">
+                  <CheckCircle size={14} /> Készletre vétel
                 </button>
               </div>
             ))}
-            {!batches.length && <p className="text-sm text-white/60">Még nincs import batch.</p>}
+            {!batches.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs import előzmény.</p>}
           </div>
         </section>
       </div>
