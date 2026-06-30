@@ -35,7 +35,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const v = text(idOrCode);
     if (!v) return null;
     const r = await client.query(
-      `SELECT id, code, name FROM ${table} WHERE id::text = $1 OR code = $1 LIMIT 1`,
+      `SELECT id, code, name, is_active FROM ${table} WHERE id::text = $1 OR code = $1 LIMIT 1`,
       [v]
     );
     return r.rows[0] || null;
@@ -333,9 +333,220 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
   }
 
-  router.get("/suppliers", requireAuthed, async (_req, res) => {
-    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_suppliers ORDER BY name ASC`);
+  function periodWhere(req, startIndex = 1) {
+    const from = emptyToNull(req.query.from);
+    const to = emptyToNull(req.query.to);
+    const args = [];
+    const parts = [];
+    let i = startIndex;
+    if (from) {
+      args.push(from);
+      parts.push(`COALESCE(b.committed_at, b.created_at) >= $${i++}::date`);
+    }
+    if (to) {
+      args.push(to);
+      parts.push(`COALESCE(b.committed_at, b.created_at) < ($${i++}::date + interval '1 day')`);
+    }
+    return { args, parts, nextIndex: i };
+  }
+
+  async function supplierUsage(client, supplierId) {
+    const r = await client.query(
+      `SELECT
+         (SELECT count(*)::int FROM aif_import_batches WHERE supplier_id=$1) AS import_batches,
+         (SELECT count(*)::int FROM aif_variant_supplier_codes WHERE supplier_id=$1) AS supplier_codes,
+         (SELECT count(*)::int FROM aif_supplier_import_profiles WHERE supplier_id=$1) AS profiles`,
+      [supplierId]
+    );
+    return r.rows[0] || { import_batches: 0, supplier_codes: 0, profiles: 0 };
+  }
+
+  router.get("/suppliers", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const withStats = ["1", "true", "yes"].includes(text(req.query.withStats || req.query.with_stats).toLowerCase());
+
+    if (!withStats) {
+      const r = await pool.query(
+        `SELECT id, code, name, is_active, notes, created_at, updated_at
+         FROM aif_suppliers
+         ${includeInactive ? "" : "WHERE is_active=true"}
+         ORDER BY is_active DESC, name ASC`
+      );
+      return res.json({ items: r.rows });
+    }
+
+    const r = await pool.query(
+      `SELECT
+         s.id, s.code, s.name, s.is_active, s.notes, s.created_at, s.updated_at,
+         count(DISTINCT b.id)::int AS import_batches,
+         count(rw.id)::int AS imported_rows,
+         COALESCE(sum(CASE WHEN b.status='committed' THEN COALESCE(rw.qty,0) ELSE 0 END),0)::int AS purchased_qty,
+         COALESCE(sum(CASE WHEN b.status='committed' THEN COALESCE(rw.qty,0) * COALESCE(rw.buy_price,0) ELSE 0 END),0)::numeric(14,2) AS purchased_value,
+         max(CASE WHEN b.status='committed' THEN COALESCE(b.committed_at, b.created_at) END) AS last_purchase_at
+       FROM aif_suppliers s
+       LEFT JOIN aif_import_batches b ON b.supplier_id=s.id
+       LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id AND rw.status <> 'ignored'
+       ${includeInactive ? "" : "WHERE s.is_active=true"}
+       GROUP BY s.id
+       ORDER BY s.is_active DESC, s.name ASC`
+    );
     res.json({ items: r.rows });
+  });
+
+  router.post("/suppliers", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const name = text(body.name);
+    const code = normCode(body.code || name);
+    const notes = emptyToNull(body.notes);
+    if (!name) return res.status(400).json({ error: "supplier name required" });
+    if (!code) return res.status(400).json({ error: "supplier code required" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r = await client.query(
+        `INSERT INTO aif_suppliers (code, name, notes, is_active)
+         VALUES ($1,$2,$3,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           notes=COALESCE(EXCLUDED.notes, aif_suppliers.notes),
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name, is_active, notes, created_at, updated_at`,
+        [code, name, notes]
+      );
+      await client.query(
+        `INSERT INTO aif_supplier_import_profiles (supplier_id, name, source_format, version)
+         VALUES ($1, 'Default XLS', 'xls', 1)
+         ON CONFLICT (supplier_id, name, version) DO NOTHING`,
+        [r.rows[0].id]
+      );
+      await client.query("COMMIT");
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF create supplier failed", e);
+      res.status(500).json({ error: "failed to save supplier" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch("/suppliers/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "supplier name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "supplier code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.notes !== undefined) {
+      sets.push(`notes=$${i++}`);
+      args.push(emptyToNull(body.notes));
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+
+    try {
+      const r = await pool.query(
+        `UPDATE aif_suppliers
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name, is_active, notes, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "supplier not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update supplier failed", e);
+      res.status(500).json({ error: "failed to update supplier" });
+    }
+  });
+
+  router.delete("/suppliers/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const supplier = await client.query(
+        `SELECT id, code, name FROM aif_suppliers WHERE id::text=$1 OR code=$1 FOR UPDATE`,
+        [id]
+      );
+      if (!supplier.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "supplier not found" });
+      }
+      const usage = await supplierUsage(client, supplier.rows[0].id);
+
+      if (Number(usage.import_batches || 0) > 0 || Number(usage.supplier_codes || 0) > 0) {
+        await client.query(`UPDATE aif_suppliers SET is_active=false, updated_at=now() WHERE id=$1`, [supplier.rows[0].id]);
+        await client.query(`UPDATE aif_supplier_import_profiles SET is_active=false, updated_at=now() WHERE supplier_id=$1`, [supplier.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+
+      await client.query(`DELETE FROM aif_suppliers WHERE id=$1`, [supplier.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete supplier failed", e);
+      res.status(500).json({ error: "failed to delete supplier" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/suppliers/report", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const p = periodWhere(req, 1);
+    const whereBatch = [`b.status='committed'`, ...p.parts];
+    const args = [...p.args];
+
+    const r = await pool.query(
+      `SELECT
+         s.id, s.code, s.name, s.is_active,
+         count(DISTINCT b.id)::int AS purchase_batches,
+         count(rw.id)::int AS purchase_rows,
+         COALESCE(sum(COALESCE(rw.qty,0)),0)::int AS purchase_qty,
+         COALESCE(sum(COALESCE(rw.qty,0) * COALESCE(rw.buy_price,0)),0)::numeric(14,2) AS purchase_value,
+         count(rw.id) FILTER (WHERE rw.buy_price IS NULL)::int AS rows_without_buy_price,
+         max(COALESCE(b.committed_at, b.created_at)) AS last_purchase_at
+       FROM aif_suppliers s
+       LEFT JOIN aif_import_batches b ON b.supplier_id=s.id AND ${whereBatch.join(" AND ")}
+       LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id AND rw.status <> 'ignored'
+       ${includeInactive ? "" : "WHERE s.is_active=true"}
+       GROUP BY s.id
+       ORDER BY purchase_value DESC, purchase_qty DESC, s.name ASC`,
+      args
+    );
+
+    const totals = r.rows.reduce((acc, x) => {
+      acc.purchase_batches += Number(x.purchase_batches || 0);
+      acc.purchase_rows += Number(x.purchase_rows || 0);
+      acc.purchase_qty += Number(x.purchase_qty || 0);
+      acc.purchase_value += Number(x.purchase_value || 0);
+      acc.rows_without_buy_price += Number(x.rows_without_buy_price || 0);
+      return acc;
+    }, { purchase_batches: 0, purchase_rows: 0, purchase_qty: 0, purchase_value: 0, rows_without_buy_price: 0 });
+
+    res.json({ items: r.rows, totals });
   });
 
   router.get("/brands", requireAuthed, async (_req, res) => {
@@ -359,13 +570,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.get("/meta", requireAuthed, async (_req, res) => {
     const [suppliers, brands, categories, locations, profiles] = await Promise.all([
-      pool.query(`SELECT id, code, name, is_active FROM aif_suppliers ORDER BY name ASC`),
-      pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`),
-      pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories ORDER BY sort_order ASC, name_ro ASC`),
-      pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations ORDER BY name ASC`),
+      pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
+      pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
+      pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT p.id, p.supplier_id, s.code AS supplier_code, p.name, p.source_format, p.version, p.is_active
                   FROM aif_supplier_import_profiles p
                   JOIN aif_suppliers s ON s.id=p.supplier_id
+                  WHERE s.is_active=true AND p.is_active=true
                   ORDER BY s.name ASC, p.name ASC, p.version DESC`),
     ]);
     res.json({
@@ -379,11 +591,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.get("/import-profiles", requireAuthed, async (req, res) => {
     const supplier = text(req.query.supplier || req.query.supplierCode || req.query.supplier_id);
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const args = [];
     const where = [];
+    if (!includeInactive) {
+      where.push(`s.is_active=true`);
+      where.push(`p.is_active=true`);
+    }
     if (supplier) {
       args.push(supplier);
-      where.push(`(s.code=$1 OR s.id::text=$1)`);
+      where.push(`(s.code=$${args.length} OR s.id::text=$${args.length})`);
     }
     const r = await pool.query(
       `SELECT p.id, p.supplier_id, s.code AS supplier_code, s.name AS supplier_name,
@@ -403,6 +620,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       const supplier = await findByIdOrCode(client, "aif_suppliers", body.supplierId || body.supplier_id || body.supplierCode || body.supplier);
       if (!supplier) return res.status(400).json({ error: "supplier required or unknown" });
+      if (supplier.is_active === false) return res.status(400).json({ error: "supplier is inactive" });
 
       let profileId = emptyToNull(body.profileId || body.profile_id);
       if (!profileId) {
