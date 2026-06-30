@@ -1,103 +1,80 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Package, ArrowLeft, Upload, Plus, Truck, FileText, Layers, Save, List, CheckCircle2, Trash2 } from "lucide-react";
-import IncomingImport from "../components/incoming/IncomingImport";
-import IncomingManualEntry from "../components/incoming/IncomingManualEntry";
-import IncomingTransfer from "../components/incoming/IncomingTransfer";
-import IncomingDocs from "../components/incoming/IncomingDocs";
-import IncomingBOM from "../components/incoming/IncomingBOM";
-import type { IncomingItemDraft, IncomingSourceMeta, Location, TransferDraft, IncomingBatchSummary } from "../lib/incoming/types";
-import { apiGetLocations, apiCreateIncomingBatch, apiReplaceIncomingItems, apiListIncomingBatches, apiGetIncomingBatch, apiCommitIncomingBatch } from "../lib/incoming/api";
+import { ArrowLeft, CheckCircle, FileSpreadsheet, RefreshCw, UploadCloud } from "lucide-react";
+import {
+  AifImportBatchSummary,
+  AifLocation,
+  AifParsedRow,
+  AifSupplier,
+  apiAifCommitImportBatch,
+  apiAifCreateImportBatch,
+  apiAifListImportBatches,
+  apiAifMeta,
+  apiAifReplaceImportRows,
+} from "../lib/aif/api";
+import { readAifWorkbook } from "../lib/aif/xls";
 
-const BG = "#474c59";
-const HEADER = "#354153";
-const ALLIN_LOGO_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
+type Props = { onLogout?: () => void };
 
-type TabKey = "import" | "manual" | "transfer" | "docs" | "bom" | "history";
+const card = "rounded-2xl border border-white/15 bg-white/8 p-5 shadow-lg";
+const input = "h-11 rounded-xl border border-white/20 bg-slate-900/40 px-3 text-white outline-none focus:border-white/50";
+const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
+const primaryBtn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-[#c90d22] px-4 text-sm text-white hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50";
 
-async function deleteIncomingBatchPermanently(batchId: string) {
-  const url = `/api/incoming/batches/${encodeURIComponent(batchId)}`;
-  const res = await fetch(url, {
-    method: "DELETE",
-    credentials: "include",
-    headers: { Accept: "application/json" },
-  });
-  if (res.ok) return;
-  const txt = await res.text().catch(() => "");
-  throw new Error(txt || `${res.status} ${res.statusText}`);
+function goHome() {
+  window.location.hash = "#allin";
 }
 
-function mergeKey(it: { sku: string; size: string; colorCode: string; category: string; name: string }) {
-  return [it.sku || "", it.size || "", it.colorCode || "", it.category || "", it.name || ""].join("|").toLowerCase();
+function cell(v: unknown) {
+  const s = String(v ?? "").trim();
+  return s || "-";
 }
 
-export default function AllInIncoming() {
-  const [tab, setTab] = useState<TabKey>("import");
+export default function AllInIncoming(_props: Props) {
+  const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
+  const [locations, setLocations] = useState<AifLocation[]>([]);
+  const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
+  const [supplierId, setSupplierId] = useState("");
+  const [locationId, setLocationId] = useState("");
+  const [note, setNote] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [rows, setRows] = useState<AifParsedRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
 
-  const [locations, setLocations] = useState<Location[]>([
-    { id: "raktar", name: "Raktár", kind: "warehouse" },
-    { id: "csikszereda", name: "Csíkszereda", kind: "shop" },
-    { id: "kezdivasarhely", name: "Kézdivásárhely", kind: "shop" },
-  ]);
-  const [locErr, setLocErr] = useState<string>("");
+  const selectedSupplier = useMemo(
+    () => suppliers.find((s) => s.id === supplierId) || null,
+    [suppliers, supplierId]
+  );
 
-  const [incoming, setIncoming] = useState<IncomingItemDraft[]>([]);
-  const [incomingMeta, setIncomingMeta] = useState<Record<string, IncomingSourceMeta>>({});
+  const preview = useMemo(() => rows.slice(0, 25), [rows]);
+  const rowProblems = useMemo(() => {
+    return rows.filter((r) => {
+      const n = r.normalized || {};
+      return !n.titleRo || !n.size || !n.qty || Number(n.qty) <= 0;
+    }).length;
+  }, [rows]);
 
-  const [transfer, setTransfer] = useState<TransferDraft>({
-    fromLocationId: "raktar",
-    toLocationId: "csikszereda",
-    items: [],
-  });
+  async function loadMeta() {
+    const meta = await apiAifMeta();
+    setSuppliers(meta.suppliers.filter((x) => x.is_active));
+    setLocations(meta.locations.filter((x) => x.is_active));
+    setSupplierId((current) => current || meta.suppliers.find((x) => x.code === "under_armour")?.id || meta.suppliers[0]?.id || "");
+    setLocationId((current) => current || meta.locations.find((x) => x.code === "main_warehouse")?.id || meta.locations[0]?.id || "");
+  }
 
-  // saving state
-  const [saveErr, setSaveErr] = useState<string>("");
-  const [saveOk, setSaveOk] = useState<string>("");
-  const [saving, setSaving] = useState<boolean>(false);
-
-  // history state
-  const [history, setHistory] = useState<IncomingBatchSummary[]>([]);
-  const [historyErr, setHistoryErr] = useState<string>("");
-  const [historyLoading, setHistoryLoading] = useState<boolean>(false);
-
-  // confirm delete modal (AllInUsers-style)
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmBatchId, setConfirmBatchId] = useState<string>("");
-  const [confirmBusy, setConfirmBusy] = useState(false);
-
-  useEffect(() => {
-    if (!confirmOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setConfirmOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen]);
-  const [selectedBatchId, setSelectedBatchId] = useState<string>("");
+  async function loadBatches() {
+    const data = await apiAifListImportBatches(25);
+    setBatches(data.items || []);
+  }
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        setLocErr("");
-        const shopsRaw: any = await apiGetLocations();
-        if (!alive) return;
-        // apiGetLocations() egyes verziókban tömböt ad, máskor { items: [...] }
-        const shops: any[] = Array.isArray(shopsRaw)
-          ? shopsRaw
-          : Array.isArray(shopsRaw?.items)
-          ? shopsRaw.items
-          : [];
-
-        // map shops -> Location
-        const locs: Location[] = shops.map((s: any) => ({
-          id: s.id,
-          name: s.name || s.label || s.id,
-          kind: s.kind || (s.id === "raktar" ? "warehouse" : "shop"),
-        }));
-        if (locs.length) setLocations(locs);
+        await loadMeta();
+        if (alive) await loadBatches();
       } catch (e: any) {
-        if (!alive) return;
-        setLocErr(e?.message || "Nem sikerült beolvasni a helyszíneket.");
+        if (alive) setMessage(e.message || "Nem sikerült betölteni az AIF adatokat.");
       }
     })();
     return () => {
@@ -105,515 +82,201 @@ export default function AllInIncoming() {
     };
   }, []);
 
-  const addBatch = (items: IncomingItemDraft[], meta: IncomingSourceMeta) => {
-    if (!items.length) return;
-    const metaId = meta.id;
-
-    // merge by key
-    setIncoming((prev) => {
-      const map = new Map<string, IncomingItemDraft>();
-      for (const p of prev) map.set(mergeKey(p), p);
-      for (const n of items) {
-        const k = mergeKey(n);
-        const ex = map.get(k);
-        if (!ex) map.set(k, n);
-        else map.set(k, { ...ex, qty: ex.qty + n.qty });
-      }
-      return Array.from(map.values());
-    });
-
-    setIncomingMeta((prev) => ({ ...prev, [metaId]: meta }));
-  };
-
-  const clearIncoming = () => {
-    setIncoming([]);
-    setIncomingMeta({});
-    setSaveErr("");
-    setSaveOk("");
-  };
-
-  const removeIncomingRow = (idx: number) => {
-    setIncoming((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const setIncomingQty = (idx: number, qty: number) => {
-    setIncoming((prev) => prev.map((it, i) => (i === idx ? { ...it, qty } : it)).filter((x) => x.qty > 0));
-  };
-
-  const groupedByMeta = useMemo(() => {
-    const ids = Array.from(new Set(incoming.map((x) => x.sourceMetaId)));
-    return ids.map((id) => incomingMeta[id]).filter(Boolean);
-  }, [incoming, incomingMeta]);
-
-  const canSave = incoming.length > 0 && Object.keys(incomingMeta).length > 0;
-
-  const saveToServer = async () => {
-    setSaveErr("");
-    setSaveOk("");
-    if (!canSave) {
-      setSaveErr("Nincs mit menteni.");
-      return;
-    }
-
-    // v1: meta-bontás batch-enként (minden import/hand meta külön batch)
-    setSaving(true);
+  async function onFileChange(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setMessage("");
     try {
-      const metaList = groupedByMeta;
-      for (const meta of metaList) {
-        const itemsForMeta = incoming.filter((x) => x.sourceMetaId === meta.id);
-        if (!itemsForMeta.length) continue;
-
-        const created = await apiCreateIncomingBatch({
-          // Backend expects supplier. If the UI input is not wired yet, keep the flow working.
-          supplier: (meta.supplier || "").trim() || "Ismeretlen beszállító",
-          sourceType: meta.kind,
-          locationId: meta.locationId,
-          note: meta.label,
-        });
-
-        await apiReplaceIncomingItems(
-          created.id,
-          itemsForMeta.map((x) => ({
-            product_code: x.sku,
-            product_name: x.name,
-            color_code: x.colorCode,
-            color_name: x.colorName,
-            size: x.size,
-            category: x.category,
-            qty: x.qty,
-            raw: { sourceMetaId: x.sourceMetaId },
-          }))
-        );
-      }
-
-      setSaveOk("Mentve a szerverre (batch-ek létrehozva).");
-      // refresh history silently
-      void loadHistory();
+      const parsed = await readAifWorkbook(file, selectedSupplier);
+      setFileName(file.name);
+      setRows(parsed);
+      setMessage(`${parsed.length} sor beolvasva. Ez még csak előnézet, nem készletmozgás.`);
     } catch (e: any) {
-      setSaveErr(e?.message || "Mentés sikertelen.");
+      setRows([]);
+      setMessage(e.message || "Nem sikerült beolvasni az XLS/XLSX fájlt.");
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
-  };
+  }
 
-  const loadHistory = async () => {
-    setHistoryErr("");
-    setHistoryLoading(true);
+  async function saveDraft() {
+    if (!supplierId || !locationId || !rows.length) return;
+    setBusy(true);
+    setMessage("");
     try {
-      const res = await apiListIncomingBatches({ limit: 50, offset: 0 });
-      setHistory(res.items || []);
-    } catch (e: any) {
-      setHistoryErr(e?.message || "Nem sikerült beolvasni a batch listát.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (tab === "history") void loadHistory();
-  }, [tab]);
-
-  const loadBatchIntoDraft = async (batchId: string) => {
-    setHistoryErr("");
-    try {
-      const d = await apiGetIncomingBatch(batchId);
-      const metaId = `batch_${d.id}`;
-      const meta: IncomingSourceMeta = {
-        id: metaId,
-        kind: d.source_type,
-        label: `Batch ${d.id}`,
-        supplier: d.supplier,
-        createdAtISO: d.created_at,
-        locationId: d.location_id,
-      };
-      const items: IncomingItemDraft[] = d.items.map((it) => ({
-        brand: (it.brand || "").toString(),
-        gender: (it.gender || "").toString(),
-        buyPrice: (it.buy_price ?? it.buyPrice ?? null) as any,
-        sku: (it.product_code || "").toString(),
-        name: (it.product_name || "").toString(),
-        colorCode: (it.color_code || "").toString(),
-        colorName: (it.color_name || "").toString(),
-        size: (it.size || "").toString(),
-        category: (it.category || "").toString(),
-        qty: it.qty,
-        sourceMetaId: metaId,
-      }));
-      setIncoming(items);
-      setIncomingMeta({ [metaId]: meta });
-      setSaveOk(`Betöltve: ${d.id}`);
-      setSaveErr("");
-      // maradunk az Előzmények fülön, és a betöltött batch kerüljön a lista aljára
-      setHistory((prev) => {
-        const idx = prev.findIndex((x) => x.id === batchId);
-        if (idx === -1) return prev;
-        const copy = prev.slice();
-        const [moved] = copy.splice(idx, 1);
-        copy.push(moved);
-        return copy;
+      const batch = await apiAifCreateImportBatch({
+        supplierId,
+        targetLocationId: locationId,
+        sourceFileName: fileName || "manual-import.xls",
+        sourceFormat: "xls",
+        note,
       });
+      const saved = await apiAifReplaceImportRows(batch.id, rows);
+      await loadBatches();
+      setMessage(`Import draft mentve: ${saved.rowCount} sor, hibás sor: ${saved.errorCount}.`);
     } catch (e: any) {
-      setHistoryErr(e?.message || "Nem sikerült betölteni a batch-et.");
-    }
-  };
-
-  const commitSelectedBatch = async () => {
-    if (!selectedBatchId) return;
-    setHistoryErr("");
-    try {
-      await apiCommitIncomingBatch(selectedBatchId);
-      setSaveOk(`Commit: ${selectedBatchId}`);
-      void loadHistory();
-    } catch (e: any) {
-      setHistoryErr(e?.message || "Commit sikertelen.");
-    }
-  };
-
-  const openDeleteConfirm = (batchId: string) => {
-    setConfirmBatchId(batchId);
-    setConfirmOpen(true);
-  };
-
-  const confirmDelete = async () => {
-    if (!confirmBatchId) return;
-    setHistoryErr("");
-    setConfirmBusy(true);
-    try {
-      await deleteIncomingBatchPermanently(confirmBatchId);
-      setSaveOk(`Törölve: ${confirmBatchId}`);
-      setSaveErr("");
-      setConfirmOpen(false);
-      setConfirmBatchId("");
-      void loadHistory();
-    } catch (e: any) {
-      setHistoryErr(e?.message || "Törlés sikertelen.");
+      setMessage(e.message || "Nem sikerült menteni az importot.");
     } finally {
-      setConfirmBusy(false);
+      setBusy(false);
     }
-  };
+  }
 
-  const tabs: Array<{ key: TabKey; label: string; icon: any }> = [
-    { key: "import", label: "CSV import", icon: Upload },
-    { key: "manual", label: "Kézi bevitel", icon: Plus },
-    { key: "transfer", label: "Mozgatás", icon: Truck },
-    { key: "docs", label: "PDF (Aviz/Recepție)", icon: FileText },
-    { key: "bom", label: "Összetevők", icon: Layers },
-    { key: "history", label: "Előzmények", icon: List },
-  ];
+  async function commitBatch(id: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifCommitImportBatch(id);
+      await loadBatches();
+      setMessage(`Commit kész. Létrehozott/frissített variánsok: ${result.committed ?? 0}.`);
+    } catch (e: any) {
+      setMessage(e.message || "A commit nem sikerült. Valószínűleg van hibás import sor.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="min-h-screen" style={{ background: BG }}>
-      <div className="sticky top-0 z-30 border-b border-white/10" style={{ background: HEADER }}>
-        <div className="max-w-[1400px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => (window.location.hash = "#home")}
-              className="h-9 px-3 rounded-xl border border-white/25 bg-white/5 text-white hover:bg-white/10 text-[12px] font-semibold inline-flex items-center gap-2"
-              title="Vissza"
-            >
-              <ArrowLeft className="w-4 h-4" /> Vissza
-            </button>
+    <main className="min-h-screen bg-[#4b5362] px-4 py-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm text-white/60">AllInFashion</p>
+            <h1 className="text-2xl font-semibold tracking-tight">Áru bevételezés</h1>
+            <p className="mt-1 text-sm text-white/70">Beszállító kiválasztás, XLS előnézet, majd tiszta AIF import.</p>
+          </div>
+          <button className={btn} onClick={goHome}>
+            <ArrowLeft size={17} /> Vissza
+          </button>
+        </header>
 
-            <div className="flex items-center gap-2">
-              <img src={ALLIN_LOGO_URL} alt="ALL IN" className="h-7 w-auto opacity-90" />
-              <div className="text-white font-semibold text-[14px] inline-flex items-center gap-2">
-                <Package className="w-4 h-4" /> Incoming
-              </div>
+        {message && <div className="rounded-xl border border-white/20 bg-slate-900/35 px-4 py-3 text-sm text-white/85">{message}</div>}
+
+        <section className={card}>
+          <div className="grid gap-4 lg:grid-cols-4">
+            <label className="grid gap-2 text-sm text-white/75">
+              Beszállító
+              <select className={input} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id} className="bg-slate-900">
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="grid gap-2 text-sm text-white/75">
+              Cél hely
+              <select className={input} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id} className="bg-slate-900">
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="grid gap-2 text-sm text-white/75 lg:col-span-2">
+              Megjegyzés
+              <input className={input} value={note} onChange={(e) => setNote(e.target.value)} placeholder="pl. Under Armour új lista" />
+            </label>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <label className={primaryBtn}>
+              <FileSpreadsheet size={18} /> XLS / XLSX kiválasztás
+              <input className="hidden" type="file" accept=".xls,.xlsx,.csv" onChange={onFileChange} />
+            </label>
+            <button className={btn} onClick={saveDraft} disabled={busy || !rows.length || !supplierId || !locationId}>
+              <UploadCloud size={18} /> Draft mentése
+            </button>
+            <button className={btn} onClick={loadBatches} disabled={busy}>
+              <RefreshCw size={17} /> Frissítés
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div className="rounded-xl bg-slate-900/35 p-4">
+              <p className="text-xs text-white/55">Fájl</p>
+              <p className="mt-1 truncate text-sm">{fileName || "-"}</p>
+            </div>
+            <div className="rounded-xl bg-slate-900/35 p-4">
+              <p className="text-xs text-white/55">Beolvasott sor</p>
+              <p className="mt-1 text-lg">{rows.length}</p>
+            </div>
+            <div className="rounded-xl bg-slate-900/35 p-4">
+              <p className="text-xs text-white/55">Gyanús sor</p>
+              <p className="mt-1 text-lg">{rowProblems}</p>
+            </div>
+            <div className="rounded-xl bg-slate-900/35 p-4">
+              <p className="text-xs text-white/55">Státusz</p>
+              <p className="mt-1 text-sm">{busy ? "Dolgozom rajta" : rows.length ? "Előnézet kész" : "Nincs fájl"}</p>
             </div>
           </div>
+        </section>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={saveToServer}
-              disabled={!canSave || saving}
-              className="h-9 px-3 rounded-xl bg-white text-slate-900 text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-2"
-              title={canSave ? "Mentés a szerverre" : "Előbb importálj vagy vigyél be tételeket"}
-            >
-              <Save className="w-4 h-4" /> {saving ? "Mentés..." : "Mentés"}
-            </button>
-
-            <div className="inline-flex items-center gap-2 text-white/80 text-[12px]">
-              <span className="text-white/60">Tételek:</span>
-              <span className="inline-flex min-w-[34px] justify-center px-2 py-0.5 rounded-md bg-white/10 border border-white/20 text-white">
-                {incoming.length}
-              </span>
-              <button
-                type="button"
-                onClick={clearIncoming}
-                className="h-8 px-3 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10 text-[12px]"
-                title="Bejövő tételek törlése"
-              >
-                Ürítés
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-[1400px] mx-auto px-4 py-4 grid gap-4">
-        {locErr ? (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
-            Helyszínek betöltése nem sikerült: <b>{locErr}</b> (fallback lista aktív)
-          </div>
-        ) : null}
-
-        {saveErr ? <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-900">{saveErr}</div> : null}
-        {saveOk ? (
-          <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-900 inline-flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4" /> {saveOk}
-          </div>
-        ) : null}
-
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="px-2 py-2 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center gap-2">
-            {tabs.map((t) => {
-              const Icon = t.icon;
-              const active = tab === t.key;
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setTab(t.key)}
-                  className={
-                    "h-9 px-3 rounded-xl text-[12px] font-semibold inline-flex items-center gap-2 border " +
-                    (active ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-800 border-slate-200 hover:bg-slate-50")
-                  }
-                >
-                  <Icon className="w-4 h-4" /> {t.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="p-4">
-            {tab === "import" ? <IncomingImport locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
-            {tab === "manual" ? <IncomingManualEntry locations={locations} existingCount={incoming.length} onAddBatch={addBatch} /> : null}
-            {tab === "transfer" ? (
-              <IncomingTransfer locations={locations} incoming={incoming} incomingMeta={incomingMeta} transfer={transfer} onChange={setTransfer} />
-            ) : null}
-            {tab === "docs" ? <IncomingDocs locations={locations} transfer={transfer} incomingCount={incoming.length} /> : null}
-            {tab === "bom" ? <IncomingBOM /> : null}
-
-            {tab === "history" ? (
-              <div className="grid gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[12px] font-semibold text-slate-800">Incoming előzmények (utolsó 50)</div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={loadHistory}
-                      className="h-9 px-3 rounded-xl border border-slate-300 bg-white text-[12px] font-semibold text-slate-800 hover:bg-slate-50"
-                    >
-                      Frissítés
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!selectedBatchId}
-                      onClick={commitSelectedBatch}
-                      className="h-9 px-3 rounded-xl bg-slate-900 text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                      title="Batch commit (draft -> committed)"
-                    >
-                      Commit
-                    </button>
-                  </div>
-                </div>
-
-                {historyErr ? <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-900">{historyErr}</div> : null}
-
-                <div className="rounded-xl border border-slate-200 overflow-hidden">
-                  <div className="max-h-[520px] overflow-auto">
-                    <table className="w-full text-[12px]">
-                      <thead className="bg-slate-50 text-slate-600 sticky top-0">
-                        <tr>
-                          <th className="text-left px-3 py-2 font-semibold">Dátum</th>
-                          <th className="text-left px-3 py-2 font-semibold">ID</th>
-                          <th className="text-left px-3 py-2 font-semibold">Beszállító</th>
-                          <th className="text-left px-3 py-2 font-semibold">Típus</th>
-                          <th className="text-left px-3 py-2 font-semibold">Helyszín</th>
-                          <th className="text-left px-3 py-2 font-semibold">Státusz</th>
-                          <th className="px-3 py-2"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {history.map((b) => (
-                          <tr key={b.id} className="border-t border-slate-200 hover:bg-slate-50">
-                            <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{new Date(b.created_at).toLocaleString()}</td>
-                            <td className="px-3 py-2 font-semibold text-slate-900">{b.id}</td>
-                            <td className="px-3 py-2 text-slate-800">{b.supplier}</td>
-                            <td className="px-3 py-2 text-slate-700">{b.source_type}</td>
-                            <td className="px-3 py-2 text-slate-700">{b.location_id}</td>
-                            <td className="px-3 py-2">
-                              <span
-                                className={
-                                  "inline-flex px-2 py-0.5 rounded-md text-[11px] border " +
-                                  (b.status === "committed"
-                                    ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                                    : b.status === "cancelled"
-                                    ? "bg-red-50 text-red-800 border-red-200"
-                                    : "bg-slate-50 text-slate-800 border-slate-200")
-                                }
-                              >
-                                {b.status}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <div className="flex items-center justify-end gap-2">
-                                <input
-                                  type="radio"
-                                  name="selectedBatch"
-                                  checked={selectedBatchId === b.id}
-                                  onChange={() => setSelectedBatchId(b.id)}
-                                  title="Kijelölés commit-hoz"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => openDeleteConfirm(b.id)}
-                                  className="h-8 w-8 rounded-md bg-red-600 text-white hover:bg-red-700 inline-flex items-center justify-center"
-                                  title="Előzmény végleges törlése"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => loadBatchIntoDraft(b.id)}
-                                  className="h-8 px-3 rounded-xl border border-slate-300 bg-white text-[12px] font-semibold text-slate-800 hover:bg-slate-50"
-                                >
-                                  Betöltés
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {!history.length && !historyLoading ? (
-                          <tr>
-                            <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
-                              Nincs adat.
-                            </td>
-                          </tr>
-                        ) : null}
-                        {historyLoading ? (
-                          <tr>
-                            <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
-                              Betöltés...
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Incoming items table always visible */}
-        <div className="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-            <div className="text-[12px] font-semibold text-slate-800">Bejövő tételek (draft)</div>
-            <div className="text-[11px] text-slate-500">Itt látszik, amit importáltál / beírtál.</div>
-          </div>
-          <div className="max-h-[520px] overflow-auto">
-            <table className="w-full text-[12px]">
-              <thead className="bg-slate-50 text-slate-600 sticky top-0">
+        <section className={card}>
+          <h2 className="mb-3 text-lg font-semibold">Előnézet</h2>
+          <div className="overflow-auto rounded-xl border border-white/10">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-slate-900/50 text-xs uppercase text-white/55">
                 <tr>
-                  <th className="text-left px-3 py-2 font-semibold">Kód</th>
-                  <th className="text-left px-3 py-2 font-semibold">Termék</th>
-                  <th className="text-left px-3 py-2 font-semibold">Szín</th>
-                  <th className="text-left px-3 py-2 font-semibold">Méret</th>
-                  <th className="text-left px-3 py-2 font-semibold">Kategória</th>
-                  <th className="text-right px-3 py-2 font-semibold">Db</th>
-                  <th className="px-3 py-2"></th>
+                  <th className="px-3 py-3">Sor</th>
+                  <th className="px-3 py-3">Kód</th>
+                  <th className="px-3 py-3">Név</th>
+                  <th className="px-3 py-3">Szín</th>
+                  <th className="px-3 py-3">Méret</th>
+                  <th className="px-3 py-3">Db</th>
+                  <th className="px-3 py-3">Vételár</th>
                 </tr>
               </thead>
-              <tbody>
-                {incoming.map((it, idx) => (
-                  <tr key={idx} className="border-t border-slate-200">
-                    <td className="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">{it.sku}</td>
-                    <td className="px-3 py-2 text-slate-800">{it.name}</td>
-                    <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
-                      {it.colorCode ? <span className="font-semibold">{it.colorCode}</span> : <span className="text-slate-400">-</span>}
-                      {it.colorName ? <span className="text-slate-500"> · {it.colorName}</span> : null}
-                    </td>
-                    <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{it.size || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-slate-700">{it.category || <span className="text-slate-400">-</span>}</td>
-                    <td className="px-3 py-2 text-right">
-                      <input
-                        value={String(it.qty)}
-                        onChange={(e) => {
-                          const q = Math.round(Number((e.target.value || "").replace(",", ".")));
-                          setIncomingQty(idx, Number.isFinite(q) ? q : 0);
-                        }}
-                        className="w-[90px] h-9 rounded-lg border border-slate-300 px-2 text-[12px] text-right"
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => removeIncomingRow(idx)}
-                        className="h-9 w-9 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 inline-flex items-center justify-center"
-                        title="Sor törlése"
-                      >
-                        ×
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {!incoming.length ? (
+              <tbody className="divide-y divide-white/10">
+                {preview.map((r, idx) => {
+                  const n = r.normalized || {};
+                  return (
+                    <tr key={`${r.rowNo || idx}-${idx}`} className="bg-white/[0.03]">
+                      <td className="px-3 py-3 text-white/55">{r.rowNo || idx + 1}</td>
+                      <td className="px-3 py-3">{cell(n.supplierProductCode || n.modelCode)}</td>
+                      <td className="px-3 py-3">{cell(n.titleRo)}</td>
+                      <td className="px-3 py-3">{cell(n.colorName || n.colorCode)}</td>
+                      <td className="px-3 py-3">{cell(n.size)}</td>
+                      <td className="px-3 py-3">{cell(n.qty)}</td>
+                      <td className="px-3 py-3">{cell(n.buyPrice)}</td>
+                    </tr>
+                  );
+                })}
+                {!preview.length && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
-                      Még nincs tétel.
+                    <td className="px-3 py-8 text-center text-white/55" colSpan={7}>
+                      Nincs beolvasott sor. Az Excel még csak néz minket, mint borjú az új kapura.
                     </td>
                   </tr>
-                ) : null}
+                )}
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
+
+        <section className={card}>
+          <h2 className="mb-3 text-lg font-semibold">Import előzmények</h2>
+          <div className="grid gap-3">
+            {batches.map((b) => (
+              <div key={b.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-900/35 p-4">
+                <div>
+                  <p className="text-sm text-white">{b.supplier_name} • {b.source_file_name || "import"}</p>
+                  <p className="mt-1 text-xs text-white/55">
+                    {new Date(b.created_at).toLocaleString()} • {b.location_name || "-"} • sor: {b.row_count || 0} • hiba: {b.error_count || 0} • {b.status}
+                  </p>
+                </div>
+                <button className={primaryBtn} disabled={busy || b.status === "committed"} onClick={() => commitBatch(b.id)}>
+                  <CheckCircle size={17} /> Commit
+                </button>
+              </div>
+            ))}
+            {!batches.length && <p className="text-sm text-white/60">Még nincs import batch.</p>}
+          </div>
+        </section>
       </div>
-
-	    {confirmOpen ? (
-	      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-	        <button
-	          type="button"
-	          className="absolute inset-0 bg-black/40"
-	          onClick={() => (confirmBusy ? null : setConfirmOpen(false))}
-	          aria-label="Bezárás"
-	        />
-	        <div className="relative w-full max-w-[520px] rounded-xl bg-white border border-slate-200 shadow-xl">
-	          <div className="px-4 py-3 border-b border-slate-200 text-[13px] font-semibold text-slate-900">
-	            Előzmény végleges törlése
-	          </div>
-	          <div className="px-4 py-4 text-[12px] text-slate-700">
-	            Biztosan törlöd véglegesen ezt a batch-et?
-	            <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-slate-900 font-semibold">
-	              {confirmBatchId}
-	            </div>
-	          </div>
-	          <div className="px-4 py-3 border-t border-slate-200 flex items-center justify-end gap-2">
-	            <button
-	              type="button"
-	              className="h-9 px-3 rounded-xl border border-slate-300 bg-white text-[12px] font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-	              onClick={() => setConfirmOpen(false)}
-	              disabled={confirmBusy}
-	            >
-	              Mégse
-	            </button>
-	            <button
-	              type="button"
-	              className="h-9 px-3 rounded-xl bg-red-600 text-white text-[12px] font-semibold hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
-	              onClick={confirmDelete}
-	              disabled={confirmBusy}
-	            >
-	              {confirmBusy ? "Törlés..." : "Törlés"}
-	            </button>
-	          </div>
-	        </div>
-	      </div>
-	    ) : null}
-
-	    </div>
+    </main>
   );
 }
