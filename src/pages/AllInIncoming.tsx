@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle, FileSpreadsheet, RefreshCw, UploadCloud } from "lucide-react";
+import { ArrowLeft, Building2, CheckCircle, FileSpreadsheet, RefreshCw, UploadCloud } from "lucide-react";
 import {
   AifImportBatchSummary,
   AifLocation,
@@ -15,10 +15,10 @@ import { readAifWorkbook } from "../lib/aif/xls";
 
 type Props = { onLogout?: () => void };
 
-const card = "rounded-2xl border border-white/15 bg-white/8 p-5 shadow-lg";
+const card = "rounded-2xl border border-white/15 bg-white/8 p-5 shadow-lg font-normal";
 const input = "h-11 rounded-xl border border-white/20 bg-slate-900/40 px-3 text-white outline-none focus:border-white/50";
-const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
-const primaryBtn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-[#c90d22] px-4 text-sm text-white hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50";
+const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const primaryBtn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-[#c90d22] px-4 text-sm text-white hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -142,7 +142,7 @@ export default function AllInIncoming(_props: Props) {
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm text-white/60">AllInFashion</p>
-            <h1 className="text-2xl font-semibold tracking-tight">Áru bevételezés</h1>
+            <h1 className="text-2xl font-normal tracking-tight">Áru bevételezés</h1>
             <p className="mt-1 text-sm text-white/70">Beszállító kiválasztás, XLS előnézet, majd tiszta AIF import.</p>
           </div>
           <button className={btn} onClick={goHome}>
@@ -193,6 +193,9 @@ export default function AllInIncoming(_props: Props) {
             <button className={btn} onClick={loadBatches} disabled={busy}>
               <RefreshCw size={17} /> Frissítés
             </button>
+            <button className={btn} onClick={() => (window.location.hash = "#allinsuppliers")} type="button">
+              <Building2 size={17} /> Beszállítók kezelése
+            </button>
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -216,7 +219,7 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <h2 className="mb-3 text-lg font-semibold">Előnézet</h2>
+          <h2 className="mb-3 text-lg font-normal">Előnézet</h2>
           <div className="overflow-auto rounded-xl border border-white/10">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-900/50 text-xs uppercase text-white/55">
@@ -258,7 +261,7 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <h2 className="mb-3 text-lg font-semibold">Import előzmények</h2>
+          <h2 className="mb-3 text-lg font-normal">Import előzmények</h2>
           <div className="grid gap-3">
             {batches.map((b) => (
               <div key={b.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-900/35 p-4">
