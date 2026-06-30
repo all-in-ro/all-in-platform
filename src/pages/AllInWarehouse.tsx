@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, RefreshCw, Search } from "lucide-react";
 import { AifInventoryItem, apiAifInventory } from "../lib/aif/api";
 
-const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
+const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const input = "h-11 rounded-xl border border-white/20 bg-slate-900/40 px-3 text-white outline-none focus:border-white/50";
 const card = "rounded-2xl border border-white/15 bg-white/8 p-5 shadow-lg";
 
@@ -53,12 +53,12 @@ export default function AllInWarehouse() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-[#4b5362] px-4 py-8 text-white">
+    <main className="min-h-screen bg-[#4b5362] px-4 py-8 text-white font-normal">
       <div className="mx-auto max-w-7xl space-y-5">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm text-white/60">AllInFashion</p>
-            <h1 className="text-2xl font-semibold tracking-tight">Raktár</h1>
+            <h1 className="text-2xl font-normal tracking-tight">Raktár</h1>
             <p className="mt-1 text-sm text-white/70">Új AIF készletnézet, belső variáns azonosítóval.</p>
           </div>
           <button className={btn} onClick={goHome}><ArrowLeft size={17} /> Vissza</button>
