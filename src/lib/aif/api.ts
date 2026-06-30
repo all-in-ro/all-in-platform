@@ -201,3 +201,72 @@ export function apiAifStock(locationCodeOrId?: string) {
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifStockItem[] }>(`/stock${suffix}`);
 }
+
+export type AifSupplierDetail = AifSupplier & {
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  import_batches?: number;
+  imported_rows?: number;
+  purchased_qty?: number;
+  purchased_value?: string | number;
+  last_purchase_at?: string | null;
+};
+
+export type AifSupplierReportItem = {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  purchase_batches: number;
+  purchase_rows: number;
+  purchase_qty: number;
+  purchase_value: string | number;
+  rows_without_buy_price: number;
+  last_purchase_at?: string | null;
+};
+
+export type AifSupplierReportTotals = {
+  purchase_batches: number;
+  purchase_rows: number;
+  purchase_qty: number;
+  purchase_value: number;
+  rows_without_buy_price: number;
+};
+
+export function apiAifListSuppliers(options?: { includeInactive?: boolean; withStats?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  if (options?.withStats) q.set("withStats", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifSupplierDetail[] }>(`/suppliers${suffix}`);
+}
+
+export function apiAifCreateSupplier(input: { name: string; code?: string; notes?: string }) {
+  return fetchAifJSON<{ item: AifSupplierDetail }>("/suppliers", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateSupplier(id: string, input: { name?: string; code?: string; notes?: string | null; is_active?: boolean }) {
+  return fetchAifJSON<{ item: AifSupplierDetail }>(`/suppliers/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteSupplier(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/suppliers/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifSupplierReport(options?: { from?: string; to?: string; includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifSupplierReportItem[]; totals: AifSupplierReportTotals }>(`/suppliers/report${suffix}`);
+}
