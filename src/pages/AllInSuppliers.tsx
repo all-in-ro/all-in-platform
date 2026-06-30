@@ -53,9 +53,9 @@ const sectionTitle =
 const sectionHint = "hidden text-xs text-white/72 sm:inline";
 const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/94";
 const input =
-  "h-8 rounded-lg border border-white/38 !bg-[#111a28] px-3 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-emerald-300/35 focus:border-emerald-200/90 focus:ring-1 focus:ring-emerald-200/35 [color-scheme:dark] font-normal";
+  "h-8 rounded-lg border border-white/38 !bg-[#303b4e] px-3 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-emerald-300/35 focus:border-emerald-200/90 focus:ring-1 focus:ring-emerald-200/35 [color-scheme:dark] font-normal";
 const textarea =
-  "min-h-[68px] rounded-lg border border-white/38 !bg-[#111a28] px-3 py-2 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-emerald-300/35 focus:border-emerald-200/90 focus:ring-1 focus:ring-emerald-200/35 font-normal";
+  "min-h-[68px] rounded-lg border border-white/38 !bg-[#303b4e] px-3 py-2 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-emerald-300/35 focus:border-emerald-200/90 focus:ring-1 focus:ring-emerald-200/35 font-normal";
 const btnBase =
   "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
@@ -357,7 +357,7 @@ export default function AllInSuppliers() {
     const q = query.trim().toLowerCase();
     if (!q) return suppliers;
     return suppliers.filter((s) => {
-      return [s.name, s.code, s.notes]
+      return [s.name, s.notes]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q));
     });
@@ -618,9 +618,6 @@ export default function AllInSuppliers() {
                   <p className="text-sm font-normal text-white">
                     {deleteTarget.name}
                   </p>
-                  <p className="mt-1 font-mono text-xs text-white/78">
-                    {deleteTarget.code}
-                  </p>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-white/74">
                   Ha már kapcsolódik hozzá bevételezés, a rendszer nem törli
@@ -701,7 +698,7 @@ export default function AllInSuppliers() {
                         className={`${input} w-full pl-9`}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="név, kód, megjegyzés"
+                        placeholder="név, megjegyzés"
                       />
                     </div>
                   </label>
@@ -723,7 +720,7 @@ export default function AllInSuppliers() {
                       onChange={(e) => setTo(e.target.value)}
                     />
                   </label>
-                  <label className="flex h-8 items-center gap-2 self-end rounded-lg border border-white/18 bg-slate-950/22 px-3 text-sm text-white/78">
+                  <label className="flex h-8 items-center gap-2 self-end rounded-lg border border-white/18 bg-[#303b4e] px-3 text-sm text-white/78">
                     <input
                       type="checkbox"
                       checked={includeInactive}
@@ -801,7 +798,7 @@ export default function AllInSuppliers() {
                   </select>
                 </label>
               </div>
-              <div className="flex items-center gap-2 rounded-xl border border-white/14 bg-slate-950/18 px-3 py-2 text-xs text-white/72">
+              <div className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#303b4e]/70 px-3 py-2 text-xs text-white/72">
                 <CalendarRange size={14} />
                 <span>
                   {from && to
@@ -923,9 +920,6 @@ export default function AllInSuppliers() {
                   </div>
                   <p className="text-lg font-normal text-white">
                     {selectedReport?.name || "Nincs adat"}
-                  </p>
-                  <p className="mt-1 font-mono text-xs text-white/64">
-                    {selectedReport?.code || "-"}
                   </p>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
@@ -1084,7 +1078,7 @@ export default function AllInSuppliers() {
             onToggle={() => setCreateOpen((v) => !v)}
           />
           {createOpen && (
-            <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr_2fr_auto] lg:items-end">
+            <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_2fr_auto] lg:items-end">
               <label className={label}>
                 Név
                 <input
@@ -1092,20 +1086,6 @@ export default function AllInSuppliers() {
                   value={form.name}
                   onChange={(e) => updateFormName(e.target.value)}
                   placeholder="pl. Under Armour Europe"
-                />
-              </label>
-              <label className={label}>
-                Kód
-                <input
-                  className={`${input} w-full`}
-                  value={form.code}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      code: normalizeCode(e.target.value),
-                    }))
-                  }
-                  placeholder="under_armour_eu"
                 />
               </label>
               <label className={label}>
@@ -1163,16 +1143,6 @@ export default function AllInSuppliers() {
                               }))
                             }
                           />
-                          <input
-                            className={`${input} w-full`}
-                            value={editForm.code}
-                            onChange={(e) =>
-                              setEditForm((f) => ({
-                                ...f,
-                                code: normalizeCode(e.target.value),
-                              }))
-                            }
-                          />
                           <textarea
                             className={textarea}
                             value={editForm.notes}
@@ -1211,9 +1181,6 @@ export default function AllInSuppliers() {
                             >
                               <p className="text-sm font-normal text-white">
                                 {s.name}
-                              </p>
-                              <p className="mt-1 break-all font-mono text-xs text-white/66">
-                                {s.code}
                               </p>
                             </button>
                             <span
@@ -1303,7 +1270,6 @@ export default function AllInSuppliers() {
                   <thead className="bg-[#151f2d] text-xs uppercase tracking-[0.09em] text-white/92">
                     <tr>
                       <th className="px-3 py-2 font-normal">Beszállító</th>
-                      <th className="px-3 py-2 font-normal">Kód</th>
                       <th className="px-3 py-2 font-normal">Státusz</th>
                       <th className="px-3 py-2 text-right font-normal">
                         Bevételezések
@@ -1356,24 +1322,6 @@ export default function AllInSuppliers() {
                                   </p>
                                 )}
                               </div>
-                            )}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            {editing ? (
-                              <input
-                                className={`${input} w-40`}
-                                value={editForm.code}
-                                onChange={(e) =>
-                                  setEditForm((f) => ({
-                                    ...f,
-                                    code: normalizeCode(e.target.value),
-                                  }))
-                                }
-                              />
-                            ) : (
-                              <span className="font-mono text-xs text-white/78">
-                                {s.code}
-                              </span>
                             )}
                           </td>
                           <td className="px-3 py-2.5">
