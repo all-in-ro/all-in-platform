@@ -47,6 +47,7 @@ const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
 
+
 function goHome() {
   window.location.hash = "#allin";
 }
