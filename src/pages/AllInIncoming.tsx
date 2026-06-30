@@ -16,13 +16,18 @@ import {
 import {
   AifImportBatchSummary,
   AifLocation,
+  AifLocationType,
   AifParsedRow,
   AifSupplier,
   apiAifCommitImportBatch,
   apiAifCreateImportBatch,
   apiAifCreateLocation,
+  apiAifCreateLocationType,
   apiAifDeleteLocation,
+  apiAifDeleteLocationType,
+  apiAifListLocationTypes,
   apiAifUpdateLocation,
+  apiAifUpdateLocationType,
   apiAifListImportBatches,
   apiAifMeta,
   apiAifReplaceImportRows,
@@ -31,7 +36,7 @@ import { readAifWorkbook } from "../lib/aif/xls";
 
 type Props = { onLogout?: () => void };
 
-type LocationType = "warehouse" | "shop" | "online" | "reserved" | "other";
+type LocationType = string;
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
 const wrap = "mx-auto max-w-7xl space-y-4";
@@ -84,6 +89,7 @@ function SectionTitle(props: { icon: React.ReactNode; title: string; right?: Rea
 export default function AllInIncoming(_props: Props) {
   const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locations, setLocations] = useState<AifLocation[]>([]);
+  const [locationTypes, setLocationTypes] = useState<AifLocationType[]>([]);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [supplierId, setSupplierId] = useState("");
   const [locationId, setLocationId] = useState("");
@@ -95,6 +101,10 @@ export default function AllInIncoming(_props: Props) {
   const [locationModalOpen, setLocationModalOpen] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [newLocationType, setNewLocationType] = useState<LocationType>("warehouse");
+  const [newLocationTypeName, setNewLocationTypeName] = useState("");
+  const [editingLocationTypeId, setEditingLocationTypeId] = useState("");
+  const [editLocationTypeName, setEditLocationTypeName] = useState("");
+  const [deleteLocationTypeTarget, setDeleteLocationTypeTarget] = useState<AifLocationType | null>(null);
   const [editingLocationId, setEditingLocationId] = useState("");
   const [editLocationName, setEditLocationName] = useState("");
   const [editLocationType, setEditLocationType] = useState<LocationType>("warehouse");
@@ -105,6 +115,16 @@ export default function AllInIncoming(_props: Props) {
     [suppliers, supplierId]
   );
 
+  const activeLocationTypes = useMemo(() => locationTypes.filter((t) => t.is_active), [locationTypes]);
+  const locationTypeOptions = useMemo(() => {
+    if (activeLocationTypes.length) return activeLocationTypes;
+    return [{ id: "warehouse", code: "warehouse", name: "Raktár", is_active: true } as AifLocationType];
+  }, [activeLocationTypes]);
+
+  function typeLabel(code: string) {
+    return locationTypes.find((t) => t.code === code)?.name || locationTypeLabel(code);
+  }
+
   const preview = useMemo(() => rows.slice(0, 25), [rows]);
   const rowProblems = useMemo(() => {
     return rows.filter((r) => {
@@ -114,11 +134,18 @@ export default function AllInIncoming(_props: Props) {
   }, [rows]);
 
   async function loadMeta() {
-    const meta = await apiAifMeta();
+    const [meta, typeData] = await Promise.all([apiAifMeta(), apiAifListLocationTypes({ includeInactive: true })]);
     const activeSuppliers = meta.suppliers.filter((x) => x.is_active);
     const activeLocations = meta.locations.filter((x) => x.is_active);
+    const allTypes = typeData.items || meta.locationTypes || [];
+    const activeTypes = allTypes.filter((x) => x.is_active);
     setSuppliers(activeSuppliers);
     setLocations(activeLocations);
+    setLocationTypes(allTypes);
+    setNewLocationType((current) => {
+      if (current && activeTypes.some((t) => t.code === current)) return current;
+      return activeTypes[0]?.code || "warehouse";
+    });
     setSupplierId((current) => current || activeSuppliers.find((x) => x.code === "under_armour")?.id || activeSuppliers[0]?.id || "");
     setLocationId((current) => {
       if (current && activeLocations.some((l) => l.id === current)) return current;
@@ -215,12 +242,94 @@ export default function AllInIncoming(_props: Props) {
     try {
       const created = await apiAifCreateLocation({ name: newLocationName, locationType: newLocationType });
       setNewLocationName("");
-      setNewLocationType("warehouse");
+      setNewLocationType(locationTypeOptions[0]?.code || "warehouse");
       await loadMeta();
       setLocationId(created.item.id);
       setMessage("Cél hely mentve.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a cél helyet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createLocationType() {
+    if (!newLocationTypeName.trim()) {
+      setMessage("A típus neve kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const created = await apiAifCreateLocationType({ name: newLocationTypeName });
+      setNewLocationTypeName("");
+      await loadMeta();
+      setNewLocationType(created.item.code);
+      setMessage("Típus mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a típust.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEditLocationType(type: AifLocationType) {
+    setDeleteLocationTypeTarget(null);
+    setEditingLocationTypeId(type.id);
+    setEditLocationTypeName(type.name || "");
+  }
+
+  function cancelEditLocationType() {
+    setEditingLocationTypeId("");
+    setEditLocationTypeName("");
+  }
+
+  async function saveLocationTypeEdit() {
+    if (!editingLocationTypeId) return;
+    if (!editLocationTypeName.trim()) {
+      setMessage("A típus neve kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateLocationType(editingLocationTypeId, { name: editLocationTypeName });
+      await loadMeta();
+      cancelEditLocationType();
+      setMessage("Típus módosítva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a típust.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function activateLocationType(type: AifLocationType) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateLocationType(type.id, { is_active: true });
+      await loadMeta();
+      setMessage("Típus aktiválva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült aktiválni a típust.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDeleteLocationType() {
+    if (!deleteLocationTypeTarget) return;
+    const target = deleteLocationTypeTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifDeleteLocationType(target.id);
+      setDeleteLocationTypeTarget(null);
+      await loadMeta();
+      setMessage(result.mode === "deleted" ? "Típus törölve." : "Típus inaktiválva, mert már használatban van.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült törölni a típust.");
     } finally {
       setBusy(false);
     }
@@ -309,16 +418,95 @@ export default function AllInIncoming(_props: Props) {
                 <label className={label}>
                   Típus
                   <select className={`${input} w-full`} value={newLocationType} onChange={(e) => setNewLocationType(e.target.value as LocationType)}>
-                    <option value="warehouse">Raktár</option>
-                    <option value="shop">Üzlet / helyszín</option>
-                    <option value="online">Online</option>
-                    <option value="reserved">Foglalás</option>
-                    <option value="other">Egyéb</option>
+                    {locationTypeOptions.map((t) => (
+                      <option key={t.id} value={t.code}>{t.name}</option>
+                    ))}
                   </select>
                 </label>
                 <button className={primaryBtn} onClick={createLocation} disabled={busy} type="button">
                   <Save size={14} /> Mentés
                 </button>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/14 bg-[#435064] p-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <label className={label}>
+                  Cél hely típus hozzáadása
+                  <input
+                    className={`${input} w-full sm:w-[280px]`}
+                    value={newLocationTypeName}
+                    onChange={(e) => setNewLocationTypeName(e.target.value)}
+                    placeholder="pl. Bemutatóterem"
+                  />
+                </label>
+                <button className={primaryBtn} onClick={createLocationType} disabled={busy} type="button">
+                  <Plus size={14} /> Típus mentése
+                </button>
+              </div>
+
+              <div className="mt-3 grid gap-2">
+                {locationTypes.map((t) => {
+                  const isEditingType = editingLocationTypeId === t.id;
+                  return (
+                    <div key={t.id} className="rounded-lg border border-white/10 bg-[#354153] p-2.5">
+                      {isEditingType ? (
+                        <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+                          <label className={label}>
+                            Típus neve
+                            <input
+                              className={`${input} w-full`}
+                              value={editLocationTypeName}
+                              onChange={(e) => setEditLocationTypeName(e.target.value)}
+                              placeholder="Típus neve"
+                            />
+                          </label>
+                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                            <button className={primaryBtn} onClick={saveLocationTypeEdit} disabled={busy} type="button">
+                              <Save size={14} /> Mentés
+                            </button>
+                            <button className={neutralBtn} onClick={cancelEditLocationType} disabled={busy} type="button">
+                              <X size={14} /> Mégse
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm text-white">{t.name}</p>
+                            {!t.is_active && <p className="mt-1 text-xs text-white/58">Inaktív</p>}
+                          </div>
+                          {deleteLocationTypeTarget?.id === t.id ? (
+                            <div className="flex flex-wrap gap-2">
+                              <button className={neutralBtn} onClick={() => setDeleteLocationTypeTarget(null)} disabled={busy} type="button">
+                                <X size={14} /> Mégse
+                              </button>
+                              <button className={dangerBtn} onClick={confirmDeleteLocationType} disabled={busy} type="button">
+                                <Trash2 size={14} /> Törlés
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-2 sm:justify-end">
+                              <button className={neutralBtn} onClick={() => startEditLocationType(t)} disabled={busy} type="button">
+                                <Edit3 size={14} /> Módosítás
+                              </button>
+                              {t.is_active ? (
+                                <button className={dangerBtn} onClick={() => { cancelEditLocationType(); setDeleteLocationTypeTarget(t); }} disabled={busy} type="button">
+                                  <Trash2 size={14} /> Törlés
+                                </button>
+                              ) : (
+                                <button className={primaryBtn} onClick={() => activateLocationType(t)} disabled={busy} type="button">
+                                  <CheckCircle size={14} /> Aktiválás
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!locationTypes.length && <p className="rounded-lg border border-white/10 bg-[#354153] px-3 py-3 text-sm text-white/70">Nincs cél hely típus.</p>}
               </div>
             </div>
 
@@ -345,11 +533,9 @@ export default function AllInIncoming(_props: Props) {
                             value={editLocationType}
                             onChange={(e) => setEditLocationType(e.target.value as LocationType)}
                           >
-                            <option value="warehouse">Raktár</option>
-                            <option value="shop">Üzlet / helyszín</option>
-                            <option value="online">Online</option>
-                            <option value="reserved">Foglalás</option>
-                            <option value="other">Egyéb</option>
+                            {locationTypeOptions.map((t) => (
+                              <option key={t.id} value={t.code}>{t.name}</option>
+                            ))}
                           </select>
                         </label>
                         <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -365,7 +551,7 @@ export default function AllInIncoming(_props: Props) {
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="text-sm text-white">{l.name}</p>
-                          <p className="mt-1 text-xs text-white/60">{locationTypeLabel(l.location_type)}</p>
+                          <p className="mt-1 text-xs text-white/60">{typeLabel(l.location_type)}</p>
                         </div>
                         {deleteLocationTarget?.id === l.id ? (
                           <div className="flex flex-wrap gap-2">
