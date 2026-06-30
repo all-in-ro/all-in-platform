@@ -29,6 +29,16 @@ export type AifLocation = {
   is_active: boolean;
 };
 
+export type AifLocationType = {
+  id: string;
+  code: string;
+  name: string;
+  sort_order?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AifImportProfile = {
   id: string;
   supplier_id: string;
@@ -44,6 +54,7 @@ export type AifMeta = {
   brands: AifBrand[];
   categories: AifCategory[];
   locations: AifLocation[];
+  locationTypes?: AifLocationType[];
   profiles: AifImportProfile[];
 };
 
@@ -269,6 +280,34 @@ export function apiAifSupplierReport(options?: { from?: string; to?: string; inc
   if (options?.includeInactive) q.set("includeInactive", "1");
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifSupplierReportItem[]; totals: AifSupplierReportTotals }>(`/suppliers/report${suffix}`);
+}
+
+
+export function apiAifListLocationTypes(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifLocationType[] }>(`/location-types${suffix}`);
+}
+
+export function apiAifCreateLocationType(input: { name: string; code?: string; sortOrder?: number }) {
+  return fetchAifJSON<{ item: AifLocationType }>("/location-types", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateLocationType(id: string, input: { name?: string; code?: string; sortOrder?: number; is_active?: boolean }) {
+  return fetchAifJSON<{ item: AifLocationType }>(`/location-types/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteLocationType(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/location-types/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 
