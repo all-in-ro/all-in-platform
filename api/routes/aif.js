@@ -361,6 +361,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0] || { import_batches: 0, stock_rows: 0, stock_movements: 0 };
   }
 
+  async function locationTypeUsage(client, typeCode) {
+    const r = await client.query(
+      `SELECT count(*)::int AS locations
+       FROM aif_locations
+       WHERE location_type=$1`,
+      [typeCode]
+    );
+    return r.rows[0] || { locations: 0 };
+  }
+
+  async function activeLocationTypeExists(client, typeCode) {
+    const r = await client.query(
+      `SELECT 1 FROM aif_location_types WHERE code=$1 AND is_active=true LIMIT 1`,
+      [typeCode]
+    );
+    return r.rowCount > 0;
+  }
+
   async function supplierUsage(client, supplierId) {
     const r = await client.query(
       `SELECT
@@ -574,6 +592,134 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
+  router.get("/location-types", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT id, code, name, sort_order, is_active, created_at, updated_at
+       FROM aif_location_types
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, name ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/location-types", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const name = text(body.name);
+    const code = normCode(body.code || name);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+
+    if (!name) return res.status(400).json({ error: "location type name required" });
+    if (!code) return res.status(400).json({ error: "location type code required" });
+
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_location_types (code, name, sort_order, is_active)
+         VALUES ($1,$2,$3,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name, sort_order, is_active, created_at, updated_at`,
+        [code, name, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create location type failed", e);
+      res.status(500).json({ error: "failed to save location type" });
+    }
+  });
+
+  router.patch("/location-types/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "location type name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "location type code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
+      sets.push(`sort_order=$${i++}`);
+      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+
+    try {
+      const r = await pool.query(
+        `UPDATE aif_location_types
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "location type not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update location type failed", e);
+      res.status(500).json({ error: "failed to update location type" });
+    }
+  });
+
+  router.delete("/location-types/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const typeRes = await client.query(
+        `SELECT id, code, name FROM aif_location_types WHERE id::text=$1 OR code=$1 FOR UPDATE`,
+        [id]
+      );
+      if (!typeRes.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "location type not found" });
+      }
+
+      const activeCount = await client.query(
+        `SELECT count(*)::int AS c FROM aif_location_types WHERE is_active=true AND id <> $1`,
+        [typeRes.rows[0].id]
+      );
+      if (Number(activeCount.rows[0]?.c || 0) <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "at least one active location type is required" });
+      }
+
+      const usage = await locationTypeUsage(client, typeRes.rows[0].code);
+      if (Number(usage.locations || 0) > 0) {
+        await client.query(`UPDATE aif_location_types SET is_active=false, updated_at=now() WHERE id=$1`, [typeRes.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+
+      await client.query(`DELETE FROM aif_location_types WHERE id=$1`, [typeRes.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete location type failed", e);
+      res.status(500).json({ error: "failed to delete location type" });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/locations", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const r = await pool.query(
@@ -590,13 +736,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const name = text(body.name);
     const code = normCode(body.code || name);
     const locationType = normCode(body.locationType || body.location_type || "warehouse") || "warehouse";
-    const allowed = new Set(["warehouse", "shop", "online", "reserved", "other"]);
 
     if (!name) return res.status(400).json({ error: "location name required" });
     if (!code) return res.status(400).json({ error: "location code required" });
-    if (!allowed.has(locationType)) return res.status(400).json({ error: "invalid location type" });
 
     try {
+      if (!(await activeLocationTypeExists(pool, locationType))) {
+        return res.status(400).json({ error: "invalid location type" });
+      }
       const r = await pool.query(
         `INSERT INTO aif_locations (code, name, location_type, is_active)
          VALUES ($1,$2,$3,true)
@@ -621,7 +768,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const sets = [];
     const args = [];
     let i = 1;
-    const allowed = new Set(["warehouse", "shop", "online", "reserved", "other"]);
 
     if (body.name !== undefined) {
       const name = text(body.name);
@@ -637,7 +783,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     if (body.locationType !== undefined || body.location_type !== undefined) {
       const locationType = normCode(body.locationType || body.location_type || "warehouse") || "warehouse";
-      if (!allowed.has(locationType)) return res.status(400).json({ error: "invalid location type" });
+      if (!(await activeLocationTypeExists(pool, locationType))) return res.status(400).json({ error: "invalid location type" });
       sets.push(`location_type=$${i++}`);
       args.push(locationType);
     }
@@ -712,11 +858,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, locations, profiles] = await Promise.all([
+    const [suppliers, brands, categories, locations, locationTypes, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
+      pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT p.id, p.supplier_id, s.code AS supplier_code, p.name, p.source_format, p.version, p.is_active
                   FROM aif_supplier_import_profiles p
                   JOIN aif_suppliers s ON s.id=p.supplier_id
@@ -728,6 +875,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       brands: brands.rows,
       categories: categories.rows,
       locations: locations.rows,
+      locationTypes: locationTypes.rows,
       profiles: profiles.rows,
     });
   });
