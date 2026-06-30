@@ -270,3 +270,36 @@ export function apiAifSupplierReport(options?: { from?: string; to?: string; inc
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifSupplierReportItem[]; totals: AifSupplierReportTotals }>(`/suppliers/report${suffix}`);
 }
+
+
+export type AifLocationDetail = AifLocation & {
+  created_at?: string;
+  updated_at?: string;
+};
+
+export function apiAifListLocations(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifLocationDetail[] }>(`/locations${suffix}`);
+}
+
+export function apiAifCreateLocation(input: { name: string; code?: string; locationType?: string }) {
+  return fetchAifJSON<{ item: AifLocationDetail }>("/locations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateLocation(id: string, input: { name?: string; code?: string; locationType?: string; is_active?: boolean }) {
+  return fetchAifJSON<{ item: AifLocationDetail }>(`/locations/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteLocation(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/locations/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
