@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
   Package,
   Truck,
@@ -9,6 +8,7 @@ import {
   ClipboardList,
   Settings,
   LogOut,
+  Building2,
 } from "lucide-react";
 
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
@@ -52,18 +52,30 @@ async function fetchJSON(url: string) {
   return await r.json();
 }
 
+function MenuButton(props: {
+  className: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button className={`${props.className} font-normal`} onClick={props.onClick} type="button">
+      {props.children}
+    </button>
+  );
+}
+
 export default function AllInHome(props: { onLogout?: () => void }) {
   const [adminLevel, setAdminLevel] = useState<"ok" | "soon" | "expired">("ok");
 
   const mainBtn =
-    "w-full h-12 rounded-xl px-4 bg-[#354153] text-white hover:bg-[#3c5069] flex items-center justify-between border border-white/40";
+    "w-full h-12 rounded-xl px-4 bg-[#354153] text-white hover:bg-[#3c5069] flex items-center justify-between border border-white/40 transition";
 
   const adminBtn = useMemo(() => {
     if (adminLevel === "expired") {
-      return "w-full h-12 rounded-xl px-4 bg-[#b90f1e] text-white hover:bg-[#a10d19] flex items-center justify-between border border-white/40";
+      return "w-full h-12 rounded-xl px-4 bg-[#b90f1e] text-white hover:bg-[#a10d19] flex items-center justify-between border border-white/40 transition";
     }
     if (adminLevel === "soon") {
-      return "w-full h-12 rounded-xl px-4 bg-amber-400 text-black hover:bg-amber-300 flex items-center justify-between border border-white/40";
+      return "w-full h-12 rounded-xl px-4 bg-amber-400 text-black hover:bg-amber-300 flex items-center justify-between border border-white/40 transition";
     }
     return mainBtn;
   }, [adminLevel, mainBtn]);
@@ -116,7 +128,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
 
   return (
     <div
-      className="min-h-screen w-screen grid place-items-center"
+      className="min-h-screen w-screen grid place-items-center font-normal"
       style={{ backgroundColor: "#474c59" }}
     >
       <div className="w-full max-w-lg px-4">
@@ -131,68 +143,52 @@ export default function AllInHome(props: { onLogout?: () => void }) {
           </div>
 
           <div className="space-y-3">
-            <Button
-              className={mainBtn}
-              onClick={() => (window.location.hash = "#allinwarehouse")}
-            >
+            <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinwarehouse")}>
               <span>RAKTÁR</span>
               <Package className="h-4 w-4" />
-            </Button>
+            </MenuButton>
 
-            <Button
-              className={mainBtn}
-              onClick={() => (window.location.hash = "#allinincoming")}
-            >
+            <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinincoming")}>
               <span>ÁRU BEVÉTELEZÉS</span>
               <Truck className="h-4 w-4" />
-            </Button>
+            </MenuButton>
+
+            <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinsuppliers")}>
+              <span>BESZÁLLÍTÓK</span>
+              <Building2 className="h-4 w-4" />
+            </MenuButton>
 
             <div className="pt-4 mt-2 border-t border-white/15 space-y-3">
-              <Button
-                className={mainBtn}
-                onClick={() => (window.location.hash = "#allinorderhistory")}
-              >
+              <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinorderhistory")}>
                 <span>RENDELÉS – HISTORY</span>
                 <History className="h-4 w-4" />
-              </Button>
+              </MenuButton>
 
-              <Button
-                className={mainBtn}
-                onClick={() => (window.location.hash = "#allinreserved")}
-              >
+              <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinreserved")}>
                 <span>LEFOGLALT TERMÉKEK</span>
                 <Bookmark className="h-4 w-4" />
-              </Button>
+              </MenuButton>
 
-              <Button
-                className={mainBtn}
-                onClick={() => (window.location.hash = "#allinstockmoves")}
-              >
+              <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinstockmoves")}>
                 <span>RAKTÁRMOZGÁS</span>
                 <Repeat className="h-4 w-4" />
-              </Button>
+              </MenuButton>
 
-              <Button
-                className={mainBtn}
-                onClick={() => (window.location.hash = "#allininventory")}
-              >
+              <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allininventory")}>
                 <span>LELTÁR</span>
                 <ClipboardList className="h-4 w-4" />
-              </Button>
+              </MenuButton>
 
-              <Button
-                className={adminBtn}
-                onClick={() => (window.location.hash = "#allinadmin")}
-              >
+              <MenuButton className={adminBtn} onClick={() => (window.location.hash = "#allinadmin")}>
                 <span>ADMINISZTRÁCIÓ</span>
                 <Settings className="h-4 w-4" />
-              </Button>
+              </MenuButton>
             </div>
 
             <div className="pt-6 mt-4 border-t border-white/10 flex justify-center">
               <button
                 onClick={logout}
-                className="flex items-center gap-2 text-sm px-4 py-2 rounded-md border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition"
+                className="flex items-center gap-2 text-sm px-4 py-2 rounded-md border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition font-normal"
                 type="button"
               >
                 <LogOut className="h-4 w-4" />
