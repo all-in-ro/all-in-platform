@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
-  AlertTriangle,
   BarChart3,
   Building2,
   Check,
@@ -25,23 +24,29 @@ import {
   apiAifUpdateSupplier,
 } from "../lib/aif/api";
 
-const page = "min-h-screen bg-[#4b5362] px-4 py-6 text-white font-normal sm:py-8";
-const wrap = "mx-auto max-w-7xl space-y-5";
-const card = "rounded-2xl border border-white/15 bg-white/8 p-4 shadow-lg sm:p-5";
-const input = "h-11 rounded-xl border border-white/20 bg-slate-900/40 px-3 text-white outline-none focus:border-white/50 font-normal placeholder:text-white/35";
-const textarea = "min-h-[88px] rounded-xl border border-white/20 bg-slate-900/40 px-3 py-3 text-white outline-none focus:border-white/50 font-normal placeholder:text-white/35";
-const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/25 bg-[#354153] px-4 text-sm text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal transition";
-const redBtn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-[#c90d22] px-4 text-sm text-white hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal transition";
-const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/8 px-3 text-sm text-white/85 hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-50 font-normal transition";
-const chip = "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-normal";
-const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm";
-const modalCard = "w-full max-w-md rounded-2xl border border-white/15 bg-[#4b5362] p-5 text-white shadow-2xl";
-
 type FormState = {
   name: string;
   code: string;
   notes: string;
 };
+
+const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
+const wrap = "mx-auto max-w-7xl space-y-4";
+const card = "rounded-2xl border border-white/14 bg-white/[0.055] p-3 shadow-md sm:p-4";
+const sectionTitle = "flex items-center gap-2 text-base text-white/92";
+const label = "grid gap-1.5 text-xs text-white/70";
+const input = "h-9 rounded-lg border border-white/18 bg-slate-950/28 px-3 text-sm text-white outline-none transition placeholder:text-white/34 focus:border-white/45 font-normal";
+const textarea = "min-h-[74px] rounded-lg border border-white/18 bg-slate-950/28 px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/34 focus:border-white/45 font-normal";
+const btnBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border px-3 text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const primaryBtn = `${btnBase} border-emerald-300/20 bg-[#2f6959] hover:bg-[#347564]`;
+const neutralBtn = `${btnBase} border-white/18 bg-[#354153] hover:bg-[#3d495b]`;
+const dangerBtn = `${btnBase} border-red-300/20 bg-[#c90d22] hover:bg-[#a90c1d]`;
+const tinyBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/16 bg-white/[0.055] px-2.5 text-xs text-white/86 transition hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tinyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-300/20 bg-[#c90d22] px-2.5 text-xs text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const chip = "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-normal";
+const statCard = "rounded-xl border border-white/10 bg-slate-950/22 px-3 py-2.5";
+const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/72 px-4 py-6 backdrop-blur-sm";
+const modalCard = "w-full max-w-sm rounded-2xl border border-white/16 bg-[#4b5362] p-4 text-white shadow-2xl";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -120,7 +125,7 @@ export default function AllInSuppliers() {
       setReport(rData.items || []);
       setTotals(rData.totals || emptyTotals());
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült betölteni a beszállítókat.");
+      setMessage(e.message || "Nu s-au putut încărca furnizorii.");
     } finally {
       setBusy(false);
     }
@@ -137,7 +142,7 @@ export default function AllInSuppliers() {
 
   async function createSupplier() {
     if (!form.name.trim()) {
-      setMessage("A beszállító neve kötelező. Sajnos a gondolatolvasó modul még mindig nem termel pénzt.");
+      setMessage("A beszállító neve kötelező.");
       return;
     }
     setBusy(true);
@@ -188,7 +193,7 @@ export default function AllInSuppliers() {
     try {
       await apiAifUpdateSupplier(s.id, { is_active: !s.is_active });
       await load();
-      setMessage(s.is_active ? "Beszállító kikapcsolva." : "Beszállító újra aktív.");
+      setMessage(s.is_active ? "Beszállító inaktiválva." : "Beszállító aktiválva.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült módosítani az állapotot.");
     } finally {
@@ -202,7 +207,6 @@ export default function AllInSuppliers() {
 
   async function confirmRemoveSupplier() {
     if (!deleteTarget) return;
-
     const s = deleteTarget;
     setBusy(true);
     setMessage("");
@@ -210,7 +214,7 @@ export default function AllInSuppliers() {
       const result = await apiAifDeleteSupplier(s.id);
       setDeleteTarget(null);
       await load();
-      setMessage(result.mode === "deleted" ? "Beszállító törölve." : "Beszállító kikapcsolva, mert már van hozzá előzmény.");
+      setMessage(result.mode === "deleted" ? "Beszállító törölve." : "Beszállító inaktiválva, mert van hozzá előzmény.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült törölni.");
     } finally {
@@ -224,29 +228,29 @@ export default function AllInSuppliers() {
         <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="supplier-delete-title">
           <div className={modalCard}>
             <div className="flex items-start gap-3">
-              <div className="mt-0.5 rounded-xl border border-red-300/25 bg-red-500/15 p-2 text-red-100">
-                <AlertTriangle size={22} />
+              <div className="mt-0.5 rounded-lg border border-red-300/20 bg-red-500/12 p-2 text-red-100">
+                <Trash2 size={18} />
               </div>
               <div className="min-w-0 flex-1">
-                <p id="supplier-delete-title" className="text-lg font-normal">Beszállító törlése</p>
-                <p className="mt-2 text-sm leading-6 text-white/72">
-                  Biztos törlöd ezt a beszállítót?
+                <p id="supplier-delete-title" className="text-base font-normal">Beszállító törlése</p>
+                <p className="mt-2 text-sm leading-6 text-white/70">
+                  Biztosan törölni szeretnéd ezt a beszállítót?
                 </p>
-                <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/35 px-3 py-3">
-                  <p className="text-base font-normal text-white">{deleteTarget.name}</p>
+                <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/28 px-3 py-2.5">
+                  <p className="text-sm font-normal text-white">{deleteTarget.name}</p>
                   <p className="mt-1 font-mono text-xs text-white/55">{deleteTarget.code}</p>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-white/60">
-                  Ha már van hozzá bevételezés, fizikailag nem töröljük, csak inaktívra kapcsoljuk, hogy a kimutatás ne menjen levesbe. Tudom, radikális ötlet: adatot nem rontunk el szándékosan.
+                <p className="mt-3 text-sm leading-6 text-white/62">
+                  Ha már kapcsolódik hozzá bevételezés, a rendszer nem törli fizikailag, csak inaktívra állítja, hogy a kimutatások megmaradjanak.
                 </p>
               </div>
             </div>
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button className={`${softBtn} w-full sm:w-auto`} onClick={() => setDeleteTarget(null)} disabled={busy} type="button">
-                <X size={16} /> Mégse
+              <button className={`${neutralBtn} w-full sm:w-auto`} onClick={() => setDeleteTarget(null)} disabled={busy} type="button">
+                <X size={15} /> Mégse
               </button>
-              <button className={`${redBtn} w-full sm:w-auto`} onClick={confirmRemoveSupplier} disabled={busy} type="button">
-                <Trash2 size={16} /> Törlés
+              <button className={`${dangerBtn} w-full sm:w-auto`} onClick={confirmRemoveSupplier} disabled={busy} type="button">
+                <Trash2 size={15} /> Törlés
               </button>
             </div>
           </div>
@@ -254,119 +258,118 @@ export default function AllInSuppliers() {
       )}
 
       <div className={wrap}>
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm text-white/60">AllInFashion</p>
-            <h1 className="text-2xl font-normal tracking-tight">Beszállítók</h1>
-            <p className="mt-1 text-sm text-white/70">
-              Valódi beszállítók kezelése, vásárlási kimutatás, import alapadatok. ForIT nem beszállító, hanem rendszer, nehogy már a kalapácsot is számlázzuk mint árut.
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs text-white/55">AllInFashion</p>
+            <h1 className="mt-1 text-xl font-normal tracking-tight sm:text-2xl">Beszállítók</h1>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-white/68">
+              Beszállítói törzsadatok, import alapadatok és vásárlási kimutatások kezelése.
             </p>
           </div>
-          <button className={btn} onClick={goHome} type="button">
-            <ArrowLeft size={17} /> Vissza
+          <button className={`${neutralBtn} self-start`} onClick={goHome} type="button">
+            <ArrowLeft size={16} /> Vissza
           </button>
         </header>
 
         {message && (
-          <div className="rounded-xl border border-white/20 bg-slate-900/35 px-4 py-3 text-sm text-white/85">
+          <div className="rounded-xl border border-white/18 bg-slate-950/25 px-3 py-2.5 text-sm text-white/82">
             {message}
           </div>
         )}
 
         <section className={card}>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Aktív beszállító</p>
-              <p className="mt-1 text-xl font-normal">{suppliers.filter((s) => s.is_active).length}</p>
-            </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Import batch</p>
-              <p className="mt-1 text-xl font-normal">{totals.purchase_batches}</p>
-            </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Vásárolt db</p>
-              <p className="mt-1 text-xl font-normal">{totals.purchase_qty}</p>
-            </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Vásárlási érték</p>
-              <p className="mt-1 text-xl font-normal">{money(totals.purchase_value)}</p>
-            </div>
-            <div className="rounded-xl bg-slate-900/35 p-4">
-              <p className="text-xs text-white/55">Ár nélküli sor</p>
-              <p className="mt-1 text-xl font-normal">{totals.rows_without_buy_price}</p>
-            </div>
-          </div>
-        </section>
-
-        <section className={card}>
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="grid min-w-[220px] flex-1 gap-2 text-sm text-white/75">
-              Keresés
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-3 text-white/40" size={18} />
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className={`${label} sm:col-span-2 lg:col-span-1`}>
+                Keresés
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" size={16} />
+                  <input
+                    className={`${input} w-full pl-9`}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="név, kód, megjegyzés"
+                  />
+                </div>
+              </label>
+              <label className={label}>
+                Időszak kezdete
+                <input className={`${input} w-full`} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+              </label>
+              <label className={label}>
+                Időszak vége
+                <input className={`${input} w-full`} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+              </label>
+              <label className="flex h-9 items-center gap-2 self-end rounded-lg border border-white/18 bg-slate-950/22 px-3 text-sm text-white/78">
                 <input
-                  className={`${input} w-full pl-10`}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="név, kód, megjegyzés"
+                  type="checkbox"
+                  checked={includeInactive}
+                  onChange={(e) => setIncludeInactive(e.target.checked)}
+                  className="h-4 w-4 accent-emerald-600"
                 />
-              </div>
-            </label>
-
-            <label className="grid gap-2 text-sm text-white/75">
-              Ettől
-              <input className={input} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm text-white/75">
-              Eddig
-              <input className={input} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-            </label>
-
-            <label className="flex h-11 items-center gap-2 rounded-xl border border-white/20 bg-slate-900/30 px-3 text-sm text-white/75">
-              <input
-                type="checkbox"
-                checked={includeInactive}
-                onChange={(e) => setIncludeInactive(e.target.checked)}
-              />
-              Inaktívak is
-            </label>
-
-            <button className={btn} onClick={load} disabled={busy} type="button">
-              <RefreshCw size={17} /> Frissítés
+                Inaktívak is
+              </label>
+            </div>
+            <button className={neutralBtn} onClick={load} disabled={busy} type="button">
+              <RefreshCw size={15} /> Frissítés
             </button>
           </div>
+
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            <div className={statCard}>
+              <p className="text-xs text-white/48">Beszállítók</p>
+              <p className="mt-1 text-lg font-normal">{suppliers.length}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs text-white/48">Batch</p>
+              <p className="mt-1 text-lg font-normal">{totals.purchase_batches}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs text-white/48">Sor</p>
+              <p className="mt-1 text-lg font-normal">{totals.purchase_rows}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs text-white/48">Darab</p>
+              <p className="mt-1 text-lg font-normal">{totals.purchase_qty}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs text-white/48">Érték</p>
+              <p className="mt-1 text-lg font-normal">{money(totals.purchase_value)}</p>
+            </div>
+          </div>
         </section>
 
         <section className={card}>
-          <div className="mb-4 flex items-center gap-2 text-white/90">
-            <Plus size={18} />
-            <h2 className="text-lg font-normal">Új beszállító</h2>
+          <div className={sectionTitle}>
+            <Plus size={17} />
+            <h2 className="text-base font-normal">Új beszállító</h2>
           </div>
-          <div className="grid gap-3 lg:grid-cols-5">
-            <label className="grid gap-2 text-sm text-white/75 lg:col-span-2">
+          <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr_2fr_auto] lg:items-end">
+            <label className={label}>
               Név
               <input className={input} value={form.name} onChange={(e) => updateFormName(e.target.value)} placeholder="pl. Under Armour Europe" />
             </label>
-            <label className="grid gap-2 text-sm text-white/75">
+            <label className={label}>
               Kód
               <input className={input} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} placeholder="under_armour_eu" />
             </label>
-            <label className="grid gap-2 text-sm text-white/75 lg:col-span-2">
+            <label className={label}>
               Megjegyzés
               <input className={input} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="kapcsolat, feltétel, árlista típusa" />
             </label>
-          </div>
-          <div className="mt-4 flex justify-end">
-            <button className={redBtn} onClick={createSupplier} disabled={busy} type="button">
-              <Save size={17} /> Mentés
+            <button className={primaryBtn} onClick={createSupplier} disabled={busy} type="button">
+              <Save size={15} /> Mentés
             </button>
           </div>
         </section>
 
         <section className={card}>
-          <div className="mb-4 flex items-center gap-2 text-white/90">
-            <Building2 size={18} />
-            <h2 className="text-lg font-normal">Beszállítói lista</h2>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className={sectionTitle}>
+              <Building2 size={17} />
+              <h2 className="text-base font-normal">Beszállítói lista</h2>
+            </div>
+            <p className="text-xs text-white/48">{filtered.length} találat</p>
           </div>
 
           <div className="grid gap-3 md:hidden">
@@ -374,105 +377,105 @@ export default function AllInSuppliers() {
               const r = reportBySupplier.get(s.id);
               const editing = editingId === s.id;
               return (
-                <div key={s.id} className="rounded-xl border border-white/10 bg-slate-900/30 p-4">
+                <div key={s.id} className="rounded-xl border border-white/10 bg-slate-950/20 p-3">
                   {editing ? (
-                    <div className="grid gap-3">
+                    <div className="grid gap-2.5">
                       <input className={input} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
                       <input className={input} value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} />
                       <textarea className={textarea} value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
-                      <div className="flex flex-wrap gap-2">
-                        <button className={redBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={16} /> Mentés</button>
-                        <button className={softBtn} onClick={() => setEditingId("")} type="button"><X size={16} /> Mégse</button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button className={primaryBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={15} /> Mentés</button>
+                        <button className={neutralBtn} onClick={() => setEditingId("")} type="button"><X size={15} /> Mégse</button>
                       </div>
                     </div>
                   ) : (
                     <>
                       <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-base font-normal text-white">{s.name}</p>
-                          <p className="mt-1 text-xs text-white/50">{s.code}</p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-normal text-white">{s.name}</p>
+                          <p className="mt-1 break-all font-mono text-xs text-white/52">{s.code}</p>
                         </div>
-                        <span className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/20 text-white/50"}`}>
+                        <span className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/52"}`}>
                           {s.is_active ? "Aktív" : "Inaktív"}
                         </span>
                       </div>
-                      {s.notes && <p className="mt-3 text-sm text-white/65">{s.notes}</p>}
-                      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-                        <div className="rounded-lg bg-white/6 p-3"><p className="text-xs text-white/45">Batch</p><p>{r?.purchase_batches || 0}</p></div>
-                        <div className="rounded-lg bg-white/6 p-3"><p className="text-xs text-white/45">Db</p><p>{r?.purchase_qty || 0}</p></div>
-                        <div className="rounded-lg bg-white/6 p-3"><p className="text-xs text-white/45">Érték</p><p>{money(r?.purchase_value)}</p></div>
-                        <div className="rounded-lg bg-white/6 p-3"><p className="text-xs text-white/45">Utolsó</p><p>{dateOnly(r?.last_purchase_at)}</p></div>
+                      {s.notes && <p className="mt-2 text-sm leading-6 text-white/62">{s.notes}</p>}
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Batch</p><p>{r?.purchase_batches || 0}</p></div>
+                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Db</p><p>{r?.purchase_qty || 0}</p></div>
+                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Érték</p><p>{money(r?.purchase_value)}</p></div>
+                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Utolsó</p><p>{dateOnly(r?.last_purchase_at)}</p></div>
                       </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <button className={softBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={16} /> Szerkesztés</button>
-                        <button className={softBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={16} /> {s.is_active ? "Kikapcs." : "Aktív"}</button>
-                        <button className={redBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={16} /> Törlés</button>
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <button className={tinyBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={14} /> Szerk.</button>
+                        <button className={tinyBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={14} /> {s.is_active ? "Inaktív" : "Aktív"}</button>
+                        <button className={tinyDangerBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={14} /> Törlés</button>
                       </div>
                     </>
                   )}
                 </div>
               );
             })}
-            {!filtered.length && <p className="text-sm text-white/60">Nincs beszállító ebben a szűrésben.</p>}
+            {!filtered.length && <p className="rounded-xl border border-white/10 bg-slate-950/20 px-3 py-6 text-center text-sm text-white/58">Nincs beszállító ebben a szűrésben.</p>}
           </div>
 
           <div className="hidden overflow-auto rounded-xl border border-white/10 md:block">
             <table className="min-w-full text-left text-sm">
-              <thead className="bg-slate-900/50 text-xs uppercase text-white/55">
+              <thead className="bg-slate-950/35 text-xs uppercase tracking-wide text-white/50">
                 <tr>
-                  <th className="px-3 py-3 font-normal">Beszállító</th>
-                  <th className="px-3 py-3 font-normal">Kód</th>
-                  <th className="px-3 py-3 font-normal">Státusz</th>
-                  <th className="px-3 py-3 text-right font-normal">Batch</th>
-                  <th className="px-3 py-3 text-right font-normal">Db</th>
-                  <th className="px-3 py-3 text-right font-normal">Érték</th>
-                  <th className="px-3 py-3 font-normal">Utolsó vásárlás</th>
-                  <th className="px-3 py-3 font-normal">Művelet</th>
+                  <th className="px-3 py-2.5 font-normal">Beszállító</th>
+                  <th className="px-3 py-2.5 font-normal">Kód</th>
+                  <th className="px-3 py-2.5 font-normal">Státusz</th>
+                  <th className="px-3 py-2.5 text-right font-normal">Batch</th>
+                  <th className="px-3 py-2.5 text-right font-normal">Db</th>
+                  <th className="px-3 py-2.5 text-right font-normal">Érték</th>
+                  <th className="px-3 py-2.5 font-normal">Utolsó vásárlás</th>
+                  <th className="px-3 py-2.5 text-right font-normal">Művelet</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/10">
+              <tbody className="divide-y divide-white/9">
                 {filtered.map((s) => {
                   const r = reportBySupplier.get(s.id);
                   const editing = editingId === s.id;
                   return (
-                    <tr key={s.id} className="bg-white/[0.03] align-top hover:bg-white/[0.06]">
-                      <td className="px-3 py-3">
+                    <tr key={s.id} className="bg-white/[0.025] align-top hover:bg-white/[0.045]">
+                      <td className="px-3 py-2.5">
                         {editing ? (
-                          <input className={`${input} w-full min-w-[220px]`} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+                          <input className={`${input} w-full min-w-[210px]`} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
                         ) : (
                           <div>
                             <p className="font-normal text-white">{s.name}</p>
-                            {s.notes && <p className="mt-1 max-w-[360px] text-xs text-white/50">{s.notes}</p>}
+                            {s.notes && <p className="mt-1 max-w-[360px] text-xs leading-5 text-white/50">{s.notes}</p>}
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5">
                         {editing ? (
-                          <input className={`${input} w-44`} value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} />
+                          <input className={`${input} w-40`} value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} />
                         ) : (
-                          <span className="font-mono text-xs text-white/70">{s.code}</span>
+                          <span className="font-mono text-xs text-white/68">{s.code}</span>
                         )}
                       </td>
-                      <td className="px-3 py-3">
-                        <span className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/20 text-white/50"}`}>
+                      <td className="px-3 py-2.5">
+                        <span className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/52"}`}>
                           {s.is_active ? "Aktív" : "Inaktív"}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-right">{r?.purchase_batches || 0}</td>
-                      <td className="px-3 py-3 text-right">{r?.purchase_qty || 0}</td>
-                      <td className="px-3 py-3 text-right">{money(r?.purchase_value)}</td>
-                      <td className="px-3 py-3">{dateOnly(r?.last_purchase_at)}</td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5 text-right">{r?.purchase_batches || 0}</td>
+                      <td className="px-3 py-2.5 text-right">{r?.purchase_qty || 0}</td>
+                      <td className="px-3 py-2.5 text-right">{money(r?.purchase_value)}</td>
+                      <td className="px-3 py-2.5">{dateOnly(r?.last_purchase_at)}</td>
+                      <td className="px-3 py-2.5">
                         {editing ? (
-                          <div className="flex flex-wrap gap-2">
-                            <button className={redBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={16} /> Mentés</button>
-                            <button className={softBtn} onClick={() => setEditingId("")} type="button"><X size={16} /> Mégse</button>
+                          <div className="flex justify-end gap-2">
+                            <button className={primaryBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={15} /> Mentés</button>
+                            <button className={neutralBtn} onClick={() => setEditingId("")} type="button"><X size={15} /> Mégse</button>
                           </div>
                         ) : (
-                          <div className="flex flex-wrap gap-2">
-                            <button className={softBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={16} /> Szerkesztés</button>
-                            <button className={softBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={16} /> {s.is_active ? "Kikapcs." : "Aktív"}</button>
-                            <button className={redBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={16} /> Törlés</button>
+                          <div className="flex justify-end gap-2 whitespace-nowrap">
+                            <button className={tinyBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={14} /> Szerk.</button>
+                            <button className={tinyBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={14} /> {s.is_active ? "Inaktív" : "Aktív"}</button>
+                            <button className={tinyDangerBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={14} /> Törlés</button>
                           </div>
                         )}
                       </td>
@@ -481,7 +484,7 @@ export default function AllInSuppliers() {
                 })}
                 {!filtered.length && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-white/55" colSpan={8}>Nincs beszállító ebben a szűrésben.</td>
+                    <td className="px-3 py-7 text-center text-white/55" colSpan={8}>Nincs beszállító ebben a szűrésben.</td>
                   </tr>
                 )}
               </tbody>
@@ -490,12 +493,12 @@ export default function AllInSuppliers() {
         </section>
 
         <section className={card}>
-          <div className="mb-3 flex items-center gap-2 text-white/90">
-            <BarChart3 size={18} />
-            <h2 className="text-lg font-normal">Kimutatás értelmezése</h2>
+          <div className="mb-2 flex items-center gap-2 text-white/90">
+            <BarChart3 size={17} />
+            <h2 className="text-base font-normal">Kimutatás értelmezése</h2>
           </div>
-          <p className="text-sm leading-6 text-white/70">
-            A vásárlási érték a commitolt import sorokból számol: darab × vételár. Ha egy XLS nem küld vételárat, a sor darabszáma látszik, de az értéke 0 lesz, mert az adatbázis sem jósnő. Ezt később külön hibaként kiemeljük az import előnézetben.
+          <p className="text-sm leading-6 text-white/68">
+            A vásárlási érték a lezárt import sorokból számol: darab × vételár. Ha egy import sorban nincs vételár, a darabszám szerepel a kimutatásban, az érték pedig 0 lesz. Ezeket a sorokat az import előnézetben külön jelöljük.
           </p>
         </section>
       </div>
