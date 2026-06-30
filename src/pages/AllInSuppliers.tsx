@@ -30,23 +30,23 @@ type FormState = {
   notes: string;
 };
 
-const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
-const wrap = "mx-auto max-w-7xl space-y-4";
-const card = "rounded-2xl border border-white/14 bg-white/[0.055] p-3 shadow-md sm:p-4";
+const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-5";
+const wrap = "mx-auto max-w-7xl space-y-3";
+const card = "rounded-xl border border-white/14 bg-white/[0.052] p-3 shadow-md sm:p-4";
 const sectionTitle = "flex items-center gap-2 text-base text-white/92";
-const label = "grid gap-1.5 text-xs text-white/70";
-const input = "h-9 rounded-lg border border-white/18 bg-slate-950/28 px-3 text-sm text-white outline-none transition placeholder:text-white/34 focus:border-white/45 font-normal";
-const textarea = "min-h-[74px] rounded-lg border border-white/18 bg-slate-950/28 px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/34 focus:border-white/45 font-normal";
-const btnBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border px-3 text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const label = "grid gap-1.5 text-xs text-white/72";
+const input = "h-8 rounded-lg border border-white/18 !bg-[#2f3848] px-3 text-sm !text-white caret-white outline-none transition placeholder:text-white/38 selection:bg-emerald-300/35 focus:border-white/45 [color-scheme:dark] font-normal";
+const textarea = "min-h-[68px] rounded-lg border border-white/18 !bg-[#2f3848] px-3 py-2 text-sm !text-white caret-white outline-none transition placeholder:text-white/38 selection:bg-emerald-300/35 focus:border-white/45 font-normal";
+const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-emerald-300/20 bg-[#2f6959] hover:bg-[#347564]`;
 const neutralBtn = `${btnBase} border-white/18 bg-[#354153] hover:bg-[#3d495b]`;
 const dangerBtn = `${btnBase} border-red-300/20 bg-[#c90d22] hover:bg-[#a90c1d]`;
-const tinyBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/16 bg-white/[0.055] px-2.5 text-xs text-white/86 transition hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const tinyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-300/20 bg-[#c90d22] px-2.5 text-xs text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const chip = "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-normal";
-const statCard = "rounded-xl border border-white/10 bg-slate-950/22 px-3 py-2.5";
+const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-white/16 bg-white/[0.055] px-2 text-xs text-white/86 transition hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tinyDangerBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-red-300/20 bg-[#c90d22] px-2 text-xs text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const chip = "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-normal";
+const statCard = "rounded-lg border border-white/10 bg-slate-950/22 px-3 py-2";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/72 px-4 py-6 backdrop-blur-sm";
-const modalCard = "w-full max-w-sm rounded-2xl border border-white/16 bg-[#4b5362] p-4 text-white shadow-2xl";
+const modalCard = "w-full max-w-sm rounded-xl border border-white/16 bg-[#4b5362] p-4 text-white shadow-2xl";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -64,7 +64,19 @@ function normalizeCode(v: string) {
 function money(v: unknown) {
   const n = Number(v ?? 0);
   if (!Number.isFinite(n)) return "0.00";
-  return n.toFixed(2);
+  return n.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function numberFmt(v: unknown) {
+  const n = Number(v ?? 0);
+  if (!Number.isFinite(n)) return "0";
+  return n.toLocaleString("ro-RO");
+}
+
+function percentFmt(v: unknown) {
+  const n = Number(v ?? 0);
+  if (!Number.isFinite(n)) return "0%";
+  return `${n.toFixed(1)}%`;
 }
 
 function dateOnly(v?: string | null) {
@@ -82,6 +94,38 @@ function emptyTotals(): AifSupplierReportTotals {
   };
 }
 
+function isoDate(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+function currentYearRange() {
+  const y = new Date().getFullYear();
+  return { from: `${y}-01-01`, to: `${y}-12-31` };
+}
+
+function previousYearRange() {
+  const y = new Date().getFullYear() - 1;
+  return { from: `${y}-01-01`, to: `${y}-12-31` };
+}
+
+function currentMonthRange() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  return {
+    from: isoDate(new Date(y, m, 1)),
+    to: isoDate(new Date(y, m + 1, 0)),
+  };
+}
+
+function last12MonthsRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setFullYear(start.getFullYear() - 1);
+  start.setDate(start.getDate() + 1);
+  return { from: isoDate(start), to: isoDate(end) };
+}
+
 export default function AllInSuppliers() {
   const [suppliers, setSuppliers] = useState<AifSupplierDetail[]>([]);
   const [report, setReport] = useState<AifSupplierReportItem[]>([]);
@@ -93,6 +137,7 @@ export default function AllInSuppliers() {
   const [form, setForm] = useState<FormState>({ name: "", code: "", notes: "" });
   const [editingId, setEditingId] = useState("");
   const [editForm, setEditForm] = useState<FormState>({ name: "", code: "", notes: "" });
+  const [selectedSupplierId, setSelectedSupplierId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AifSupplierDetail | null>(null);
@@ -113,28 +158,81 @@ export default function AllInSuppliers() {
     });
   }, [suppliers, query]);
 
-  async function load() {
+  const sortedReport = useMemo(() => {
+    return [...report].sort((a, b) => Number(b.purchase_value || 0) - Number(a.purchase_value || 0));
+  }, [report]);
+
+  const selectedReport = useMemo(() => {
+    if (selectedSupplierId) {
+      const found = reportBySupplier.get(selectedSupplierId);
+      if (found) return found;
+    }
+    return sortedReport[0] || null;
+  }, [reportBySupplier, selectedSupplierId, sortedReport]);
+
+  const selectedSupplier = useMemo(() => {
+    if (!selectedReport) return null;
+    return suppliers.find((s) => s.id === selectedReport.id) || null;
+  }, [selectedReport, suppliers]);
+
+  const maxReportValue = useMemo(() => {
+    return Math.max(1, ...sortedReport.map((r) => Number(r.purchase_value || 0)));
+  }, [sortedReport]);
+
+  const totalPurchaseValue = Number(totals.purchase_value || 0);
+  const selectedPurchaseValue = Number(selectedReport?.purchase_value || 0);
+  const selectedShare = totalPurchaseValue > 0 ? (selectedPurchaseValue / totalPurchaseValue) * 100 : 0;
+  const selectedAvgBatch = Number(selectedReport?.purchase_batches || 0) > 0
+    ? selectedPurchaseValue / Number(selectedReport?.purchase_batches || 1)
+    : 0;
+  const selectedAvgQtyValue = Number(selectedReport?.purchase_qty || 0) > 0
+    ? selectedPurchaseValue / Number(selectedReport?.purchase_qty || 1)
+    : 0;
+
+  async function load(next?: { from?: string; to?: string; includeInactive?: boolean }) {
+    const nextFrom = next?.from ?? from;
+    const nextTo = next?.to ?? to;
+    const nextIncludeInactive = next?.includeInactive ?? includeInactive;
+
     setBusy(true);
     setMessage("");
     try {
       const [sData, rData] = await Promise.all([
-        apiAifListSuppliers({ includeInactive, withStats: true }),
-        apiAifSupplierReport({ from, to, includeInactive }),
+        apiAifListSuppliers({ includeInactive: nextIncludeInactive, withStats: true }),
+        apiAifSupplierReport({ from: nextFrom, to: nextTo, includeInactive: nextIncludeInactive }),
       ]);
       setSuppliers(sData.items || []);
       setReport(rData.items || []);
       setTotals(rData.totals || emptyTotals());
     } catch (e: any) {
-      setMessage(e.message || "Nu s-au putut încărca furnizorii.");
+      setMessage(e.message || "Nem sikerült betölteni a beszállítókat.");
     } finally {
       setBusy(false);
     }
   }
 
   useEffect(() => {
-    load();
+    load({ includeInactive });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [includeInactive]);
+
+  useEffect(() => {
+    if (!selectedSupplierId && sortedReport.length) {
+      setSelectedSupplierId(sortedReport[0].id);
+    }
+  }, [selectedSupplierId, sortedReport]);
+
+  function applyPeriod(range: { from: string; to: string }) {
+    setFrom(range.from);
+    setTo(range.to);
+    load({ from: range.from, to: range.to });
+  }
+
+  function clearPeriod() {
+    setFrom("");
+    setTo("");
+    load({ from: "", to: "" });
+  }
 
   function updateFormName(name: string) {
     setForm((f) => ({ ...f, name, code: f.code ? f.code : normalizeCode(name) }));
@@ -229,14 +327,14 @@ export default function AllInSuppliers() {
           <div className={modalCard}>
             <div className="flex items-start gap-3">
               <div className="mt-0.5 rounded-lg border border-red-300/20 bg-red-500/12 p-2 text-red-100">
-                <Trash2 size={18} />
+                <Trash2 size={17} />
               </div>
               <div className="min-w-0 flex-1">
                 <p id="supplier-delete-title" className="text-base font-normal">Beszállító törlése</p>
                 <p className="mt-2 text-sm leading-6 text-white/70">
-                  Biztosan törölni szeretnéd ezt a beszállítót?
+                  Biztosan törlöd ezt a beszállítót?
                 </p>
-                <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/28 px-3 py-2.5">
+                <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/28 px-3 py-2.5">
                   <p className="text-sm font-normal text-white">{deleteTarget.name}</p>
                   <p className="mt-1 font-mono text-xs text-white/55">{deleteTarget.code}</p>
                 </div>
@@ -266,13 +364,13 @@ export default function AllInSuppliers() {
               Beszállítói törzsadatok, import alapadatok és vásárlási kimutatások kezelése.
             </p>
           </div>
-          <button className={`${neutralBtn} self-start`} onClick={goHome} type="button">
-            <ArrowLeft size={16} /> Vissza
+          <button className={neutralBtn} onClick={goHome} type="button">
+            <ArrowLeft size={15} /> Vissza
           </button>
         </header>
 
         {message && (
-          <div className="rounded-xl border border-white/18 bg-slate-950/25 px-3 py-2.5 text-sm text-white/82">
+          <div className="rounded-lg border border-white/18 bg-slate-950/25 px-3 py-2 text-sm text-white/82">
             {message}
           </div>
         )}
@@ -283,7 +381,7 @@ export default function AllInSuppliers() {
               <label className={`${label} sm:col-span-2 lg:col-span-1`}>
                 Keresés
                 <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" size={16} />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" size={15} />
                   <input
                     className={`${input} w-full pl-9`}
                     value={query}
@@ -300,7 +398,7 @@ export default function AllInSuppliers() {
                 Időszak vége
                 <input className={`${input} w-full`} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
               </label>
-              <label className="flex h-9 items-center gap-2 self-end rounded-lg border border-white/18 bg-slate-950/22 px-3 text-sm text-white/78">
+              <label className="flex h-8 items-center gap-2 self-end rounded-lg border border-white/18 bg-slate-950/22 px-3 text-sm text-white/78">
                 <input
                   type="checkbox"
                   checked={includeInactive}
@@ -310,55 +408,172 @@ export default function AllInSuppliers() {
                 Inaktívak is
               </label>
             </div>
-            <button className={neutralBtn} onClick={load} disabled={busy} type="button">
-              <RefreshCw size={15} /> Frissítés
+            <button className={neutralBtn} onClick={() => load()} disabled={busy} type="button">
+              <RefreshCw size={14} /> Frissítés
             </button>
           </div>
 
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className={tinyBtn} onClick={() => applyPeriod(currentYearRange())} type="button">Idei év</button>
+            <button className={tinyBtn} onClick={() => applyPeriod(previousYearRange())} type="button">Tavaly</button>
+            <button className={tinyBtn} onClick={() => applyPeriod(currentMonthRange())} type="button">Aktuális hónap</button>
+            <button className={tinyBtn} onClick={() => applyPeriod(last12MonthsRange())} type="button">Utolsó 12 hónap</button>
+            <button className={tinyBtn} onClick={clearPeriod} type="button">Teljes időszak</button>
+          </div>
+        </section>
+
+        <section className={card}>
+          <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className={sectionTitle}>
+              <BarChart3 size={17} />
+              <h2 className="text-base font-normal">Vásárlási kimutatás</h2>
+            </div>
+            <label className="grid gap-1.5 text-xs text-white/72 lg:w-72">
+              Beszállító részletezése
+              <select
+                className={`${input} w-full`}
+                value={selectedReport?.id || selectedSupplierId}
+                onChange={(e) => setSelectedSupplierId(e.target.value)}
+              >
+                {sortedReport.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+                {!sortedReport.length && <option value="">Nincs adat</option>}
+              </select>
+            </label>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             <div className={statCard}>
               <p className="text-xs text-white/48">Beszállítók</p>
-              <p className="mt-1 text-lg font-normal">{suppliers.length}</p>
+              <p className="mt-1 text-lg font-normal">{numberFmt(suppliers.length)}</p>
             </div>
             <div className={statCard}>
               <p className="text-xs text-white/48">Batch</p>
-              <p className="mt-1 text-lg font-normal">{totals.purchase_batches}</p>
+              <p className="mt-1 text-lg font-normal">{numberFmt(totals.purchase_batches)}</p>
             </div>
             <div className={statCard}>
               <p className="text-xs text-white/48">Sor</p>
-              <p className="mt-1 text-lg font-normal">{totals.purchase_rows}</p>
+              <p className="mt-1 text-lg font-normal">{numberFmt(totals.purchase_rows)}</p>
             </div>
             <div className={statCard}>
               <p className="text-xs text-white/48">Darab</p>
-              <p className="mt-1 text-lg font-normal">{totals.purchase_qty}</p>
+              <p className="mt-1 text-lg font-normal">{numberFmt(totals.purchase_qty)}</p>
             </div>
             <div className={statCard}>
               <p className="text-xs text-white/48">Érték</p>
               <p className="mt-1 text-lg font-normal">{money(totals.purchase_value)}</p>
             </div>
           </div>
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_1.25fr]">
+            <div className="rounded-xl border border-white/10 bg-slate-950/18 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-sm text-white/86">Kiválasztott beszállító</p>
+                {selectedSupplier && (
+                  <span className={`${chip} ${selectedSupplier.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/52"}`}>
+                    {selectedSupplier.is_active ? "Aktív" : "Inaktív"}
+                  </span>
+                )}
+              </div>
+              <p className="text-lg font-normal text-white">{selectedReport?.name || "Nincs adat"}</p>
+              <p className="mt-1 font-mono text-xs text-white/50">{selectedReport?.code || "-"}</p>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Érték</p>
+                  <p className="mt-1">{money(selectedReport?.purchase_value)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Részesedés</p>
+                  <p className="mt-1">{percentFmt(selectedShare)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Darab</p>
+                  <p className="mt-1">{numberFmt(selectedReport?.purchase_qty)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Batch</p>
+                  <p className="mt-1">{numberFmt(selectedReport?.purchase_batches)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Átlag / batch</p>
+                  <p className="mt-1">{money(selectedAvgBatch)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Átlag / darab</p>
+                  <p className="mt-1">{money(selectedAvgQtyValue)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Vételár nélküli sor</p>
+                  <p className="mt-1">{numberFmt(selectedReport?.rows_without_buy_price)}</p>
+                </div>
+                <div className="rounded-lg bg-white/[0.055] p-2.5">
+                  <p className="text-xs text-white/46">Utolsó vásárlás</p>
+                  <p className="mt-1">{dateOnly(selectedReport?.last_purchase_at)}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-950/18 p-3">
+              <p className="mb-3 text-sm text-white/86">Beszállítói rangsor</p>
+              <div className="grid gap-2">
+                {sortedReport.map((r) => {
+                  const value = Number(r.purchase_value || 0);
+                  const width = Math.max(2, Math.round((value / maxReportValue) * 100));
+                  const active = selectedReport?.id === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      className={`rounded-lg border px-3 py-2 text-left transition ${active ? "border-emerald-300/40 bg-emerald-400/8" : "border-white/10 bg-white/[0.035] hover:bg-white/[0.06]"}`}
+                      onClick={() => setSelectedSupplierId(r.id)}
+                      type="button"
+                    >
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="truncate text-white/90">{r.name}</span>
+                        <span className="shrink-0 text-white/78">{money(r.purchase_value)}</span>
+                      </div>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-950/38">
+                        <div className="h-full rounded-full bg-emerald-300/70" style={{ width: `${width}%` }} />
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-white/50">
+                        <span>{numberFmt(r.purchase_qty)} db</span>
+                        <span>{numberFmt(r.purchase_batches)} batch</span>
+                        <span>{dateOnly(r.last_purchase_at)}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+                {!sortedReport.length && (
+                  <p className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-6 text-center text-sm text-white/55">
+                    Nincs vásárlási adat a kiválasztott időszakban.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
         </section>
 
         <section className={card}>
           <div className={sectionTitle}>
-            <Plus size={17} />
+            <Plus size={16} />
             <h2 className="text-base font-normal">Új beszállító</h2>
           </div>
           <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr_2fr_auto] lg:items-end">
             <label className={label}>
               Név
-              <input className={input} value={form.name} onChange={(e) => updateFormName(e.target.value)} placeholder="pl. Under Armour Europe" />
+              <input className={`${input} w-full`} value={form.name} onChange={(e) => updateFormName(e.target.value)} placeholder="pl. Under Armour Europe" />
             </label>
             <label className={label}>
               Kód
-              <input className={input} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} placeholder="under_armour_eu" />
+              <input className={`${input} w-full`} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} placeholder="under_armour_eu" />
             </label>
             <label className={label}>
               Megjegyzés
-              <input className={input} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="kapcsolat, feltétel, árlista típusa" />
+              <input className={`${input} w-full`} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="kapcsolat, feltétel, árlista típusa" />
             </label>
             <button className={primaryBtn} onClick={createSupplier} disabled={busy} type="button">
-              <Save size={15} /> Mentés
+              <Save size={14} /> Mentés
             </button>
           </div>
         </section>
@@ -366,7 +581,7 @@ export default function AllInSuppliers() {
         <section className={card}>
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className={sectionTitle}>
-              <Building2 size={17} />
+              <Building2 size={16} />
               <h2 className="text-base font-normal">Beszállítói lista</h2>
             </div>
             <p className="text-xs text-white/48">{filtered.length} találat</p>
@@ -380,36 +595,37 @@ export default function AllInSuppliers() {
                 <div key={s.id} className="rounded-xl border border-white/10 bg-slate-950/20 p-3">
                   {editing ? (
                     <div className="grid gap-2.5">
-                      <input className={input} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
-                      <input className={input} value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} />
+                      <input className={`${input} w-full`} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+                      <input className={`${input} w-full`} value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: normalizeCode(e.target.value) }))} />
                       <textarea className={textarea} value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
                       <div className="grid grid-cols-2 gap-2">
-                        <button className={primaryBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={15} /> Mentés</button>
-                        <button className={neutralBtn} onClick={() => setEditingId("")} type="button"><X size={15} /> Mégse</button>
+                        <button className={primaryBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={14} /> Mentés</button>
+                        <button className={neutralBtn} onClick={() => setEditingId("")} type="button"><X size={14} /> Mégse</button>
                       </div>
                     </div>
                   ) : (
                     <>
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                        <button className="min-w-0 text-left" onClick={() => setSelectedSupplierId(s.id)} type="button">
                           <p className="text-sm font-normal text-white">{s.name}</p>
                           <p className="mt-1 break-all font-mono text-xs text-white/52">{s.code}</p>
-                        </div>
+                        </button>
                         <span className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/52"}`}>
                           {s.is_active ? "Aktív" : "Inaktív"}
                         </span>
                       </div>
                       {s.notes && <p className="mt-2 text-sm leading-6 text-white/62">{s.notes}</p>}
                       <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Batch</p><p>{r?.purchase_batches || 0}</p></div>
-                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Db</p><p>{r?.purchase_qty || 0}</p></div>
+                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Batch</p><p>{numberFmt(r?.purchase_batches)}</p></div>
+                        <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Db</p><p>{numberFmt(r?.purchase_qty)}</p></div>
                         <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Érték</p><p>{money(r?.purchase_value)}</p></div>
                         <div className="rounded-lg bg-white/[0.055] p-2.5"><p className="text-xs text-white/44">Utolsó</p><p>{dateOnly(r?.last_purchase_at)}</p></div>
                       </div>
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        <button className={tinyBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={14} /> Szerk.</button>
-                        <button className={tinyBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={14} /> {s.is_active ? "Inaktív" : "Aktív"}</button>
-                        <button className={tinyDangerBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={14} /> Törlés</button>
+                      <div className="mt-3 grid grid-cols-4 gap-2">
+                        <button className={tinyBtn} onClick={() => setSelectedSupplierId(s.id)} type="button">Kimut.</button>
+                        <button className={tinyBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={13} /> Szerk.</button>
+                        <button className={tinyBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={13} /> {s.is_active ? "Inaktív" : "Aktív"}</button>
+                        <button className={tinyDangerBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={13} /> Törlés</button>
                       </div>
                     </>
                   )}
@@ -423,14 +639,14 @@ export default function AllInSuppliers() {
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-950/35 text-xs uppercase tracking-wide text-white/50">
                 <tr>
-                  <th className="px-3 py-2.5 font-normal">Beszállító</th>
-                  <th className="px-3 py-2.5 font-normal">Kód</th>
-                  <th className="px-3 py-2.5 font-normal">Státusz</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Batch</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Db</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Érték</th>
-                  <th className="px-3 py-2.5 font-normal">Utolsó vásárlás</th>
-                  <th className="px-3 py-2.5 text-right font-normal">Művelet</th>
+                  <th className="px-3 py-2 font-normal">Beszállító</th>
+                  <th className="px-3 py-2 font-normal">Kód</th>
+                  <th className="px-3 py-2 font-normal">Státusz</th>
+                  <th className="px-3 py-2 text-right font-normal">Batch</th>
+                  <th className="px-3 py-2 text-right font-normal">Db</th>
+                  <th className="px-3 py-2 text-right font-normal">Érték</th>
+                  <th className="px-3 py-2 font-normal">Utolsó vásárlás</th>
+                  <th className="px-3 py-2 text-right font-normal">Művelet</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/9">
@@ -444,7 +660,9 @@ export default function AllInSuppliers() {
                           <input className={`${input} w-full min-w-[210px]`} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
                         ) : (
                           <div>
-                            <p className="font-normal text-white">{s.name}</p>
+                            <button className="text-left font-normal text-white hover:text-emerald-100" onClick={() => setSelectedSupplierId(s.id)} type="button">
+                              {s.name}
+                            </button>
                             {s.notes && <p className="mt-1 max-w-[360px] text-xs leading-5 text-white/50">{s.notes}</p>}
                           </div>
                         )}
@@ -461,21 +679,22 @@ export default function AllInSuppliers() {
                           {s.is_active ? "Aktív" : "Inaktív"}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-right">{r?.purchase_batches || 0}</td>
-                      <td className="px-3 py-2.5 text-right">{r?.purchase_qty || 0}</td>
+                      <td className="px-3 py-2.5 text-right">{numberFmt(r?.purchase_batches)}</td>
+                      <td className="px-3 py-2.5 text-right">{numberFmt(r?.purchase_qty)}</td>
                       <td className="px-3 py-2.5 text-right">{money(r?.purchase_value)}</td>
                       <td className="px-3 py-2.5">{dateOnly(r?.last_purchase_at)}</td>
                       <td className="px-3 py-2.5">
                         {editing ? (
                           <div className="flex justify-end gap-2">
-                            <button className={primaryBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={15} /> Mentés</button>
-                            <button className={neutralBtn} onClick={() => setEditingId("")} type="button"><X size={15} /> Mégse</button>
+                            <button className={primaryBtn} onClick={() => saveEdit(s.id)} disabled={busy} type="button"><Check size={14} /> Mentés</button>
+                            <button className={neutralBtn} onClick={() => setEditingId("")} type="button"><X size={14} /> Mégse</button>
                           </div>
                         ) : (
-                          <div className="flex justify-end gap-2 whitespace-nowrap">
-                            <button className={tinyBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={14} /> Szerk.</button>
-                            <button className={tinyBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={14} /> {s.is_active ? "Inaktív" : "Aktív"}</button>
-                            <button className={tinyDangerBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={14} /> Törlés</button>
+                          <div className="flex justify-end gap-1.5 whitespace-nowrap">
+                            <button className={tinyBtn} onClick={() => setSelectedSupplierId(s.id)} type="button">Kimut.</button>
+                            <button className={tinyBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={13} /> Szerk.</button>
+                            <button className={tinyBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={13} /> {s.is_active ? "Inaktív" : "Aktív"}</button>
+                            <button className={tinyDangerBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={13} /> Törlés</button>
                           </div>
                         )}
                       </td>
@@ -490,16 +709,6 @@ export default function AllInSuppliers() {
               </tbody>
             </table>
           </div>
-        </section>
-
-        <section className={card}>
-          <div className="mb-2 flex items-center gap-2 text-white/90">
-            <BarChart3 size={17} />
-            <h2 className="text-base font-normal">Kimutatás értelmezése</h2>
-          </div>
-          <p className="text-sm leading-6 text-white/68">
-            A vásárlási érték a lezárt import sorokból számol: darab × vételár. Ha egy import sorban nincs vételár, a darabszám szerepel a kimutatásban, az érték pedig 0 lesz. Ezeket a sorokat az import előnézetben külön jelöljük.
-          </p>
         </section>
       </div>
     </main>
