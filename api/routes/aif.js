@@ -350,6 +350,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return { args, parts, nextIndex: i };
   }
 
+  async function locationUsage(client, locationId) {
+    const r = await client.query(
+      `SELECT
+         (SELECT count(*)::int FROM aif_import_batches WHERE target_location_id=$1) AS import_batches,
+         (SELECT count(*)::int FROM aif_stock WHERE location_id=$1) AS stock_rows,
+         (SELECT count(*)::int FROM aif_stock_movements WHERE location_id=$1) AS stock_movements`,
+      [locationId]
+    );
+    return r.rows[0] || { import_batches: 0, stock_rows: 0, stock_movements: 0 };
+  }
+
   async function supplierUsage(client, supplierId) {
     const r = await client.query(
       `SELECT
@@ -563,9 +574,141 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
-  router.get("/locations", requireAuthed, async (_req, res) => {
-    const r = await pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations ORDER BY name ASC`);
+  router.get("/locations", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT id, code, name, location_type, is_active, created_at, updated_at
+       FROM aif_locations
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, name ASC`
+    );
     res.json({ items: r.rows });
+  });
+
+  router.post("/locations", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const name = text(body.name);
+    const code = normCode(body.code || name);
+    const locationType = normCode(body.locationType || body.location_type || "warehouse") || "warehouse";
+    const allowed = new Set(["warehouse", "shop", "online", "reserved", "other"]);
+
+    if (!name) return res.status(400).json({ error: "location name required" });
+    if (!code) return res.status(400).json({ error: "location code required" });
+    if (!allowed.has(locationType)) return res.status(400).json({ error: "invalid location type" });
+
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_locations (code, name, location_type, is_active)
+         VALUES ($1,$2,$3,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           location_type=EXCLUDED.location_type,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name, location_type, is_active, created_at, updated_at`,
+        [code, name, locationType]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create location failed", e);
+      res.status(500).json({ error: "failed to save location" });
+    }
+  });
+
+  router.patch("/locations/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    const allowed = new Set(["warehouse", "shop", "online", "reserved", "other"]);
+
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "location name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "location code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.locationType !== undefined || body.location_type !== undefined) {
+      const locationType = normCode(body.locationType || body.location_type || "warehouse") || "warehouse";
+      if (!allowed.has(locationType)) return res.status(400).json({ error: "invalid location type" });
+      sets.push(`location_type=$${i++}`);
+      args.push(locationType);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+
+    try {
+      const r = await pool.query(
+        `UPDATE aif_locations
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name, location_type, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "location not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update location failed", e);
+      res.status(500).json({ error: "failed to update location" });
+    }
+  });
+
+  router.delete("/locations/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const location = await client.query(
+        `SELECT id, code, name FROM aif_locations WHERE id::text=$1 OR code=$1 FOR UPDATE`,
+        [id]
+      );
+      if (!location.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "location not found" });
+      }
+
+      const activeCount = await client.query(
+        `SELECT count(*)::int AS c FROM aif_locations WHERE is_active=true AND id <> $1`,
+        [location.rows[0].id]
+      );
+      if (Number(activeCount.rows[0]?.c || 0) <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "at least one active location is required" });
+      }
+
+      const usage = await locationUsage(client, location.rows[0].id);
+      if (
+        Number(usage.import_batches || 0) > 0 ||
+        Number(usage.stock_rows || 0) > 0 ||
+        Number(usage.stock_movements || 0) > 0
+      ) {
+        await client.query(`UPDATE aif_locations SET is_active=false, updated_at=now() WHERE id=$1`, [location.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+
+      await client.query(`DELETE FROM aif_locations WHERE id=$1`, [location.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete location failed", e);
+      res.status(500).json({ error: "failed to delete location" });
+    } finally {
+      client.release();
+    }
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
