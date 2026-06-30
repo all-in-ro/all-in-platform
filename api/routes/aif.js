@@ -1,0 +1,720 @@
+import express from "express";
+
+export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
+  const router = express.Router();
+
+  router.use(express.json({ limit: "15mb" }));
+
+  const text = (v) => String(v ?? "").trim();
+  const emptyToNull = (v) => {
+    const s = text(v);
+    return s ? s : null;
+  };
+  const toInt = (v) => {
+    if (v === null || v === undefined || v === "") return null;
+    const n = Number.parseInt(String(v).replace(",", "."), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  const toMoney = (v) => {
+    if (v === null || v === undefined || String(v).trim() === "") return null;
+    const n = Number(String(v).replace(",", ".").trim());
+    return Number.isFinite(n) ? n : null;
+  };
+  const normCode = (v) => text(v)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  function actorFrom(req) {
+    return text(req.session?.actor || req.session?.shopId || req.session?.role || "system") || "system";
+  }
+
+  async function findByIdOrCode(client, table, idOrCode) {
+    const v = text(idOrCode);
+    if (!v) return null;
+    const r = await client.query(
+      `SELECT id, code, name FROM ${table} WHERE id::text = $1 OR code = $1 LIMIT 1`,
+      [v]
+    );
+    return r.rows[0] || null;
+  }
+
+  async function getDefaultLocationId(client) {
+    const r = await client.query(`SELECT id FROM aif_locations WHERE code='main_warehouse' LIMIT 1`);
+    return r.rows[0]?.id || null;
+  }
+
+  function normalizeRowInput(input, rowNo) {
+    const src = input?.normalized && typeof input.normalized === "object" ? input.normalized : input || {};
+
+    const supplierProductCode = emptyToNull(
+      src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.code || input?.product_code
+    );
+    const supplierVariantCode = emptyToNull(
+      src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code || input?.variant_code
+    );
+    const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code);
+    const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size);
+
+    const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brand);
+    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.category);
+
+    const normalized = {
+      brandCode: brandRaw ? normCode(brandRaw) : null,
+      brandName: emptyToNull(src.brandName || src.brand_name || src.brand),
+      categoryCode: categoryRaw ? normCode(categoryRaw) : null,
+      modelCode: emptyToNull(src.modelCode || src.model_code || supplierProductCode),
+      titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
+      titleHu: emptyToNull(src.titleHu || src.title_hu),
+      descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
+      gender: normCode(src.gender || "unisex") || "unisex",
+      productType: emptyToNull(src.productType || src.product_type),
+      season: emptyToNull(src.season),
+      material: emptyToNull(src.material),
+      colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode),
+      colorName: emptyToNull(src.colorName || src.color_name),
+      colorHex: emptyToNull(src.colorHex || src.color_hex),
+      size: emptyToNull(src.size || supplierSize),
+      barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
+      buyPrice: toMoney(src.buyPrice ?? src.buy_price),
+      sellPrice: toMoney(src.sellPrice ?? src.sell_price),
+      compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
+      weightGrams: toInt(src.weightGrams ?? src.weight_grams),
+      imageUrl: emptyToNull(src.imageUrl || src.image_url),
+      supplierProductCode,
+      supplierVariantCode,
+      supplierColorCode,
+      supplierSize,
+      qty: toInt(src.qty ?? src.quantity ?? input?.qty),
+    };
+
+    const errors = [];
+    if (!normalized.titleRo) errors.push("product name/title missing");
+    if (!normalized.size) errors.push("size missing");
+    if (normalized.qty === null || normalized.qty <= 0) errors.push("qty must be > 0");
+    if (!normalized.modelCode && !normalized.supplierProductCode) errors.push("model/product code missing");
+    if (!["men", "women", "kids", "unisex"].includes(normalized.gender)) normalized.gender = "unisex";
+
+    return {
+      rowNo: toInt(input?.rowNo ?? input?.row_no ?? rowNo) || rowNo,
+      raw: input?.raw && typeof input.raw === "object" ? input.raw : input,
+      normalized,
+      status: errors.length ? "error" : "parsed",
+      errors,
+    };
+  }
+
+  async function ensureBrand(client, normalized, fallbackSupplierCode) {
+    const rawCode = normalized.brandCode || normCode(fallbackSupplierCode);
+    if (!rawCode) return null;
+
+    const name = normalized.brandName || text(rawCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+    const r = await client.query(
+      `INSERT INTO aif_brands (code, name)
+       VALUES ($1, $2)
+       ON CONFLICT (code) DO UPDATE SET name = COALESCE(aif_brands.name, EXCLUDED.name)
+       RETURNING id`,
+      [rawCode, name]
+    );
+    return r.rows[0].id;
+  }
+
+  async function findCategoryId(client, categoryCode) {
+    const code = normCode(categoryCode);
+    if (!code) return null;
+    const r = await client.query(`SELECT id FROM aif_categories WHERE code=$1 AND is_active=true LIMIT 1`, [code]);
+    return r.rows[0]?.id || null;
+  }
+
+  async function upsertModel(client, { supplierCode, normalized }) {
+    const brandId = await ensureBrand(client, normalized, supplierCode);
+    const categoryId = await findCategoryId(client, normalized.categoryCode);
+    const baseModelCode = normalized.modelCode || normalized.supplierProductCode || normalized.titleRo;
+    const modelCode = `${normCode(supplierCode || "aif")}:${normCode(baseModelCode)}`;
+
+    const r = await client.query(
+      `INSERT INTO aif_product_models (
+         brand_id, category_id, model_code, title_ro, title_hu, description_ro,
+         gender, product_type, season, material, shopify_title, status
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft')
+       ON CONFLICT (model_code) WHERE model_code IS NOT NULL AND model_code <> ''
+       DO UPDATE SET
+         brand_id = COALESCE(EXCLUDED.brand_id, aif_product_models.brand_id),
+         category_id = COALESCE(EXCLUDED.category_id, aif_product_models.category_id),
+         title_ro = EXCLUDED.title_ro,
+         title_hu = COALESCE(EXCLUDED.title_hu, aif_product_models.title_hu),
+         description_ro = COALESCE(EXCLUDED.description_ro, aif_product_models.description_ro),
+         gender = EXCLUDED.gender,
+         product_type = COALESCE(EXCLUDED.product_type, aif_product_models.product_type),
+         season = COALESCE(EXCLUDED.season, aif_product_models.season),
+         material = COALESCE(EXCLUDED.material, aif_product_models.material),
+         shopify_title = COALESCE(EXCLUDED.shopify_title, aif_product_models.shopify_title),
+         updated_at = now()
+       RETURNING id`,
+      [
+        brandId,
+        categoryId,
+        modelCode,
+        normalized.titleRo,
+        normalized.titleHu,
+        normalized.descriptionRo,
+        normalized.gender,
+        normalized.productType,
+        normalized.season,
+        normalized.material,
+        normalized.titleRo,
+      ]
+    );
+    return r.rows[0].id;
+  }
+
+  async function upsertVariant(client, { modelId, normalized }) {
+    const colorCode = normalized.colorCode || "";
+    const colorName = normalized.colorName || "";
+    const size = normalized.size;
+
+    const existing = await client.query(
+      `SELECT id FROM aif_product_variants
+       WHERE model_id=$1
+         AND lower(COALESCE(color_code,'')) = lower($2)
+         AND lower(COALESCE(color_name,'')) = lower($3)
+         AND lower(size) = lower($4)
+       LIMIT 1`,
+      [modelId, colorCode, colorName, size]
+    );
+
+    if (existing.rowCount) {
+      const id = existing.rows[0].id;
+      await client.query(
+        `UPDATE aif_product_variants SET
+           barcode = COALESCE($2, barcode),
+           color_code = NULLIF($3, ''),
+           color_name = NULLIF($4, ''),
+           color_hex = COALESCE($5, color_hex),
+           buy_price = COALESCE($6, buy_price),
+           sell_price = COALESCE($7, sell_price),
+           compare_at_price = COALESCE($8, compare_at_price),
+           weight_grams = COALESCE($9, weight_grams),
+           image_url = COALESCE($10, image_url),
+           status = 'active',
+           updated_at = now()
+         WHERE id=$1`,
+        [
+          id,
+          normalized.barcode,
+          colorCode,
+          colorName,
+          normalized.colorHex,
+          normalized.buyPrice,
+          normalized.sellPrice,
+          normalized.compareAtPrice,
+          normalized.weightGrams,
+          normalized.imageUrl,
+        ]
+      );
+      return id;
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO aif_product_variants (
+         model_id, barcode, color_code, color_name, color_hex, size,
+         buy_price, sell_price, compare_at_price, weight_grams, image_url, status
+       )
+       VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,'active')
+       RETURNING id`,
+      [
+        modelId,
+        normalized.barcode,
+        colorCode,
+        colorName,
+        normalized.colorHex,
+        size,
+        normalized.buyPrice,
+        normalized.sellPrice,
+        normalized.compareAtPrice,
+        normalized.weightGrams,
+        normalized.imageUrl,
+      ]
+    );
+    return inserted.rows[0].id;
+  }
+
+  async function upsertSupplierCode(client, { variantId, supplierId, normalized }) {
+    const keys = [
+      normalized.supplierProductCode || "",
+      normalized.supplierVariantCode || "",
+      normalized.supplierColorCode || "",
+      normalized.supplierSize || "",
+    ];
+
+    const existing = await client.query(
+      `SELECT id FROM aif_variant_supplier_codes
+       WHERE supplier_id=$1
+         AND COALESCE(supplier_product_code,'')=$2
+         AND COALESCE(supplier_variant_code,'')=$3
+         AND COALESCE(supplier_color_code,'')=$4
+         AND COALESCE(supplier_size,'')=$5
+       LIMIT 1`,
+      [supplierId, ...keys]
+    );
+
+    if (existing.rowCount) {
+      await client.query(
+        `UPDATE aif_variant_supplier_codes SET
+           variant_id=$2,
+           supplier_color_name=$3,
+           supplier_barcode=$4,
+           supplier_sku=$5,
+           raw=$6::jsonb,
+           is_active=true,
+           updated_at=now()
+         WHERE id=$1`,
+        [
+          existing.rows[0].id,
+          variantId,
+          normalized.colorName,
+          normalized.barcode,
+          normalized.supplierVariantCode || normalized.supplierProductCode,
+          JSON.stringify(normalized),
+        ]
+      );
+      return;
+    }
+
+    await client.query(
+      `INSERT INTO aif_variant_supplier_codes (
+         variant_id, supplier_id, supplier_product_code, supplier_variant_code,
+         supplier_color_code, supplier_color_name, supplier_size,
+         supplier_barcode, supplier_sku, raw
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+      [
+        variantId,
+        supplierId,
+        normalized.supplierProductCode,
+        normalized.supplierVariantCode,
+        normalized.supplierColorCode,
+        normalized.colorName,
+        normalized.supplierSize,
+        normalized.barcode,
+        normalized.supplierVariantCode || normalized.supplierProductCode,
+        JSON.stringify(normalized),
+      ]
+    );
+  }
+
+  async function addStock(client, { locationId, variantId, qty, actor, sourceId, rowId, raw }) {
+    const current = await client.query(
+      `SELECT qty, reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+      [locationId, variantId]
+    );
+    const before = current.rowCount ? Number(current.rows[0].qty || 0) : 0;
+    const after = before + qty;
+    if (after < 0) throw new Error("stock cannot go negative");
+
+    await client.query(
+      `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+       VALUES ($1,$2,$3,0,now())
+       ON CONFLICT (location_id, variant_id)
+       DO UPDATE SET qty=$3, updated_at=now()`,
+      [locationId, variantId, after]
+    );
+
+    await client.query(
+      `INSERT INTO aif_stock_movements (
+         movement_type, source_type, source_id, location_id, variant_id,
+         qty_delta, qty_before, qty_after, actor, raw
+       )
+       VALUES ('incoming','import_batch',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+      [sourceId, locationId, variantId, qty, before, after, actor, JSON.stringify({ rowId, raw })]
+    );
+  }
+
+  router.get("/suppliers", requireAuthed, async (_req, res) => {
+    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_suppliers ORDER BY name ASC`);
+    res.json({ items: r.rows });
+  });
+
+  router.get("/brands", requireAuthed, async (_req, res) => {
+    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
+    res.json({ items: r.rows });
+  });
+
+  router.get("/categories", requireAuthed, async (_req, res) => {
+    const r = await pool.query(
+      `SELECT id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active
+       FROM aif_categories
+       ORDER BY sort_order ASC, name_ro ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.get("/locations", requireAuthed, async (_req, res) => {
+    const r = await pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations ORDER BY name ASC`);
+    res.json({ items: r.rows });
+  });
+
+  router.get("/meta", requireAuthed, async (_req, res) => {
+    const [suppliers, brands, categories, locations, profiles] = await Promise.all([
+      pool.query(`SELECT id, code, name, is_active FROM aif_suppliers ORDER BY name ASC`),
+      pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`),
+      pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations ORDER BY name ASC`),
+      pool.query(`SELECT p.id, p.supplier_id, s.code AS supplier_code, p.name, p.source_format, p.version, p.is_active
+                  FROM aif_supplier_import_profiles p
+                  JOIN aif_suppliers s ON s.id=p.supplier_id
+                  ORDER BY s.name ASC, p.name ASC, p.version DESC`),
+    ]);
+    res.json({
+      suppliers: suppliers.rows,
+      brands: brands.rows,
+      categories: categories.rows,
+      locations: locations.rows,
+      profiles: profiles.rows,
+    });
+  });
+
+  router.get("/import-profiles", requireAuthed, async (req, res) => {
+    const supplier = text(req.query.supplier || req.query.supplierCode || req.query.supplier_id);
+    const args = [];
+    const where = [];
+    if (supplier) {
+      args.push(supplier);
+      where.push(`(s.code=$1 OR s.id::text=$1)`);
+    }
+    const r = await pool.query(
+      `SELECT p.id, p.supplier_id, s.code AS supplier_code, s.name AS supplier_name,
+              p.name, p.source_format, p.version, p.sheet_name_hint, p.header_row_hint, p.is_active, p.settings
+       FROM aif_supplier_import_profiles p
+       JOIN aif_suppliers s ON s.id=p.supplier_id
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY s.name ASC, p.name ASC, p.version DESC`,
+      args
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/import-batches", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      const supplier = await findByIdOrCode(client, "aif_suppliers", body.supplierId || body.supplier_id || body.supplierCode || body.supplier);
+      if (!supplier) return res.status(400).json({ error: "supplier required or unknown" });
+
+      let profileId = emptyToNull(body.profileId || body.profile_id);
+      if (!profileId) {
+        const pr = await client.query(
+          `SELECT id FROM aif_supplier_import_profiles
+           WHERE supplier_id=$1 AND is_active=true
+           ORDER BY version DESC
+           LIMIT 1`,
+          [supplier.id]
+        );
+        profileId = pr.rows[0]?.id || null;
+      }
+
+      let location = null;
+      const locInput = body.targetLocationId || body.target_location_id || body.locationId || body.location_id || body.locationCode || body.location;
+      if (locInput) location = await findByIdOrCode(client, "aif_locations", locInput);
+      const targetLocationId = location?.id || await getDefaultLocationId(client);
+      if (!targetLocationId) return res.status(400).json({ error: "target location missing" });
+
+      const r = await client.query(
+        `INSERT INTO aif_import_batches (
+           supplier_id, profile_id, target_location_id, source_file_name,
+           source_file_url, source_format, status, created_by, actor, note, raw_meta
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,$8,$9,$10::jsonb)
+         RETURNING id`,
+        [
+          supplier.id,
+          profileId,
+          targetLocationId,
+          emptyToNull(body.sourceFileName || body.source_file_name || body.fileName),
+          emptyToNull(body.sourceFileUrl || body.source_file_url || body.fileUrl),
+          normCode(body.sourceFormat || body.source_format || "xls") || "xls",
+          req.session?.role || "system",
+          actorFrom(req),
+          emptyToNull(body.note),
+          JSON.stringify(body.rawMeta || body.raw_meta || {}),
+        ]
+      );
+      res.json({ id: r.rows[0].id });
+    } catch (e) {
+      console.error("AIF create import batch failed", e);
+      res.status(500).json({ error: "failed to create import batch" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/import-batches", requireAuthed, async (req, res) => {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const r = await pool.query(
+      `SELECT b.id, b.created_at, b.updated_at, b.status, b.row_count, b.error_count,
+              b.source_file_name, b.note, b.committed_at,
+              s.code AS supplier_code, s.name AS supplier_name,
+              l.code AS location_code, l.name AS location_name,
+              p.name AS profile_name, p.version AS profile_version
+       FROM aif_import_batches b
+       JOIN aif_suppliers s ON s.id=b.supplier_id
+       LEFT JOIN aif_locations l ON l.id=b.target_location_id
+       LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
+       ORDER BY b.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.get("/import-batches/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const batch = await pool.query(
+      `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
+              l.code AS location_code, l.name AS location_name,
+              p.name AS profile_name, p.version AS profile_version
+       FROM aif_import_batches b
+       JOIN aif_suppliers s ON s.id=b.supplier_id
+       LEFT JOIN aif_locations l ON l.id=b.target_location_id
+       LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
+       WHERE b.id=$1`,
+      [id]
+    );
+    if (!batch.rowCount) return res.status(404).json({ error: "not found" });
+
+    const rows = await pool.query(
+      `SELECT id, row_no, raw, normalized, status, error_messages, variant_id,
+              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
+              qty, buy_price, sell_price
+       FROM aif_import_rows
+       WHERE batch_id=$1
+       ORDER BY row_no ASC`,
+      [id]
+    );
+
+    res.json({ batch: batch.rows[0], rows: rows.rows });
+  });
+
+  router.post("/import-batches/:id/rows", requireAuthed, async (req, res) => {
+    const batchId = text(req.params.id);
+    const rowsInput = Array.isArray(req.body?.rows) ? req.body.rows : Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!rowsInput.length) return res.status(400).json({ error: "rows required" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const batch = await client.query(`SELECT id, status FROM aif_import_batches WHERE id=$1 FOR UPDATE`, [batchId]);
+      if (!batch.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "batch not found" });
+      }
+      if (!["draft", "parsed", "needs_review", "failed"].includes(batch.rows[0].status)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "batch cannot be edited" });
+      }
+
+      await client.query(`DELETE FROM aif_import_rows WHERE batch_id=$1`, [batchId]);
+
+      let errorCount = 0;
+      let rowNo = 1;
+      for (const input of rowsInput) {
+        const nr = normalizeRowInput(input, rowNo++);
+        if (nr.errors.length) errorCount++;
+        await client.query(
+          `INSERT INTO aif_import_rows (
+             batch_id, row_no, raw, normalized, status, error_messages,
+             supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
+             qty, buy_price, sell_price
+           )
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13)`,
+          [
+            batchId,
+            nr.rowNo,
+            JSON.stringify(nr.raw || {}),
+            JSON.stringify(nr.normalized),
+            nr.status,
+            nr.errors,
+            nr.normalized.supplierProductCode,
+            nr.normalized.supplierVariantCode,
+            nr.normalized.supplierColorCode,
+            nr.normalized.supplierSize,
+            nr.normalized.qty,
+            nr.normalized.buyPrice,
+            nr.normalized.sellPrice,
+          ]
+        );
+      }
+
+      await client.query(
+        `UPDATE aif_import_batches
+         SET row_count=$2, error_count=$3, status=$4, updated_at=now()
+         WHERE id=$1`,
+        [batchId, rowsInput.length, errorCount, errorCount ? "needs_review" : "parsed"]
+      );
+
+      await client.query("COMMIT");
+      res.json({ ok: true, rowCount: rowsInput.length, errorCount });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF replace import rows failed", e);
+      res.status(500).json({ error: "failed to save rows" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/import-batches/:id/commit", requireAuthed, async (req, res) => {
+    const batchId = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const batchRes = await client.query(
+        `SELECT b.*, s.code AS supplier_code
+         FROM aif_import_batches b
+         JOIN aif_suppliers s ON s.id=b.supplier_id
+         WHERE b.id=$1
+         FOR UPDATE`,
+        [batchId]
+      );
+      if (!batchRes.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "batch not found" });
+      }
+      const batch = batchRes.rows[0];
+      if (batch.status === "committed") {
+        await client.query("COMMIT");
+        return res.json({ ok: true, already: true });
+      }
+      if (!["parsed", "needs_review", "draft"].includes(batch.status)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "batch cannot be committed" });
+      }
+      if (!batch.target_location_id) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "target location missing" });
+      }
+
+      const rows = await client.query(
+        `SELECT * FROM aif_import_rows
+         WHERE batch_id=$1 AND status <> 'ignored'
+         ORDER BY row_no ASC
+         FOR UPDATE`,
+        [batchId]
+      );
+
+      const errors = rows.rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
+      if (errors.length) {
+        await client.query(
+          `UPDATE aif_import_batches SET status='needs_review', error_count=$2, updated_at=now() WHERE id=$1`,
+          [batchId, errors.length]
+        );
+        await client.query("COMMIT");
+        return res.status(400).json({ error: "batch has row errors", errorCount: errors.length });
+      }
+
+      let committed = 0;
+      const actor = actorFrom(req);
+      for (const row of rows.rows) {
+        const normalized = row.normalized || {};
+        const qty = Number(row.qty ?? normalized.qty ?? 0);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
+        const variantId = await upsertVariant(client, { modelId, normalized });
+        await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
+        await addStock(client, {
+          locationId: batch.target_location_id,
+          variantId,
+          qty: Math.floor(qty),
+          actor,
+          sourceId: batchId,
+          rowId: row.id,
+          raw: row.raw,
+        });
+
+        await client.query(
+          `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
+          [row.id, variantId]
+        );
+        committed++;
+      }
+
+      await client.query(
+        `UPDATE aif_import_batches
+         SET status='committed', committed_at=now(), error_count=0, updated_at=now()
+         WHERE id=$1`,
+        [batchId]
+      );
+
+      await client.query("COMMIT");
+      res.json({ ok: true, committed });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF commit import batch failed", e);
+      res.status(500).json({ error: "failed to commit import batch" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/inventory", requireAuthed, async (req, res) => {
+    const search = text(req.query.search || req.query.q);
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
+    const args = [];
+    const where = [];
+    if (search) {
+      args.push(`%${search}%`);
+      where.push(`(
+        title_ro ILIKE $1 OR internal_sku ILIKE $1 OR barcode ILIKE $1 OR
+        model_code ILIKE $1 OR brand_name ILIKE $1 OR color_name ILIKE $1 OR size ILIKE $1
+      )`);
+    }
+    args.push(limit);
+    const r = await pool.query(
+      `SELECT * FROM aif_inventory_summary
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY brand_name ASC NULLS LAST, title_ro ASC, color_name ASC NULLS LAST, size ASC
+       LIMIT $${args.length}`,
+      args
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.get("/stock", requireAuthed, async (req, res) => {
+    const location = text(req.query.location || req.query.locationCode || req.query.location_id);
+    const variant = text(req.query.variant || req.query.variantId || req.query.variant_id);
+    const args = [];
+    const where = [];
+    if (location) {
+      args.push(location);
+      where.push(`(l.code=$${args.length} OR l.id::text=$${args.length})`);
+    }
+    if (variant) {
+      args.push(variant);
+      where.push(`(v.id::text=$${args.length} OR v.internal_sku=$${args.length} OR v.barcode=$${args.length})`);
+    }
+    const r = await pool.query(
+      `SELECT l.code AS location_code, l.name AS location_name,
+              v.id AS variant_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name,
+              m.title_ro, s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
+       FROM aif_stock s
+       JOIN aif_locations l ON l.id=s.location_id
+       JOIN aif_product_variants v ON v.id=s.variant_id
+       JOIN aif_product_models m ON m.id=v.model_id
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY l.name ASC, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC`,
+      args
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.get("/health", requireAuthed, async (_req, res) => {
+    const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
+    res.json({ ok: true, suppliers: r.rows[0].suppliers });
+  });
+
+  return router;
+}
