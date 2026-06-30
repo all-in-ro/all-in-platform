@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
+  AlertTriangle,
   BarChart3,
   Building2,
   Check,
@@ -33,6 +34,8 @@ const btn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl borde
 const redBtn = "inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-[#c90d22] px-4 text-sm text-white hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal transition";
 const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/8 px-3 text-sm text-white/85 hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-50 font-normal transition";
 const chip = "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-normal";
+const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm";
+const modalCard = "w-full max-w-md rounded-2xl border border-white/15 bg-[#4b5362] p-5 text-white shadow-2xl";
 
 type FormState = {
   name: string;
@@ -87,6 +90,7 @@ export default function AllInSuppliers() {
   const [editForm, setEditForm] = useState<FormState>({ name: "", code: "", notes: "" });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<AifSupplierDetail | null>(null);
 
   const reportBySupplier = useMemo(() => {
     const map = new Map<string, AifSupplierReportItem>();
@@ -192,16 +196,19 @@ export default function AllInSuppliers() {
     }
   }
 
-  async function removeSupplier(s: AifSupplierDetail) {
-    const ok = window.confirm(
-      `${s.name} törlése? Ha már van hozzá bevételezés, akkor nem törlöm fizikailag, csak kikapcsolom. Tudom, ez nem drámai, de legalább nem rontjuk el a kimutatást.`
-    );
-    if (!ok) return;
+  function askRemoveSupplier(s: AifSupplierDetail) {
+    setDeleteTarget(s);
+  }
 
+  async function confirmRemoveSupplier() {
+    if (!deleteTarget) return;
+
+    const s = deleteTarget;
     setBusy(true);
     setMessage("");
     try {
       const result = await apiAifDeleteSupplier(s.id);
+      setDeleteTarget(null);
       await load();
       setMessage(result.mode === "deleted" ? "Beszállító törölve." : "Beszállító kikapcsolva, mert már van hozzá előzmény.");
     } catch (e: any) {
@@ -213,6 +220,39 @@ export default function AllInSuppliers() {
 
   return (
     <main className={page}>
+      {deleteTarget && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="supplier-delete-title">
+          <div className={modalCard}>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-xl border border-red-300/25 bg-red-500/15 p-2 text-red-100">
+                <AlertTriangle size={22} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p id="supplier-delete-title" className="text-lg font-normal">Beszállító törlése</p>
+                <p className="mt-2 text-sm leading-6 text-white/72">
+                  Biztos törlöd ezt a beszállítót?
+                </p>
+                <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/35 px-3 py-3">
+                  <p className="text-base font-normal text-white">{deleteTarget.name}</p>
+                  <p className="mt-1 font-mono text-xs text-white/55">{deleteTarget.code}</p>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-white/60">
+                  Ha már van hozzá bevételezés, fizikailag nem töröljük, csak inaktívra kapcsoljuk, hogy a kimutatás ne menjen levesbe. Tudom, radikális ötlet: adatot nem rontunk el szándékosan.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button className={`${softBtn} w-full sm:w-auto`} onClick={() => setDeleteTarget(null)} disabled={busy} type="button">
+                <X size={16} /> Mégse
+              </button>
+              <button className={`${redBtn} w-full sm:w-auto`} onClick={confirmRemoveSupplier} disabled={busy} type="button">
+                <Trash2 size={16} /> Törlés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className={wrap}>
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -366,7 +406,7 @@ export default function AllInSuppliers() {
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button className={softBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={16} /> Szerkesztés</button>
                         <button className={softBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={16} /> {s.is_active ? "Kikapcs." : "Aktív"}</button>
-                        <button className={redBtn} onClick={() => removeSupplier(s)} disabled={busy} type="button"><Trash2 size={16} /> Törlés</button>
+                        <button className={redBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={16} /> Törlés</button>
                       </div>
                     </>
                   )}
@@ -432,7 +472,7 @@ export default function AllInSuppliers() {
                           <div className="flex flex-wrap gap-2">
                             <button className={softBtn} onClick={() => startEdit(s)} type="button"><Edit3 size={16} /> Szerkesztés</button>
                             <button className={softBtn} onClick={() => toggleActive(s)} disabled={busy} type="button"><Power size={16} /> {s.is_active ? "Kikapcs." : "Aktív"}</button>
-                            <button className={redBtn} onClick={() => removeSupplier(s)} disabled={busy} type="button"><Trash2 size={16} /> Törlés</button>
+                            <button className={redBtn} onClick={() => askRemoveSupplier(s)} disabled={busy} type="button"><Trash2 size={16} /> Törlés</button>
                           </div>
                         )}
                       </td>
