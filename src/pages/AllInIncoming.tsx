@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Building2,
   CheckCircle,
+  Edit3,
   FileSpreadsheet,
   MapPin,
   Plus,
@@ -21,6 +22,7 @@ import {
   apiAifCreateImportBatch,
   apiAifCreateLocation,
   apiAifDeleteLocation,
+  apiAifUpdateLocation,
   apiAifListImportBatches,
   apiAifMeta,
   apiAifReplaceImportRows,
@@ -46,7 +48,6 @@ const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-
 const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
-
 
 function goHome() {
   window.location.hash = "#allin";
@@ -94,6 +95,9 @@ export default function AllInIncoming(_props: Props) {
   const [locationModalOpen, setLocationModalOpen] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [newLocationType, setNewLocationType] = useState<LocationType>("warehouse");
+  const [editingLocationId, setEditingLocationId] = useState("");
+  const [editLocationName, setEditLocationName] = useState("");
+  const [editLocationType, setEditLocationType] = useState<LocationType>("warehouse");
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
 
   const selectedSupplier = useMemo(
@@ -222,6 +226,43 @@ export default function AllInIncoming(_props: Props) {
     }
   }
 
+  function startEditLocation(location: AifLocation) {
+    setDeleteLocationTarget(null);
+    setEditingLocationId(location.id);
+    setEditLocationName(location.name || "");
+    setEditLocationType((location.location_type as LocationType) || "warehouse");
+  }
+
+  function cancelEditLocation() {
+    setEditingLocationId("");
+    setEditLocationName("");
+    setEditLocationType("warehouse");
+  }
+
+  async function saveLocationEdit() {
+    if (!editingLocationId) return;
+    if (!editLocationName.trim()) {
+      setMessage("A cél hely neve kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const updated = await apiAifUpdateLocation(editingLocationId, {
+        name: editLocationName,
+        locationType: editLocationType,
+      });
+      await loadMeta();
+      setLocationId((current) => current || updated.item.id);
+      cancelEditLocation();
+      setMessage("Cél hely módosítva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a cél helyet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function confirmDeleteLocation() {
     if (!deleteLocationTarget) return;
     const target = deleteLocationTarget;
@@ -282,28 +323,74 @@ export default function AllInIncoming(_props: Props) {
             </div>
 
             <div className="mt-4 grid gap-2">
-              {locations.map((l) => (
-                <div key={l.id} className="flex flex-col gap-2 rounded-xl border border-white/12 bg-[#354153] p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm text-white">{l.name}</p>
-                    <p className="mt-1 text-xs text-white/60">{locationTypeLabel(l.location_type)}</p>
+              {locations.map((l) => {
+                const isEditing = editingLocationId === l.id;
+                return (
+                  <div key={l.id} className="rounded-xl border border-white/12 bg-[#354153] p-3">
+                    {isEditing ? (
+                      <div className="grid gap-3 lg:grid-cols-[1fr_180px_auto] lg:items-end">
+                        <label className={label}>
+                          Név
+                          <input
+                            className={`${input} w-full`}
+                            value={editLocationName}
+                            onChange={(e) => setEditLocationName(e.target.value)}
+                            placeholder="Cél hely neve"
+                          />
+                        </label>
+                        <label className={label}>
+                          Típus
+                          <select
+                            className={`${input} w-full`}
+                            value={editLocationType}
+                            onChange={(e) => setEditLocationType(e.target.value as LocationType)}
+                          >
+                            <option value="warehouse">Raktár</option>
+                            <option value="shop">Üzlet / helyszín</option>
+                            <option value="online">Online</option>
+                            <option value="reserved">Foglalás</option>
+                            <option value="other">Egyéb</option>
+                          </select>
+                        </label>
+                        <div className="flex flex-wrap gap-2 lg:justify-end">
+                          <button className={primaryBtn} onClick={saveLocationEdit} disabled={busy} type="button">
+                            <Save size={14} /> Mentés
+                          </button>
+                          <button className={neutralBtn} onClick={cancelEditLocation} disabled={busy} type="button">
+                            <X size={14} /> Mégse
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm text-white">{l.name}</p>
+                          <p className="mt-1 text-xs text-white/60">{locationTypeLabel(l.location_type)}</p>
+                        </div>
+                        {deleteLocationTarget?.id === l.id ? (
+                          <div className="flex flex-wrap gap-2">
+                            <button className={neutralBtn} onClick={() => setDeleteLocationTarget(null)} disabled={busy} type="button">
+                              <X size={14} /> Mégse
+                            </button>
+                            <button className={dangerBtn} onClick={confirmDeleteLocation} disabled={busy} type="button">
+                              <Trash2 size={14} /> Törlés
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                            <button className={neutralBtn} onClick={() => startEditLocation(l)} disabled={busy} type="button">
+                              <Edit3 size={14} /> Módosítás
+                            </button>
+                            <button className={dangerBtn} onClick={() => { cancelEditLocation(); setDeleteLocationTarget(l); }} disabled={busy} type="button">
+                              <Trash2 size={14} /> Törlés
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {deleteLocationTarget?.id === l.id ? (
-                    <div className="flex flex-wrap gap-2">
-                      <button className={neutralBtn} onClick={() => setDeleteLocationTarget(null)} disabled={busy} type="button">
-                        <X size={14} /> Mégse
-                      </button>
-                      <button className={dangerBtn} onClick={confirmDeleteLocation} disabled={busy} type="button">
-                        <Trash2 size={14} /> Törlés
-                      </button>
-                    </div>
-                  ) : (
-                    <button className={dangerBtn} onClick={() => setDeleteLocationTarget(l)} disabled={busy} type="button">
-                      <Trash2 size={14} /> Törlés
-                    </button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
               {!locations.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Nincs aktív cél hely.</p>}
             </div>
           </div>
