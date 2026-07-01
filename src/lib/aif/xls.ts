@@ -370,8 +370,7 @@ function guessCategory(value: string): string | null {
 
 function buildNormalized(row: RawRow, columns: AifColumnAnalysis[], supplier?: AifSupplier | null) {
   const supplierCode = supplier?.code || "";
-  const supplierName = supplier?.name || supplierCode;
-  const brandRaw = valueByField(row, columns, "brand") || supplierName;
+  const brandRaw = valueByField(row, columns, "brand");
   const categoryRaw = valueByField(row, columns, "category") || valueByField(row, columns, "subCategory");
   const productCode = valueByField(row, columns, "productCode");
   const variantCode = valueByField(row, columns, "variantCode");
@@ -388,8 +387,8 @@ function buildNormalized(row: RawRow, columns: AifColumnAnalysis[], supplier?: A
     brandCode: brandRaw,
     brandName: brandRaw,
     categoryCode: guessCategory(categoryRaw),
-    modelCode: productCode || variantCode || name,
-    titleRo: name || productCode || variantCode,
+    modelCode: productCode || variantCode,
+    titleRo: name,
     gender: normalizeGender(valueByField(row, columns, "gender")),
     productType: valueByField(row, columns, "productType"),
     season: valueByField(row, columns, "season"),
