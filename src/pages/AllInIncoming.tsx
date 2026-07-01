@@ -17,23 +17,28 @@ import {
   ChevronUp,
 } from "lucide-react";
 import {
+  AifCurrency,
   AifImportBatchSummary,
   AifLocation,
   AifLocationType,
   AifParsedRow,
   AifSupplier,
   apiAifCommitImportBatch,
+  apiAifCreateCurrency,
   apiAifCreateImportBatch,
   apiAifCreateLocation,
   apiAifCreateLocationType,
+  apiAifDeleteCurrency,
   apiAifDeleteLocation,
   apiAifDeleteLocationType,
+  apiAifListCurrencies,
   apiAifListLocationTypes,
   apiAifUpdateLocation,
   apiAifUpdateLocationType,
   apiAifListImportBatches,
   apiAifMeta,
   apiAifReplaceImportRows,
+  apiAifUpdateCurrency,
 } from "../lib/aif/api";
 import {
   AIF_COLUMN_FIELD_OPTIONS,
@@ -77,6 +82,21 @@ function cell(v: unknown) {
 
 function valueString(v: unknown) {
   return String(v ?? "");
+}
+
+function toNumber(v: unknown) {
+  if (v === null || v === undefined || String(v).trim() === "") return 0;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function moneyText(value: number, currency = "") {
+  const n = Number.isFinite(value) ? value : 0;
+  return `${n.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
 }
 
 function confidenceText(value: number) {
@@ -125,10 +145,29 @@ export default function AllInIncoming(_props: Props) {
   const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [locationTypes, setLocationTypes] = useState<AifLocationType[]>([]);
+  const [currencies, setCurrencies] = useState<AifCurrency[]>([]);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [supplierId, setSupplierId] = useState("");
   const [locationId, setLocationId] = useState("");
   const [note, setNote] = useState("");
+  const [receptionOpen, setReceptionOpen] = useState(true);
+  const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState(todayIso());
+  const [receptionDate, setReceptionDate] = useState(todayIso());
+  const [currencyCode, setCurrencyCode] = useState("RON");
+  const [exchangeRateToRon, setExchangeRateToRon] = useState("1");
+  const [tvaMode, setTvaMode] = useState<"without_tva" | "with_tva" | "no_tva">("without_tva");
+  const [tvaRate, setTvaRate] = useState("19");
+  const [shippingCost, setShippingCost] = useState("0");
+  const [invoiceGross, setInvoiceGross] = useState("");
+  const [newCurrencyCode, setNewCurrencyCode] = useState("");
+  const [newCurrencyName, setNewCurrencyName] = useState("");
+  const [newCurrencySymbol, setNewCurrencySymbol] = useState("");
+  const [editingCurrencyCode, setEditingCurrencyCode] = useState("");
+  const [editCurrencyName, setEditCurrencyName] = useState("");
+  const [editCurrencySymbol, setEditCurrencySymbol] = useState("");
+  const [deleteCurrencyTarget, setDeleteCurrencyTarget] = useState<AifCurrency | null>(null);
   const [fileName, setFileName] = useState("");
   const [rows, setRows] = useState<AifParsedRow[]>([]);
   const [workbench, setWorkbench] = useState<AifWorkbookAnalysis | null>(null);
@@ -155,6 +194,7 @@ export default function AllInIncoming(_props: Props) {
   );
 
   const activeLocationTypes = useMemo(() => locationTypes.filter((t) => t.is_active), [locationTypes]);
+  const activeCurrencies = useMemo(() => currencies.filter((c) => c.is_active), [currencies]);
   const locationTypeOptions = useMemo(() => {
     if (activeLocationTypes.length) return activeLocationTypes;
     return [{ id: "warehouse", code: "warehouse", name: "Raktár", is_active: true } as AifLocationType];
@@ -170,7 +210,33 @@ export default function AllInIncoming(_props: Props) {
   const approvedProblems = useMemo(() => approvedRowList.filter((r) => aifRowErrors(r).length > 0).length, [approvedRowList]);
   const approvedCount = approvedRowList.length;
   const excludedCount = Math.max(0, rows.length - approvedCount);
-  const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0);
+  const approvedGoodsValue = useMemo(() => approvedRowList.reduce((sum, row) => {
+    const n = row.normalized || {};
+    return sum + toNumber(n.qty) * toNumber(n.buyPrice);
+  }, 0), [approvedRowList]);
+  const approvedQty = useMemo(() => approvedRowList.reduce((sum, row) => sum + toNumber(row.normalized?.qty), 0), [approvedRowList]);
+  const rateValue = toNumber(exchangeRateToRon || (currencyCode === "RON" ? "1" : "0"));
+  const shippingValue = toNumber(shippingCost);
+  const vatRateValue = toNumber(tvaRate);
+  const goodsPlusShipping = approvedGoodsValue + shippingValue;
+  const computedReception = useMemo(() => {
+    const vatFactor = 1 + Math.max(0, vatRateValue) / 100;
+    if (tvaMode === "with_tva") {
+      const gross = goodsPlusShipping;
+      const net = vatFactor > 0 ? gross / vatFactor : gross;
+      const vat = gross - net;
+      return { net, vat, gross };
+    }
+    if (tvaMode === "no_tva") return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
+    const net = goodsPlusShipping;
+    const vat = net * Math.max(0, vatRateValue) / 100;
+    return { net, vat, gross: net + vat };
+  }, [goodsPlusShipping, tvaMode, vatRateValue]);
+  const invoiceGrossValue = invoiceGross.trim() ? toNumber(invoiceGross) : computedReception.gross;
+  const invoiceDifference = invoiceGross.trim() ? invoiceGrossValue - computedReception.gross : 0;
+  const receptionRonValue = invoiceGrossValue * (rateValue || 0);
+  const receptionReady = Boolean(invoiceNumber.trim() && currencyCode && rateValue > 0);
+  const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
     return workbench.columns.reduce((sum, c) => sum + c.warnings.length + (c.field !== "ignore" && c.confidence < 60 ? 1 : 0), 0) + workbench.warnings.length;
@@ -222,7 +288,11 @@ export default function AllInIncoming(_props: Props) {
   }
 
   async function loadMeta() {
-    const [meta, typeData] = await Promise.all([apiAifMeta(), apiAifListLocationTypes({ includeInactive: true })]);
+    const [meta, typeData, currencyData] = await Promise.all([
+      apiAifMeta(),
+      apiAifListLocationTypes({ includeInactive: true }),
+      apiAifListCurrencies({ includeInactive: true }),
+    ]);
     const activeSuppliers = meta.suppliers.filter((x) => x.is_active);
     const activeLocations = meta.locations.filter((x) => x.is_active);
     const allTypes = typeData.items || meta.locationTypes || [];
@@ -230,6 +300,7 @@ export default function AllInIncoming(_props: Props) {
     setSuppliers(activeSuppliers);
     setLocations(activeLocations);
     setLocationTypes(allTypes);
+    setCurrencies(currencyData.items || meta.currencies || []);
     setNewLocationType((current) => {
       if (current && activeTypes.some((t) => t.code === current)) return current;
       return activeTypes[0]?.code || "warehouse";
@@ -238,6 +309,11 @@ export default function AllInIncoming(_props: Props) {
     setLocationId((current) => {
       if (current && activeLocations.some((l) => l.id === current)) return current;
       return activeLocations.find((x) => x.code === "main_warehouse")?.id || activeLocations[0]?.id || "";
+    });
+    setCurrencyCode((current) => {
+      const active = (currencyData.items || meta.currencies || []).filter((c) => c.is_active);
+      if (current && active.some((c) => c.code === current)) return current;
+      return active.find((c) => c.code === "RON")?.code || active[0]?.code || "RON";
     });
   }
 
@@ -300,6 +376,10 @@ export default function AllInIncoming(_props: Props) {
       setMessage("A kijelölt sorok között hibás vagy hiányos adat van. Javítás vagy kizárás után menthető.");
       return;
     }
+    if (!receptionReady) {
+      setMessage("A receptióhoz kötelező a számlaszám, pénznem és pozitív árfolyam.");
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
@@ -309,6 +389,23 @@ export default function AllInIncoming(_props: Props) {
         sourceFileName: fileName || "import.xls",
         sourceFormat: "xls",
         note,
+        reception: {
+          invoiceNumber,
+          invoiceDate,
+          receptionDate,
+          currencyCode,
+          exchangeRateToRon: rateValue,
+          tvaMode,
+          tvaRate: vatRateValue,
+          shippingCost: shippingValue,
+          goodsValue: approvedGoodsValue,
+          invoiceNet: computedReception.net,
+          invoiceVat: computedReception.vat,
+          invoiceGross: invoiceGrossValue,
+          lineCount: approvedCount,
+          totalQty: approvedQty,
+          note,
+        },
       });
       const saved = await apiAifReplaceImportRows(batch.id, approvedRowList);
       await loadBatches();
@@ -486,6 +583,95 @@ export default function AllInIncoming(_props: Props) {
       setMessage(result.mode === "deleted" ? "Cél hely törölve." : "Cél hely inaktiválva, mert már kapcsolódik hozzá adat.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült törölni a cél helyet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+
+  async function createCurrency() {
+    const code = newCurrencyCode.trim().toUpperCase();
+    if (!code || !newCurrencyName.trim()) {
+      setMessage("A pénznem kódja és neve kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const created = await apiAifCreateCurrency({ code, name: newCurrencyName, symbol: newCurrencySymbol });
+      setNewCurrencyCode("");
+      setNewCurrencyName("");
+      setNewCurrencySymbol("");
+      await loadMeta();
+      setCurrencyCode(created.item.code);
+      if (created.item.code === "RON") setExchangeRateToRon("1");
+      setMessage("Pénznem mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a pénznemet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEditCurrency(currency: AifCurrency) {
+    setDeleteCurrencyTarget(null);
+    setEditingCurrencyCode(currency.code);
+    setEditCurrencyName(currency.name || "");
+    setEditCurrencySymbol(currency.symbol || "");
+  }
+
+  function cancelEditCurrency() {
+    setEditingCurrencyCode("");
+    setEditCurrencyName("");
+    setEditCurrencySymbol("");
+  }
+
+  async function saveCurrencyEdit() {
+    if (!editingCurrencyCode) return;
+    if (!editCurrencyName.trim()) {
+      setMessage("A pénznem neve kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateCurrency(editingCurrencyCode, { name: editCurrencyName, symbol: editCurrencySymbol });
+      await loadMeta();
+      cancelEditCurrency();
+      setMessage("Pénznem módosítva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a pénznemet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function activateCurrency(currency: AifCurrency) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateCurrency(currency.code, { is_active: true });
+      await loadMeta();
+      setMessage("Pénznem aktiválva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült aktiválni a pénznemet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDeleteCurrency() {
+    if (!deleteCurrencyTarget) return;
+    const target = deleteCurrencyTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifDeleteCurrency(target.code);
+      setDeleteCurrencyTarget(null);
+      await loadMeta();
+      setMessage(result.mode === "deleted" ? "Pénznem törölve." : "Pénznem inaktiválva, mert már használatban van.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült törölni a pénznemet.");
     } finally {
       setBusy(false);
     }
@@ -685,6 +871,91 @@ export default function AllInIncoming(_props: Props) {
         </div>
       )}
 
+      {currencyModalOpen && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="currencies-title">
+          <div className={modalCard}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p id="currencies-title" className="text-lg font-normal">Pénznemek kezelése</p>
+                <p className="mt-1 text-sm text-white/70">A receptió és import árfolyamaihoz használt pénznemek.</p>
+              </div>
+              <button className={neutralBtn} onClick={() => setCurrencyModalOpen(false)} type="button">
+                <X size={14} /> Bezárás
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-white/14 bg-[#435064] p-3">
+              <div className="grid gap-3 sm:grid-cols-[110px_1fr_120px_auto] sm:items-end">
+                <label className={label}>
+                  Kód
+                  <input className={`${input} w-full uppercase`} value={newCurrencyCode} onChange={(e) => setNewCurrencyCode(e.target.value.toUpperCase())} placeholder="EUR" maxLength={8} />
+                </label>
+                <label className={label}>
+                  Név
+                  <input className={`${input} w-full`} value={newCurrencyName} onChange={(e) => setNewCurrencyName(e.target.value)} placeholder="Euro" />
+                </label>
+                <label className={label}>
+                  Jel
+                  <input className={`${input} w-full`} value={newCurrencySymbol} onChange={(e) => setNewCurrencySymbol(e.target.value)} placeholder="€" />
+                </label>
+                <button className={primaryBtn} onClick={createCurrency} disabled={busy} type="button">
+                  <Save size={14} /> Mentés
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {currencies.map((c) => {
+                const isEditing = editingCurrencyCode === c.code;
+                return (
+                  <div key={c.code} className="rounded-xl border border-white/12 bg-[#354153] p-3">
+                    {isEditing ? (
+                      <div className="grid gap-3 sm:grid-cols-[1fr_120px_auto] sm:items-end">
+                        <label className={label}>
+                          Név
+                          <input className={`${input} w-full`} value={editCurrencyName} onChange={(e) => setEditCurrencyName(e.target.value)} />
+                        </label>
+                        <label className={label}>
+                          Jel
+                          <input className={`${input} w-full`} value={editCurrencySymbol} onChange={(e) => setEditCurrencySymbol(e.target.value)} />
+                        </label>
+                        <div className="flex flex-wrap gap-2 sm:justify-end">
+                          <button className={primaryBtn} onClick={saveCurrencyEdit} disabled={busy} type="button"><Save size={14} /> Mentés</button>
+                          <button className={neutralBtn} onClick={cancelEditCurrency} disabled={busy} type="button"><X size={14} /> Mégse</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm text-white">{c.code} • {c.name}{c.symbol ? ` • ${c.symbol}` : ""}</p>
+                          {!c.is_active && <p className="mt-1 text-xs text-white/58">Inaktív</p>}
+                        </div>
+                        {deleteCurrencyTarget?.code === c.code ? (
+                          <div className="flex flex-wrap gap-2">
+                            <button className={neutralBtn} onClick={() => setDeleteCurrencyTarget(null)} disabled={busy} type="button"><X size={14} /> Mégse</button>
+                            <button className={dangerBtn} onClick={confirmDeleteCurrency} disabled={busy} type="button"><Trash2 size={14} /> Törlés</button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                            <button className={neutralBtn} onClick={() => startEditCurrency(c)} disabled={busy} type="button"><Edit3 size={14} /> Módosítás</button>
+                            {c.is_active ? (
+                              <button className={dangerBtn} onClick={() => { cancelEditCurrency(); setDeleteCurrencyTarget(c); }} disabled={busy || c.code === "RON"} type="button"><Trash2 size={14} /> Törlés</button>
+                            ) : (
+                              <button className={primaryBtn} onClick={() => activateCurrency(c)} disabled={busy} type="button"><CheckCircle size={14} /> Aktiválás</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {!currencies.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Nincs pénznem.</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className={wrap}>
         <header className={topCard}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -783,6 +1054,122 @@ export default function AllInIncoming(_props: Props) {
               A beolvasás csak előnézet. Importként kizárólag a kijelölt és hibátlan sorok menthetők.
             </div>
           ) : null}
+        </section>
+
+        <section className={card}>
+          <SectionTitle
+            icon={<FileSpreadsheet size={16} />}
+            title="Receptió és számla adatok"
+            right={
+              <button className={tinyBtn} onClick={() => setReceptionOpen((v) => !v)} type="button">
+                {receptionOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {receptionOpen ? "Bezárás" : "Megnyitás"}
+              </button>
+            }
+          />
+
+          {receptionOpen && (
+            <div className="mt-3 space-y-3">
+              <div className="grid gap-3 lg:grid-cols-4">
+                <label className={label}>
+                  Számlaszám
+                  <input className={`${input} w-full`} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Számla száma" />
+                </label>
+                <label className={label}>
+                  Számla dátuma
+                  <input className={`${input} w-full`} type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+                </label>
+                <label className={label}>
+                  Receptió dátuma
+                  <input className={`${input} w-full`} type="date" value={receptionDate} onChange={(e) => setReceptionDate(e.target.value)} />
+                </label>
+                <label className={label}>
+                  Pénznem
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <select
+                      className={`${input} w-full`}
+                      value={currencyCode}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setCurrencyCode(next);
+                        if (next === "RON") setExchangeRateToRon("1");
+                      }}
+                    >
+                      {activeCurrencies.map((c) => (
+                        <option key={c.code} value={c.code}>{c.code} • {c.name}</option>
+                      ))}
+                    </select>
+                    <button className={neutralBtn} onClick={() => setCurrencyModalOpen(true)} type="button">
+                      Kezelés
+                    </button>
+                  </div>
+                </label>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-5">
+                <label className={label}>
+                  Árfolyam RON
+                  <input className={`${input} w-full`} value={exchangeRateToRon} onChange={(e) => setExchangeRateToRon(e.target.value)} placeholder={currencyCode === "RON" ? "1" : "pl. 4.97"} />
+                </label>
+                <label className={label}>
+                  TVA kezelés
+                  <select className={`${input} w-full`} value={tvaMode} onChange={(e) => setTvaMode(e.target.value as any)}>
+                    <option value="without_tva">Árak TVA nélkül</option>
+                    <option value="with_tva">Árak TVA-val</option>
+                    <option value="no_tva">TVA nélkül</option>
+                  </select>
+                </label>
+                <label className={label}>
+                  TVA %
+                  <input className={`${input} w-full`} value={tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} />
+                </label>
+                <label className={label}>
+                  Szállítás
+                  <input className={`${input} w-full`} value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} placeholder="0" />
+                </label>
+                <label className={label}>
+                  Számla végösszeg
+                  <input className={`${input} w-full`} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder={moneyText(computedReception.gross)} />
+                </label>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-6">
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Kijelölt érték</p>
+                  <p className="mt-1 text-sm text-white">{moneyText(approvedGoodsValue, currencyCode)}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Nettó</p>
+                  <p className="mt-1 text-sm text-white">{moneyText(computedReception.net, currencyCode)}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">TVA</p>
+                  <p className="mt-1 text-sm text-white">{moneyText(computedReception.vat, currencyCode)}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított összeg</p>
+                  <p className="mt-1 text-sm text-white">{moneyText(computedReception.gross, currencyCode)}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eltérés</p>
+                  <p className={`mt-1 text-sm ${Math.abs(invoiceDifference) > 0.01 ? "text-amber-100" : "text-emerald-100"}`}>{moneyText(invoiceDifference, currencyCode)}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
+                  <p className="mt-1 text-sm text-white">{moneyText(receptionRonValue, "RON")}</p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white/72">
+                A terméksorok vételára a kiválasztott pénznemben marad az import előnézetben. Mentéskor a rendszer RON értéket is számol az árfolyam alapján, így a raktár és a kimutatás nem az Excel többféle ár oszlopából próbál találgatni.
+              </div>
+
+              {!receptionReady && (
+                <div className="rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
+                  Import mentés előtt kötelező a számlaszám, a pénznem és a pozitív árfolyam.
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         <section className={card}>
