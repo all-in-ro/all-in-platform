@@ -63,6 +63,9 @@ const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-3 shadow-lg shad
 const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20 font-normal";
 const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/86 font-normal";
 const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
+const selectInput = `${input} aif-native-select [color-scheme:dark]`;
+const optionStyle = { backgroundColor: "#303b4e", color: "#ffffff" };
+const mutedOptionStyle = { backgroundColor: "#303b4e", color: "#a9b3c7" };
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
@@ -262,6 +265,7 @@ export default function AllInIncoming(_props: Props) {
     invoiceGrossProvided
   );
   const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/80 bg-red-500/10 focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
+  const requiredSelectInput = (missing: boolean) => `${selectInput} w-full ${missing ? "border-red-300/80 bg-[#303b4e] focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
   const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
@@ -709,6 +713,23 @@ export default function AllInIncoming(_props: Props) {
 
   return (
     <main className={page}>
+      <style>{`
+        select.aif-native-select,
+        select.aif-native-select option,
+        select.aif-native-select optgroup {
+          background-color: #303b4e !important;
+          color: #ffffff !important;
+          color-scheme: dark;
+        }
+        select.aif-native-select option:disabled {
+          background-color: #303b4e !important;
+          color: rgba(255, 255, 255, 0.45) !important;
+        }
+        select.aif-native-select option:checked {
+          background-color: #3b4658 !important;
+          color: #ffffff !important;
+        }
+      `}</style>
       {locationModalOpen && (
         <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="locations-title">
           <div className={modalCard}>
@@ -735,9 +756,9 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>
                   Típus
-                  <select className={`${input} w-full`} value={newLocationType} onChange={(e) => setNewLocationType(e.target.value as LocationType)}>
+                  <select className={`${selectInput} w-full`} value={newLocationType} onChange={(e) => setNewLocationType(e.target.value as LocationType)}>
                     {locationTypeOptions.map((t) => (
-                      <option key={t.id} value={t.code}>{t.name}</option>
+                      <option style={optionStyle} key={t.id} value={t.code}>{t.name}</option>
                     ))}
                   </select>
                 </label>
@@ -847,12 +868,12 @@ export default function AllInIncoming(_props: Props) {
                         <label className={label}>
                           Típus
                           <select
-                            className={`${input} w-full`}
+                            className={`${selectInput} w-full`}
                             value={editLocationType}
                             onChange={(e) => setEditLocationType(e.target.value as LocationType)}
                           >
                             {locationTypeOptions.map((t) => (
-                              <option key={t.id} value={t.code}>{t.name}</option>
+                              <option style={optionStyle} key={t.id} value={t.code}>{t.name}</option>
                             ))}
                           </select>
                         </label>
@@ -1008,9 +1029,9 @@ export default function AllInIncoming(_props: Props) {
           <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
             <label className={label}>
               Beszállító
-              <select className={`${input} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+              <select className={`${selectInput} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
                 {suppliers.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
+                  <option style={optionStyle} key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
             </label>
@@ -1018,9 +1039,9 @@ export default function AllInIncoming(_props: Props) {
             <label className={label}>
               Cél hely
               <div className="grid grid-cols-[1fr_auto] gap-2">
-                <select className={`${input} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                <select className={`${selectInput} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
                   {locations.map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
+                    <option style={optionStyle} key={l.id} value={l.id}>{l.name}</option>
                   ))}
                 </select>
                 <button className={neutralBtn} onClick={() => setLocationModalOpen(true)} type="button" title="Cél helyek kezelése">
@@ -1120,13 +1141,13 @@ export default function AllInIncoming(_props: Props) {
                   Pénznem
                   <div className="grid grid-cols-[1fr_auto] gap-2">
                     <select
-                      className={requiredInput(requiredMissing.currencyCode)}
+                      className={requiredSelectInput(requiredMissing.currencyCode)}
                       value={currencyCode}
                       onChange={(e) => setCurrencyCode(e.target.value)}
                     >
-                      <option value="">Pénznem kiválasztása</option>
+                      <option style={mutedOptionStyle} value="">Pénznem kiválasztása</option>
                       {activeCurrencies.map((c) => (
-                        <option key={c.code} value={c.code}>{c.code} • {c.name}</option>
+                        <option style={optionStyle} key={c.code} value={c.code}>{c.code} • {c.name}</option>
                       ))}
                     </select>
                     <button className={neutralBtn} onClick={() => setCurrencyModalOpen(true)} type="button">
@@ -1143,11 +1164,11 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>
                   TVA kezelés
-                  <select className={requiredInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate(""); }}>
-                    <option value="">TVA kezelés kiválasztása</option>
-                    <option value="without_tva">Árak TVA nélkül</option>
-                    <option value="with_tva">Árak TVA-val</option>
-                    <option value="no_tva">TVA nélkül</option>
+                  <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate(""); }}>
+                    <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
+                    <option style={optionStyle} value="without_tva">Árak TVA nélkül</option>
+                    <option style={optionStyle} value="with_tva">Árak TVA-val</option>
+                    <option style={optionStyle} value="no_tva">TVA nélkül</option>
                   </select>
                 </label>
                 <label className={label}>
@@ -1301,9 +1322,9 @@ export default function AllInIncoming(_props: Props) {
                       <tr key={`${c.index}-${c.header}`} className="bg-[#445064] hover:bg-[#4b596f]">
                         <td className="px-3 py-2.5 text-white/90">{c.header}</td>
                         <td className="px-3 py-2.5">
-                          <select className={`${input} h-8 w-[190px]`} value={c.field} onChange={(e) => updateColumnField(c.index, e.target.value as AifColumnField)}>
+                          <select className={`${selectInput} h-8 w-[190px]`} value={c.field} onChange={(e) => updateColumnField(c.index, e.target.value as AifColumnField)}>
                             {AIF_COLUMN_FIELD_OPTIONS.map((opt) => (
-                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              <option style={optionStyle} key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
                           </select>
                         </td>
