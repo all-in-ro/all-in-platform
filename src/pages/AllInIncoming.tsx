@@ -54,7 +54,22 @@ import {
 type Props = { onLogout?: () => void };
 
 type LocationType = string;
-type EditableImportField = "supplierProductCode" | "titleRo" | "colorName" | "colorCode" | "size" | "qty" | "buyPrice";
+type EditableImportField =
+  | "supplierProductCode"
+  | "titleRo"
+  | "brandCode"
+  | "categoryCode"
+  | "gender"
+  | "colorName"
+  | "colorCode"
+  | "size"
+  | "qty"
+  | "buyPrice";
+
+type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
+type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; sort_order?: number | string | null; is_active?: boolean };
+type AifGenderOption = { code: string; name: string; sort_order?: number | string | null; is_active?: boolean };
+type AifSupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
 const wrap = "mx-auto max-w-7xl space-y-4";
@@ -129,6 +144,15 @@ function locationTypeLabel(v: string) {
   return map[v] || "Egyéb";
 }
 
+function categoryLabel(c: AifCategoryOption) {
+  return c.name_ro || c.name_hu || c.name || c.code || "-";
+}
+
+function genderLabel(code: unknown, items: AifGenderOption[]) {
+  const key = String(code ?? "").trim().toLowerCase();
+  return items.find((g) => String(g.code).toLowerCase() === key)?.name || String(code || "-");
+}
+
 function SectionTitle(props: { icon: React.ReactNode; title: string; right?: React.ReactNode }) {
   return (
     <div className={sectionHeader}>
@@ -151,6 +175,13 @@ export default function AllInIncoming(_props: Props) {
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [locationTypes, setLocationTypes] = useState<AifLocationType[]>([]);
   const [currencies, setCurrencies] = useState<AifCurrency[]>([]);
+  const [brands, setBrands] = useState<AifBrandOption[]>([]);
+  const [categories, setCategories] = useState<AifCategoryOption[]>([]);
+  const [genderTypes, setGenderTypes] = useState<AifGenderOption[]>([]);
+  const [supplierBrands, setSupplierBrands] = useState<AifSupplierBrandLink[]>([]);
+  const [defaultBrandCode, setDefaultBrandCode] = useState("");
+  const [defaultCategoryCode, setDefaultCategoryCode] = useState("");
+  const [defaultGender, setDefaultGender] = useState("");
   const [receptions, setReceptions] = useState<AifReceptionSummary[]>([]);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [supplierId, setSupplierId] = useState("");
@@ -199,6 +230,20 @@ export default function AllInIncoming(_props: Props) {
     [suppliers, supplierId]
   );
 
+  const activeBrands = useMemo(() => brands.filter((b) => b.is_active !== false), [brands]);
+  const activeCategories = useMemo(() => categories.filter((c) => c.is_active !== false), [categories]);
+  const activeGenderTypes = useMemo(() => genderTypes.filter((g) => g.is_active !== false), [genderTypes]);
+  const brandOptionsForSupplier = useMemo(() => {
+    if (!supplierId) return activeBrands;
+    const linkedBrandIds = new Set(
+      supplierBrands
+        .filter((link) => link.is_active !== false && String(link.supplier_id) === String(supplierId))
+        .map((link) => String(link.brand_id))
+    );
+    if (!linkedBrandIds.size) return activeBrands;
+    return activeBrands.filter((brand) => linkedBrandIds.has(String(brand.id)));
+  }, [activeBrands, supplierBrands, supplierId]);
+
   const activeLocationTypes = useMemo(() => locationTypes.filter((t) => t.is_active), [locationTypes]);
   const activeCurrencies = useMemo(() => currencies.filter((c) => c.is_active), [currencies]);
   const locationTypeOptions = useMemo(() => {
@@ -208,6 +253,36 @@ export default function AllInIncoming(_props: Props) {
 
   function typeLabel(code: string) {
     return locationTypes.find((t) => t.code === code)?.name || locationTypeLabel(code);
+  }
+
+  useEffect(() => {
+    if (defaultBrandCode && !brandOptionsForSupplier.some((b) => (b.code || b.id) === defaultBrandCode)) {
+      setDefaultBrandCode("");
+    }
+  }, [brandOptionsForSupplier, defaultBrandCode]);
+
+  function brandValueForRow(n: Record<string, unknown>) {
+    const raw = String(n.brandCode || n.brandName || "").trim();
+    if (!raw) return "";
+    const rawLower = raw.toLowerCase();
+    const match = brandOptionsForSupplier.find((b) =>
+      String(b.code || "").toLowerCase() === rawLower ||
+      String(b.id || "").toLowerCase() === rawLower ||
+      String(b.name || "").toLowerCase() === rawLower
+    );
+    return match ? String(match.code || match.id) : raw;
+  }
+
+  function categoryValueForRow(n: Record<string, unknown>) {
+    const raw = String(n.categoryCode || n.categoryName || "").trim();
+    if (!raw) return "";
+    const rawLower = raw.toLowerCase();
+    const match = activeCategories.find((c) =>
+      String(c.code || "").toLowerCase() === rawLower ||
+      String(c.id || "").toLowerCase() === rawLower ||
+      String(categoryLabel(c)).toLowerCase() === rawLower
+    );
+    return match ? String(match.code || match.id) : raw;
   }
 
   const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
@@ -290,10 +365,60 @@ export default function AllInIncoming(_props: Props) {
         if (field === "qty") normalized[field] = value === "" ? null : Number(value);
         else if (field === "buyPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
         else normalized[field] = value;
+        if (field === "brandCode") {
+          const brand = activeBrands.find((b) => (b.code || b.id) === value);
+          normalized.brandName = brand?.name || "";
+        }
+        if (field === "categoryCode") {
+          const category = activeCategories.find((c) => (c.code || c.id) === value);
+          normalized.categoryName = category ? categoryLabel(category) : "";
+        }
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
         return { ...row, normalized };
       })
     );
+  }
+
+  function applyImportDefaults(scope: "missing" | "approved" | "all") {
+    if (!rows.length) {
+      setMessage("Nincs beolvasott sor.");
+      return;
+    }
+    const hasAnyDefault = Boolean(defaultBrandCode || defaultCategoryCode || defaultGender);
+    if (!hasAnyDefault) {
+      setMessage("Nincs kiválasztott alap besorolás.");
+      return;
+    }
+    let changed = 0;
+    setRows((current) =>
+      current.map((row, index) => {
+        if (scope === "approved" && !approvedRows[rowKey(row, index)]) return row;
+        const normalized = { ...(row.normalized || {}) };
+        let touched = false;
+        const assign = (key: "brandCode" | "categoryCode" | "gender", value: string) => {
+          if (!value) return;
+          if (scope === "missing" && normalized[key]) return;
+          if (normalized[key] === value) return;
+          normalized[key] = value;
+          touched = true;
+        };
+        assign("brandCode", defaultBrandCode);
+        assign("categoryCode", defaultCategoryCode);
+        assign("gender", defaultGender);
+        if (defaultBrandCode && normalized.brandCode === defaultBrandCode) {
+          normalized.brandName = activeBrands.find((b) => (b.code || b.id) === defaultBrandCode)?.name || normalized.brandName;
+        }
+        if (defaultCategoryCode && normalized.categoryCode === defaultCategoryCode) {
+          const category = activeCategories.find((c) => (c.code || c.id) === defaultCategoryCode);
+          normalized.categoryName = category ? categoryLabel(category) : normalized.categoryName;
+        }
+        if (touched) changed += 1;
+        return touched ? { ...row, normalized } : row;
+      })
+    );
+    if (scope === "approved") setMessage(`${changed} kijelölt sor besorolása frissítve.`);
+    else if (scope === "all") setMessage(`${changed} beolvasott sor besorolása frissítve.`);
+    else setMessage(`${changed} sor hiányzó besorolása kitöltve.`);
   }
 
   function toggleApprovedRow(index: number, checked: boolean) {
@@ -331,6 +456,10 @@ export default function AllInIncoming(_props: Props) {
     setLocations(activeLocations);
     setLocationTypes(allTypes);
     setCurrencies(currencyData.items || meta.currencies || []);
+    setBrands((meta as any).brands || []);
+    setCategories((meta as any).categories || []);
+    setGenderTypes((meta as any).genderTypes || []);
+    setSupplierBrands((meta as any).supplierBrands || []);
     setNewLocationType((current) => {
       if (current && activeTypes.some((t) => t.code === current)) return current;
       return activeTypes[0]?.code || "warehouse";
@@ -1100,6 +1229,54 @@ export default function AllInIncoming(_props: Props) {
               <p className="mt-1 text-lg font-normal">{rowProblems}</p>
             </div>
           </div>
+
+          <div className="mt-4 rounded-xl border border-white/14 bg-[#354153] p-3">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm uppercase tracking-[0.09em] text-white/90">Import besorolás</p>
+                <p className="mt-1 text-xs text-white/62">Márka, kategória és nem az AIF törzsadatokból. Ezek az értékek a mentett sorokkal együtt kerülnek tovább.</p>
+              </div>
+              <button className={tinyBtn} onClick={() => (window.location.hash = "#allinwarehouse")} type="button">Törzsadatok</button>
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-3">
+              <label className={label}>
+                Márka
+                <select className={`${selectInput} w-full`} value={defaultBrandCode} onChange={(e) => setDefaultBrandCode(e.target.value)}>
+                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett márka</option>
+                  {brandOptionsForSupplier.map((b) => (
+                    <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>
+                  ))}
+                </select>
+              </label>
+              <label className={label}>
+                Kategória
+                <select className={`${selectInput} w-full`} value={defaultCategoryCode} onChange={(e) => setDefaultCategoryCode(e.target.value)}>
+                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett kategória</option>
+                  {activeCategories.map((c) => (
+                    <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className={label}>
+                Nem
+                <select className={`${selectInput} w-full`} value={defaultGender} onChange={(e) => setDefaultGender(e.target.value)}>
+                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett nem</option>
+                  {activeGenderTypes.map((g) => (
+                    <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className={neutralBtn} onClick={() => applyImportDefaults("missing")} disabled={busy || !rows.length} type="button">Hiányzó besorolás kitöltése</button>
+              <button className={neutralBtn} onClick={() => applyImportDefaults("approved")} disabled={busy || !approvedCount} type="button">Kijelölt sorokra</button>
+              <button className={neutralBtn} onClick={() => applyImportDefaults("all")} disabled={busy || !rows.length} type="button">Minden beolvasott sorra</button>
+            </div>
+            {supplierId && !brandOptionsForSupplier.length ? (
+              <p className="mt-2 rounded-lg border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-xs text-amber-50">A kiválasztott beszállítóhoz nincs aktív márka kapcsolat. Előbb a beszállítói márkakapcsolatot kell beállítani.</p>
+            ) : null}
+          </div>
+
           {rows.length ? (
             <div className="mt-3 rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
               A beolvasás csak előnézet. Importként kizárólag a kijelölt és hibátlan sorok menthetők.
@@ -1356,6 +1533,9 @@ export default function AllInIncoming(_props: Props) {
                   <th className="px-3 py-2 font-normal">Állapot</th>
                   <th className="px-3 py-2 font-normal">Termékkód</th>
                   <th className="px-3 py-2 font-normal">Név</th>
+                  <th className="px-3 py-2 font-normal">Márka</th>
+                  <th className="px-3 py-2 font-normal">Kategória</th>
+                  <th className="px-3 py-2 font-normal">Nem</th>
                   <th className="px-3 py-2 font-normal">Szín</th>
                   <th className="px-3 py-2 font-normal">Színkód</th>
                   <th className="px-3 py-2 font-normal">Méret</th>
@@ -1383,6 +1563,24 @@ export default function AllInIncoming(_props: Props) {
                       </td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[130px]`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} /></td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[230px]`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} /></td>
+                      <td className="px-3 py-2.5">
+                        <select className={`${selectInput} h-8 w-[150px]`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
+                          <option style={mutedOptionStyle} value="">Nincs</option>
+                          {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <select className={`${selectInput} h-8 w-[170px]`} value={categoryValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
+                          <option style={mutedOptionStyle} value="">Nincs</option>
+                          {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <select className={`${selectInput} h-8 w-[130px]`} value={valueString(n.gender)} onChange={(e) => updateRowField(globalIndex, "gender", e.target.value)}>
+                          <option style={mutedOptionStyle} value="">Nincs</option>
+                          {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
+                        </select>
+                      </td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[120px]`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} /></td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[90px]`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} /></td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[85px]`} value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} /></td>
@@ -1394,7 +1592,7 @@ export default function AllInIncoming(_props: Props) {
                 })}
                 {!preview.length && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-white/60" colSpan={11}>Nincs beolvasott sor.</td>
+                    <td className="px-3 py-8 text-center text-white/60" colSpan={14}>Nincs beolvasott sor.</td>
                   </tr>
                 )}
               </tbody>
