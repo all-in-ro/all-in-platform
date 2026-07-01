@@ -66,7 +66,6 @@ const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
 
-
 function goHome() {
   window.location.hash = "#allin";
 }
@@ -117,6 +116,11 @@ function SectionTitle(props: { icon: React.ReactNode; title: string; right?: Rea
   );
 }
 
+
+function rowKey(row: AifParsedRow, index: number) {
+  return `${row.rowNo || index + 1}-${index}`;
+}
+
 export default function AllInIncoming(_props: Props) {
   const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locations, setLocations] = useState<AifLocation[]>([]);
@@ -130,6 +134,7 @@ export default function AllInIncoming(_props: Props) {
   const [workbench, setWorkbench] = useState<AifWorkbookAnalysis | null>(null);
   const [workbenchOpen, setWorkbenchOpen] = useState(true);
   const [previewLimit, setPreviewLimit] = useState(25);
+  const [approvedRows, setApprovedRows] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [locationModalOpen, setLocationModalOpen] = useState(false);
@@ -161,6 +166,11 @@ export default function AllInIncoming(_props: Props) {
 
   const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
   const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r).length > 0).length, [rows]);
+  const approvedRowList = useMemo(() => rows.filter((row, index) => approvedRows[rowKey(row, index)]), [rows, approvedRows]);
+  const approvedProblems = useMemo(() => approvedRowList.filter((r) => aifRowErrors(r).length > 0).length, [approvedRowList]);
+  const approvedCount = approvedRowList.length;
+  const excludedCount = Math.max(0, rows.length - approvedCount);
+  const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
     return workbench.columns.reduce((sum, c) => sum + c.warnings.length + (c.field !== "ignore" && c.confidence < 60 ? 1 : 0), 0) + workbench.warnings.length;
@@ -188,6 +198,27 @@ export default function AllInIncoming(_props: Props) {
         return { ...row, normalized };
       })
     );
+  }
+
+  function toggleApprovedRow(index: number, checked: boolean) {
+    const row = rows[index];
+    if (!row) return;
+    const key = rowKey(row, index);
+    setApprovedRows((current) => ({ ...current, [key]: checked }));
+  }
+
+  function selectCleanRows() {
+    const next: Record<string, boolean> = {};
+    rows.forEach((row, index) => {
+      if (aifRowErrors(row).length === 0) next[rowKey(row, index)] = true;
+    });
+    setApprovedRows(next);
+    setMessage("A hibátlan sorok ki lettek jelölve. Mentés előtt ellenőrizd az előnézetet.");
+  }
+
+  function clearApprovedRows() {
+    setApprovedRows({});
+    setMessage("A kijelölés törölve. A beolvasott adatok továbbra is csak előnézetben vannak.");
   }
 
   async function loadMeta() {
@@ -247,10 +278,12 @@ export default function AllInIncoming(_props: Props) {
       setWorkbench(parsed.analysis);
       setWorkbenchOpen(true);
       setPreviewLimit(25);
-      setMessage(`${parsed.rows.length} sor beolvasva. Az oszlopok és sorok mentés előtt ellenőrizhetők.`);
+      setApprovedRows({});
+      setMessage(`${parsed.rows.length} sor beolvasva előnézetre. Importáláshoz előbb jelöld ki a valóban használható sorokat.`);
     } catch (e: any) {
       setRows([]);
       setWorkbench(null);
+      setApprovedRows({});
       setMessage(e.message || "Nem sikerült beolvasni az XLS/XLSX fájlt.");
     } finally {
       setBusy(false);
@@ -259,6 +292,14 @@ export default function AllInIncoming(_props: Props) {
 
   async function saveDraft() {
     if (!supplierId || !locationId || !rows.length) return;
+    if (!approvedRowList.length) {
+      setMessage("Nincs kijelölt sor. Beolvasás után csak a kijelölt sorok menthetők importként.");
+      return;
+    }
+    if (approvedProblems > 0) {
+      setMessage("A kijelölt sorok között hibás vagy hiányos adat van. Javítás vagy kizárás után menthető.");
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
@@ -269,9 +310,9 @@ export default function AllInIncoming(_props: Props) {
         sourceFormat: "xls",
         note,
       });
-      const saved = await apiAifReplaceImportRows(batch.id, rows);
+      const saved = await apiAifReplaceImportRows(batch.id, approvedRowList);
       await loadBatches();
-      setMessage(`Import mentve: ${saved.rowCount} sor, ellenőrzendő sor: ${saved.errorCount}.`);
+      setMessage(`Import mentve: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni az importot.");
     } finally {
@@ -698,8 +739,14 @@ export default function AllInIncoming(_props: Props) {
               <FileSpreadsheet size={15} /> XLS / XLSX kiválasztás
               <input className="hidden" type="file" accept=".xls,.xlsx,.csv" onChange={onFileChange} />
             </label>
-            <button className={primaryBtn} onClick={saveDraft} disabled={busy || !rows.length || !supplierId || !locationId} type="button">
-              <UploadCloud size={15} /> Import mentése
+            <button className={neutralBtn} onClick={selectCleanRows} disabled={busy || !rows.length} type="button">
+              <CheckCircle size={14} /> Hibátlan sorok kijelölése
+            </button>
+            <button className={neutralBtn} onClick={clearApprovedRows} disabled={busy || !rows.length || !approvedCount} type="button">
+              <X size={14} /> Kijelölés törlése
+            </button>
+            <button className={primaryBtn} onClick={saveDraft} disabled={busy || !canSaveApprovedRows} type="button">
+              <UploadCloud size={15} /> Kijelölt sorok mentése
             </button>
             <button className={neutralBtn} onClick={reloadAll} disabled={busy} type="button">
               <RefreshCw size={14} /> Frissítés
@@ -709,7 +756,7 @@ export default function AllInIncoming(_props: Props) {
             </button>
           </div>
 
-          <div className="mt-4 grid gap-2 md:grid-cols-4">
+          <div className="mt-4 grid gap-2 md:grid-cols-5">
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Fájl</p>
               <p className="mt-1 truncate text-sm">{fileName || "-"}</p>
@@ -719,14 +766,23 @@ export default function AllInIncoming(_props: Props) {
               <p className="mt-1 text-lg font-normal">{rows.length}</p>
             </div>
             <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Ellenőrzendő sorok</p>
-              <p className="mt-1 text-lg font-normal">{rowProblems}</p>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Kijelölt sorok</p>
+              <p className="mt-1 text-lg font-normal">{approvedCount}</p>
             </div>
             <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Állapot</p>
-              <p className="mt-1 text-sm">{busy ? "Feldolgozás" : rows.length ? "Előnézet kész" : "Nincs fájl"}</p>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Kizárt sorok</p>
+              <p className="mt-1 text-lg font-normal">{excludedCount}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Ellenőrzendő</p>
+              <p className="mt-1 text-lg font-normal">{rowProblems}</p>
             </div>
           </div>
+          {rows.length ? (
+            <div className="mt-3 rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
+              A beolvasás csak előnézet. Importként kizárólag a kijelölt és hibátlan sorok menthetők.
+            </div>
+          ) : null}
         </section>
 
         <section className={card}>
@@ -809,11 +865,12 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Soronkénti előnézet" right={<span className="text-xs text-white/60">Szerkeszthető sorok</span>} />
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Soronkénti előnézet" right={<span className="text-xs text-white/60">Szerkeszthető, kijelölhető sorok</span>} />
           <div className="mt-3 overflow-auto rounded-xl border border-white/14">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
                 <tr>
+                  <th className="px-3 py-2 font-normal">Importálás</th>
                   <th className="px-3 py-2 font-normal">Sorszám</th>
                   <th className="px-3 py-2 font-normal">Állapot</th>
                   <th className="px-3 py-2 font-normal">Termékkód</th>
@@ -823,6 +880,7 @@ export default function AllInIncoming(_props: Props) {
                   <th className="px-3 py-2 font-normal">Méret</th>
                   <th className="px-3 py-2 font-normal">Darab</th>
                   <th className="px-3 py-2 font-normal">Vételár</th>
+                  <th className="px-3 py-2 font-normal">Döntés</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
@@ -830,8 +888,13 @@ export default function AllInIncoming(_props: Props) {
                   const globalIndex = idx;
                   const n = r.normalized || {};
                   const errors = aifRowErrors(r);
+                  const key = rowKey(r, globalIndex);
+                  const approved = Boolean(approvedRows[key]);
                   return (
-                    <tr key={`${r.rowNo || idx}-${idx}`} className={errors.length ? "bg-red-500/10 hover:bg-red-500/15" : "bg-[#445064] hover:bg-[#4b596f]"}>
+                    <tr key={`${r.rowNo || idx}-${idx}`} className={errors.length ? "bg-red-500/10 hover:bg-red-500/15" : approved ? "bg-emerald-400/10 hover:bg-emerald-400/14" : "bg-[#445064] hover:bg-[#4b596f]"}>
+                      <td className="px-3 py-2.5">
+                        <input className="h-4 w-4 accent-emerald-300" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
+                      </td>
                       <td className="px-3 py-2.5 text-white/62">{r.rowNo || idx + 1}</td>
                       <td className="px-3 py-2.5 text-xs">
                         {errors.length ? <span className="text-amber-100">Ellenőrizni</span> : <span className="text-emerald-100">Rendben</span>}
@@ -844,12 +907,13 @@ export default function AllInIncoming(_props: Props) {
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[85px]`} value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} /></td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[80px]`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} /></td>
                       <td className="px-3 py-2.5"><input className={`${input} h-8 w-[95px]`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} /></td>
+                      <td className="px-3 py-2.5 text-xs">{approved ? <span className="text-emerald-100">Mentésre kijelölve</span> : <span className="text-white/55">Kizárva</span>}</td>
                     </tr>
                   );
                 })}
                 {!preview.length && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-white/60" colSpan={9}>Nincs beolvasott sor.</td>
+                    <td className="px-3 py-8 text-center text-white/60" colSpan={11}>Nincs beolvasott sor.</td>
                   </tr>
                 )}
               </tbody>
