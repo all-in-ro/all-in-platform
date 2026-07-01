@@ -35,6 +35,10 @@ type InventoryItem = {
   image_url?: string | null;
   brand_name?: string | null;
   brand_code?: string | null;
+  supplier_names?: string | null;
+  supplier_codes?: string | null;
+  supplier_ids?: string | null;
+  suppliers?: Array<{ id?: string; code?: string; name?: string }> | null;
   model_id?: string | null;
   model_code?: string | null;
   title_ro?: string | null;
@@ -138,6 +142,61 @@ function missingLabels(it: InventoryItem) {
   return out;
 }
 
+function normalizeSearch(v: unknown) {
+  return String(v ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function splitCsv(v: unknown) {
+  return String(v ?? "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function itemSupplierText(it: InventoryItem) {
+  if (it.supplier_names) return it.supplier_names;
+  const names = (it.suppliers || []).map((s) => s.name).filter(Boolean) as string[];
+  return names.length ? names.join(", ") : "-";
+}
+
+function supplierMatches(it: InventoryItem, selected: string) {
+  if (selected === "all") return true;
+  const key = normalizeSearch(selected);
+  const values = [
+    ...splitCsv(it.supplier_ids),
+    ...splitCsv(it.supplier_codes),
+    ...splitCsv(it.supplier_names),
+    ...(it.suppliers || []).flatMap((s) => [s.id, s.code, s.name]),
+  ].map(normalizeSearch);
+  return values.some((x) => x === key);
+}
+
+function itemMatchesSearch(it: InventoryItem, query: string) {
+  const q = normalizeSearch(query);
+  if (!q) return true;
+  const haystack = [
+    it.title_ro,
+    it.title_hu,
+    it.brand_name,
+    it.brand_code,
+    itemSupplierText(it),
+    it.supplier_codes,
+    it.internal_sku,
+    it.barcode,
+    it.model_code,
+    it.category_name_ro,
+    it.category_name_hu,
+    it.color_name,
+    it.color_code,
+    it.size,
+  ].map(normalizeSearch).join(" ");
+  return haystack.includes(q);
+}
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: "include", ...options });
   if (!res.ok) {
@@ -147,15 +206,14 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-async function apiInventory(search: string) {
+async function apiInventory() {
   const qs = new URLSearchParams();
   qs.set("limit", "500");
-  if (search.trim()) qs.set("search", search.trim());
   return fetchJSON<{ items: InventoryItem[] }>(`/api/aif/inventory?${qs.toString()}`);
 }
 
 async function apiMeta() {
-  return fetchJSON<{ brands: MetaItem[]; categories: MetaItem[]; locations: MetaItem[] }>("/api/aif/meta");
+  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; locations: MetaItem[] }>("/api/aif/meta");
 }
 
 async function apiStock() {
@@ -240,10 +298,12 @@ function formFromDetail(d: DetailResponse): EditForm {
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
+  const [suppliers, setSuppliers] = useState<MetaItem[]>([]);
   const [brands, setBrands] = useState<MetaItem[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
+  const [supplier, setSupplier] = useState("all");
   const [brand, setBrand] = useState("all");
   const [category, setCategory] = useState("all");
   const [gender, setGender] = useState("all");
@@ -275,6 +335,8 @@ export default function AllInWarehouse() {
 
   const filtered = useMemo(() => {
     let out = [...items];
+    if (search.trim()) out = out.filter((x) => itemMatchesSearch(x, search));
+    if (supplier !== "all") out = out.filter((x) => supplierMatches(x, supplier));
     if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
     if (category !== "all") out = out.filter((x) => (x.category_code || x.category_name_ro || "") === category || x.category_name_ro === category);
     if (gender !== "all") out = out.filter((x) => (x.gender || "") === gender);
@@ -297,7 +359,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [items, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [items, search, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   const totals = useMemo(() => {
     return filtered.reduce(
@@ -340,8 +402,9 @@ export default function AllInWarehouse() {
     setBusy(true);
     setMessage("");
     try {
-      const [inv, meta, stock] = await Promise.all([apiInventory(search), apiMeta(), apiStock()]);
+      const [inv, meta, stock] = await Promise.all([apiInventory(), apiMeta(), apiStock()]);
       setItems(inv.items || []);
+      setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
       setCategories(meta.categories || []);
       setLocations(meta.locations || []);
@@ -458,8 +521,14 @@ export default function AllInWarehouse() {
                 Keresés
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-2.5 text-white/40" size={18} />
-                  <input className={`${input} w-full pl-10`} value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="Név, márka, vonalkód, szín, méret" />
+                  <input className={`${input} w-full pl-10`} value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="Név, beszállító, márka, vonalkód, szín, méret" />
                 </div>
+              </label>
+              <label className={label}>Beszállító
+                <select className={select} value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+                  <option value="all">Összes</option>
+                  {suppliers.map((s) => <option key={s.id} value={s.code || s.name || s.id}>{s.name}</option>)}
+                </select>
               </label>
               <label className={label}>Márka
                 <select className={select} value={brand} onChange={(e) => setBrand(e.target.value)}>
@@ -517,7 +586,7 @@ export default function AllInWarehouse() {
               </label>
               <div className="flex items-end gap-2">
                 <button className={btn} onClick={load} disabled={busy}><Search size={16} /> Keresés</button>
-                <button className={btnSoft} onClick={() => { setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Törlés</button>
+                <button className={btnSoft} onClick={() => { setSupplier("all"); setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Törlés</button>
               </div>
             </div>
           )}
@@ -581,6 +650,7 @@ export default function AllInWarehouse() {
                     <tr>
                       <th className="px-3 py-3">Kép</th>
                       <th className="px-3 py-3">Termék</th>
+                      <th className="px-3 py-3">Beszállító</th>
                       <th className="px-3 py-3">Márka</th>
                       <th className="px-3 py-3">Kategória</th>
                       <th className="px-3 py-3">Szín</th>
@@ -598,6 +668,7 @@ export default function AllInWarehouse() {
                       <tr key={it.variant_id} className="bg-white/[0.03] hover:bg-white/[0.06]">
                         <td className="px-3 py-3">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
                         <td className="px-3 py-3"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
+                        <td className="px-3 py-3">{itemSupplierText(it)}</td>
                         <td className="px-3 py-3">{it.brand_name || "-"}</td>
                         <td className="px-3 py-3">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-3">{it.color_name || it.color_code || "-"}</td>
@@ -610,7 +681,7 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-3 text-right"><button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button></td>
                       </tr>
                     ))}
-                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={12}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
+                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -622,7 +693,7 @@ export default function AllInWarehouse() {
                       {it.image_url ? <img src={it.image_url} alt="" className="h-20 w-20 rounded-xl object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={20} /></div>}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm">{it.title_ro || "-"}</p>
-                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.color_name || it.color_code || "-"} • {it.size || "-"}</p>
+                        <p className="mt-1 text-xs text-white/55">{itemSupplierText(it)} • {it.brand_name || "-"} • {it.color_name || it.color_code || "-"} • {it.size || "-"}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <span className={chip}>Készlet: {n(it.total_qty)}</span>
                           <span className={chip}>Elérhető: {n(it.available_qty)}</span>
