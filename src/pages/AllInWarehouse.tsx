@@ -66,7 +66,8 @@ type InventoryItem = {
   last_incoming_at?: string | null;
 };
 
-type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string; is_active?: boolean };
+type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
+type GenderType = { code: string; name: string; sort_order?: number | string | null; is_active?: boolean };
 type SupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 type StockItem = { variant_id: string; location_code?: string; location_name?: string; qty?: number | string; reserved_qty?: number | string; available_qty?: number | string };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
@@ -158,6 +159,16 @@ function splitCsv(v: unknown) {
     .filter(Boolean);
 }
 
+
+function categoryLabel(c: MetaItem) {
+  return c.name_hu || c.name_ro || c.name || c.code || "-";
+}
+
+function genderLabel(code: unknown, items: GenderType[]) {
+  const key = normalizeSearch(code);
+  return items.find((g) => normalizeSearch(g.code) === key)?.name || String(code || "-");
+}
+
 function itemSupplierText(it: InventoryItem) {
   if (it.supplier_names) return it.supplier_names;
   const names = (it.suppliers || []).map((s) => s.name).filter(Boolean) as string[];
@@ -214,7 +225,7 @@ async function apiInventory() {
 }
 
 async function apiMeta() {
-  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
+  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
 }
 
 async function apiStock() {
@@ -231,6 +242,33 @@ async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+
+async function apiSaveCategory(id: string, payload: Record<string, unknown>) {
+  const url = id ? `/api/aif/categories/${encodeURIComponent(id)}` : "/api/aif/categories";
+  return fetchJSON<{ item: MetaItem }>(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteCategory(id: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/categories/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function apiSaveGenderType(code: string, payload: Record<string, unknown>) {
+  const url = code ? `/api/aif/gender-types/${encodeURIComponent(code)}` : "/api/aif/gender-types";
+  return fetchJSON<{ item: GenderType }>(url, {
+    method: code ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteGenderType(code: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/gender-types/${encodeURIComponent(code)}`, { method: "DELETE" });
 }
 
 async function uploadImage(file: File, variantId: string) {
@@ -303,6 +341,7 @@ export default function AllInWarehouse() {
   const [brands, setBrands] = useState<MetaItem[]>([]);
   const [supplierBrands, setSupplierBrands] = useState<SupplierBrandLink[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
+  const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
   const [supplier, setSupplier] = useState("all");
@@ -322,6 +361,12 @@ export default function AllInWarehouse() {
   const [edit, setEdit] = useState<EditForm>(emptyForm());
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [taxonomyOpen, setTaxonomyOpen] = useState(false);
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders">("categories");
+  const [taxonomyBusy, setTaxonomyBusy] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", sortOrder: "100" });
+  const [genderForm, setGenderForm] = useState({ code: "", name: "", sortOrder: "100" });
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender"; id: string; name: string } | null>(null);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -423,6 +468,88 @@ export default function AllInWarehouse() {
     return [...map.entries()].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty).slice(0, 8);
   }, [stockRows]);
 
+  function resetCategoryForm() {
+    setCategoryForm({ id: "", nameRo: "", nameHu: "", sortOrder: "100" });
+  }
+
+  function editCategoryRow(c: MetaItem) {
+    setTaxonomyTab("categories");
+    setCategoryForm({
+      id: String(c.id || c.code || ""),
+      nameRo: String(c.name_ro || c.name || ""),
+      nameHu: String(c.name_hu || ""),
+      sortOrder: c.sort_order == null ? "100" : String(c.sort_order),
+    });
+  }
+
+  function resetGenderForm() {
+    setGenderForm({ code: "", name: "", sortOrder: "100" });
+  }
+
+  function editGenderRow(g: GenderType) {
+    setTaxonomyTab("genders");
+    setGenderForm({ code: String(g.code || ""), name: String(g.name || ""), sortOrder: g.sort_order == null ? "100" : String(g.sort_order) });
+  }
+
+  async function saveCategoryForm() {
+    if (!categoryForm.nameRo.trim()) {
+      setMessage("A kategória neve kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveCategory(categoryForm.id, {
+        nameRo: categoryForm.nameRo,
+        nameHu: categoryForm.nameHu,
+        sortOrder: categoryForm.sortOrder,
+      });
+      resetCategoryForm();
+      await load();
+      setMessage("Kategória mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a kategóriát.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
+  async function saveGenderForm() {
+    if (!genderForm.name.trim()) {
+      setMessage("A nem megnevezése kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveGenderType(genderForm.code, {
+        name: genderForm.name,
+        sortOrder: genderForm.sortOrder,
+      });
+      resetGenderForm();
+      await load();
+      setMessage("Nem törzsadat mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a nem törzsadatot.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
+  async function confirmDeleteTaxonomy() {
+    if (!deleteTarget) return;
+    setTaxonomyBusy(true);
+    try {
+      if (deleteTarget.kind === "category") await apiDeleteCategory(deleteTarget.id);
+      if (deleteTarget.kind === "gender") await apiDeleteGenderType(deleteTarget.id);
+      setDeleteTarget(null);
+      await load();
+      setMessage("Törzsadat frissítve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a törzsadatot.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
   async function load() {
     setBusy(true);
     setMessage("");
@@ -433,6 +560,7 @@ export default function AllInWarehouse() {
       setBrands(meta.brands || []);
       setSupplierBrands(meta.supplierBrands || []);
       setCategories(meta.categories || []);
+      setGenderTypes(meta.genderTypes || []);
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
     } catch (e: any) {
@@ -529,6 +657,7 @@ export default function AllInWarehouse() {
             <p className="mt-1 max-w-3xl text-sm text-white/70">Termék- és készletközpont kereséssel, szűréssel, képekkel, készletértékkel és termékadat-szerkesztéssel.</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
             <button className={btnSoft} onClick={load} disabled={busy}><RefreshCw size={16} /> Frissítés</button>
             <button className={btn} onClick={goHome}><ArrowLeft size={16} /> Vissza</button>
           </div>
@@ -566,16 +695,13 @@ export default function AllInWarehouse() {
               <label className={label}>Kategória
                 <select className={select} value={category} onChange={(e) => setCategory(e.target.value)}>
                   <option value="all">Összes</option>
-                  {categories.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{c.name_hu || c.name_ro || c.name}</option>)}
+                  {categories.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
                 </select>
               </label>
               <label className={label}>Nem
                 <select className={select} value={gender} onChange={(e) => setGender(e.target.value)}>
                   <option value="all">Összes</option>
-                  <option value="men">Férfi</option>
-                  <option value="women">Női</option>
-                  <option value="kids">Gyerek</option>
-                  <option value="unisex">Unisex</option>
+                  {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
                 </select>
               </label>
               <label className={label}>Cél hely
@@ -738,6 +864,100 @@ export default function AllInWarehouse() {
         </section>
       </div>
 
+      {taxonomyOpen && (
+        <div className={modalWrap}>
+          <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
+              <div>
+                <p className="text-sm text-white/65">Raktár törzsadatok</p>
+                <h2 className="text-xl">Kategóriák és nemek kezelése</h2>
+              </div>
+              <button className={btnSoft} onClick={() => setTaxonomyOpen(false)}><X size={16} /> Bezárás</button>
+            </div>
+            <div className="space-y-4 p-4">
+              <div className="flex flex-wrap gap-2">
+                <button className={taxonomyTab === "categories" ? btn : btnSoft} onClick={() => setTaxonomyTab("categories")}>Kategóriák</button>
+                <button className={taxonomyTab === "genders" ? btn : btnSoft} onClick={() => setTaxonomyTab("genders")}>Nemek</button>
+              </div>
+
+              {taxonomyTab === "categories" && (
+                <div className="grid gap-4 lg:grid-cols-[1fr,1.25fr]">
+                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="text-sm text-white/85">{categoryForm.id ? "Kategória módosítása" : "Új kategória"}</p>
+                      {categoryForm.id && <button className={btnSoft} onClick={resetCategoryForm}>Új kategória</button>}
+                    </div>
+                    <div className="grid gap-3">
+                      <label className={label}>Megnevezés románul<input className={input} value={categoryForm.nameRo} onChange={(e) => setCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
+                      <label className={label}>Megnevezés magyarul<input className={input} value={categoryForm.nameHu} onChange={(e) => setCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
+                      <label className={label}>Sorrend<input className={input} value={categoryForm.sortOrder} onChange={(e) => setCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} /></label>
+                      <button className={btn} onClick={saveCategoryForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
+                    </div>
+                  </section>
+                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                    <p className="mb-3 text-sm text-white/85">Kategória lista</p>
+                    <div className="space-y-2">
+                      {categories.map((c) => (
+                        <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+                          <div><p className="text-sm text-white">{categoryLabel(c)}</p>{c.name_ro && c.name_hu && <p className="text-xs text-white/55">{c.name_ro}</p>}</div>
+                          <div className="flex gap-2">
+                            <button className={btnSoft} onClick={() => editCategoryRow(c)}><Edit3 size={14} /> Módosítás</button>
+                            <button className={btnSoft} onClick={() => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) })}>Törlés</button>
+                          </div>
+                        </div>
+                      ))}
+                      {!categories.length && <p className="text-sm text-white/55">Nincs aktív kategória.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {taxonomyTab === "genders" && (
+                <div className="grid gap-4 lg:grid-cols-[1fr,1.25fr]">
+                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="text-sm text-white/85">{genderForm.code ? "Nem módosítása" : "Új nem"}</p>
+                      {genderForm.code && <button className={btnSoft} onClick={resetGenderForm}>Új nem</button>}
+                    </div>
+                    <div className="grid gap-3">
+                      <label className={label}>Megnevezés<input className={input} value={genderForm.name} onChange={(e) => setGenderForm((x) => ({ ...x, name: e.target.value }))} /></label>
+                      <label className={label}>Sorrend<input className={input} value={genderForm.sortOrder} onChange={(e) => setGenderForm((x) => ({ ...x, sortOrder: e.target.value }))} /></label>
+                      <button className={btn} onClick={saveGenderForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
+                    </div>
+                  </section>
+                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                    <p className="mb-3 text-sm text-white/85">Nemek listája</p>
+                    <div className="space-y-2">
+                      {genderTypes.map((g) => (
+                        <div key={g.code} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+                          <p className="text-sm text-white">{g.name}</p>
+                          <div className="flex gap-2">
+                            <button className={btnSoft} onClick={() => editGenderRow(g)}><Edit3 size={14} /> Módosítás</button>
+                            <button className={btnSoft} onClick={() => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name })}>Törlés</button>
+                          </div>
+                        </div>
+                      ))}
+                      {!genderTypes.length && <p className="text-sm text-white/55">Nincs aktív elem.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {deleteTarget && (
+                <div className="rounded-xl border border-rose-200/25 bg-rose-500/10 p-4">
+                  <p className="text-sm text-white">Törlés vagy inaktiválás megerősítése</p>
+                  <p className="mt-1 text-sm text-white/70">{deleteTarget.name}</p>
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button className={btnSoft} onClick={() => setDeleteTarget(null)}>Mégse</button>
+                    <button className={btn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy}>Megerősítés</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {detail && (
         <div className={modalWrap}>
           <div className={modal}>
@@ -774,8 +994,8 @@ export default function AllInWarehouse() {
                       <label className={label}>Terméknév magyarul<input className={input} value={edit.titleHu} onChange={(e) => setEdit((x) => ({ ...x, titleHu: e.target.value }))} /></label>
                       <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
                       <label className={label}>Márka<select className={select} value={edit.brandCode} onChange={(e) => setEdit((x) => ({ ...x, brandCode: e.target.value }))}><option value="">Nincs beállítva</option>{brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}</select></label>
-                      <label className={label}>Kategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value }))}><option value="">Nincs beállítva</option>{categories.map((c) => <option key={c.id} value={c.code || c.id}>{c.name_hu || c.name_ro || c.name}</option>)}</select></label>
-                      <label className={label}>Nem<select className={select} value={edit.gender} onChange={(e) => setEdit((x) => ({ ...x, gender: e.target.value }))}><option value="men">Férfi</option><option value="women">Női</option><option value="kids">Gyerek</option><option value="unisex">Unisex</option></select></label>
+                      <label className={label}>Kategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value }))}><option value="">Nincs beállítva</option>{categories.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
+                      <label className={label}>Nem<select className={select} value={edit.gender} onChange={(e) => setEdit((x) => ({ ...x, gender: e.target.value }))}>{genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}</select></label>
                       <label className={label}>Terméktípus<input className={input} value={edit.productType} onChange={(e) => setEdit((x) => ({ ...x, productType: e.target.value }))} /></label>
                       <label className={label}>Szezon<input className={input} value={edit.season} onChange={(e) => setEdit((x) => ({ ...x, season: e.target.value }))} /></label>
                       <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
