@@ -1169,6 +1169,242 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.get("/variants/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "variant id required" });
+
+    try {
+      const variant = await pool.query(
+        `SELECT
+           v.id, v.model_id, v.internal_sku, v.barcode, v.color_code, v.color_name, v.color_hex,
+           v.size, v.buy_price, v.sell_price, v.compare_at_price, v.weight_grams, v.image_url,
+           v.images, v.attributes, v.status, v.created_at, v.updated_at,
+           m.model_code, m.title_ro, m.title_hu, m.description_ro, m.gender, m.product_type,
+           m.season, m.material, m.shopify_title, m.shopify_handle, m.status AS model_status,
+           b.id AS brand_id, b.name AS brand_name, b.code AS brand_code,
+           c.id AS category_id, c.name_ro AS category_name_ro, c.name_hu AS category_name_hu, c.code AS category_code
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id = v.model_id
+         LEFT JOIN aif_brands b ON b.id = m.brand_id
+         LEFT JOIN aif_categories c ON c.id = m.category_id
+         WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
+         LIMIT 1`,
+        [id]
+      );
+
+      if (!variant.rowCount) return res.status(404).json({ error: "variant not found" });
+
+      const variantId = variant.rows[0].id;
+      const stock = await pool.query(
+        `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
+                l.location_type, s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
+         FROM aif_stock s
+         JOIN aif_locations l ON l.id=s.location_id
+         WHERE s.variant_id=$1
+         ORDER BY l.name ASC`,
+        [variantId]
+      );
+
+      const supplierCodes = await pool.query(
+        `SELECT sc.id, sc.supplier_product_code, sc.supplier_variant_code,
+                sc.supplier_color_code, sc.supplier_color_name, sc.supplier_size,
+                sc.supplier_barcode, sc.supplier_sku, sc.is_active,
+                s.name AS supplier_name
+         FROM aif_variant_supplier_codes sc
+         JOIN aif_suppliers s ON s.id=sc.supplier_id
+         WHERE sc.variant_id=$1
+         ORDER BY sc.is_active DESC, s.name ASC`,
+        [variantId]
+      );
+
+      const movements = await pool.query(
+        `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
+                sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor,
+                l.name AS location_name
+         FROM aif_stock_movements sm
+         LEFT JOIN aif_locations l ON l.id=sm.location_id
+         WHERE sm.variant_id=$1
+         ORDER BY sm.created_at DESC
+         LIMIT 25`,
+        [variantId]
+      );
+
+      res.json({
+        item: variant.rows[0],
+        stock: stock.rows,
+        supplierCodes: supplierCodes.rows,
+        movements: movements.rows,
+      });
+    } catch (e) {
+      console.error("AIF variant detail failed", e);
+      res.status(500).json({ error: "failed to load variant" });
+    }
+  });
+
+  router.patch("/variants/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    if (!id) return res.status(400).json({ error: "variant id required" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT v.id, v.model_id
+         FROM aif_product_variants v
+         WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
+         FOR UPDATE`,
+        [id]
+      );
+
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "variant not found" });
+      }
+
+      const variantId = current.rows[0].id;
+      const modelId = current.rows[0].model_id;
+
+      const variantSets = [];
+      const variantArgs = [];
+      let vi = 1;
+      const addVariant = (column, value) => {
+        if (value === undefined) return;
+        variantSets.push(`${column}=$${vi++}`);
+        variantArgs.push(value);
+      };
+
+      if (body.barcode !== undefined) addVariant("barcode", emptyToNull(body.barcode));
+      if (body.colorCode !== undefined || body.color_code !== undefined) addVariant("color_code", emptyToNull(body.colorCode ?? body.color_code));
+      if (body.colorName !== undefined || body.color_name !== undefined) addVariant("color_name", emptyToNull(body.colorName ?? body.color_name));
+      if (body.colorHex !== undefined || body.color_hex !== undefined) addVariant("color_hex", emptyToNull(body.colorHex ?? body.color_hex));
+      if (body.size !== undefined) {
+        const size = text(body.size);
+        if (!size) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "size required" });
+        }
+        addVariant("size", size);
+      }
+      if (body.buyPrice !== undefined || body.buy_price !== undefined) addVariant("buy_price", toMoney(body.buyPrice ?? body.buy_price));
+      if (body.sellPrice !== undefined || body.sell_price !== undefined) addVariant("sell_price", toMoney(body.sellPrice ?? body.sell_price));
+      if (body.compareAtPrice !== undefined || body.compare_at_price !== undefined) addVariant("compare_at_price", toMoney(body.compareAtPrice ?? body.compare_at_price));
+      if (body.weightGrams !== undefined || body.weight_grams !== undefined) addVariant("weight_grams", toInt(body.weightGrams ?? body.weight_grams));
+      if (body.imageUrl !== undefined || body.image_url !== undefined) addVariant("image_url", emptyToNull(body.imageUrl ?? body.image_url));
+      if (body.status !== undefined) {
+        const status = text(body.status);
+        if (!["active", "inactive", "archived"].includes(status)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "invalid variant status" });
+        }
+        addVariant("status", status);
+      }
+
+      if (variantSets.length) {
+        variantArgs.push(variantId);
+        await client.query(
+          `UPDATE aif_product_variants
+           SET ${variantSets.join(", ")}, updated_at=now()
+           WHERE id=$${vi}`,
+          variantArgs
+        );
+      }
+
+      const modelSets = [];
+      const modelArgs = [];
+      let mi = 1;
+      const addModel = (column, value) => {
+        if (value === undefined) return;
+        modelSets.push(`${column}=$${mi++}`);
+        modelArgs.push(value);
+      };
+
+      if (body.titleRo !== undefined || body.title_ro !== undefined) {
+        const title = text(body.titleRo ?? body.title_ro);
+        if (!title) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "product name required" });
+        }
+        addModel("title_ro", title);
+      }
+      if (body.titleHu !== undefined || body.title_hu !== undefined) addModel("title_hu", emptyToNull(body.titleHu ?? body.title_hu));
+      if (body.descriptionRo !== undefined || body.description_ro !== undefined) addModel("description_ro", emptyToNull(body.descriptionRo ?? body.description_ro));
+      if (body.gender !== undefined) {
+        const gender = normCode(body.gender || "unisex") || "unisex";
+        if (!["men", "women", "kids", "unisex"].includes(gender)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "invalid gender" });
+        }
+        addModel("gender", gender);
+      }
+      if (body.productType !== undefined || body.product_type !== undefined) addModel("product_type", emptyToNull(body.productType ?? body.product_type));
+      if (body.season !== undefined) addModel("season", emptyToNull(body.season));
+      if (body.material !== undefined) addModel("material", emptyToNull(body.material));
+      if (body.shopifyTitle !== undefined || body.shopify_title !== undefined) addModel("shopify_title", emptyToNull(body.shopifyTitle ?? body.shopify_title));
+      if (body.modelStatus !== undefined || body.model_status !== undefined) {
+        const status = text(body.modelStatus ?? body.model_status);
+        if (!["draft", "active", "archived"].includes(status)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "invalid model status" });
+        }
+        addModel("status", status);
+      }
+
+      const categoryInput = body.categoryId ?? body.category_id ?? body.categoryCode ?? body.category_code;
+      if (categoryInput !== undefined) {
+        const category = emptyToNull(categoryInput);
+        if (!category) {
+          addModel("category_id", null);
+        } else {
+          const cat = await client.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [category]);
+          if (!cat.rowCount) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ error: "category not found" });
+          }
+          addModel("category_id", cat.rows[0].id);
+        }
+      }
+
+      const brandInput = body.brandId ?? body.brand_id ?? body.brandCode ?? body.brand_code;
+      if (brandInput !== undefined) {
+        const brand = emptyToNull(brandInput);
+        if (!brand) {
+          addModel("brand_id", null);
+        } else {
+          const br = await client.query(`SELECT id FROM aif_brands WHERE id::text=$1 OR code=$1 LIMIT 1`, [brand]);
+          if (!br.rowCount) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ error: "brand not found" });
+          }
+          addModel("brand_id", br.rows[0].id);
+        }
+      }
+
+      if (modelSets.length) {
+        modelArgs.push(modelId);
+        await client.query(
+          `UPDATE aif_product_models
+           SET ${modelSets.join(", ")}, updated_at=now()
+           WHERE id=$${mi}`,
+          modelArgs
+        );
+      }
+
+      await client.query("COMMIT");
+      res.json({ ok: true });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      if (e && e.code === "23505") {
+        return res.status(400).json({ error: "barcode or sku already exists" });
+      }
+      console.error("AIF update variant failed", e);
+      res.status(500).json({ error: "failed to update variant" });
+    } finally {
+      client.release();
+    }
+  });
+
+
   router.get("/inventory", requireAuthed, async (req, res) => {
     const search = text(req.query.search || req.query.q);
     const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
