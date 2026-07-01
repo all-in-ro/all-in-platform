@@ -39,6 +39,59 @@ export type AifLocationType = {
   updated_at?: string;
 };
 
+export type AifCurrency = {
+  code: string;
+  name: string;
+  symbol?: string | null;
+  sort_order?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AifReceptionInput = {
+  invoiceNumber?: string;
+  invoiceDate?: string;
+  receptionDate?: string;
+  currencyCode?: string;
+  exchangeRateToRon?: number | string;
+  tvaMode?: "without_tva" | "with_tva" | "no_tva" | string;
+  tvaRate?: number | string;
+  shippingCost?: number | string;
+  goodsValue?: number | string;
+  invoiceNet?: number | string;
+  invoiceVat?: number | string;
+  invoiceGross?: number | string;
+  lineCount?: number;
+  totalQty?: number;
+  note?: string;
+};
+
+export type AifReceptionSummary = {
+  id: string;
+  created_at: string;
+  updated_at?: string;
+  status: string;
+  supplier_id?: string | null;
+  supplier_name?: string | null;
+  target_location_id?: string | null;
+  location_name?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  reception_date?: string | null;
+  currency_code: string;
+  exchange_rate_to_ron: string | number;
+  tva_mode: string;
+  tva_rate?: string | number | null;
+  goods_value?: string | number | null;
+  invoice_net?: string | number | null;
+  invoice_vat?: string | number | null;
+  invoice_gross?: string | number | null;
+  shipping_cost?: string | number | null;
+  total_qty?: number | null;
+  line_count?: number | null;
+};
+
 export type AifImportProfile = {
   id: string;
   supplier_id: string;
@@ -55,6 +108,7 @@ export type AifMeta = {
   categories: AifCategory[];
   locations: AifLocation[];
   locationTypes?: AifLocationType[];
+  currencies?: AifCurrency[];
   profiles: AifImportProfile[];
 };
 
@@ -74,6 +128,11 @@ export type AifImportBatchSummary = {
   location_name?: string | null;
   profile_name?: string | null;
   profile_version?: number | null;
+  reception_id?: string | null;
+  invoice_number?: string | null;
+  currency_code?: string | null;
+  exchange_rate_to_ron?: string | number | null;
+  invoice_gross?: string | number | null;
 };
 
 export type AifParsedRow = {
@@ -168,6 +227,7 @@ export function apiAifCreateImportBatch(input: {
   sourceFileName?: string;
   sourceFormat?: string;
   note?: string;
+  reception?: AifReceptionInput;
 }) {
   return fetchAifJSON<{ id: string }>("/import-batches", {
     method: "POST",
@@ -341,4 +401,38 @@ export function apiAifDeleteLocation(id: string) {
   return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/locations/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+
+export function apiAifListCurrencies(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifCurrency[] }>(`/currencies${suffix}`);
+}
+
+export function apiAifCreateCurrency(input: { code: string; name: string; symbol?: string; sortOrder?: number }) {
+  return fetchAifJSON<{ item: AifCurrency }>("/currencies", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateCurrency(code: string, input: { name?: string; symbol?: string | null; sortOrder?: number; is_active?: boolean }) {
+  return fetchAifJSON<{ item: AifCurrency }>(`/currencies/${encodeURIComponent(code)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteCurrency(code: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/currencies/${encodeURIComponent(code)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifListReceptions(options?: { limit?: number }) {
+  const q = new URLSearchParams();
+  q.set("limit", String(options?.limit || 50));
+  return fetchAifJSON<{ items: AifReceptionSummary[] }>(`/receptions?${q.toString()}`);
 }
