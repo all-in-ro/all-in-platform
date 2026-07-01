@@ -12,6 +12,9 @@ import {
   Trash2,
   UploadCloud,
   X,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import {
   AifImportBatchSummary,
@@ -32,11 +35,19 @@ import {
   apiAifMeta,
   apiAifReplaceImportRows,
 } from "../lib/aif/api";
-import { readAifWorkbook } from "../lib/aif/xls";
+import {
+  AIF_COLUMN_FIELD_OPTIONS,
+  AifColumnField,
+  AifWorkbookAnalysis,
+  aifRowErrors,
+  applyAifColumnMapping,
+  readAifWorkbookWithAnalysis,
+} from "../lib/aif/xls";
 
 type Props = { onLogout?: () => void };
 
 type LocationType = string;
+type EditableImportField = "supplierProductCode" | "titleRo" | "colorName" | "colorCode" | "size" | "qty" | "buyPrice";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
 const wrap = "mx-auto max-w-7xl space-y-4";
@@ -48,12 +59,12 @@ const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm t
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
+const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[11px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
 const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
-
 
 function goHome() {
   window.location.hash = "#allin";
@@ -62,6 +73,24 @@ function goHome() {
 function cell(v: unknown) {
   const s = String(v ?? "").trim();
   return s || "-";
+}
+
+function valueString(v: unknown) {
+  return String(v ?? "");
+}
+
+function confidenceText(value: number) {
+  if (value >= 85) return "Magas";
+  if (value >= 60) return "Közepes";
+  if (value > 0) return "Alacsony";
+  return "Nincs";
+}
+
+function confidenceClass(value: number) {
+  if (value >= 85) return "text-emerald-100";
+  if (value >= 60) return "text-amber-100";
+  if (value > 0) return "text-red-100";
+  return "text-white/55";
 }
 
 function locationTypeLabel(v: string) {
@@ -97,6 +126,9 @@ export default function AllInIncoming(_props: Props) {
   const [note, setNote] = useState("");
   const [fileName, setFileName] = useState("");
   const [rows, setRows] = useState<AifParsedRow[]>([]);
+  const [workbench, setWorkbench] = useState<AifWorkbookAnalysis | null>(null);
+  const [workbenchOpen, setWorkbenchOpen] = useState(true);
+  const [previewLimit, setPreviewLimit] = useState(25);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [locationModalOpen, setLocationModalOpen] = useState(false);
@@ -126,13 +158,36 @@ export default function AllInIncoming(_props: Props) {
     return locationTypes.find((t) => t.code === code)?.name || locationTypeLabel(code);
   }
 
-  const preview = useMemo(() => rows.slice(0, 25), [rows]);
-  const rowProblems = useMemo(() => {
-    return rows.filter((r) => {
-      const n = r.normalized || {};
-      return !n.titleRo || !n.size || !n.qty || Number(n.qty) <= 0;
-    }).length;
-  }, [rows]);
+  const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
+  const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r).length > 0).length, [rows]);
+  const columnWarnings = useMemo(() => {
+    if (!workbench) return 0;
+    return workbench.columns.reduce((sum, c) => sum + c.warnings.length + (c.field !== "ignore" && c.confidence < 60 ? 1 : 0), 0) + workbench.warnings.length;
+  }, [workbench]);
+
+  function updateColumnField(index: number, field: AifColumnField) {
+    if (!workbench) return;
+    const next: AifWorkbookAnalysis = {
+      ...workbench,
+      columns: workbench.columns.map((col) => (col.index === index ? { ...col, field, label: AIF_COLUMN_FIELD_OPTIONS.find((x) => x.value === field)?.label || col.label } : col)),
+    };
+    setWorkbench(next);
+    setRows((current) => applyAifColumnMapping(current, next, selectedSupplier));
+  }
+
+  function updateRowField(index: number, field: EditableImportField, value: string) {
+    setRows((current) =>
+      current.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        const normalized = { ...(row.normalized || {}) };
+        if (field === "qty") normalized[field] = value === "" ? null : Number(value);
+        else if (field === "buyPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
+        else normalized[field] = value;
+        if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
+        return { ...row, normalized };
+      })
+    );
+  }
 
   async function loadMeta() {
     const [meta, typeData] = await Promise.all([apiAifMeta(), apiAifListLocationTypes({ includeInactive: true })]);
@@ -185,12 +240,16 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const parsed = await readAifWorkbook(file, selectedSupplier);
+      const parsed = await readAifWorkbookWithAnalysis(file, selectedSupplier);
       setFileName(file.name);
-      setRows(parsed);
-      setMessage(`${parsed.length} sor beolvasva. Az adatok mentés előtt ellenőrizhetők.`);
+      setRows(parsed.rows);
+      setWorkbench(parsed.analysis);
+      setWorkbenchOpen(true);
+      setPreviewLimit(25);
+      setMessage(`${parsed.rows.length} sor beolvasva. Az oszlopok és sorok mentés előtt ellenőrizhetők.`);
     } catch (e: any) {
       setRows([]);
+      setWorkbench(null);
       setMessage(e.message || "Nem sikerült beolvasni az XLS/XLSX fájlt.");
     } finally {
       setBusy(false);
@@ -670,15 +729,96 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Előnézet" right={<span className="text-xs text-white/60">Első 25 sor</span>} />
+          <SectionTitle
+            icon={<AlertTriangle size={16} />}
+            title="Import ellenőrzés"
+            right={
+              <button className={tinyBtn} onClick={() => setWorkbenchOpen((v) => !v)} type="button">
+                {workbenchOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {workbenchOpen ? "Bezárás" : "Megnyitás"}
+              </button>
+            }
+          />
+
+          {workbenchOpen && (
+            <div className="mt-3 space-y-3">
+              <div className="grid gap-2 md:grid-cols-4">
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Munkalap</p>
+                  <p className="mt-1 truncate text-sm">{workbench?.sheetName || "-"}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Fejléc sora</p>
+                  <p className="mt-1 text-lg font-normal">{workbench?.headerRow || "-"}</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Felismerés</p>
+                  <p className={`mt-1 text-lg font-normal ${confidenceClass(workbench?.overallConfidence || 0)}`}>{workbench?.overallConfidence ?? 0}%</p>
+                </div>
+                <div className={statCard}>
+                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Ellenőrzések</p>
+                  <p className="mt-1 text-lg font-normal">{columnWarnings + rowProblems}</p>
+                </div>
+              </div>
+
+              {workbench?.warnings?.length ? (
+                <div className="rounded-xl border border-amber-200/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
+                  {workbench.warnings.map((w, i) => (
+                    <p key={`${w}-${i}`}>{w}</p>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="overflow-auto rounded-xl border border-white/14">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
+                    <tr>
+                      <th className="px-3 py-2 font-normal">Excel oszlop</th>
+                      <th className="px-3 py-2 font-normal">Felismert mező</th>
+                      <th className="px-3 py-2 font-normal">Biztonság</th>
+                      <th className="px-3 py-2 font-normal">Minták</th>
+                      <th className="px-3 py-2 font-normal">Megjegyzés</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {(workbench?.columns || []).map((c) => (
+                      <tr key={`${c.index}-${c.header}`} className="bg-[#445064] hover:bg-[#4b596f]">
+                        <td className="px-3 py-2.5 text-white/90">{c.header}</td>
+                        <td className="px-3 py-2.5">
+                          <select className={`${input} h-8 w-[190px]`} value={c.field} onChange={(e) => updateColumnField(c.index, e.target.value as AifColumnField)}>
+                            {AIF_COLUMN_FIELD_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className={`px-3 py-2.5 ${confidenceClass(c.confidence)}`}>{confidenceText(c.confidence)} • {c.confidence}%</td>
+                        <td className="px-3 py-2.5 text-white/70">{c.samples.length ? c.samples.join(" | ") : "-"}</td>
+                        <td className="px-3 py-2.5 text-white/70">{c.warnings.length ? c.warnings.join(" ") : "-"}</td>
+                      </tr>
+                    ))}
+                    {!workbench?.columns?.length && (
+                      <tr>
+                        <td className="px-3 py-6 text-center text-white/60" colSpan={5}>Nincs beolvasott oszlop.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className={card}>
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Soronkénti előnézet" right={<span className="text-xs text-white/60">Szerkeszthető sorok</span>} />
           <div className="mt-3 overflow-auto rounded-xl border border-white/14">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
                 <tr>
                   <th className="px-3 py-2 font-normal">Sorszám</th>
+                  <th className="px-3 py-2 font-normal">Állapot</th>
                   <th className="px-3 py-2 font-normal">Termékkód</th>
                   <th className="px-3 py-2 font-normal">Név</th>
                   <th className="px-3 py-2 font-normal">Szín</th>
+                  <th className="px-3 py-2 font-normal">Színkód</th>
                   <th className="px-3 py-2 font-normal">Méret</th>
                   <th className="px-3 py-2 font-normal">Darab</th>
                   <th className="px-3 py-2 font-normal">Vételár</th>
@@ -686,27 +826,41 @@ export default function AllInIncoming(_props: Props) {
               </thead>
               <tbody className="divide-y divide-white/10">
                 {preview.map((r, idx) => {
+                  const globalIndex = idx;
                   const n = r.normalized || {};
+                  const errors = aifRowErrors(r);
                   return (
-                    <tr key={`${r.rowNo || idx}-${idx}`} className="bg-[#445064] hover:bg-[#4b596f]">
+                    <tr key={`${r.rowNo || idx}-${idx}`} className={errors.length ? "bg-red-500/10 hover:bg-red-500/15" : "bg-[#445064] hover:bg-[#4b596f]"}>
                       <td className="px-3 py-2.5 text-white/62">{r.rowNo || idx + 1}</td>
-                      <td className="px-3 py-2.5">{cell(n.supplierProductCode || n.modelCode)}</td>
-                      <td className="px-3 py-2.5">{cell(n.titleRo)}</td>
-                      <td className="px-3 py-2.5">{cell(n.colorName || n.colorCode)}</td>
-                      <td className="px-3 py-2.5">{cell(n.size)}</td>
-                      <td className="px-3 py-2.5">{cell(n.qty)}</td>
-                      <td className="px-3 py-2.5">{cell(n.buyPrice)}</td>
+                      <td className="px-3 py-2.5 text-xs">
+                        {errors.length ? <span className="text-amber-100">Ellenőrizni</span> : <span className="text-emerald-100">Rendben</span>}
+                        {errors.length ? <p className="mt-1 max-w-[180px] text-white/60">{errors.join(" ")}</p> : null}
+                      </td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[130px]`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} /></td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[230px]`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} /></td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[120px]`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} /></td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[90px]`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} /></td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[85px]`} value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} /></td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[80px]`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} /></td>
+                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[95px]`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} /></td>
                     </tr>
                   );
                 })}
                 {!preview.length && (
                   <tr>
-                    <td className="px-3 py-8 text-center text-white/60" colSpan={7}>Nincs beolvasott sor.</td>
+                    <td className="px-3 py-8 text-center text-white/60" colSpan={9}>Nincs beolvasott sor.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
+          {rows.length > preview.length && (
+            <div className="mt-3 flex justify-end">
+              <button className={neutralBtn} onClick={() => setPreviewLimit((n) => Math.min(n + 25, rows.length))} type="button">
+                További sorok
+              </button>
+            </div>
+          )}
         </section>
 
         <section className={card}>
