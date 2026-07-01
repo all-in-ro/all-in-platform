@@ -396,9 +396,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function tvaMode(v) {
-    const mode = normCode(v || "without_tva");
+    const raw = text(v);
+    if (!raw) return null;
+    const mode = normCode(raw);
     if (["without_tva", "with_tva", "no_tva"].includes(mode)) return mode;
-    return "without_tva";
+    return null;
   }
 
   async function currencyUsage(client, code) {
@@ -414,17 +416,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function receptionFromBody(body) {
     const src = body?.reception && typeof body.reception === "object" ? body.reception : {};
-    const code = currencyCode(src.currencyCode || src.currency_code || body.currencyCode || body.currency_code || "RON") || "RON";
-    const exchangeRate = toMoney(src.exchangeRateToRon ?? src.exchange_rate_to_ron ?? body.exchangeRateToRon ?? body.exchange_rate_to_ron ?? (code === "RON" ? 1 : null));
-    const rate = exchangeRate && exchangeRate > 0 ? exchangeRate : (code === "RON" ? 1 : null);
+    const code = currencyCode(src.currencyCode || src.currency_code || body.currencyCode || body.currency_code);
+    const exchangeRate = toMoney(src.exchangeRateToRon ?? src.exchange_rate_to_ron ?? body.exchangeRateToRon ?? body.exchange_rate_to_ron);
+    const mode = tvaMode(src.tvaMode || src.tva_mode || body.tvaMode || body.tva_mode);
     return {
       invoiceNumber: emptyToNull(src.invoiceNumber || src.invoice_number || body.invoiceNumber || body.invoice_number),
       invoiceDate: emptyToNull(src.invoiceDate || src.invoice_date || body.invoiceDate || body.invoice_date),
       receptionDate: emptyToNull(src.receptionDate || src.reception_date || body.receptionDate || body.reception_date),
-      currencyCode: code,
-      exchangeRateToRon: rate,
-      tvaMode: tvaMode(src.tvaMode || src.tva_mode || body.tvaMode || body.tva_mode),
-      tvaRate: toMoney(src.tvaRate ?? src.tva_rate ?? body.tvaRate ?? body.tva_rate ?? 19),
+      currencyCode: code || null,
+      exchangeRateToRon: exchangeRate && exchangeRate > 0 ? exchangeRate : null,
+      tvaMode: mode,
+      tvaRate: toMoney(src.tvaRate ?? src.tva_rate ?? body.tvaRate ?? body.tva_rate),
       shippingCost: toMoney(src.shippingCost ?? src.shipping_cost ?? body.shippingCost ?? body.shipping_cost) ?? 0,
       goodsValue: toMoney(src.goodsValue ?? src.goods_value ?? body.goodsValue ?? body.goods_value),
       invoiceNet: toMoney(src.invoiceNet ?? src.invoice_net ?? body.invoiceNet ?? body.invoice_net),
@@ -1111,9 +1113,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!targetLocationId) return res.status(400).json({ error: "target location missing" });
 
       const reception = receptionFromBody(body);
-      if (!reception.exchangeRateToRon || reception.exchangeRateToRon <= 0) {
-        return res.status(400).json({ error: "exchange rate required" });
-      }
+      if (!reception.invoiceNumber) return res.status(400).json({ error: "invoice number required" });
+      if (!reception.invoiceDate) return res.status(400).json({ error: "invoice date required" });
+      if (!reception.receptionDate) return res.status(400).json({ error: "reception date required" });
+      if (!reception.currencyCode) return res.status(400).json({ error: "currency required" });
+      if (!reception.exchangeRateToRon || reception.exchangeRateToRon <= 0) return res.status(400).json({ error: "exchange rate required" });
+      if (!reception.tvaMode) return res.status(400).json({ error: "TVA mode required" });
+      if (reception.tvaMode !== "no_tva" && (reception.tvaRate === null || reception.tvaRate === undefined)) return res.status(400).json({ error: "TVA rate required" });
+      if (reception.invoiceGross === null || reception.invoiceGross === undefined) return res.status(400).json({ error: "invoice total required" });
 
       const curr = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [reception.currencyCode]);
       if (!curr.rowCount) return res.status(400).json({ error: "currency is inactive or unknown" });
