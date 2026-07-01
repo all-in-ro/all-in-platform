@@ -67,6 +67,7 @@ type InventoryItem = {
 };
 
 type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string; is_active?: boolean };
+type SupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 type StockItem = { variant_id: string; location_code?: string; location_name?: string; qty?: number | string; reserved_qty?: number | string; available_qty?: number | string };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
@@ -213,7 +214,7 @@ async function apiInventory() {
 }
 
 async function apiMeta() {
-  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; locations: MetaItem[] }>("/api/aif/meta");
+  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
 }
 
 async function apiStock() {
@@ -300,6 +301,7 @@ export default function AllInWarehouse() {
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
   const [suppliers, setSuppliers] = useState<MetaItem[]>([]);
   const [brands, setBrands] = useState<MetaItem[]>([]);
+  const [supplierBrands, setSupplierBrands] = useState<SupplierBrandLink[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
@@ -332,6 +334,29 @@ export default function AllInWarehouse() {
     }
     return map;
   }, [stockRows]);
+
+  const selectedSupplier = useMemo(() => {
+    if (supplier === "all") return null;
+    const selected = normalizeSearch(supplier);
+    return suppliers.find((s) => [s.id, s.code, s.name].map(normalizeSearch).some((x) => x === selected)) || null;
+  }, [supplier, suppliers]);
+
+  const brandOptions = useMemo(() => {
+    if (!selectedSupplier) return brands;
+    const linkedBrandIds = new Set(
+      supplierBrands
+        .filter((x) => x.is_active !== false && normalizeSearch(x.supplier_id) === normalizeSearch(selectedSupplier.id))
+        .map((x) => String(x.brand_id))
+    );
+    return brands.filter((b) => linkedBrandIds.has(String(b.id)));
+  }, [brands, supplierBrands, selectedSupplier]);
+
+  useEffect(() => {
+    if (brand === "all") return;
+    const current = normalizeSearch(brand);
+    const valid = brandOptions.some((b) => [b.id, b.code, b.name].map(normalizeSearch).some((x) => x === current));
+    if (!valid) setBrand("all");
+  }, [brand, brandOptions]);
 
   const filtered = useMemo(() => {
     let out = [...items];
@@ -406,6 +431,7 @@ export default function AllInWarehouse() {
       setItems(inv.items || []);
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
+      setSupplierBrands(meta.supplierBrands || []);
       setCategories(meta.categories || []);
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
@@ -532,8 +558,9 @@ export default function AllInWarehouse() {
               </label>
               <label className={label}>Márka
                 <select className={select} value={brand} onChange={(e) => setBrand(e.target.value)}>
-                  <option value="all">Összes</option>
-                  {brands.map((b) => <option key={b.id} value={b.code || b.name || b.id}>{b.name}</option>)}
+                  <option value="all">{selectedSupplier ? "Összes kapcsolt márka" : "Összes"}</option>
+                  {brandOptions.map((b) => <option key={b.id} value={b.code || b.name || b.id}>{b.name}</option>)}
+                  {selectedSupplier && !brandOptions.length && <option value="" disabled>Nincs kapcsolt márka</option>}
                 </select>
               </label>
               <label className={label}>Kategória
