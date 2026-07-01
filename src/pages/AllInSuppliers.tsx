@@ -33,6 +33,24 @@ type FormState = {
   notes: string;
 };
 
+type AifBrand = {
+  id: string;
+  code?: string;
+  name: string;
+  is_active: boolean;
+};
+
+type AifSupplierBrandLink = {
+  id: string;
+  supplier_id: string;
+  brand_id: string;
+  supplier_name: string;
+  brand_name: string;
+  is_preferred: boolean;
+  is_active: boolean;
+  notes?: string | null;
+};
+
 type CompareMode =
   | "none"
   | "same_period_last_year"
@@ -112,6 +130,82 @@ function percentFmt(v: unknown) {
 function dateOnly(v?: string | null) {
   if (!v) return "-";
   return String(v).slice(0, 10);
+}
+
+async function fetchAifJSON<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers || {});
+  if (options.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await fetch(`/api/aif${path}`, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { error: text };
+  }
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data as T;
+}
+
+function apiAifListBrands(includeInactive: boolean) {
+  const q = includeInactive ? "?includeInactive=1" : "";
+  return fetchAifJSON<{ items: AifBrand[] }>(`/brands${q}`);
+}
+
+function apiAifCreateBrand(input: { name: string }) {
+  return fetchAifJSON<{ item: AifBrand }>("/brands", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+function apiAifUpdateBrand(id: string, input: Partial<{ name: string; is_active: boolean; isActive: boolean }>) {
+  return fetchAifJSON<{ item: AifBrand }>(`/brands/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+function apiAifDeleteBrand(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated" }>(`/brands/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+function apiAifListSupplierBrands(includeInactive: boolean) {
+  const q = includeInactive ? "?includeInactive=1" : "";
+  return fetchAifJSON<{ items: AifSupplierBrandLink[] }>(`/supplier-brands${q}`);
+}
+
+function apiAifCreateSupplierBrand(input: {
+  supplierId: string;
+  brandId: string;
+  isPreferred?: boolean;
+  notes?: string;
+}) {
+  return fetchAifJSON<{ item: AifSupplierBrandLink }>("/supplier-brands", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+function apiAifUpdateSupplierBrand(id: string, input: Partial<{ is_active: boolean; isActive: boolean; is_preferred: boolean; isPreferred: boolean; notes: string }>) {
+  return fetchAifJSON<{ item: AifSupplierBrandLink }>(`/supplier-brands/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+function apiAifDeleteSupplierBrand(id: string) {
+  return fetchAifJSON<{ ok: true }>(`/supplier-brands/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 function emptyTotals(): AifSupplierReportTotals {
@@ -307,6 +401,8 @@ function ComparisonMiniCard(props: {
 
 export default function AllInSuppliers() {
   const [suppliers, setSuppliers] = useState<AifSupplierDetail[]>([]);
+  const [brands, setBrands] = useState<AifBrand[]>([]);
+  const [supplierBrandLinks, setSupplierBrandLinks] = useState<AifSupplierBrandLink[]>([]);
   const [report, setReport] = useState<AifSupplierReportItem[]>([]);
   const [compareReport, setCompareReport] = useState<AifSupplierReportItem[]>(
     [],
@@ -322,6 +418,7 @@ export default function AllInSuppliers() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [brandsOpen, setBrandsOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
   const [form, setForm] = useState<FormState>({
     name: "",
@@ -334,12 +431,21 @@ export default function AllInSuppliers() {
     code: "",
     notes: "",
   });
+  const [brandForm, setBrandForm] = useState({ name: "" });
+  const [editingBrandId, setEditingBrandId] = useState("");
+  const [brandEditName, setBrandEditName] = useState("");
+  const [brandSupplierId, setBrandSupplierId] = useState("");
+  const [brandId, setBrandId] = useState("");
+  const [linkPreferred, setLinkPreferred] = useState(false);
+  const [linkNotes, setLinkNotes] = useState("");
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AifSupplierDetail | null>(
     null,
   );
+  const [brandDeleteTarget, setBrandDeleteTarget] = useState<AifBrand | null>(null);
+  const [linkDeleteTarget, setLinkDeleteTarget] = useState<AifSupplierBrandLink | null>(null);
 
   const reportBySupplier = useMemo(() => {
     const map = new Map<string, AifSupplierReportItem>();
@@ -368,6 +474,17 @@ export default function AllInSuppliers() {
       (a, b) => Number(b.purchase_value || 0) - Number(a.purchase_value || 0),
     );
   }, [report]);
+
+
+  const activeBrands = useMemo(() => {
+    return brands.filter((b) => b.is_active);
+  }, [brands]);
+
+  const selectedSupplierBrandLinks = useMemo(() => {
+    const sid = brandSupplierId || selectedSupplierId;
+    if (!sid) return [];
+    return supplierBrandLinks.filter((x) => x.supplier_id === sid);
+  }, [brandSupplierId, selectedSupplierId, supplierBrandLinks]);
 
   const selectedReport = useMemo(() => {
     if (selectedSupplierId) {
@@ -430,6 +547,8 @@ export default function AllInSuppliers() {
         includeInactive: nextIncludeInactive,
         withStats: true,
       });
+      const brandPromise = apiAifListBrands(nextIncludeInactive);
+      const supplierBrandPromise = apiAifListSupplierBrands(nextIncludeInactive);
       const reportPromise = apiAifSupplierReport({
         from: nextFrom,
         to: nextTo,
@@ -443,12 +562,16 @@ export default function AllInSuppliers() {
           })
         : Promise.resolve({ items: [], totals: emptyTotals() });
 
-      const [sData, rData, cData] = await Promise.all([
+      const [sData, bData, sbData, rData, cData] = await Promise.all([
         supplierPromise,
+        brandPromise,
+        supplierBrandPromise,
         reportPromise,
         comparePromise,
       ]);
       setSuppliers(sData.items || []);
+      setBrands(bData.items || []);
+      setSupplierBrandLinks(sbData.items || []);
       setReport(rData.items || []);
       setTotals(rData.totals || emptyTotals());
       setCompareReport(cData.items || []);
@@ -470,6 +593,18 @@ export default function AllInSuppliers() {
       setSelectedSupplierId(sortedReport[0].id);
     }
   }, [selectedSupplierId, sortedReport]);
+
+  useEffect(() => {
+    if (!brandSupplierId && suppliers.length) {
+      setBrandSupplierId(selectedSupplierId || suppliers[0].id);
+    }
+  }, [brandSupplierId, selectedSupplierId, suppliers]);
+
+  useEffect(() => {
+    if (!brandId && activeBrands.length) {
+      setBrandId(activeBrands[0].id);
+    }
+  }, [activeBrands, brandId]);
 
   function applyPeriod(range: { from: string; to: string }) {
     setFrom(range.from);
@@ -593,6 +728,156 @@ export default function AllInSuppliers() {
     }
   }
 
+
+  async function createBrand() {
+    if (!brandForm.name.trim()) {
+      setMessage("A márkanév kötelező.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifCreateBrand({ name: brandForm.name });
+      setBrandForm({ name: "" });
+      await load();
+      setMessage("Márka mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a márkát.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startBrandEdit(brand: AifBrand) {
+    setEditingBrandId(brand.id);
+    setBrandEditName(brand.name || "");
+  }
+
+  async function saveBrandEdit(id: string) {
+    if (!brandEditName.trim()) {
+      setMessage("A márkanév nem maradhat üresen.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateBrand(id, { name: brandEditName });
+      setEditingBrandId("");
+      await load();
+      setMessage("Márka frissítve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült frissíteni a márkát.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleBrandActive(brand: AifBrand) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateBrand(brand.id, { is_active: !brand.is_active });
+      await load();
+      setMessage(brand.is_active ? "Márka inaktiválva." : "Márka aktiválva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a márka állapotát.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmRemoveBrand() {
+    if (!brandDeleteTarget) return;
+    const target = brandDeleteTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifDeleteBrand(target.id);
+      setBrandDeleteTarget(null);
+      await load();
+      setMessage(result.mode === "deleted" ? "Márka törölve." : "Márka inaktiválva, mert kapcsolódó adat van hozzá.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült törölni a márkát.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSupplierBrandLink() {
+    const supplierId = brandSupplierId || selectedSupplierId;
+    if (!supplierId) {
+      setMessage("Válassz beszállítót.");
+      return;
+    }
+    if (!brandId) {
+      setMessage("Válassz márkát.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifCreateSupplierBrand({
+        supplierId,
+        brandId,
+        isPreferred: linkPreferred,
+        notes: linkNotes,
+      });
+      setLinkNotes("");
+      setLinkPreferred(false);
+      await load();
+      setMessage("Beszállító-márka kapcsolat mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a kapcsolatot.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleSupplierBrandLinkActive(link: AifSupplierBrandLink) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateSupplierBrand(link.id, { is_active: !link.is_active });
+      await load();
+      setMessage(link.is_active ? "Kapcsolat inaktiválva." : "Kapcsolat aktiválva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a kapcsolatot.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setSupplierBrandPreferred(link: AifSupplierBrandLink) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifUpdateSupplierBrand(link.id, { is_preferred: true });
+      await load();
+      setMessage("Elsődleges márka beállítva.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült beállítani az elsődleges márkát.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmRemoveSupplierBrandLink() {
+    if (!linkDeleteTarget) return;
+    const target = linkDeleteTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifDeleteSupplierBrand(target.id);
+      setLinkDeleteTarget(null);
+      await load();
+      setMessage("Márkakapcsolat törölve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült törölni a márkakapcsolatot.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className={page}>
       {deleteTarget && (
@@ -641,6 +926,63 @@ export default function AllInSuppliers() {
                 disabled={busy}
                 type="button"
               >
+                <Trash2 size={15} /> Törlés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {brandDeleteTarget && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true">
+          <div className={modalCard}>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-lg border border-red-300/20 bg-red-500/12 p-2 text-red-100">
+                <Trash2 size={17} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-normal">Márka törlése</p>
+                <p className="mt-2 text-sm leading-6 text-white/78">Biztosan törlöd ezt a márkát?</p>
+                <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/28 px-3 py-2.5">
+                  <p className="text-sm font-normal text-white">{brandDeleteTarget.name}</p>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-white/74">
+                  Ha kapcsolódó termék vagy beszállítói kapcsolat tartozik hozzá, a rendszer inaktívra állítja.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button className={`${neutralBtn} w-full sm:w-auto`} onClick={() => setBrandDeleteTarget(null)} disabled={busy} type="button">
+                <X size={15} /> Mégse
+              </button>
+              <button className={`${dangerBtn} w-full sm:w-auto`} onClick={confirmRemoveBrand} disabled={busy} type="button">
+                <Trash2 size={15} /> Törlés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {linkDeleteTarget && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true">
+          <div className={modalCard}>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-lg border border-red-300/20 bg-red-500/12 p-2 text-red-100">
+                <Trash2 size={17} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-normal">Márkakapcsolat törlése</p>
+                <p className="mt-2 text-sm leading-6 text-white/78">Biztosan törlöd ezt a beszállító-márka kapcsolatot?</p>
+                <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/28 px-3 py-2.5">
+                  <p className="text-sm font-normal text-white">{linkDeleteTarget.supplier_name} → {linkDeleteTarget.brand_name}</p>
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button className={`${neutralBtn} w-full sm:w-auto`} onClick={() => setLinkDeleteTarget(null)} disabled={busy} type="button">
+                <X size={15} /> Mégse
+              </button>
+              <button className={`${dangerBtn} w-full sm:w-auto`} onClick={confirmRemoveSupplierBrandLink} disabled={busy} type="button">
                 <Trash2 size={15} /> Törlés
               </button>
             </div>
@@ -1107,6 +1449,180 @@ export default function AllInSuppliers() {
               >
                 <Save size={14} /> Mentés
               </button>
+            </div>
+          )}
+        </section>
+
+        <section className={card}>
+          <SectionToggle
+            icon={<Building2 size={16} />}
+            title="Márkák és beszállítói kapcsolatok"
+            subtitle="Márkatörzs és kapcsolás beszállítóhoz"
+            open={brandsOpen}
+            onToggle={() => setBrandsOpen((v) => !v)}
+          />
+          {brandsOpen && (
+            <div className="mt-3 grid gap-3 xl:grid-cols-[0.95fr_1.05fr]">
+              <div className="rounded-2xl border border-white/18 bg-[#343f51] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-white/88">Márkatörzs</p>
+                  <span className={chip + " border-white/18 text-white/70"}>{brands.length} márka</span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <label className={label}>
+                    Új márka
+                    <input
+                      className={`${input} w-full`}
+                      value={brandForm.name}
+                      onChange={(e) => setBrandForm({ name: e.target.value })}
+                      placeholder="pl. Adidas"
+                    />
+                  </label>
+                  <button className={`${primaryBtn} self-end`} onClick={createBrand} disabled={busy} type="button">
+                    <Save size={14} /> Mentés
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {brands.map((brand) => {
+                    const editing = editingBrandId === brand.id;
+                    return (
+                      <div key={brand.id} className="rounded-xl border border-white/14 bg-[#414c5f] p-2.5">
+                        {editing ? (
+                          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+                            <input
+                              className={`${input} w-full`}
+                              value={brandEditName}
+                              onChange={(e) => setBrandEditName(e.target.value)}
+                            />
+                            <button className={primaryBtn} onClick={() => saveBrandEdit(brand.id)} disabled={busy} type="button">
+                              <Check size={14} /> Mentés
+                            </button>
+                            <button className={neutralBtn} onClick={() => setEditingBrandId("")} type="button">
+                              <X size={14} /> Mégse
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="text-sm text-white">{brand.name}</p>
+                              <span className={`${chip} mt-1 ${brand.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
+                                {brand.is_active ? "Aktív" : "Inaktív"}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button className={tinyBtn} onClick={() => startBrandEdit(brand)} type="button">
+                                <Edit3 size={13} /> Módosít
+                              </button>
+                              <button className={tinyBtn} onClick={() => toggleBrandActive(brand)} disabled={busy} type="button">
+                                <Power size={13} /> {brand.is_active ? "Inaktív" : "Aktív"}
+                              </button>
+                              <button className={tinyDangerBtn} onClick={() => setBrandDeleteTarget(brand)} disabled={busy} type="button">
+                                <Trash2 size={13} /> Törlés
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!brands.length && (
+                    <p className="rounded-xl border border-white/14 bg-[#414c5f] px-3 py-5 text-center text-sm text-white/74">
+                      Nincs rögzített márka.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/18 bg-[#343f51] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-white/88">Beszállítóhoz rendelt márkák</p>
+                  <span className={chip + " border-white/18 text-white/70"}>{supplierBrandLinks.length} kapcsolat</span>
+                </div>
+                <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                  <label className={label}>
+                    Beszállító
+                    <select
+                      className={`${input} w-full`}
+                      value={brandSupplierId || selectedSupplierId}
+                      onChange={(e) => setBrandSupplierId(e.target.value)}
+                    >
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={label}>
+                    Márka
+                    <select
+                      className={`${input} w-full`}
+                      value={brandId}
+                      onChange={(e) => setBrandId(e.target.value)}
+                    >
+                      {activeBrands.map((brand) => (
+                        <option key={brand.id} value={brand.id}>{brand.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={`${label} lg:col-span-2`}>
+                    Megjegyzés
+                    <input
+                      className={`${input} w-full`}
+                      value={linkNotes}
+                      onChange={(e) => setLinkNotes(e.target.value)}
+                      placeholder="pl. hivatalos forgalmazás, szezonális, külön árlista"
+                    />
+                  </label>
+                  <label className="flex h-8 items-center gap-2 rounded-lg border border-white/18 bg-[#303b4e] px-3 text-sm text-white/78">
+                    <input
+                      type="checkbox"
+                      checked={linkPreferred}
+                      onChange={(e) => setLinkPreferred(e.target.checked)}
+                      className="h-4 w-4 accent-emerald-600"
+                    />
+                    Elsődleges márka ennél a beszállítónál
+                  </label>
+                  <button className={`${primaryBtn} justify-self-start`} onClick={createSupplierBrandLink} disabled={busy} type="button">
+                    <Plus size={14} /> Kapcsolás
+                  </button>
+                </div>
+
+                <div className="mt-3 grid gap-2">
+                  {selectedSupplierBrandLinks.map((link) => (
+                    <div key={link.id} className="rounded-xl border border-white/14 bg-[#414c5f] p-2.5">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-sm text-white">{link.brand_name}</p>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {link.is_preferred && <span className={`${chip} border-emerald-300/35 text-emerald-100`}>Elsődleges</span>}
+                            <span className={`${chip} ${link.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
+                              {link.is_active ? "Aktív" : "Inaktív"}
+                            </span>
+                          </div>
+                          {link.notes && <p className="mt-2 text-sm leading-6 text-white/70">{link.notes}</p>}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {!link.is_preferred && (
+                            <button className={tinyBtn} onClick={() => setSupplierBrandPreferred(link)} disabled={busy} type="button">
+                              Elsődleges
+                            </button>
+                          )}
+                          <button className={tinyBtn} onClick={() => toggleSupplierBrandLinkActive(link)} disabled={busy} type="button">
+                            <Power size={13} /> {link.is_active ? "Inaktív" : "Aktív"}
+                          </button>
+                          <button className={tinyDangerBtn} onClick={() => setLinkDeleteTarget(link)} disabled={busy} type="button">
+                            <Trash2 size={13} /> Törlés
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {!selectedSupplierBrandLinks.length && (
+                    <p className="rounded-xl border border-white/14 bg-[#414c5f] px-3 py-5 text-center text-sm text-white/74">
+                      Ehhez a beszállítóhoz még nincs márka kapcsolva.
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </section>
