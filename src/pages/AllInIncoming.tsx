@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   AifCurrency,
+  AifReceptionSummary,
   AifImportBatchSummary,
   AifLocation,
   AifLocationType,
@@ -32,6 +33,7 @@ import {
   apiAifDeleteLocation,
   apiAifDeleteLocationType,
   apiAifListCurrencies,
+  apiAifListReceptions,
   apiAifListLocationTypes,
   apiAifUpdateLocation,
   apiAifUpdateLocationType,
@@ -146,6 +148,7 @@ export default function AllInIncoming(_props: Props) {
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [locationTypes, setLocationTypes] = useState<AifLocationType[]>([]);
   const [currencies, setCurrencies] = useState<AifCurrency[]>([]);
+  const [receptions, setReceptions] = useState<AifReceptionSummary[]>([]);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [supplierId, setSupplierId] = useState("");
   const [locationId, setLocationId] = useState("");
@@ -153,13 +156,13 @@ export default function AllInIncoming(_props: Props) {
   const [receptionOpen, setReceptionOpen] = useState(true);
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(todayIso());
-  const [receptionDate, setReceptionDate] = useState(todayIso());
-  const [currencyCode, setCurrencyCode] = useState("RON");
-  const [exchangeRateToRon, setExchangeRateToRon] = useState("1");
-  const [tvaMode, setTvaMode] = useState<"without_tva" | "with_tva" | "no_tva">("without_tva");
-  const [tvaRate, setTvaRate] = useState("19");
-  const [shippingCost, setShippingCost] = useState("0");
+  const [invoiceDate, setInvoiceDate] = useState("");
+  const [receptionDate, setReceptionDate] = useState("");
+  const [currencyCode, setCurrencyCode] = useState("");
+  const [exchangeRateToRon, setExchangeRateToRon] = useState("");
+  const [tvaMode, setTvaMode] = useState<"" | "without_tva" | "with_tva" | "no_tva">("");
+  const [tvaRate, setTvaRate] = useState("");
+  const [shippingCost, setShippingCost] = useState("");
   const [invoiceGross, setInvoiceGross] = useState("");
   const [newCurrencyCode, setNewCurrencyCode] = useState("");
   const [newCurrencyName, setNewCurrencyName] = useState("");
@@ -215,11 +218,25 @@ export default function AllInIncoming(_props: Props) {
     return sum + toNumber(n.qty) * toNumber(n.buyPrice);
   }, 0), [approvedRowList]);
   const approvedQty = useMemo(() => approvedRowList.reduce((sum, row) => sum + toNumber(row.normalized?.qty), 0), [approvedRowList]);
-  const rateValue = toNumber(exchangeRateToRon || (currencyCode === "RON" ? "1" : "0"));
-  const shippingValue = toNumber(shippingCost);
-  const vatRateValue = toNumber(tvaRate);
+  const rateValue = exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
+  const shippingValue = shippingCost.trim() ? toNumber(shippingCost) : 0;
+  const vatRateValue = tvaRate.trim() ? toNumber(tvaRate) : 0;
   const goodsPlusShipping = approvedGoodsValue + shippingValue;
+  const invoiceGrossProvided = invoiceGross.trim().length > 0;
+  const invoiceGrossValue = invoiceGrossProvided ? toNumber(invoiceGross) : 0;
+  const tvaRateRequired = tvaMode === "without_tva" || tvaMode === "with_tva";
+  const requiredMissing = {
+    invoiceNumber: !invoiceNumber.trim(),
+    invoiceDate: !invoiceDate,
+    receptionDate: !receptionDate,
+    currencyCode: !currencyCode,
+    exchangeRateToRon: !exchangeRateToRon.trim() || rateValue <= 0,
+    tvaMode: !tvaMode,
+    tvaRate: tvaRateRequired && (!tvaRate.trim() || vatRateValue < 0),
+    invoiceGross: !invoiceGrossProvided,
+  };
   const computedReception = useMemo(() => {
+    if (!tvaMode) return { net: 0, vat: 0, gross: goodsPlusShipping };
     const vatFactor = 1 + Math.max(0, vatRateValue) / 100;
     if (tvaMode === "with_tva") {
       const gross = goodsPlusShipping;
@@ -232,10 +249,19 @@ export default function AllInIncoming(_props: Props) {
     const vat = net * Math.max(0, vatRateValue) / 100;
     return { net, vat, gross: net + vat };
   }, [goodsPlusShipping, tvaMode, vatRateValue]);
-  const invoiceGrossValue = invoiceGross.trim() ? toNumber(invoiceGross) : computedReception.gross;
-  const invoiceDifference = invoiceGross.trim() ? invoiceGrossValue - computedReception.gross : 0;
-  const receptionRonValue = invoiceGrossValue * (rateValue || 0);
-  const receptionReady = Boolean(invoiceNumber.trim() && currencyCode && rateValue > 0);
+  const invoiceDifference = invoiceGrossProvided ? invoiceGrossValue - computedReception.gross : 0;
+  const receptionRonValue = (invoiceGrossProvided ? invoiceGrossValue : computedReception.gross) * (rateValue || 0);
+  const receptionReady = Boolean(
+    invoiceNumber.trim() &&
+    invoiceDate &&
+    receptionDate &&
+    currencyCode &&
+    rateValue > 0 &&
+    tvaMode &&
+    (!tvaRateRequired || tvaRate.trim()) &&
+    invoiceGrossProvided
+  );
+  const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/80 bg-red-500/10 focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
   const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
@@ -313,7 +339,7 @@ export default function AllInIncoming(_props: Props) {
     setCurrencyCode((current) => {
       const active = (currencyData.items || meta.currencies || []).filter((c) => c.is_active);
       if (current && active.some((c) => c.code === current)) return current;
-      return active.find((c) => c.code === "RON")?.code || active[0]?.code || "RON";
+      return "";
     });
   }
 
@@ -322,9 +348,14 @@ export default function AllInIncoming(_props: Props) {
     setBatches(data.items || []);
   }
 
+  async function loadReceptions() {
+    const data = await apiAifListReceptions({ limit: 25 });
+    setReceptions(data.items || []);
+  }
+
   async function reloadAll() {
     await loadMeta();
-    await loadBatches();
+    await Promise.all([loadBatches(), loadReceptions()]);
   }
 
   useEffect(() => {
@@ -332,7 +363,7 @@ export default function AllInIncoming(_props: Props) {
     (async () => {
       try {
         await loadMeta();
-        if (alive) await loadBatches();
+        if (alive) await Promise.all([loadBatches(), loadReceptions()]);
       } catch (e: any) {
         if (alive) setMessage(e.message || "Nem sikerült betölteni az adatokat.");
       }
@@ -377,7 +408,7 @@ export default function AllInIncoming(_props: Props) {
       return;
     }
     if (!receptionReady) {
-      setMessage("A receptióhoz kötelező a számlaszám, pénznem és pozitív árfolyam.");
+      setMessage("A receptió kötelező mezőit ki kell tölteni: számlaszám, dátumok, pénznem, árfolyam, TVA kezelés és számla végösszeg.");
       return;
     }
     setBusy(true);
@@ -408,7 +439,7 @@ export default function AllInIncoming(_props: Props) {
         },
       });
       const saved = await apiAifReplaceImportRows(batch.id, approvedRowList);
-      await loadBatches();
+      await Promise.all([loadBatches(), loadReceptions()]);
       setMessage(`Import mentve: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni az importot.");
@@ -422,7 +453,7 @@ export default function AllInIncoming(_props: Props) {
     setMessage("");
     try {
       const result = await apiAifCommitImportBatch(id);
-      await loadBatches();
+      await Promise.all([loadBatches(), loadReceptions()]);
       setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.`);
     } catch (e: any) {
       setMessage(e.message || "A készletre vétel nem sikerült. Ellenőrizd az import sorokat.");
@@ -604,7 +635,6 @@ export default function AllInIncoming(_props: Props) {
       setNewCurrencySymbol("");
       await loadMeta();
       setCurrencyCode(created.item.code);
-      if (created.item.code === "RON") setExchangeRateToRon("1");
       setMessage("Pénznem mentve.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a pénznemet.");
@@ -1069,31 +1099,32 @@ export default function AllInIncoming(_props: Props) {
 
           {receptionOpen && (
             <div className="mt-3 space-y-3">
+              <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/74">
+                A receptió a bevételezés pénzügyi fejrésze. A kötelező mezők üresen indulnak, és kitöltésig piros jelölést kapnak.
+              </div>
+
               <div className="grid gap-3 lg:grid-cols-4">
                 <label className={label}>
                   Számlaszám
-                  <input className={`${input} w-full`} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Számla száma" />
+                  <input className={requiredInput(requiredMissing.invoiceNumber)} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Számla száma" />
                 </label>
                 <label className={label}>
                   Számla dátuma
-                  <input className={`${input} w-full`} type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+                  <input className={requiredInput(requiredMissing.invoiceDate)} type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
                 </label>
                 <label className={label}>
                   Receptió dátuma
-                  <input className={`${input} w-full`} type="date" value={receptionDate} onChange={(e) => setReceptionDate(e.target.value)} />
+                  <input className={requiredInput(requiredMissing.receptionDate)} type="date" value={receptionDate} onChange={(e) => setReceptionDate(e.target.value)} />
                 </label>
                 <label className={label}>
                   Pénznem
                   <div className="grid grid-cols-[1fr_auto] gap-2">
                     <select
-                      className={`${input} w-full`}
+                      className={requiredInput(requiredMissing.currencyCode)}
                       value={currencyCode}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        setCurrencyCode(next);
-                        if (next === "RON") setExchangeRateToRon("1");
-                      }}
+                      onChange={(e) => setCurrencyCode(e.target.value)}
                     >
+                      <option value="">Pénznem kiválasztása</option>
                       {activeCurrencies.map((c) => (
                         <option key={c.code} value={c.code}>{c.code} • {c.name}</option>
                       ))}
@@ -1108,11 +1139,12 @@ export default function AllInIncoming(_props: Props) {
               <div className="grid gap-3 lg:grid-cols-5">
                 <label className={label}>
                   Árfolyam RON
-                  <input className={`${input} w-full`} value={exchangeRateToRon} onChange={(e) => setExchangeRateToRon(e.target.value)} placeholder={currencyCode === "RON" ? "1" : "pl. 4.97"} />
+                  <input className={requiredInput(requiredMissing.exchangeRateToRon)} value={exchangeRateToRon} onChange={(e) => setExchangeRateToRon(e.target.value)} placeholder="pl. 4.97" />
                 </label>
                 <label className={label}>
                   TVA kezelés
-                  <select className={`${input} w-full`} value={tvaMode} onChange={(e) => setTvaMode(e.target.value as any)}>
+                  <select className={requiredInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate(""); }}>
+                    <option value="">TVA kezelés kiválasztása</option>
                     <option value="without_tva">Árak TVA nélkül</option>
                     <option value="with_tva">Árak TVA-val</option>
                     <option value="no_tva">TVA nélkül</option>
@@ -1120,15 +1152,15 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>
                   TVA %
-                  <input className={`${input} w-full`} value={tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} />
+                  <input className={requiredInput(requiredMissing.tvaRate)} value={tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} placeholder={tvaMode === "no_tva" ? "Nem szükséges" : "pl. 19"} />
                 </label>
                 <label className={label}>
                   Szállítás
-                  <input className={`${input} w-full`} value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} placeholder="0" />
+                  <input className={`${input} w-full`} value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} placeholder="ha nincs, hagyd üresen" />
                 </label>
                 <label className={label}>
                   Számla végösszeg
-                  <input className={`${input} w-full`} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder={moneyText(computedReception.gross)} />
+                  <input className={requiredInput(requiredMissing.invoiceGross)} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder="Számla végösszege" />
                 </label>
               </div>
 
@@ -1151,25 +1183,66 @@ export default function AllInIncoming(_props: Props) {
                 </div>
                 <div className={statCard}>
                   <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eltérés</p>
-                  <p className={`mt-1 text-sm ${Math.abs(invoiceDifference) > 0.01 ? "text-amber-100" : "text-emerald-100"}`}>{moneyText(invoiceDifference, currencyCode)}</p>
+                  <p className={`mt-1 text-sm ${invoiceGrossProvided && Math.abs(invoiceDifference) > 0.01 ? "text-amber-100" : "text-white"}`}>{invoiceGrossProvided ? moneyText(invoiceDifference, currencyCode) : "-"}</p>
                 </div>
                 <div className={statCard}>
                   <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
-                  <p className="mt-1 text-sm text-white">{moneyText(receptionRonValue, "RON")}</p>
+                  <p className="mt-1 text-sm text-white">{rateValue > 0 ? moneyText(receptionRonValue, "RON") : "-"}</p>
                 </div>
               </div>
 
               <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white/72">
-                A terméksorok vételára a kiválasztott pénznemben marad az import előnézetben. Mentéskor a rendszer RON értéket is számol az árfolyam alapján, így a raktár és a kimutatás nem az Excel többféle ár oszlopából próbál találgatni.
+                A sorok vételára a kiválasztott pénznemben marad az előnézetben. Mentéskor a rendszer külön RON értéket számol az árfolyam alapján.
               </div>
 
               {!receptionReady && (
                 <div className="rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
-                  Import mentés előtt kötelező a számlaszám, a pénznem és a pozitív árfolyam.
+                  Import mentés előtt töltsd ki a receptió kötelező mezőit. A pirossal jelölt mezők hiányoznak vagy hibásak.
                 </div>
               )}
             </div>
           )}
+        </section>
+
+        <section className={card}>
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Receptiók" right={<span className="text-xs text-white/60">Legutóbbi számlás bevételezések</span>} />
+          <div className="mt-3 grid gap-2">
+            {receptions.map((r) => (
+              <div key={r.id} className="rounded-xl border border-white/12 bg-[#354153] p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
+                    <p className="mt-1 text-xs text-white/62">
+                      {r.supplier_name || "-"} • {r.location_name || "-"} • {r.currency_code || "-"}
+                    </p>
+                  </div>
+                  <div className="text-left text-xs text-white/70 sm:text-right">
+                    <p>{r.invoice_date || "-"}</p>
+                    <p className="mt-1">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p>
+                  </div>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Árfolyam</p>
+                    <p className="mt-1 text-sm text-white">{cell(r.exchange_rate_to_ron)}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Terméksor</p>
+                    <p className="mt-1 text-sm text-white">{r.line_count || 0}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Darab</p>
+                    <p className="mt-1 text-sm text-white">{r.total_qty || 0}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Állapot</p>
+                    <p className="mt-1 text-sm text-white">{r.status || "-"}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!receptions.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs receptió.</p>}
+          </div>
         </section>
 
         <section className={card}>
