@@ -106,73 +106,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function linkSupplierBrand(client, supplierId, brandId, preferred = false) {
-    if (!supplierId || !brandId) return;
-    if (preferred) {
-      await client.query(
-        `UPDATE aif_supplier_brands
-         SET is_preferred=false, updated_at=now()
-         WHERE supplier_id=$1 AND brand_id <> $2`,
-        [supplierId, brandId]
-      );
-    }
-    await client.query(
-      `INSERT INTO aif_supplier_brands (supplier_id, brand_id, is_preferred, is_active)
-       VALUES ($1,$2,$3,true)
-       ON CONFLICT (supplier_id, brand_id) DO UPDATE SET
-         is_active=true,
-         is_preferred=CASE WHEN EXCLUDED.is_preferred THEN true ELSE aif_supplier_brands.is_preferred END,
-         updated_at=now()`,
-      [supplierId, brandId, Boolean(preferred)]
-    );
-  }
+  async function ensureBrand(client, normalized, fallbackSupplierCode) {
+    const rawCode = normalized.brandCode || normCode(fallbackSupplierCode);
+    if (!rawCode) return null;
 
-  async function ensureBrand(client, normalized, fallbackSupplierCode, supplierId = null) {
-    const rawCode = normalized.brandCode || null;
-
-    if (rawCode) {
-      const name = normalized.brandName || text(rawCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
-      const r = await client.query(
-        `INSERT INTO aif_brands (code, name)
-         VALUES ($1, $2)
-         ON CONFLICT (code) DO UPDATE SET
-           name = COALESCE(EXCLUDED.name, aif_brands.name),
-           is_active=true,
-           updated_at=now()
-         RETURNING id`,
-        [rawCode, name]
-      );
-      await linkSupplierBrand(client, supplierId, r.rows[0].id, false);
-      return r.rows[0].id;
-    }
-
-    if (supplierId) {
-      const linked = await client.query(
-        `SELECT b.id
-         FROM aif_supplier_brands sb
-         JOIN aif_brands b ON b.id=sb.brand_id
-         WHERE sb.supplier_id=$1
-           AND sb.is_active=true
-           AND b.is_active=true
-         ORDER BY sb.is_preferred DESC, b.name ASC
-         LIMIT 1`,
-        [supplierId]
-      );
-      if (linked.rowCount) return linked.rows[0].id;
-    }
-
-    const fallbackCode = normCode(fallbackSupplierCode);
-    if (!fallbackCode) return null;
-    const fallbackName = text(fallbackCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
-    const fallback = await client.query(
+    const name = normalized.brandName || text(rawCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+    const r = await client.query(
       `INSERT INTO aif_brands (code, name)
        VALUES ($1, $2)
-       ON CONFLICT (code) DO UPDATE SET updated_at=now()
+       ON CONFLICT (code) DO UPDATE SET name = COALESCE(aif_brands.name, EXCLUDED.name)
        RETURNING id`,
-      [fallbackCode, fallbackName]
+      [rawCode, name]
     );
-    await linkSupplierBrand(client, supplierId, fallback.rows[0].id, true);
-    return fallback.rows[0].id;
+    return r.rows[0].id;
   }
 
   async function findCategoryId(client, categoryCode) {
@@ -182,8 +128,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0]?.id || null;
   }
 
-  async function upsertModel(client, { supplierCode, supplierId, normalized }) {
-    const brandId = await ensureBrand(client, normalized, supplierCode, supplierId);
+  async function upsertModel(client, { supplierCode, normalized }) {
+    const brandId = await ensureBrand(client, normalized, supplierCode);
     const categoryId = await findCategoryId(client, normalized.categoryCode);
     const baseModelCode = normalized.modelCode || normalized.supplierProductCode || normalized.titleRo;
     const modelCode = `${normCode(supplierCode || "aif")}:${normCode(baseModelCode)}`;
@@ -444,14 +390,33 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0] || { import_batches: 0, supplier_codes: 0, profiles: 0 };
   }
 
-  async function brandUsage(client, brandId) {
+
+  async function categoryUsage(client, categoryId) {
     const r = await client.query(
       `SELECT
-         (SELECT count(*)::int FROM aif_product_models WHERE brand_id=$1) AS product_models,
-         (SELECT count(*)::int FROM aif_supplier_brands WHERE brand_id=$1) AS supplier_links`,
-      [brandId]
+         (SELECT count(*)::int FROM aif_product_models WHERE category_id=$1) AS product_models,
+         (SELECT count(*)::int FROM aif_categories WHERE parent_id=$1) AS child_categories`,
+      [categoryId]
     );
-    return r.rows[0] || { product_models: 0, supplier_links: 0 };
+    return r.rows[0] || { product_models: 0, child_categories: 0 };
+  }
+
+  async function genderTypeUsage(client, code) {
+    const r = await client.query(
+      `SELECT count(*)::int AS product_models
+       FROM aif_product_models
+       WHERE gender=$1`,
+      [code]
+    );
+    return r.rows[0] || { product_models: 0 };
+  }
+
+  async function activeGenderTypeExists(client, code) {
+    const r = await client.query(
+      `SELECT 1 FROM aif_gender_types WHERE code=$1 AND is_active=true LIMIT 1`,
+      [code]
+    );
+    return r.rowCount > 0;
   }
 
 
@@ -691,240 +656,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows, totals });
   });
 
-  router.get("/currencies", requireAuthed, async (req, res) => {
-    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
-    const r = await pool.query(
-      `SELECT code, name, symbol, sort_order, is_active, created_at, updated_at
-       FROM aif_currencies
-       ${includeInactive ? "" : "WHERE is_active=true"}
-       ORDER BY is_active DESC, sort_order ASC, code ASC`
-    );
-    res.json({ items: r.rows });
-  });
-
-  router.post("/currencies", requireAdminOrSecret, async (req, res) => {
-    const body = req.body || {};
-    const code = currencyCode(body.code);
-    const name = text(body.name);
-    const symbol = emptyToNull(body.symbol);
-    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
-    if (!code) return res.status(400).json({ error: "currency code required" });
-    if (!name) return res.status(400).json({ error: "currency name required" });
-    try {
-      const r = await pool.query(
-        `INSERT INTO aif_currencies (code, name, symbol, sort_order, is_active)
-         VALUES ($1,$2,$3,$4,true)
-         ON CONFLICT (code) DO UPDATE SET
-           name=EXCLUDED.name,
-           symbol=EXCLUDED.symbol,
-           sort_order=EXCLUDED.sort_order,
-           is_active=true,
-           updated_at=now()
-         RETURNING code, name, symbol, sort_order, is_active, created_at, updated_at`,
-        [code, name, symbol, sortOrder]
-      );
-      res.json({ item: r.rows[0] });
-    } catch (e) {
-      console.error("AIF create currency failed", e);
-      res.status(500).json({ error: "failed to save currency" });
-    }
-  });
-
-  router.patch("/currencies/:code", requireAdminOrSecret, async (req, res) => {
-    const codeParam = currencyCode(req.params.code);
-    const body = req.body || {};
-    const sets = [];
-    const args = [];
-    let i = 1;
-    if (body.name !== undefined) {
-      const name = text(body.name);
-      if (!name) return res.status(400).json({ error: "currency name required" });
-      sets.push(`name=$${i++}`);
-      args.push(name);
-    }
-    if (body.symbol !== undefined) {
-      sets.push(`symbol=$${i++}`);
-      args.push(emptyToNull(body.symbol));
-    }
-    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
-      sets.push(`sort_order=$${i++}`);
-      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
-    }
-    if (body.is_active !== undefined || body.isActive !== undefined) {
-      sets.push(`is_active=$${i++}`);
-      args.push(Boolean(body.is_active ?? body.isActive));
-    }
-    if (!sets.length) return res.json({ ok: true });
-    args.push(codeParam);
-    try {
-      const r = await pool.query(
-        `UPDATE aif_currencies SET ${sets.join(", ")}, updated_at=now()
-         WHERE code=$${i}
-         RETURNING code, name, symbol, sort_order, is_active, created_at, updated_at`,
-        args
-      );
-      if (!r.rowCount) return res.status(404).json({ error: "currency not found" });
-      res.json({ item: r.rows[0] });
-    } catch (e) {
-      console.error("AIF update currency failed", e);
-      res.status(500).json({ error: "failed to update currency" });
-    }
-  });
-
-  router.delete("/currencies/:code", requireAdminOrSecret, async (req, res) => {
-    const codeParam = currencyCode(req.params.code);
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const c = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 FOR UPDATE`, [codeParam]);
-      if (!c.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "currency not found" });
-      }
-      const activeCount = await client.query(`SELECT count(*)::int AS c FROM aif_currencies WHERE is_active=true AND code <> $1`, [codeParam]);
-      if (Number(activeCount.rows[0]?.c || 0) <= 0) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "at least one active currency is required" });
-      }
-      const usage = await currencyUsage(client, codeParam);
-      if (Number(usage.receptions || 0) > 0 || Number(usage.exchange_rates || 0) > 0 || Number(usage.import_batches || 0) > 0) {
-        await client.query(`UPDATE aif_currencies SET is_active=false, updated_at=now() WHERE code=$1`, [codeParam]);
-        await client.query("COMMIT");
-        return res.json({ ok: true, mode: "deactivated", usage });
-      }
-      await client.query(`DELETE FROM aif_currencies WHERE code=$1`, [codeParam]);
-      await client.query("COMMIT");
-      res.json({ ok: true, mode: "deleted", usage });
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF delete currency failed", e);
-      res.status(500).json({ error: "failed to delete currency" });
-    } finally {
-      client.release();
-    }
-  });
-
-  router.get("/receptions", requireAuthed, async (req, res) => {
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
-    const r = await pool.query(
-      `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
-              r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
-              r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-              s.name AS supplier_name, l.name AS location_name
-       FROM aif_receptions r
-       LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
-       LEFT JOIN aif_locations l ON l.id=r.target_location_id
-       ORDER BY r.created_at DESC
-       LIMIT $1`,
-      [limit]
-    );
-    res.json({ items: r.rows });
-  });
-
-  router.get("/brands", requireAuthed, async (req, res) => {
-    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
-    const r = await pool.query(
-      `SELECT id, code, name, is_active, created_at, updated_at
-       FROM aif_brands
-       ${includeInactive ? "" : "WHERE is_active=true"}
-       ORDER BY is_active DESC, name ASC`
-    );
-    res.json({ items: r.rows });
-  });
-
-  router.post("/brands", requireAdminOrSecret, async (req, res) => {
-    const body = req.body || {};
-    const name = text(body.name);
-    const code = normCode(body.code || name);
-    if (!name) return res.status(400).json({ error: "brand name required" });
-    if (!code) return res.status(400).json({ error: "brand code required" });
-    try {
-      const r = await pool.query(
-        `INSERT INTO aif_brands (code, name, is_active)
-         VALUES ($1,$2,true)
-         ON CONFLICT (code) DO UPDATE SET
-           name=EXCLUDED.name,
-           is_active=true,
-           updated_at=now()
-         RETURNING id, code, name, is_active, created_at, updated_at`,
-        [code, name]
-      );
-      res.json({ item: r.rows[0] });
-    } catch (e) {
-      console.error("AIF create brand failed", e);
-      res.status(500).json({ error: "failed to save brand" });
-    }
-  });
-
-  router.patch("/brands/:id", requireAdminOrSecret, async (req, res) => {
-    const id = text(req.params.id);
-    const body = req.body || {};
-    const sets = [];
-    const args = [];
-    let i = 1;
-    if (body.name !== undefined) {
-      const name = text(body.name);
-      if (!name) return res.status(400).json({ error: "brand name required" });
-      sets.push(`name=$${i++}`);
-      args.push(name);
-    }
-    if (body.code !== undefined) {
-      const code = normCode(body.code);
-      if (!code) return res.status(400).json({ error: "brand code required" });
-      sets.push(`code=$${i++}`);
-      args.push(code);
-    }
-    if (body.is_active !== undefined || body.isActive !== undefined) {
-      sets.push(`is_active=$${i++}`);
-      args.push(Boolean(body.is_active ?? body.isActive));
-    }
-    if (!sets.length) return res.json({ ok: true });
-    args.push(id);
-    try {
-      const r = await pool.query(
-        `UPDATE aif_brands
-         SET ${sets.join(", ")}, updated_at=now()
-         WHERE id::text=$${i} OR code=$${i}
-         RETURNING id, code, name, is_active, created_at, updated_at`,
-        args
-      );
-      if (!r.rowCount) return res.status(404).json({ error: "brand not found" });
-      res.json({ item: r.rows[0] });
-    } catch (e) {
-      console.error("AIF update brand failed", e);
-      res.status(500).json({ error: "failed to update brand" });
-    }
-  });
-
-  router.delete("/brands/:id", requireAdminOrSecret, async (req, res) => {
-    const id = text(req.params.id);
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const brand = await client.query(`SELECT id FROM aif_brands WHERE id::text=$1 OR code=$1 FOR UPDATE`, [id]);
-      if (!brand.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "brand not found" });
-      }
-      const usage = await brandUsage(client, brand.rows[0].id);
-      if (Number(usage.product_models || 0) > 0 || Number(usage.supplier_links || 0) > 0) {
-        await client.query(`UPDATE aif_brands SET is_active=false, updated_at=now() WHERE id=$1`, [brand.rows[0].id]);
-        await client.query(`UPDATE aif_supplier_brands SET is_active=false, updated_at=now() WHERE brand_id=$1`, [brand.rows[0].id]);
-        await client.query("COMMIT");
-        return res.json({ ok: true, mode: "deactivated", usage });
-      }
-      await client.query(`DELETE FROM aif_brands WHERE id=$1`, [brand.rows[0].id]);
-      await client.query("COMMIT");
-      res.json({ ok: true, mode: "deleted", usage });
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF delete brand failed", e);
-      res.status(500).json({ error: "failed to delete brand" });
-    } finally {
-      client.release();
-    }
-  });
-
   router.get("/supplier-brands", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const supplier = text(req.query.supplier || req.query.supplierId || req.query.supplier_id);
@@ -1057,13 +788,379 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.get("/categories", requireAuthed, async (_req, res) => {
+
+
+  router.get("/currencies", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const r = await pool.query(
-      `SELECT id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active
-       FROM aif_categories
-       ORDER BY sort_order ASC, name_ro ASC`
+      `SELECT code, name, symbol, sort_order, is_active, created_at, updated_at
+       FROM aif_currencies
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, code ASC`
     );
     res.json({ items: r.rows });
+  });
+
+  router.post("/currencies", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const code = currencyCode(body.code);
+    const name = text(body.name);
+    const symbol = emptyToNull(body.symbol);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!code) return res.status(400).json({ error: "currency code required" });
+    if (!name) return res.status(400).json({ error: "currency name required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_currencies (code, name, symbol, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           symbol=EXCLUDED.symbol,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING code, name, symbol, sort_order, is_active, created_at, updated_at`,
+        [code, name, symbol, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create currency failed", e);
+      res.status(500).json({ error: "failed to save currency" });
+    }
+  });
+
+  router.patch("/currencies/:code", requireAdminOrSecret, async (req, res) => {
+    const codeParam = currencyCode(req.params.code);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "currency name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.symbol !== undefined) {
+      sets.push(`symbol=$${i++}`);
+      args.push(emptyToNull(body.symbol));
+    }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
+      sets.push(`sort_order=$${i++}`);
+      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(codeParam);
+    try {
+      const r = await pool.query(
+        `UPDATE aif_currencies SET ${sets.join(", ")}, updated_at=now()
+         WHERE code=$${i}
+         RETURNING code, name, symbol, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "currency not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update currency failed", e);
+      res.status(500).json({ error: "failed to update currency" });
+    }
+  });
+
+  router.delete("/currencies/:code", requireAdminOrSecret, async (req, res) => {
+    const codeParam = currencyCode(req.params.code);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const c = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 FOR UPDATE`, [codeParam]);
+      if (!c.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "currency not found" });
+      }
+      const activeCount = await client.query(`SELECT count(*)::int AS c FROM aif_currencies WHERE is_active=true AND code <> $1`, [codeParam]);
+      if (Number(activeCount.rows[0]?.c || 0) <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "at least one active currency is required" });
+      }
+      const usage = await currencyUsage(client, codeParam);
+      if (Number(usage.receptions || 0) > 0 || Number(usage.exchange_rates || 0) > 0 || Number(usage.import_batches || 0) > 0) {
+        await client.query(`UPDATE aif_currencies SET is_active=false, updated_at=now() WHERE code=$1`, [codeParam]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_currencies WHERE code=$1`, [codeParam]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete currency failed", e);
+      res.status(500).json({ error: "failed to delete currency" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/receptions", requireAuthed, async (req, res) => {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const r = await pool.query(
+      `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+              r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
+              r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
+              s.name AS supplier_name, l.name AS location_name
+       FROM aif_receptions r
+       LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+       LEFT JOIN aif_locations l ON l.id=r.target_location_id
+       ORDER BY r.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.get("/brands", requireAuthed, async (_req, res) => {
+    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
+    res.json({ items: r.rows });
+  });
+
+  router.get("/categories", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active, created_at, updated_at
+       FROM aif_categories
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, name_ro ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/categories", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const nameRo = text(body.nameRo || body.name_ro || body.name);
+    const nameHu = emptyToNull(body.nameHu || body.name_hu);
+    const code = normCode(body.code || nameRo);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    const shopifyHandle = emptyToNull(body.shopifyCollectionHandle || body.shopify_collection_handle);
+    if (!nameRo) return res.status(400).json({ error: "category name required" });
+    if (!code) return res.status(400).json({ error: "category code required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_categories (code, name_ro, name_hu, shopify_collection_handle, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,$5,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name_ro=EXCLUDED.name_ro,
+           name_hu=EXCLUDED.name_hu,
+           shopify_collection_handle=EXCLUDED.shopify_collection_handle,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
+        [code, nameRo, nameHu, shopifyHandle, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create category failed", e);
+      res.status(500).json({ error: "failed to save category" });
+    }
+  });
+
+  router.patch("/categories/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+
+    if (body.nameRo !== undefined || body.name_ro !== undefined || body.name !== undefined) {
+      const nameRo = text(body.nameRo ?? body.name_ro ?? body.name);
+      if (!nameRo) return res.status(400).json({ error: "category name required" });
+      sets.push(`name_ro=$${i++}`);
+      args.push(nameRo);
+    }
+    if (body.nameHu !== undefined || body.name_hu !== undefined) {
+      sets.push(`name_hu=$${i++}`);
+      args.push(emptyToNull(body.nameHu ?? body.name_hu));
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "category code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.shopifyCollectionHandle !== undefined || body.shopify_collection_handle !== undefined) {
+      sets.push(`shopify_collection_handle=$${i++}`);
+      args.push(emptyToNull(body.shopifyCollectionHandle ?? body.shopify_collection_handle));
+    }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
+      sets.push(`sort_order=$${i++}`);
+      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+
+    try {
+      const r = await pool.query(
+        `UPDATE aif_categories
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "category not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update category failed", e);
+      res.status(500).json({ error: "failed to update category" });
+    }
+  });
+
+  router.delete("/categories/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const category = await client.query(
+        `SELECT id, code, name_ro FROM aif_categories WHERE id::text=$1 OR code=$1 FOR UPDATE`,
+        [id]
+      );
+      if (!category.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "category not found" });
+      }
+      const usage = await categoryUsage(client, category.rows[0].id);
+      if (Number(usage.product_models || 0) > 0 || Number(usage.child_categories || 0) > 0) {
+        await client.query(`UPDATE aif_categories SET is_active=false, updated_at=now() WHERE id=$1`, [category.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_categories WHERE id=$1`, [category.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete category failed", e);
+      res.status(500).json({ error: "failed to delete category" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/gender-types", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT code, name, sort_order, is_active, created_at, updated_at
+       FROM aif_gender_types
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, name ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/gender-types", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const name = text(body.name);
+    const code = normCode(body.code || name);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!name) return res.status(400).json({ error: "gender name required" });
+    if (!code) return res.status(400).json({ error: "gender code required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_gender_types (code, name, sort_order, is_active)
+         VALUES ($1,$2,$3,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING code, name, sort_order, is_active, created_at, updated_at`,
+        [code, name, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create gender type failed", e);
+      res.status(500).json({ error: "failed to save gender" });
+    }
+  });
+
+  router.patch("/gender-types/:code", requireAdminOrSecret, async (req, res) => {
+    const codeParam = normCode(req.params.code);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "gender name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
+      sets.push(`sort_order=$${i++}`);
+      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+
+    if (!sets.length) return res.json({ ok: true });
+    args.push(codeParam);
+
+    try {
+      const r = await pool.query(
+        `UPDATE aif_gender_types
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE code=$${i}
+         RETURNING code, name, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "gender not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update gender type failed", e);
+      res.status(500).json({ error: "failed to update gender" });
+    }
+  });
+
+  router.delete("/gender-types/:code", requireAdminOrSecret, async (req, res) => {
+    const codeParam = normCode(req.params.code);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const gt = await client.query(`SELECT code, name FROM aif_gender_types WHERE code=$1 FOR UPDATE`, [codeParam]);
+      if (!gt.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "gender not found" });
+      }
+      const activeCount = await client.query(`SELECT count(*)::int AS c FROM aif_gender_types WHERE is_active=true AND code <> $1`, [codeParam]);
+      if (Number(activeCount.rows[0]?.c || 0) <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "at least one active gender is required" });
+      }
+      const usage = await genderTypeUsage(client, codeParam);
+      if (Number(usage.product_models || 0) > 0) {
+        await client.query(`UPDATE aif_gender_types SET is_active=false, updated_at=now() WHERE code=$1`, [codeParam]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_gender_types WHERE code=$1`, [codeParam]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete gender type failed", e);
+      res.status(500).json({ error: "failed to delete gender" });
+    } finally {
+      client.release();
+    }
   });
 
   router.get("/location-types", requireAuthed, async (req, res) => {
@@ -1332,10 +1429,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, locations, locationTypes, currencies, supplierBrands, profiles] = await Promise.all([
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`SELECT code, name, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT code, name, symbol, sort_order, is_active FROM aif_currencies WHERE is_active=true ORDER BY sort_order ASC, code ASC`),
@@ -1345,7 +1443,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   JOIN aif_suppliers s ON s.id=sb.supplier_id
                   JOIN aif_brands b ON b.id=sb.brand_id
                   WHERE sb.is_active=true AND s.is_active=true AND b.is_active=true
-                  ORDER BY s.name ASC, sb.is_preferred DESC, b.name ASC`),
+                  ORDER BY s.name ASC, b.name ASC`),
       pool.query(`SELECT p.id, p.supplier_id, s.code AS supplier_code, p.name, p.source_format, p.version, p.is_active
                   FROM aif_supplier_import_profiles p
                   JOIN aif_suppliers s ON s.id=p.supplier_id
@@ -1356,6 +1454,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       suppliers: suppliers.rows,
       brands: brands.rows,
       categories: categories.rows,
+      genderTypes: genderTypes.rows,
       locations: locations.rows,
       locationTypes: locationTypes.rows,
       currencies: currencies.rows,
@@ -1712,7 +1811,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.sellPrice = Number(row.sell_price_ron);
         }
 
-        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, supplierId: batch.supplier_id, normalized });
+        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
         const variantId = await upsertVariant(client, { modelId, normalized });
         await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         await addStock(client, {
@@ -1921,7 +2020,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (body.descriptionRo !== undefined || body.description_ro !== undefined) addModel("description_ro", emptyToNull(body.descriptionRo ?? body.description_ro));
       if (body.gender !== undefined) {
         const gender = normCode(body.gender || "unisex") || "unisex";
-        if (!["men", "women", "kids", "unisex"].includes(gender)) {
+        if (!(await activeGenderTypeExists(client, gender))) {
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "invalid gender" });
         }
@@ -2004,7 +2103,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       args.push(`%${search}%`);
       where.push(`(
         title_ro ILIKE $1 OR internal_sku ILIKE $1 OR barcode ILIKE $1 OR
-        model_code ILIKE $1 OR brand_name ILIKE $1 OR supplier_names ILIKE $1 OR color_name ILIKE $1 OR size ILIKE $1
+        model_code ILIKE $1 OR brand_name ILIKE $1 OR color_name ILIKE $1 OR size ILIKE $1
       )`);
     }
     args.push(limit);
