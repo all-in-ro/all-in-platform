@@ -21,6 +21,7 @@ const panel = "rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
 const panelHead = "flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
@@ -334,6 +335,17 @@ function formFromDetail(d: DetailResponse): EditForm {
   };
 }
 
+
+function nextSortOrder(rows: Array<{ sort_order?: number | string | null }>) {
+  const nums = rows
+    .map((x) => Number(x.sort_order))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  if (!nums.length) return "10";
+  const max = Math.max(...nums);
+  const useTens = nums.some((x) => x >= 10 && x % 10 === 0);
+  return String(max + (useTens ? 10 : 1));
+}
+
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
@@ -364,8 +376,8 @@ export default function AllInWarehouse() {
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
   const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", sortOrder: "100" });
-  const [genderForm, setGenderForm] = useState({ code: "", name: "", sortOrder: "100" });
+  const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", sortOrder: "10" });
+  const [genderForm, setGenderForm] = useState({ code: "", name: "", sortOrder: "10" });
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender"; id: string; name: string } | null>(null);
 
   const stockMap = useMemo(() => {
@@ -379,6 +391,29 @@ export default function AllInWarehouse() {
     }
     return map;
   }, [stockRows]);
+
+  const nextCategorySortOrder = useMemo(() => nextSortOrder(categories), [categories]);
+  const nextGenderSortOrder = useMemo(() => nextSortOrder(genderTypes), [genderTypes]);
+
+  useEffect(() => {
+    if (!taxonomyOpen) return;
+    if (taxonomyTab === "categories" && !categoryForm.id && !categoryForm.nameRo.trim() && !categoryForm.nameHu.trim()) {
+      setCategoryForm((x) => x.sortOrder === nextCategorySortOrder ? x : { ...x, sortOrder: nextCategorySortOrder });
+    }
+    if (taxonomyTab === "genders" && !genderForm.code && !genderForm.name.trim()) {
+      setGenderForm((x) => x.sortOrder === nextGenderSortOrder ? x : { ...x, sortOrder: nextGenderSortOrder });
+    }
+  }, [
+    taxonomyOpen,
+    taxonomyTab,
+    nextCategorySortOrder,
+    nextGenderSortOrder,
+    categoryForm.id,
+    categoryForm.nameRo,
+    categoryForm.nameHu,
+    genderForm.code,
+    genderForm.name,
+  ]);
 
   const selectedSupplier = useMemo(() => {
     if (supplier === "all") return null;
@@ -469,7 +504,7 @@ export default function AllInWarehouse() {
   }, [stockRows]);
 
   function resetCategoryForm() {
-    setCategoryForm({ id: "", nameRo: "", nameHu: "", sortOrder: "100" });
+    setCategoryForm({ id: "", nameRo: "", nameHu: "", sortOrder: nextCategorySortOrder });
   }
 
   function editCategoryRow(c: MetaItem) {
@@ -483,7 +518,7 @@ export default function AllInWarehouse() {
   }
 
   function resetGenderForm() {
-    setGenderForm({ code: "", name: "", sortOrder: "100" });
+    setGenderForm({ code: "", name: "", sortOrder: nextGenderSortOrder });
   }
 
   function editGenderRow(g: GenderType) {
@@ -739,7 +774,7 @@ export default function AllInWarehouse() {
               </label>
               <div className="flex items-end gap-2">
                 <button className={btn} onClick={load} disabled={busy}><Search size={16} /> Keresés</button>
-                <button className={btnSoft} onClick={() => { setSupplier("all"); setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Törlés</button>
+                <button className={btnSoft} onClick={() => { setSupplier("all"); setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Alaphelyzet</button>
               </div>
             </div>
           )}
@@ -890,7 +925,10 @@ export default function AllInWarehouse() {
                     <div className="grid gap-3">
                       <label className={label}>Megnevezés románul<input className={input} value={categoryForm.nameRo} onChange={(e) => setCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
                       <label className={label}>Megnevezés magyarul<input className={input} value={categoryForm.nameHu} onChange={(e) => setCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
-                      <label className={label}>Sorrend<input className={input} value={categoryForm.sortOrder} onChange={(e) => setCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} /></label>
+                      <label className={label}>Sorrend
+                        <input className={input} value={categoryForm.sortOrder} onChange={(e) => setCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!categoryForm.id && <span className="text-[11px] text-white/50">Következő javasolt sorrend: {nextCategorySortOrder}</span>}
+                      </label>
                       <button className={btn} onClick={saveCategoryForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
                     </div>
                   </section>
@@ -902,7 +940,7 @@ export default function AllInWarehouse() {
                           <div><p className="text-sm text-white">{categoryLabel(c)}</p>{c.name_ro && c.name_hu && <p className="text-xs text-white/55">{c.name_ro}</p>}</div>
                           <div className="flex gap-2">
                             <button className={btnSoft} onClick={() => editCategoryRow(c)}><Edit3 size={14} /> Módosítás</button>
-                            <button className={btnSoft} onClick={() => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) })}>Törlés</button>
+                            <button className={dangerBtn} onClick={() => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) })}>Törlés</button>
                           </div>
                         </div>
                       ))}
@@ -921,7 +959,10 @@ export default function AllInWarehouse() {
                     </div>
                     <div className="grid gap-3">
                       <label className={label}>Megnevezés<input className={input} value={genderForm.name} onChange={(e) => setGenderForm((x) => ({ ...x, name: e.target.value }))} /></label>
-                      <label className={label}>Sorrend<input className={input} value={genderForm.sortOrder} onChange={(e) => setGenderForm((x) => ({ ...x, sortOrder: e.target.value }))} /></label>
+                      <label className={label}>Sorrend
+                        <input className={input} value={genderForm.sortOrder} onChange={(e) => setGenderForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!genderForm.code && <span className="text-[11px] text-white/50">Következő javasolt sorrend: {nextGenderSortOrder}</span>}
+                      </label>
                       <button className={btn} onClick={saveGenderForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
                     </div>
                   </section>
@@ -933,7 +974,7 @@ export default function AllInWarehouse() {
                           <p className="text-sm text-white">{g.name}</p>
                           <div className="flex gap-2">
                             <button className={btnSoft} onClick={() => editGenderRow(g)}><Edit3 size={14} /> Módosítás</button>
-                            <button className={btnSoft} onClick={() => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name })}>Törlés</button>
+                            <button className={dangerBtn} onClick={() => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name })}>Törlés</button>
                           </div>
                         </div>
                       ))}
@@ -949,7 +990,7 @@ export default function AllInWarehouse() {
                   <p className="mt-1 text-sm text-white/70">{deleteTarget.name}</p>
                   <div className="mt-3 flex flex-wrap justify-end gap-2">
                     <button className={btnSoft} onClick={() => setDeleteTarget(null)}>Mégse</button>
-                    <button className={btn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy}>Megerősítés</button>
+                    <button className={dangerBtn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy}>Megerősítés</button>
                   </div>
                 </div>
               )}
