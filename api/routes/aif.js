@@ -106,19 +106,73 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function ensureBrand(client, normalized, fallbackSupplierCode) {
-    const rawCode = normalized.brandCode || normCode(fallbackSupplierCode);
-    if (!rawCode) return null;
+  async function linkSupplierBrand(client, supplierId, brandId, preferred = false) {
+    if (!supplierId || !brandId) return;
+    if (preferred) {
+      await client.query(
+        `UPDATE aif_supplier_brands
+         SET is_preferred=false, updated_at=now()
+         WHERE supplier_id=$1 AND brand_id <> $2`,
+        [supplierId, brandId]
+      );
+    }
+    await client.query(
+      `INSERT INTO aif_supplier_brands (supplier_id, brand_id, is_preferred, is_active)
+       VALUES ($1,$2,$3,true)
+       ON CONFLICT (supplier_id, brand_id) DO UPDATE SET
+         is_active=true,
+         is_preferred=CASE WHEN EXCLUDED.is_preferred THEN true ELSE aif_supplier_brands.is_preferred END,
+         updated_at=now()`,
+      [supplierId, brandId, Boolean(preferred)]
+    );
+  }
 
-    const name = normalized.brandName || text(rawCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
-    const r = await client.query(
+  async function ensureBrand(client, normalized, fallbackSupplierCode, supplierId = null) {
+    const rawCode = normalized.brandCode || null;
+
+    if (rawCode) {
+      const name = normalized.brandName || text(rawCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+      const r = await client.query(
+        `INSERT INTO aif_brands (code, name)
+         VALUES ($1, $2)
+         ON CONFLICT (code) DO UPDATE SET
+           name = COALESCE(EXCLUDED.name, aif_brands.name),
+           is_active=true,
+           updated_at=now()
+         RETURNING id`,
+        [rawCode, name]
+      );
+      await linkSupplierBrand(client, supplierId, r.rows[0].id, false);
+      return r.rows[0].id;
+    }
+
+    if (supplierId) {
+      const linked = await client.query(
+        `SELECT b.id
+         FROM aif_supplier_brands sb
+         JOIN aif_brands b ON b.id=sb.brand_id
+         WHERE sb.supplier_id=$1
+           AND sb.is_active=true
+           AND b.is_active=true
+         ORDER BY sb.is_preferred DESC, b.name ASC
+         LIMIT 1`,
+        [supplierId]
+      );
+      if (linked.rowCount) return linked.rows[0].id;
+    }
+
+    const fallbackCode = normCode(fallbackSupplierCode);
+    if (!fallbackCode) return null;
+    const fallbackName = text(fallbackCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+    const fallback = await client.query(
       `INSERT INTO aif_brands (code, name)
        VALUES ($1, $2)
-       ON CONFLICT (code) DO UPDATE SET name = COALESCE(aif_brands.name, EXCLUDED.name)
+       ON CONFLICT (code) DO UPDATE SET updated_at=now()
        RETURNING id`,
-      [rawCode, name]
+      [fallbackCode, fallbackName]
     );
-    return r.rows[0].id;
+    await linkSupplierBrand(client, supplierId, fallback.rows[0].id, true);
+    return fallback.rows[0].id;
   }
 
   async function findCategoryId(client, categoryCode) {
@@ -128,8 +182,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0]?.id || null;
   }
 
-  async function upsertModel(client, { supplierCode, normalized }) {
-    const brandId = await ensureBrand(client, normalized, supplierCode);
+  async function upsertModel(client, { supplierCode, supplierId, normalized }) {
+    const brandId = await ensureBrand(client, normalized, supplierCode, supplierId);
     const categoryId = await findCategoryId(client, normalized.categoryCode);
     const baseModelCode = normalized.modelCode || normalized.supplierProductCode || normalized.titleRo;
     const modelCode = `${normCode(supplierCode || "aif")}:${normCode(baseModelCode)}`;
@@ -388,6 +442,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [supplierId]
     );
     return r.rows[0] || { import_batches: 0, supplier_codes: 0, profiles: 0 };
+  }
+
+  async function brandUsage(client, brandId) {
+    const r = await client.query(
+      `SELECT
+         (SELECT count(*)::int FROM aif_product_models WHERE brand_id=$1) AS product_models,
+         (SELECT count(*)::int FROM aif_supplier_brands WHERE brand_id=$1) AS supplier_links`,
+      [brandId]
+    );
+    return r.rows[0] || { product_models: 0, supplier_links: 0 };
   }
 
 
@@ -757,9 +821,240 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
-  router.get("/brands", requireAuthed, async (_req, res) => {
-    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
+  router.get("/brands", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT id, code, name, is_active, created_at, updated_at
+       FROM aif_brands
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, name ASC`
+    );
     res.json({ items: r.rows });
+  });
+
+  router.post("/brands", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const name = text(body.name);
+    const code = normCode(body.code || name);
+    if (!name) return res.status(400).json({ error: "brand name required" });
+    if (!code) return res.status(400).json({ error: "brand code required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_brands (code, name, is_active)
+         VALUES ($1,$2,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name, is_active, created_at, updated_at`,
+        [code, name]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create brand failed", e);
+      res.status(500).json({ error: "failed to save brand" });
+    }
+  });
+
+  router.patch("/brands/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "brand name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "brand code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+    try {
+      const r = await pool.query(
+        `UPDATE aif_brands
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "brand not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update brand failed", e);
+      res.status(500).json({ error: "failed to update brand" });
+    }
+  });
+
+  router.delete("/brands/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const brand = await client.query(`SELECT id FROM aif_brands WHERE id::text=$1 OR code=$1 FOR UPDATE`, [id]);
+      if (!brand.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "brand not found" });
+      }
+      const usage = await brandUsage(client, brand.rows[0].id);
+      if (Number(usage.product_models || 0) > 0 || Number(usage.supplier_links || 0) > 0) {
+        await client.query(`UPDATE aif_brands SET is_active=false, updated_at=now() WHERE id=$1`, [brand.rows[0].id]);
+        await client.query(`UPDATE aif_supplier_brands SET is_active=false, updated_at=now() WHERE brand_id=$1`, [brand.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_brands WHERE id=$1`, [brand.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete brand failed", e);
+      res.status(500).json({ error: "failed to delete brand" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/supplier-brands", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const supplier = text(req.query.supplier || req.query.supplierId || req.query.supplier_id);
+    const args = [];
+    const where = [];
+    if (!includeInactive) where.push(`sb.is_active=true AND s.is_active=true AND b.is_active=true`);
+    if (supplier) {
+      args.push(supplier);
+      where.push(`(s.id::text=$${args.length} OR s.code=$${args.length})`);
+    }
+    const r = await pool.query(
+      `SELECT sb.id, sb.supplier_id, sb.brand_id, sb.is_preferred, sb.is_active, sb.notes, sb.created_at, sb.updated_at,
+              s.name AS supplier_name, b.name AS brand_name
+       FROM aif_supplier_brands sb
+       JOIN aif_suppliers s ON s.id=sb.supplier_id
+       JOIN aif_brands b ON b.id=sb.brand_id
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY s.name ASC, sb.is_preferred DESC, b.name ASC`,
+      args
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/supplier-brands", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const supplier = await findByIdOrCode(client, "aif_suppliers", body.supplierId || body.supplier_id || body.supplier);
+      const brand = await findByIdOrCode(client, "aif_brands", body.brandId || body.brand_id || body.brand);
+      if (!supplier) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "supplier required" });
+      }
+      if (!brand) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "brand required" });
+      }
+      const preferred = Boolean(body.isPreferred ?? body.is_preferred);
+      if (preferred) {
+        await client.query(`UPDATE aif_supplier_brands SET is_preferred=false, updated_at=now() WHERE supplier_id=$1`, [supplier.id]);
+      }
+      const r = await client.query(
+        `INSERT INTO aif_supplier_brands (supplier_id, brand_id, is_preferred, is_active, notes)
+         VALUES ($1,$2,$3,true,$4)
+         ON CONFLICT (supplier_id, brand_id) DO UPDATE SET
+           is_active=true,
+           is_preferred=EXCLUDED.is_preferred,
+           notes=COALESCE(EXCLUDED.notes, aif_supplier_brands.notes),
+           updated_at=now()
+         RETURNING id, supplier_id, brand_id, is_preferred, is_active, notes, created_at, updated_at`,
+        [supplier.id, brand.id, preferred, emptyToNull(body.notes)]
+      );
+      await client.query("COMMIT");
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF create supplier brand link failed", e);
+      res.status(500).json({ error: "failed to save supplier brand link" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch("/supplier-brands/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(`SELECT * FROM aif_supplier_brands WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "supplier brand link not found" });
+      }
+      const sets = [];
+      const args = [];
+      let i = 1;
+      if (body.is_preferred !== undefined || body.isPreferred !== undefined) {
+        const preferred = Boolean(body.is_preferred ?? body.isPreferred);
+        if (preferred) {
+          await client.query(
+            `UPDATE aif_supplier_brands SET is_preferred=false, updated_at=now() WHERE supplier_id=$1 AND id <> $2`,
+            [current.rows[0].supplier_id, current.rows[0].id]
+          );
+        }
+        sets.push(`is_preferred=$${i++}`);
+        args.push(preferred);
+      }
+      if (body.is_active !== undefined || body.isActive !== undefined) {
+        sets.push(`is_active=$${i++}`);
+        args.push(Boolean(body.is_active ?? body.isActive));
+      }
+      if (body.notes !== undefined) {
+        sets.push(`notes=$${i++}`);
+        args.push(emptyToNull(body.notes));
+      }
+      if (!sets.length) {
+        await client.query("COMMIT");
+        return res.json({ ok: true });
+      }
+      args.push(id);
+      const r = await client.query(
+        `UPDATE aif_supplier_brands
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i}
+         RETURNING id, supplier_id, brand_id, is_preferred, is_active, notes, created_at, updated_at`,
+        args
+      );
+      await client.query("COMMIT");
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF update supplier brand link failed", e);
+      res.status(500).json({ error: "failed to update supplier brand link" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/supplier-brands/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    try {
+      const r = await pool.query(`DELETE FROM aif_supplier_brands WHERE id::text=$1`, [id]);
+      if (!r.rowCount) return res.status(404).json({ error: "supplier brand link not found" });
+      res.json({ ok: true, mode: "deleted" });
+    } catch (e) {
+      console.error("AIF delete supplier brand link failed", e);
+      res.status(500).json({ error: "failed to delete supplier brand link" });
+    }
   });
 
   router.get("/categories", requireAuthed, async (_req, res) => {
@@ -1037,13 +1332,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, locations, locationTypes, currencies, profiles] = await Promise.all([
+    const [suppliers, brands, categories, locations, locationTypes, currencies, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT code, name, symbol, sort_order, is_active FROM aif_currencies WHERE is_active=true ORDER BY sort_order ASC, code ASC`),
+      pool.query(`SELECT sb.id, sb.supplier_id, sb.brand_id, sb.is_preferred, sb.is_active,
+                         s.name AS supplier_name, b.name AS brand_name
+                  FROM aif_supplier_brands sb
+                  JOIN aif_suppliers s ON s.id=sb.supplier_id
+                  JOIN aif_brands b ON b.id=sb.brand_id
+                  WHERE sb.is_active=true AND s.is_active=true AND b.is_active=true
+                  ORDER BY s.name ASC, sb.is_preferred DESC, b.name ASC`),
       pool.query(`SELECT p.id, p.supplier_id, s.code AS supplier_code, p.name, p.source_format, p.version, p.is_active
                   FROM aif_supplier_import_profiles p
                   JOIN aif_suppliers s ON s.id=p.supplier_id
@@ -1057,6 +1359,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locations: locations.rows,
       locationTypes: locationTypes.rows,
       currencies: currencies.rows,
+      supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
     });
   });
@@ -1409,7 +1712,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.sellPrice = Number(row.sell_price_ron);
         }
 
-        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
+        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, supplierId: batch.supplier_id, normalized });
         const variantId = await upsertVariant(client, { modelId, normalized });
         await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         await addStock(client, {
@@ -1701,7 +2004,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       args.push(`%${search}%`);
       where.push(`(
         title_ro ILIKE $1 OR internal_sku ILIKE $1 OR barcode ILIKE $1 OR
-        model_code ILIKE $1 OR brand_name ILIKE $1 OR color_name ILIKE $1 OR size ILIKE $1
+        model_code ILIKE $1 OR brand_name ILIKE $1 OR supplier_names ILIKE $1 OR color_name ILIKE $1 OR size ILIKE $1
       )`);
     }
     args.push(limit);
