@@ -390,6 +390,53 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0] || { import_batches: 0, supplier_codes: 0, profiles: 0 };
   }
 
+
+  function currencyCode(v) {
+    return text(v).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+  }
+
+  function tvaMode(v) {
+    const mode = normCode(v || "without_tva");
+    if (["without_tva", "with_tva", "no_tva"].includes(mode)) return mode;
+    return "without_tva";
+  }
+
+  async function currencyUsage(client, code) {
+    const r = await client.query(
+      `SELECT
+         (SELECT count(*)::int FROM aif_receptions WHERE currency_code=$1) AS receptions,
+         (SELECT count(*)::int FROM aif_exchange_rates WHERE currency_code=$1) AS exchange_rates,
+         (SELECT count(*)::int FROM aif_import_batches WHERE currency_code=$1) AS import_batches`,
+      [code]
+    );
+    return r.rows[0] || { receptions: 0, exchange_rates: 0, import_batches: 0 };
+  }
+
+  function receptionFromBody(body) {
+    const src = body?.reception && typeof body.reception === "object" ? body.reception : {};
+    const code = currencyCode(src.currencyCode || src.currency_code || body.currencyCode || body.currency_code || "RON") || "RON";
+    const exchangeRate = toMoney(src.exchangeRateToRon ?? src.exchange_rate_to_ron ?? body.exchangeRateToRon ?? body.exchange_rate_to_ron ?? (code === "RON" ? 1 : null));
+    const rate = exchangeRate && exchangeRate > 0 ? exchangeRate : (code === "RON" ? 1 : null);
+    return {
+      invoiceNumber: emptyToNull(src.invoiceNumber || src.invoice_number || body.invoiceNumber || body.invoice_number),
+      invoiceDate: emptyToNull(src.invoiceDate || src.invoice_date || body.invoiceDate || body.invoice_date),
+      receptionDate: emptyToNull(src.receptionDate || src.reception_date || body.receptionDate || body.reception_date),
+      currencyCode: code,
+      exchangeRateToRon: rate,
+      tvaMode: tvaMode(src.tvaMode || src.tva_mode || body.tvaMode || body.tva_mode),
+      tvaRate: toMoney(src.tvaRate ?? src.tva_rate ?? body.tvaRate ?? body.tva_rate ?? 19),
+      shippingCost: toMoney(src.shippingCost ?? src.shipping_cost ?? body.shippingCost ?? body.shipping_cost) ?? 0,
+      goodsValue: toMoney(src.goodsValue ?? src.goods_value ?? body.goodsValue ?? body.goods_value),
+      invoiceNet: toMoney(src.invoiceNet ?? src.invoice_net ?? body.invoiceNet ?? body.invoice_net),
+      invoiceVat: toMoney(src.invoiceVat ?? src.invoice_vat ?? body.invoiceVat ?? body.invoice_vat),
+      invoiceGross: toMoney(src.invoiceGross ?? src.invoice_gross ?? body.invoiceGross ?? body.invoice_gross),
+      lineCount: toInt(src.lineCount ?? src.line_count ?? body.lineCount ?? body.line_count) || 0,
+      totalQty: toInt(src.totalQty ?? src.total_qty ?? body.totalQty ?? body.total_qty) || 0,
+      note: emptyToNull(src.note || body.note),
+      rawMeta: src && typeof src === "object" ? src : {},
+    };
+  }
+
   router.get("/suppliers", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const withStats = ["1", "true", "yes"].includes(text(req.query.withStats || req.query.with_stats).toLowerCase());
@@ -410,7 +457,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          count(DISTINCT b.id)::int AS import_batches,
          count(rw.id)::int AS imported_rows,
          COALESCE(sum(CASE WHEN b.status='committed' THEN COALESCE(rw.qty,0) ELSE 0 END),0)::int AS purchased_qty,
-         COALESCE(sum(CASE WHEN b.status='committed' THEN COALESCE(rw.qty,0) * COALESCE(rw.buy_price,0) ELSE 0 END),0)::numeric(14,2) AS purchased_value,
+         COALESCE(sum(CASE WHEN b.status='committed' THEN COALESCE(rw.qty,0) * COALESCE(rw.buy_price_ron, rw.buy_price,0) ELSE 0 END),0)::numeric(14,2) AS purchased_value,
          max(CASE WHEN b.status='committed' THEN COALESCE(b.committed_at, b.created_at) END) AS last_purchase_at
        FROM aif_suppliers s
        LEFT JOIN aif_import_batches b ON b.supplier_id=s.id
@@ -554,7 +601,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          count(DISTINCT b.id)::int AS purchase_batches,
          count(rw.id)::int AS purchase_rows,
          COALESCE(sum(COALESCE(rw.qty,0)),0)::int AS purchase_qty,
-         COALESCE(sum(COALESCE(rw.qty,0) * COALESCE(rw.buy_price,0)),0)::numeric(14,2) AS purchase_value,
+         COALESCE(sum(COALESCE(rw.qty,0) * COALESCE(rw.buy_price_ron, rw.buy_price,0)),0)::numeric(14,2) AS purchase_value,
          count(rw.id) FILTER (WHERE rw.buy_price IS NULL)::int AS rows_without_buy_price,
          max(COALESCE(b.committed_at, b.created_at)) AS last_purchase_at
        FROM aif_suppliers s
@@ -576,6 +623,136 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }, { purchase_batches: 0, purchase_rows: 0, purchase_qty: 0, purchase_value: 0, rows_without_buy_price: 0 });
 
     res.json({ items: r.rows, totals });
+  });
+
+  router.get("/currencies", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT code, name, symbol, sort_order, is_active, created_at, updated_at
+       FROM aif_currencies
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, code ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/currencies", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const code = currencyCode(body.code);
+    const name = text(body.name);
+    const symbol = emptyToNull(body.symbol);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!code) return res.status(400).json({ error: "currency code required" });
+    if (!name) return res.status(400).json({ error: "currency name required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_currencies (code, name, symbol, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           symbol=EXCLUDED.symbol,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING code, name, symbol, sort_order, is_active, created_at, updated_at`,
+        [code, name, symbol, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create currency failed", e);
+      res.status(500).json({ error: "failed to save currency" });
+    }
+  });
+
+  router.patch("/currencies/:code", requireAdminOrSecret, async (req, res) => {
+    const codeParam = currencyCode(req.params.code);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.name !== undefined) {
+      const name = text(body.name);
+      if (!name) return res.status(400).json({ error: "currency name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.symbol !== undefined) {
+      sets.push(`symbol=$${i++}`);
+      args.push(emptyToNull(body.symbol));
+    }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
+      sets.push(`sort_order=$${i++}`);
+      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(codeParam);
+    try {
+      const r = await pool.query(
+        `UPDATE aif_currencies SET ${sets.join(", ")}, updated_at=now()
+         WHERE code=$${i}
+         RETURNING code, name, symbol, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "currency not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update currency failed", e);
+      res.status(500).json({ error: "failed to update currency" });
+    }
+  });
+
+  router.delete("/currencies/:code", requireAdminOrSecret, async (req, res) => {
+    const codeParam = currencyCode(req.params.code);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const c = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 FOR UPDATE`, [codeParam]);
+      if (!c.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "currency not found" });
+      }
+      const activeCount = await client.query(`SELECT count(*)::int AS c FROM aif_currencies WHERE is_active=true AND code <> $1`, [codeParam]);
+      if (Number(activeCount.rows[0]?.c || 0) <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "at least one active currency is required" });
+      }
+      const usage = await currencyUsage(client, codeParam);
+      if (Number(usage.receptions || 0) > 0 || Number(usage.exchange_rates || 0) > 0 || Number(usage.import_batches || 0) > 0) {
+        await client.query(`UPDATE aif_currencies SET is_active=false, updated_at=now() WHERE code=$1`, [codeParam]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_currencies WHERE code=$1`, [codeParam]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete currency failed", e);
+      res.status(500).json({ error: "failed to delete currency" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/receptions", requireAuthed, async (req, res) => {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const r = await pool.query(
+      `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+              r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
+              r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
+              s.name AS supplier_name, l.name AS location_name
+       FROM aif_receptions r
+       LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+       LEFT JOIN aif_locations l ON l.id=r.target_location_id
+       ORDER BY r.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({ items: r.rows });
   });
 
   router.get("/brands", requireAuthed, async (_req, res) => {
@@ -858,12 +1035,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, locations, locationTypes, profiles] = await Promise.all([
+    const [suppliers, brands, categories, locations, locationTypes, currencies, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
+      pool.query(`SELECT code, name, symbol, sort_order, is_active FROM aif_currencies WHERE is_active=true ORDER BY sort_order ASC, code ASC`),
       pool.query(`SELECT p.id, p.supplier_id, s.code AS supplier_code, p.name, p.source_format, p.version, p.is_active
                   FROM aif_supplier_import_profiles p
                   JOIN aif_suppliers s ON s.id=p.supplier_id
@@ -876,6 +1054,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       categories: categories.rows,
       locations: locations.rows,
       locationTypes: locationTypes.rows,
+      currencies: currencies.rows,
       profiles: profiles.rows,
     });
   });
@@ -931,17 +1110,62 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const targetLocationId = location?.id || await getDefaultLocationId(client);
       if (!targetLocationId) return res.status(400).json({ error: "target location missing" });
 
+      const reception = receptionFromBody(body);
+      if (!reception.exchangeRateToRon || reception.exchangeRateToRon <= 0) {
+        return res.status(400).json({ error: "exchange rate required" });
+      }
+
+      const curr = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [reception.currencyCode]);
+      if (!curr.rowCount) return res.status(400).json({ error: "currency is inactive or unknown" });
+
+      await client.query("BEGIN");
+
+      const receptionRes = await client.query(
+        `INSERT INTO aif_receptions (
+           supplier_id, target_location_id, invoice_number, invoice_date, reception_date,
+           currency_code, exchange_rate_to_ron, tva_mode, tva_rate, shipping_cost,
+           goods_value, invoice_net, invoice_vat, invoice_gross, total_qty, line_count,
+           status, note, raw_meta, created_by, actor
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft',$17,$18::jsonb,$19,$20)
+         RETURNING id`,
+        [
+          supplier.id,
+          targetLocationId,
+          reception.invoiceNumber,
+          reception.invoiceDate,
+          reception.receptionDate,
+          reception.currencyCode,
+          reception.exchangeRateToRon,
+          reception.tvaMode,
+          reception.tvaRate,
+          reception.shippingCost,
+          reception.goodsValue,
+          reception.invoiceNet,
+          reception.invoiceVat,
+          reception.invoiceGross,
+          reception.totalQty,
+          reception.lineCount,
+          reception.note,
+          JSON.stringify(reception.rawMeta || {}),
+          req.session?.role || "system",
+          actorFrom(req),
+        ]
+      );
+
       const r = await client.query(
         `INSERT INTO aif_import_batches (
-           supplier_id, profile_id, target_location_id, source_file_name,
-           source_file_url, source_format, status, created_by, actor, note, raw_meta
+           supplier_id, profile_id, target_location_id, reception_id, source_file_name,
+           source_file_url, source_format, status, created_by, actor, note, raw_meta,
+           currency_code, exchange_rate_to_ron, invoice_number
          )
-         VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,$8,$9,$10::jsonb)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10,$11::jsonb,$12,$13,$14)
          RETURNING id`,
         [
           supplier.id,
           profileId,
           targetLocationId,
+          receptionRes.rows[0].id,
           emptyToNull(body.sourceFileName || body.source_file_name || body.fileName),
           emptyToNull(body.sourceFileUrl || body.source_file_url || body.fileUrl),
           normCode(body.sourceFormat || body.source_format || "xls") || "xls",
@@ -949,10 +1173,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           actorFrom(req),
           emptyToNull(body.note),
           JSON.stringify(body.rawMeta || body.raw_meta || {}),
+          reception.currencyCode,
+          reception.exchangeRateToRon,
+          reception.invoiceNumber,
         ]
       );
-      res.json({ id: r.rows[0].id });
+      await client.query("COMMIT");
+      res.json({ id: r.rows[0].id, receptionId: receptionRes.rows[0].id });
     } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF create import batch failed", e);
       res.status(500).json({ error: "failed to create import batch" });
     } finally {
@@ -965,6 +1194,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const r = await pool.query(
       `SELECT b.id, b.created_at, b.updated_at, b.status, b.row_count, b.error_count,
               b.source_file_name, b.note, b.committed_at,
+              b.reception_id, b.invoice_number, b.currency_code, b.exchange_rate_to_ron,
+              r.invoice_gross, r.invoice_date, r.reception_date,
               s.code AS supplier_code, s.name AS supplier_name,
               l.code AS location_code, l.name AS location_name,
               p.name AS profile_name, p.version AS profile_version
@@ -972,6 +1203,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        JOIN aif_suppliers s ON s.id=b.supplier_id
        LEFT JOIN aif_locations l ON l.id=b.target_location_id
        LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
+       LEFT JOIN aif_receptions r ON r.id=b.reception_id
        ORDER BY b.created_at DESC
        LIMIT $1`,
       [limit]
@@ -984,11 +1216,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const batch = await pool.query(
       `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
               l.code AS location_code, l.name AS location_name,
-              p.name AS profile_name, p.version AS profile_version
+              p.name AS profile_name, p.version AS profile_version,
+              to_jsonb(r.*) AS reception
        FROM aif_import_batches b
        JOIN aif_suppliers s ON s.id=b.supplier_id
        LEFT JOIN aif_locations l ON l.id=b.target_location_id
        LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
+       LEFT JOIN aif_receptions r ON r.id=b.reception_id
        WHERE b.id=$1`,
       [id]
     );
@@ -997,7 +1231,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rows = await pool.query(
       `SELECT id, row_no, raw, normalized, status, error_messages, variant_id,
               supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-              qty, buy_price, sell_price
+              qty, buy_price, buy_price_ron, sell_price, sell_price_ron
        FROM aif_import_rows
        WHERE batch_id=$1
        ORDER BY row_no ASC`,
@@ -1015,7 +1249,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const batch = await client.query(`SELECT id, status FROM aif_import_batches WHERE id=$1 FOR UPDATE`, [batchId]);
+      const batch = await client.query(
+        `SELECT b.id, b.status, b.currency_code, b.exchange_rate_to_ron,
+                r.exchange_rate_to_ron AS reception_exchange_rate, r.currency_code AS reception_currency_code
+         FROM aif_import_batches b
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
+         WHERE b.id=$1
+         FOR UPDATE`,
+        [batchId]
+      );
       if (!batch.rowCount) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "batch not found" });
@@ -1025,6 +1267,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.status(400).json({ error: "batch cannot be edited" });
       }
 
+      const exchangeRate = Number(batch.rows[0].exchange_rate_to_ron || batch.rows[0].reception_exchange_rate || 1);
+      const currency = currencyCode(batch.rows[0].currency_code || batch.rows[0].reception_currency_code || "RON") || "RON";
+
       await client.query(`DELETE FROM aif_import_rows WHERE batch_id=$1`, [batchId]);
 
       let errorCount = 0;
@@ -1032,18 +1277,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
         if (nr.errors.length) errorCount++;
+        const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
+          ? null
+          : Number(nr.normalized.buyPrice) * exchangeRate;
+        const sellPriceRon = nr.normalized.sellPrice == null || !Number.isFinite(exchangeRate)
+          ? null
+          : Number(nr.normalized.sellPrice) * exchangeRate;
+        const normalizedForDb = {
+          ...nr.normalized,
+          currencyCode: currency,
+          exchangeRateToRon: exchangeRate,
+          buyPriceRon,
+          sellPriceRon,
+        };
+
         await client.query(
           `INSERT INTO aif_import_rows (
              batch_id, row_no, raw, normalized, status, error_messages,
              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-             qty, buy_price, sell_price
+             qty, buy_price, buy_price_ron, sell_price, sell_price_ron
            )
-           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13)`,
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
           [
             batchId,
             nr.rowNo,
             JSON.stringify(nr.raw || {}),
-            JSON.stringify(nr.normalized),
+            JSON.stringify(normalizedForDb),
             nr.status,
             nr.errors,
             nr.normalized.supplierProductCode,
@@ -1052,7 +1311,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.supplierSize,
             nr.normalized.qty,
             nr.normalized.buyPrice,
+            buyPriceRon,
             nr.normalized.sellPrice,
+            sellPriceRon,
           ]
         );
       }
@@ -1081,9 +1342,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await client.query("BEGIN");
       const batchRes = await client.query(
-        `SELECT b.*, s.code AS supplier_code
+        `SELECT b.*, s.code AS supplier_code, r.exchange_rate_to_ron AS reception_exchange_rate
          FROM aif_import_batches b
          JOIN aif_suppliers s ON s.id=b.supplier_id
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE b.id=$1
          FOR UPDATE`,
         [batchId]
@@ -1127,9 +1389,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let committed = 0;
       const actor = actorFrom(req);
       for (const row of rows.rows) {
-        const normalized = row.normalized || {};
+        const normalized = { ...(row.normalized || {}) };
         const qty = Number(row.qty ?? normalized.qty ?? 0);
         if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        if (row.buy_price_ron !== null && row.buy_price_ron !== undefined) {
+          normalized.buyPriceOriginal = row.buy_price;
+          normalized.buyPrice = Number(row.buy_price_ron);
+        }
+        if (row.sell_price_ron !== null && row.sell_price_ron !== undefined) {
+          normalized.sellPriceOriginal = row.sell_price;
+          normalized.sellPrice = Number(row.sell_price_ron);
+        }
 
         const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
         const variantId = await upsertVariant(client, { modelId, normalized });
@@ -1157,6 +1428,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE id=$1`,
         [batchId]
       );
+
+      if (batch.reception_id) {
+        await client.query(
+          `UPDATE aif_receptions
+           SET status='committed', updated_at=now()
+           WHERE id=$1`,
+          [batch.reception_id]
+        );
+      }
 
       await client.query("COMMIT");
       res.json({ ok: true, committed });
