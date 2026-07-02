@@ -1074,7 +1074,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
-  router.patch("/receptions/:id", requireAdminOrSecret, async (req, res) => {
+  router.patch("/receptions/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const body = req.body || {};
     const src = body.reception && typeof body.reception === "object" ? body.reception : body;
