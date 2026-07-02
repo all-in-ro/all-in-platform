@@ -497,8 +497,7 @@ export default function AllInSuppliers() {
     return map;
   }, [supplierBrandLinks]);
 
-  const currentBrandSupplierId =
-    brandSupplierId || selectedSupplierId || suppliers[0]?.id || "";
+  const currentBrandSupplierId = brandSupplierId || suppliers[0]?.id || "";
 
   const currentBrandSupplierName = currentBrandSupplierId
     ? supplierNameById.get(currentBrandSupplierId) || "-"
@@ -629,17 +628,13 @@ export default function AllInSuppliers() {
 
   useEffect(() => {
     if (!brandSupplierId && suppliers.length) {
-      setBrandSupplierId(selectedSupplierId || suppliers[0].id);
+      setBrandSupplierId(suppliers[0].id);
     }
-  }, [brandSupplierId, selectedSupplierId, suppliers]);
+  }, [brandSupplierId, suppliers]);
 
   useEffect(() => {
-    if (!availableBrandsForSelectedSupplier.length) {
-      if (brandId) setBrandId("");
-      return;
-    }
-    if (!availableBrandsForSelectedSupplier.some((brand) => brand.id === brandId)) {
-      setBrandId(availableBrandsForSelectedSupplier[0].id);
+    if (brandId && !availableBrandsForSelectedSupplier.some((brand) => brand.id === brandId)) {
+      setBrandId("");
     }
   }, [availableBrandsForSelectedSupplier, brandId]);
 
@@ -664,6 +659,12 @@ export default function AllInSuppliers() {
     window.setTimeout(() => {
       reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 0);
+  }
+
+  function focusSupplierBrandLinks(id: string) {
+    setBrandSupplierId(id);
+    setBrandId("");
+    setBrandsOpen(true);
   }
 
   function changeCompareMode(mode: CompareMode) {
@@ -851,13 +852,13 @@ export default function AllInSuppliers() {
   }
 
   async function createSupplierBrandLink() {
-    const supplierId = brandSupplierId || selectedSupplierId;
+    const supplierId = brandSupplierId;
     if (!supplierId) {
       setMessage("Válassz beszállítót.");
       return;
     }
     if (!brandId) {
-      setMessage("Nincs kapcsolható márka ehhez a beszállítóhoz.");
+      setMessage("Válassz márkát a kapcsoláshoz.");
       return;
     }
     if (selectedSupplierActiveBrandIds.has(brandId)) {
@@ -1573,7 +1574,7 @@ export default function AllInSuppliers() {
                                     <button
                                       key={link.id}
                                       className={`${chip} ${link.supplier_id === currentBrandSupplierId ? "border-emerald-300/42 bg-emerald-300/10 text-emerald-50" : "border-white/18 bg-slate-950/18 text-white/72"}`}
-                                      onClick={() => openSupplierDetails(link.supplier_id)}
+                                      onClick={() => focusSupplierBrandLinks(link.supplier_id)}
                                       type="button"
                                       title="Beszállító kiválasztása"
                                     >
@@ -1620,7 +1621,7 @@ export default function AllInSuppliers() {
                     <select
                       className={`${input} w-full`}
                       value={currentBrandSupplierId}
-                      onChange={(e) => openSupplierDetails(e.target.value)}
+                      onChange={(e) => focusSupplierBrandLinks(e.target.value)}
                     >
                       {suppliers.map((s) => (
                         <option key={s.id} value={s.id}>{s.name}</option>
@@ -1634,11 +1635,12 @@ export default function AllInSuppliers() {
                       value={brandId}
                       onChange={(e) => setBrandId(e.target.value)}
                     >
+                      <option value="">Márka kiválasztása</option>
                       {availableBrandsForSelectedSupplier.map((brand) => (
                         <option key={brand.id} value={brand.id}>{brand.name}</option>
                       ))}
                       {!availableBrandsForSelectedSupplier.length && (
-                        <option value="">Nincs kapcsolható márka</option>
+                        <option value="" disabled>Nincs kapcsolható márka</option>
                       )}
                     </select>
                   </label>
@@ -1663,7 +1665,7 @@ export default function AllInSuppliers() {
                     />
                     Elsődleges márka ennél a beszállítónál
                   </label>
-                  <button className={`${primaryBtn} justify-self-start`} onClick={createSupplierBrandLink} disabled={busy} type="button">
+                  <button className={`${primaryBtn} justify-self-start`} onClick={createSupplierBrandLink} disabled={busy || !brandId} type="button">
                     <Plus size={14} /> Kapcsolás
                   </button>
                 </div>
