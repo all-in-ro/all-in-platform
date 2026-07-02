@@ -300,7 +300,7 @@ export default function AllInReceptions(_props: Props) {
     setSavingHeader(true);
     setMessage("");
     try {
-      await apiAifUpdateReception(detail.item.id, {
+      const saved = await apiAifUpdateReception(detail.item.id, {
         invoiceNumber: receptionDraft.invoiceNumber,
         invoiceDate: receptionDraft.invoiceDate,
         receptionDate: receptionDraft.receptionDate,
@@ -312,6 +312,22 @@ export default function AllInReceptions(_props: Props) {
         invoiceGross: receptionDraft.invoiceGross,
         note: receptionDraft.note,
       });
+      if (saved?.item) {
+        setDetail((prev) => prev ? { ...prev, item: { ...prev.item, ...saved.item } } : prev);
+        setReceptionDraft((prev) => ({
+          ...prev,
+          invoiceNumber: String(saved.item?.invoice_number ?? prev.invoiceNumber ?? ""),
+          invoiceDate: dateOnly(saved.item?.invoice_date) || prev.invoiceDate,
+          receptionDate: dateOnly(saved.item?.reception_date) || prev.receptionDate,
+          currencyCode: String(saved.item?.currency_code ?? prev.currencyCode ?? ""),
+          exchangeRateToRon: String(saved.item?.exchange_rate_to_ron ?? prev.exchangeRateToRon ?? ""),
+          tvaMode: String(saved.item?.tva_mode ?? prev.tvaMode ?? ""),
+          tvaRate: String(saved.item?.tva_rate ?? prev.tvaRate ?? ""),
+          shippingCost: String(saved.item?.shipping_cost ?? prev.shippingCost ?? ""),
+          invoiceGross: String(saved.item?.invoice_gross ?? prev.invoiceGross ?? ""),
+          note: String(saved.item?.note ?? prev.note ?? ""),
+        }));
+      }
       await reloadDetail(detail.item.id);
       await load();
       setMessage("Receptió fejadatai mentve.");
