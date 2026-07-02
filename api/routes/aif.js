@@ -2171,7 +2171,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          FROM aif_import_batches b
          LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE b.id=$1
-         FOR UPDATE`,
+         FOR UPDATE OF b`,
         [batchId]
       );
       if (!batch.rowCount) {
@@ -2263,7 +2263,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          JOIN aif_suppliers s ON s.id=b.supplier_id
          LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE b.id=$1
-         FOR UPDATE`,
+         FOR UPDATE OF b`,
         [batchId]
       );
       if (!batchRes.rowCount) {
