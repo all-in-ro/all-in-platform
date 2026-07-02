@@ -170,6 +170,20 @@ function genderLabel(code: unknown, items: AifGenderOption[]) {
   return items.find((g) => String(g.code).toLowerCase() === key)?.name || String(code || "-");
 }
 
+function rowStatusText(value?: string | null) {
+  const v = String(value || "").toLowerCase();
+  if (v === "committed") return "Készleten";
+  if (v === "parsed") return "Feldolgozható";
+  if (v === "error") return "Javítandó";
+  if (v === "ignored") return "Kihagyva";
+  if (v === "draft") return "Vázlat";
+  return value || "-";
+}
+
+function normValue(row: any, key: string, fallback?: unknown) {
+  return cell((row?.normalized || {})[key] ?? fallback);
+}
+
 function SectionTitle(props: { icon: React.ReactNode; title: string; right?: React.ReactNode }) {
   return (
     <div className={sectionHeader}>
@@ -203,6 +217,7 @@ export default function AllInIncoming(_props: Props) {
   const [selectedReceptionId, setSelectedReceptionId] = useState("");
   const [receptionPickerId, setReceptionPickerId] = useState("");
   const [loadedReception, setLoadedReception] = useState<AifReceptionDetail | null>(null);
+  const [receptionListOpen, setReceptionListOpen] = useState(false);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [supplierId, setSupplierId] = useState("");
   const [locationId, setLocationId] = useState("");
@@ -279,6 +294,23 @@ export default function AllInIncoming(_props: Props) {
     () => receptions.find((r) => String(r.id) === String(selectedReceptionId)) || loadedReception?.item || null,
     [receptions, selectedReceptionId, loadedReception]
   );
+
+  const loadedReceptionRows = useMemo(() => loadedReception?.rows || [], [loadedReception]);
+  const loadedReceptionRowTotals = useMemo(() => {
+    return loadedReceptionRows.reduce(
+      (acc: { total: number; committed: number; remaining: number; qty: number; value: number }, row: any) => {
+        acc.total += 1;
+        if (row.status === "committed") acc.committed += 1;
+        else if (row.status !== "ignored") acc.remaining += 1;
+        if (row.status !== "ignored") {
+          acc.qty += toNumber(row.qty ?? row.normalized?.qty);
+          acc.value += toNumber(row.qty ?? row.normalized?.qty) * toNumber(row.buy_price ?? row.normalized?.buyPrice);
+        }
+        return acc;
+      },
+      { total: 0, committed: 0, remaining: 0, qty: 0, value: 0 }
+    );
+  }, [loadedReceptionRows]);
 
   const activeLocationTypes = useMemo(() => locationTypes.filter((t) => t.is_active), [locationTypes]);
   const activeCurrencies = useMemo(() => currencies.filter((c) => c.is_active), [currencies]);
@@ -499,7 +531,7 @@ export default function AllInIncoming(_props: Props) {
     setPreviewLimit(25);
   }
 
-  function startNewEmptyReception() {
+  function startNewEmptyReception(showMessage = true) {
     setSelectedReceptionId("");
     setReceptionPickerId("");
     setLoadedReception(null);
@@ -523,7 +555,7 @@ export default function AllInIncoming(_props: Props) {
     setManualRowsOpen(true);
     setReceptionOpen(true);
     setWorkbenchOpen(false);
-    setMessage("Új üres bevételezés indítva. Előbb válassz beszállítót és töltsd ki a receptiót, majd jöhet kézi sor vagy XLS.");
+    if (showMessage) setMessage("Új üres bevételezés indítva. Előbb válassz beszállítót és töltsd ki a receptiót, majd jöhet kézi sor vagy XLS.");
   }
 
   function fillReceptionHeader(detail: AifReceptionDetail) {
@@ -676,7 +708,10 @@ export default function AllInIncoming(_props: Props) {
     (async () => {
       try {
         await loadMeta();
-        if (alive) await Promise.all([loadBatches(), loadReceptions()]);
+        if (alive) {
+          await Promise.all([loadBatches(), loadReceptions()]);
+          startNewEmptyReception(false);
+        }
       } catch (e: any) {
         if (alive) setMessage(e.message || "Nem sikerült betölteni az adatokat.");
       }
@@ -1403,6 +1438,65 @@ export default function AllInIncoming(_props: Props) {
           </div>
         </section>
 
+        {loadedReception && (
+          <section className={card}>
+            <SectionTitle
+              icon={<CheckCircle size={16} />}
+              title="Betöltött receptió tartalma"
+              right={<span className="text-xs text-white/60">A már mentett sorok áttekintése</span>}
+            />
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Összes sor</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.total}</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Készleten</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.committed}</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Még dolgozandó</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.remaining}</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Darab / érték</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.qty} db • {moneyText(loadedReceptionRowTotals.value, loadedReception.item?.currency_code || currencyCode)}</p></div>
+            </div>
+            <div className="mt-3 overflow-auto rounded-xl border border-white/14">
+              <table className="min-w-[980px] w-full text-left text-sm">
+                <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
+                  <tr>
+                    <th className="px-3 py-2 font-normal">Állapot</th>
+                    <th className="px-3 py-2 font-normal">Termékkód</th>
+                    <th className="px-3 py-2 font-normal">Név</th>
+                    <th className="px-3 py-2 font-normal">Márka</th>
+                    <th className="px-3 py-2 font-normal">Kategória</th>
+                    <th className="px-3 py-2 font-normal">Nem</th>
+                    <th className="px-3 py-2 font-normal">Szín</th>
+                    <th className="px-3 py-2 font-normal">Méret</th>
+                    <th className="px-3 py-2 text-right font-normal">Darab</th>
+                    <th className="px-3 py-2 text-right font-normal">Vételár</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {loadedReceptionRows.map((row: any) => (
+                    <tr key={row.id || `${row.batch_id}-${row.row_no}`} className={row.status === "committed" ? "bg-emerald-400/10" : row.status === "error" ? "bg-red-500/10" : "bg-[#445064]"}>
+                      <td className="px-3 py-2.5 text-xs text-white/80">{rowStatusText(row.status)}</td>
+                      <td className="px-3 py-2.5 text-white/88">{cell(row.supplier_product_code || row.normalized?.supplierProductCode || row.normalized?.modelCode)}</td>
+                      <td className="px-3 py-2.5 text-white">{normValue(row, "titleRo")}</td>
+                      <td className="px-3 py-2.5 text-white/82">{normValue(row, "brandName", row.normalized?.brandCode)}</td>
+                      <td className="px-3 py-2.5 text-white/82">{normValue(row, "categoryName", row.normalized?.categoryCode)}</td>
+                      <td className="px-3 py-2.5 text-white/82">{genderLabel(row.normalized?.gender, activeGenderTypes)}</td>
+                      <td className="px-3 py-2.5 text-white/82">{normValue(row, "colorName")}</td>
+                      <td className="px-3 py-2.5 text-white/82">{cell(row.supplier_size || row.normalized?.size)}</td>
+                      <td className="px-3 py-2.5 text-right text-white/88">{cell(row.qty || row.normalized?.qty)}</td>
+                      <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.buy_price || row.normalized?.buyPrice), loadedReception.item?.currency_code || currencyCode)}</td>
+                    </tr>
+                  ))}
+                  {!loadedReceptionRows.length && (
+                    <tr>
+                      <td className="px-3 py-6 text-center text-white/60" colSpan={10}>Ebben a receptióban még nincs mentett terméksor.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              <button className={neutralBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Receptió részletei</button>
+              <button className={neutralBtn} onClick={() => loadReceptionIntoWorkspace(selectedReceptionId)} disabled={busy || !selectedReceptionId} type="button"><RefreshCw size={14} /> Újratöltés</button>
+            </div>
+          </section>
+        )}
+
         <section className={card}>
           <SectionTitle icon={<FileSpreadsheet size={16} />} title="Import alapadatok" right={<span className="text-xs text-white/60">Beszállító, cél hely, fájl</span>} />
 
@@ -1726,35 +1820,39 @@ export default function AllInIncoming(_props: Props) {
           <SectionTitle
             icon={<FileSpreadsheet size={16} />}
             title="Receptió gyorslista"
-            right={<button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Összes receptió</button>}
+            right={
+              <div className="flex items-center gap-2">
+                <button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Összes receptió</button>
+                <button className={tinyBtn} onClick={() => setReceptionListOpen((v) => !v)} type="button">
+                  {receptionListOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {receptionListOpen ? "Bezárás" : "Megnyitás"}
+                </button>
+              </div>
+            }
           />
-          <div className="mt-3 grid gap-2">
-            {receptions.slice(0, 6).map((r) => {
-              const active = String(r.id) === String(selectedReceptionId);
-              return (
-                <div key={r.id} className={`rounded-xl border px-3 py-2 ${active ? "border-emerald-200/45 bg-emerald-400/10" : "border-white/12 bg-[#354153]"}`}>
+          {receptionListOpen && (
+            <div className="mt-3 grid gap-2">
+              {receptions.map((r) => (
+                <div key={r.id} className={`rounded-xl border px-3 py-2 ${String(r.id) === String(selectedReceptionId) ? "border-emerald-200/35 bg-emerald-400/12" : "border-white/12 bg-[#354153]"}`}>
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
-                      <p className="mt-1 truncate text-xs text-white/62">{r.supplier_name || "-"} • {r.location_name || "-"} • {r.currency_code || "-"}</p>
+                    <div>
+                      <p className="text-sm text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
+                      <p className="mt-1 text-xs text-white/62">{r.supplier_name || "-"} • {r.location_name || "-"} • {r.currency_code || "-"}</p>
                     </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs md:min-w-[360px]">
-                      <div className="rounded-lg border border-white/10 bg-[#303b4e] px-2 py-1.5"><p className="text-white/50">Terméksor</p><p className="text-white">{r.line_count || 0}</p></div>
-                      <div className="rounded-lg border border-white/10 bg-[#303b4e] px-2 py-1.5"><p className="text-white/50">Érték</p><p className="text-white">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p></div>
-                      <div className="rounded-lg border border-white/10 bg-[#303b4e] px-2 py-1.5"><p className="text-white/50">Állapot</p><p className="text-white">{receptionStatusLabel(r.status)}</p></div>
+                    <div className="grid gap-2 text-xs md:grid-cols-3 md:min-w-[360px]">
+                      <div className="rounded-lg bg-[#303b4e] px-2 py-1.5"><span className="text-white/55">Terméksor</span><p className="text-white">{r.line_count || 0}</p></div>
+                      <div className="rounded-lg bg-[#303b4e] px-2 py-1.5"><span className="text-white/55">Érték</span><p className="text-white">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p></div>
+                      <div className="rounded-lg bg-[#303b4e] px-2 py-1.5"><span className="text-white/55">Állapot</span><p className="text-white">{receptionStatusLabel(r.status)}</p></div>
                     </div>
-                    <div className="flex flex-wrap gap-2 md:justify-end">
-                      <button className={tinyBtn} onClick={() => loadReceptionIntoWorkspace(r.id)} disabled={busy} type="button">
-                        <Edit3 size={13} /> Betöltés
-                      </button>
-                      <button className={tinyBtn} onClick={() => window.open(`/api/aif/receptions/${encodeURIComponent(r.id)}/export.csv`, "_blank", "noopener,noreferrer")} type="button"><Download size={13} /> CSV</button>
+                    <div className="flex justify-end gap-2">
+                      <button className={tinyBtn} onClick={() => loadReceptionIntoWorkspace(r.id)} disabled={busy} type="button"><Edit3 size={13} /> Betöltés</button>
+                      <button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button"><Download size={13} /> Részletek</button>
                     </div>
                   </div>
                 </div>
-              );
-            })}
-            {!receptions.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs receptió. Új üres bevételezéssel lehet kezdeni.</p>}
-          </div>
+              ))}
+              {!receptions.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs receptió.</p>}
+            </div>
+          )}
         </section>
 
         <section className={card}>
@@ -1836,6 +1934,7 @@ export default function AllInIncoming(_props: Props) {
           )}
         </section>
 
+        {rows.length > 0 && (
         <section className={card}>
           <SectionTitle icon={<FileSpreadsheet size={16} />} title="Soronkénti előnézet" right={<span className="text-xs text-white/60">Szerkeszthető, kijelölhető sorok</span>} />
           <div className="mt-3 overflow-auto rounded-xl border border-white/14">
@@ -1920,6 +2019,7 @@ export default function AllInIncoming(_props: Props) {
             </div>
           )}
         </section>
+        )}
 
         <section className={card}>
           <SectionTitle icon={<CheckCircle size={16} />} title="Import előzmények" right={<span className="text-xs text-white/60">Legutóbbi bevételezések</span>} />
