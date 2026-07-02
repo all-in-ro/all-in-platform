@@ -31,21 +31,21 @@ import {
 
 type Props = { onLogout?: () => void };
 
-const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
-const wrap = "mx-auto max-w-7xl space-y-4";
-const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-3 shadow-lg shadow-slate-950/15 sm:p-4 font-normal";
-const headerCard = "rounded-2xl border border-white/24 bg-[#465164] px-4 py-3 shadow-lg shadow-slate-950/10";
-const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20 font-normal";
-const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/86 font-normal";
-const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
+const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
+const wrap = "mx-auto max-w-7xl space-y-3";
+const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-2.5 shadow-lg shadow-slate-950/15 sm:p-3 font-normal";
+const headerCard = "rounded-2xl border border-white/24 bg-[#465164] px-3 py-2.5 shadow-lg shadow-slate-950/10";
+const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2 text-left shadow-sm shadow-slate-950/20 font-normal";
+const label = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-white/86 font-normal";
+const input = "h-8 rounded-lg border border-white/24 bg-[#303b4e] px-2.5 text-xs text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
 const select = `${input} pr-8`;
-const btnBase = "inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
-const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[11px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const tinyDangerBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-red-300/24 bg-[#c90d22] px-2 text-[11px] text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const statCard = "rounded-xl border border-white/18 bg-[#354153] px-3 py-2";
+const tinyBtn = "inline-flex h-6 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[10.5px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tinyDangerBtn = "inline-flex h-6 items-center justify-center gap-1 rounded-md border border-red-300/24 bg-[#c90d22] px-2 text-[10.5px] text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const statCard = "rounded-xl border border-white/18 bg-[#354153] px-2.5 py-1.5";
 
 function n(v: unknown): number {
   const x = Number(String(v ?? "").replace(",", "."));
@@ -79,10 +79,47 @@ function statusText(s?: string | null) {
   return s || "-";
 }
 
+function rowDraftValue(row: any, drafts: Record<string, Record<string, unknown>>) {
+  if (!row || row.status === "ignored") return 0;
+  const draft = drafts[row.id] || row.normalized || {};
+  const qty = n((draft as any).qty ?? row.qty ?? (row.normalized || {}).qty);
+  const buyPrice = n((draft as any).buyPrice ?? row.buy_price ?? (row.normalized || {}).buyPrice);
+  return qty * buyPrice;
+}
+
+function receptionBalance(item: any, rows: any[], drafts: Record<string, Record<string, unknown>>) {
+  const invoiceGross = n(item?.invoice_gross);
+  const shipping = n(item?.shipping_cost);
+  const tvaRate = n(item?.tva_rate);
+  const tvaMode = String(item?.tva_mode || "without_tva");
+  const rowsValue = (rows || []).reduce((sum, row) => sum + rowDraftValue(row, drafts), 0);
+  let tvaValue = 0;
+  let calculatedTotal = rowsValue + shipping;
+
+  if (tvaMode === "without_tva") {
+    tvaValue = rowsValue * (tvaRate / 100);
+    calculatedTotal = rowsValue + tvaValue + shipping;
+  } else if (tvaMode === "with_tva" && tvaRate > 0) {
+    tvaValue = rowsValue - rowsValue / (1 + tvaRate / 100);
+    calculatedTotal = rowsValue + shipping;
+  }
+
+  const diff = invoiceGross - calculatedTotal;
+  const absDiff = Math.abs(diff);
+  const status = absDiff < 0.01 ? "Egyezik" : diff > 0 ? "Hiányzik a sorokból" : "Túllépés";
+  const className = absDiff < 0.01
+    ? "border-emerald-200/45 bg-emerald-300/10"
+    : diff > 0
+      ? "border-amber-200/50 bg-amber-300/12"
+      : "border-red-200/50 bg-red-300/12";
+
+  return { invoiceGross, rowsValue, shipping, tvaValue, calculatedTotal, diff, status, className };
+}
+
 function SectionTitle(props: { title: string; icon?: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className={sectionHeader}>
-      <div className="flex items-center gap-2 text-sm uppercase tracking-[0.11em] text-white/94">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.11em] text-white/94">
         {props.icon}
         <span>{props.title}</span>
       </div>
@@ -253,6 +290,11 @@ export default function AllInReceptions(_props: Props) {
     return rows.filter((r) => r.status !== "committed" && r.status !== "ignored");
   }, [detail, rowStatusFilter]);
 
+  const detailBalance = useMemo(() => {
+    if (!detail) return null;
+    return receptionBalance(detail.item, detail.rows || [], rowDrafts);
+  }, [detail, rowDrafts]);
+
   async function saveReceptionHeader() {
     if (!detail) return;
     setSavingHeader(true);
@@ -400,8 +442,8 @@ export default function AllInReceptions(_props: Props) {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.13em] text-white/70">AllInFashion</p>
-              <h1 className="mt-1 text-2xl text-white font-normal">Receptiók</h1>
-              <p className="mt-1 text-sm text-white/80">Számlás bevételezések, export, részletezés és tesztadatok törlése.</p>
+              <h1 className="mt-1 text-xl text-white font-normal">Receptiók</h1>
+              <p className="mt-1 text-xs text-white/80">Számlás bevételezések, export, részletezés és tesztadatok törlése.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button className={neutralBtn} onClick={load} disabled={busy} type="button"><RefreshCw size={15} /> Frissítés</button>
@@ -415,7 +457,7 @@ export default function AllInReceptions(_props: Props) {
 
         <section className={card}>
           <SectionTitle icon={<Search size={16} />} title="Szűrés és keresés" />
-          <div className="mt-3 grid gap-3 lg:grid-cols-4">
+          <div className="mt-2 grid gap-2 lg:grid-cols-4">
             <label className={`${label} lg:col-span-2`}>
               Keresés
               <input className={input} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="számlaszám, beszállító, cél hely" />
@@ -461,7 +503,7 @@ export default function AllInReceptions(_props: Props) {
               </select>
             </label>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <button className={primaryBtn} onClick={load} disabled={busy} type="button"><Search size={15} /> Keresés</button>
             <button className={neutralBtn} onClick={resetFilters} type="button"><X size={15} /> Alaphelyzet</button>
           </div>
@@ -470,11 +512,11 @@ export default function AllInReceptions(_props: Props) {
         <section className={card}>
           <SectionTitle icon={<CalendarDays size={16} />} title="Áttekintés" />
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Receptiók</p><p className="mt-1 text-xl text-white">{totals.count}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Terméksor</p><p className="mt-1 text-xl text-white">{totals.lines}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Darab</p><p className="mt-1 text-xl text-white">{totals.qty}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Törölhető</p><p className="mt-1 text-xl text-white">{totals.deletable}</p></div>
-            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-1 text-xl text-white">{money(totals.value)}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Receptiók</p><p className="mt-0.5 text-lg text-white">{totals.count}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Terméksor</p><p className="mt-0.5 text-lg text-white">{totals.lines}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Darab</p><p className="mt-0.5 text-lg text-white">{totals.qty}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Törölhető</p><p className="mt-0.5 text-lg text-white">{totals.deletable}</p></div>
+            <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-0.5 text-lg text-white">{money(totals.value)}</p></div>
           </div>
         </section>
 
@@ -482,34 +524,34 @@ export default function AllInReceptions(_props: Props) {
           <SectionTitle title="Receptió lista" right={<span className="text-xs text-white/70">{items.length} találat</span>} />
           <div className="mt-3 overflow-hidden rounded-xl border border-white/12">
             <div className="hidden overflow-x-auto lg:block">
-              <table className="min-w-full text-left text-sm">
+              <table className="min-w-full text-left text-xs">
                 <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                   <tr>
-                    <th className="px-3 py-2">Számla</th>
-                    <th className="px-3 py-2">Beszállító</th>
-                    <th className="px-3 py-2">Cél hely</th>
-                    <th className="px-3 py-2">Dátum</th>
-                    <th className="px-3 py-2">Pénznem</th>
-                    <th className="px-3 py-2 text-right">Végösszeg</th>
-                    <th className="px-3 py-2 text-right">Sorszám</th>
-                    <th className="px-3 py-2 text-right">Darab</th>
-                    <th className="px-3 py-2">Állapot</th>
-                    <th className="px-3 py-2 text-right">Művelet</th>
+                    <th className="px-2 py-1.5">Számla</th>
+                    <th className="px-2 py-1.5">Beszállító</th>
+                    <th className="px-2 py-1.5">Cél hely</th>
+                    <th className="px-2 py-1.5">Dátum</th>
+                    <th className="px-2 py-1.5">Pénznem</th>
+                    <th className="px-2 py-1.5 text-right">Végösszeg</th>
+                    <th className="px-2 py-1.5 text-right">Sorszám</th>
+                    <th className="px-2 py-1.5 text-right">Darab</th>
+                    <th className="px-2 py-1.5">Állapot</th>
+                    <th className="px-2 py-1.5 text-right">Művelet</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10 bg-[#4d5869]">
                   {items.map((r) => (
                     <tr key={r.id} className="hover:bg-white/5">
                       <td className="px-3 py-2 text-white">{cell(r.invoice_number)}</td>
-                      <td className="px-3 py-2 text-white/82">{cell(r.supplier_name)}</td>
-                      <td className="px-3 py-2 text-white/82">{cell(r.location_name)}</td>
-                      <td className="px-3 py-2 text-white/82">{dateText(r.reception_date)}</td>
-                      <td className="px-3 py-2 text-white/82">{cell(r.currency_code)}</td>
+                      <td className="px-2 py-1.5 text-white/82">{cell(r.supplier_name)}</td>
+                      <td className="px-2 py-1.5 text-white/82">{cell(r.location_name)}</td>
+                      <td className="px-2 py-1.5 text-white/82">{dateText(r.reception_date)}</td>
+                      <td className="px-2 py-1.5 text-white/82">{cell(r.currency_code)}</td>
                       <td className="px-3 py-2 text-right text-white">{money(r.invoice_gross, r.currency_code)}</td>
                       <td className="px-3 py-2 text-right text-white/82">{r.line_count || 0}</td>
                       <td className="px-3 py-2 text-right text-white/82">{r.total_qty || 0}</td>
-                      <td className="px-3 py-2 text-white/82">{statusText(r.status)}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-1.5 text-white/82">{statusText(r.status)}</td>
+                      <td className="px-2 py-1.5">
                         <div className="flex justify-end gap-1.5">
                           <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
                           <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> Export</button>
@@ -518,7 +560,7 @@ export default function AllInReceptions(_props: Props) {
                       </td>
                     </tr>
                   ))}
-                  {!items.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={10}>Nincs receptió a megadott szűrés szerint.</td></tr>}
+                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={10}>Nincs receptió a megadott szűrés szerint.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -527,18 +569,18 @@ export default function AllInReceptions(_props: Props) {
                 <div key={r.id} className="rounded-xl border border-white/12 bg-[#354153] p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm text-white">{cell(r.invoice_number)}</p>
+                      <p className="text-xs text-white">{cell(r.invoice_number)}</p>
                       <p className="mt-1 text-xs text-white/62">{cell(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
                     <span className="rounded-full border border-emerald-200/30 bg-emerald-300/10 px-2 py-1 text-xs text-emerald-50">{statusText(r.status)}</span>
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Dátum</p><p>{dateText(r.reception_date)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Érték</p><p>{money(r.invoice_gross, r.currency_code)}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Sorszám</p><p>{r.line_count || 0}</p></div>
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
                     <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> Export</button>
                     <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
@@ -554,34 +596,52 @@ export default function AllInReceptions(_props: Props) {
       {detail && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
           <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/24 bg-[#4d5869] shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/18 bg-[#303b4e] px-4 py-3">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/18 bg-[#303b4e] px-3 py-2">
               <div>
                 <p className="text-xs uppercase tracking-[0.1em] text-white/60">Receptió részletei</p>
-                <h2 className="text-lg text-white font-normal">{cell(detail.item.invoice_number)}</h2>
+                <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
               </div>
               <div className="flex gap-2">
                 <button className={neutralBtn} onClick={() => exportCsv(detail.item.id)} type="button"><Download size={15} /> Export</button>
                 <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
-            <div className="space-y-4 p-4">
+            <div className="space-y-3 p-3">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                <div className={statCard}><p className="text-xs uppercase text-white/56">Beszállító</p><p className="mt-1 text-sm text-white">{cell(detail.item.supplier_name)}</p></div>
-                <div className={statCard}><p className="text-xs uppercase text-white/56">Cél hely</p><p className="mt-1 text-sm text-white">{cell(detail.item.location_name)}</p></div>
-                <div className={statCard}><p className="text-xs uppercase text-white/56">Pénznem</p><p className="mt-1 text-sm text-white">{cell(detail.item.currency_code)}</p></div>
-                <div className={statCard}><p className="text-xs uppercase text-white/56">Árfolyam</p><p className="mt-1 text-sm text-white">{cell(detail.item.exchange_rate_to_ron)}</p></div>
-                <div className={statCard}><p className="text-xs uppercase text-white/56">Végösszeg</p><p className="mt-1 text-sm text-white">{money(detail.item.invoice_gross, detail.item.currency_code)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.supplier_name)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Cél hely</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.location_name)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Pénznem</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.currency_code)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Árfolyam</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.exchange_rate_to_ron)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Végösszeg</p><p className="mt-0.5 text-xs text-white">{money(detail.item.invoice_gross, detail.item.currency_code)}</p></div>
               </div>
 
-              <div className="rounded-xl border border-white/14 bg-[#354153] p-3">
+              {detailBalance && (
+                <div className={`rounded-xl border px-3 py-2 ${detailBalance.className}`}>
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.08em] text-white/72">Számla egyeztetés</p>
+                      <p className="mt-0.5 text-sm text-white">Különbözet: {money(detailBalance.diff, detail.item.currency_code)}</p>
+                    </div>
+                    <span className="rounded-full border border-white/20 bg-slate-950/18 px-2 py-1 text-xs text-white/90">{detailBalance.status}</span>
+                  </div>
+                  <div className="mt-2 grid gap-2 text-xs text-white/82 sm:grid-cols-4">
+                    <div>Sorok értéke: {money(detailBalance.rowsValue, detail.item.currency_code)}</div>
+                    <div>TVA: {money(detailBalance.tvaValue, detail.item.currency_code)}</div>
+                    <div>Szállítás: {money(detailBalance.shipping, detail.item.currency_code)}</div>
+                    <div>Számított: {money(detailBalance.calculatedTotal, detail.item.currency_code)}</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-xl border border-white/14 bg-[#354153] p-2.5">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm text-white">Receptió fejadatai</p>
+                    <p className="text-xs text-white">Receptió fejadatai</p>
                     <p className="mt-1 text-xs text-white/64">Számlaszám, árfolyam, TVA és végösszeg javítása. A még nem készletre vett sorok RON értékei újraszámolódnak.</p>
                   </div>
                   <button className={primaryBtn} onClick={saveReceptionHeader} disabled={busy || savingHeader} type="button"><Save size={15} /> Fejadatok mentése</button>
                 </div>
-                <div className="mt-3 grid gap-3 lg:grid-cols-4">
+                <div className="mt-2 grid gap-2 lg:grid-cols-4">
                   <label className={label}>Számlaszám<input className={input} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
                   <label className={label}>Számla dátuma<input className={input} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
                   <label className={label}>Receptió dátuma<input className={input} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
@@ -595,10 +655,10 @@ export default function AllInReceptions(_props: Props) {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-white/14 bg-[#354153] p-3">
+              <div className="rounded-xl border border-white/14 bg-[#354153] p-2.5">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm text-white">Terméksorok feldolgozása</p>
+                    <p className="text-xs text-white">Terméksorok feldolgozása</p>
                     <p className="mt-1 text-xs text-white/64">
                       A hibátlan sorok külön is készletre vehetők. Ami még nincs kész, az marad javítható állapotban.
                     </p>
@@ -625,22 +685,22 @@ export default function AllInReceptions(_props: Props) {
               </div>
 
               <div className="overflow-hidden rounded-xl border border-white/12">
-                <div className="max-h-[46vh] overflow-auto">
-                  <table className="min-w-[1180px] text-left text-sm">
+                <div className="max-h-[40vh] overflow-auto">
+                  <table className="min-w-[1080px] text-left text-xs">
                     <thead className="sticky top-0 z-10 bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                       <tr>
-                        <th className="px-3 py-2">Kijelölés</th>
-                        <th className="px-3 py-2">Sorszám</th>
-                        <th className="px-3 py-2">Állapot</th>
-                        <th className="px-3 py-2">Termékkód</th>
-                        <th className="px-3 py-2">Név</th>
-                        <th className="px-3 py-2">Méret</th>
-                        <th className="px-3 py-2">Szín</th>
-                        <th className="px-3 py-2">Színkód</th>
-                        <th className="px-3 py-2 text-right">Darab</th>
-                        <th className="px-3 py-2 text-right">Vételár</th>
-                        <th className="px-3 py-2 text-right">Vételár RON</th>
-                        <th className="px-3 py-2 text-right">Művelet</th>
+                        <th className="px-2 py-1.5">Kijelölés</th>
+                        <th className="px-2 py-1.5">Sorszám</th>
+                        <th className="px-2 py-1.5">Állapot</th>
+                        <th className="px-2 py-1.5">Termékkód</th>
+                        <th className="px-2 py-1.5">Név</th>
+                        <th className="px-2 py-1.5">Méret</th>
+                        <th className="px-2 py-1.5">Szín</th>
+                        <th className="px-2 py-1.5">Színkód</th>
+                        <th className="px-2 py-1.5 text-right">Darab</th>
+                        <th className="px-2 py-1.5 text-right">Vételár</th>
+                        <th className="px-2 py-1.5 text-right">Vételár RON</th>
+                        <th className="px-2 py-1.5 text-right">Művelet</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/10 bg-[#4d5869]">
@@ -650,7 +710,7 @@ export default function AllInReceptions(_props: Props) {
                         const checked = selectedRows.has(r.id);
                         return (
                           <tr key={r.id} className={r.status === "committed" ? "bg-emerald-300/8" : r.status === "ignored" ? "opacity-55" : ""}>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input
                                 type="checkbox"
                                 className="h-4 w-4 accent-emerald-300"
@@ -659,31 +719,31 @@ export default function AllInReceptions(_props: Props) {
                                 onChange={() => toggleRow(r.id)}
                               />
                             </td>
-                            <td className="px-3 py-2 text-white/82">{r.row_no}</td>
-                            <td className="px-3 py-2 text-white/82">{statusText(r.status)}</td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5 text-white/82">{r.row_no}</td>
+                            <td className="px-2 py-1.5 text-white/82">{statusText(r.status)}</td>
+                            <td className="px-2 py-1.5">
                               <input className={input} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} />
                             </td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input className={input} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
                             </td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input className={input} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
                             </td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input className={input} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} />
                             </td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input className={input} value={String(draft.colorCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
                             </td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input className={`${input} text-right`} value={String(draft.qty ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
                             </td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <input className={`${input} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
                             </td>
                             <td className="px-3 py-2 text-right text-white/82">{money(r.buy_price_ron, "RON")}</td>
-                            <td className="px-3 py-2">
+                            <td className="px-2 py-1.5">
                               <div className="flex justify-end gap-1.5">
                                 <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!editable || busy} type="button">
                                   <MoveRight size={13} /> Áthelyezés
@@ -696,7 +756,7 @@ export default function AllInReceptions(_props: Props) {
                           </tr>
                         );
                       })}
-                      {!visibleRows.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={12}>Nincs sor ebben a nézetben.</td></tr>}
+                      {!visibleRows.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={12}>Nincs sor ebben a nézetben.</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -710,9 +770,9 @@ export default function AllInReceptions(_props: Props) {
       {moveTarget && detail && (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-2xl border border-white/24 bg-[#4d5869] p-4 shadow-2xl">
-            <h2 className="text-lg text-white font-normal">Terméksor áthelyezése</h2>
+            <h2 className="text-base text-white font-normal">Terméksor áthelyezése</h2>
             <p className="mt-2 text-sm text-white/76">Csak még nem készletre vett sor helyezhető át másik nyitott receptióba.</p>
-            <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] p-3 text-sm text-white">
+            <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
               {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)}
             </div>
             <label className={`${label} mt-3`}>
@@ -735,9 +795,9 @@ export default function AllInReceptions(_props: Props) {
       {deleteTarget && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-white/24 bg-[#4d5869] p-4 shadow-2xl">
-            <h2 className="text-lg text-white font-normal">Receptió törlése</h2>
+            <h2 className="text-base text-white font-normal">Receptió törlése</h2>
             <p className="mt-2 text-sm text-white/76">A törlés a receptióhoz tartozó mentett import sorokat is eltávolítja, ha még nem történt készletre vétel.</p>
-            <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] p-3 text-sm text-white">
+            <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
               {cell(deleteTarget.invoice_number)} • {cell(deleteTarget.supplier_name)} • {money(deleteTarget.invoice_gross, deleteTarget.currency_code)}
             </div>
             <div className="mt-4 flex justify-end gap-2">
