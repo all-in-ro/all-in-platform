@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  Barcode,
   Boxes,
   ChevronDown,
   ChevronUp,
@@ -97,18 +98,25 @@ type EditForm = {
   barcode: string;
   colorCode: string;
   colorName: string;
-  colorHex: string;
   size: string;
   buyPrice: string;
   sellPrice: string;
   compareAtPrice: string;
-  weightGrams: string;
   imageUrl: string;
   variantStatus: string;
 };
 
 function goHome() {
   window.location.hash = "#allin";
+}
+
+function goBarcodeManager(variantId?: string, barcode?: string, title?: string) {
+  const params = new URLSearchParams();
+  if (variantId) params.set("variant", variantId);
+  if (barcode) params.set("barcode", barcode);
+  if (title) params.set("title", title);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  window.location.hash = `#allinbarcodes${suffix}`;
 }
 
 function n(v: unknown) {
@@ -296,12 +304,10 @@ function emptyForm(): EditForm {
     barcode: "",
     colorCode: "",
     colorName: "",
-    colorHex: "",
     size: "",
     buyPrice: "",
     sellPrice: "",
     compareAtPrice: "",
-    weightGrams: "",
     imageUrl: "",
     variantStatus: "active",
   };
@@ -324,12 +330,10 @@ function formFromDetail(d: DetailResponse): EditForm {
     barcode: x.barcode || "",
     colorCode: x.color_code || "",
     colorName: x.color_name || "",
-    colorHex: x.color_hex || "",
     size: x.size || "",
     buyPrice: x.buy_price == null ? "" : String(x.buy_price),
     sellPrice: x.sell_price == null ? "" : String(x.sell_price),
     compareAtPrice: x.compare_at_price == null ? "" : String(x.compare_at_price),
-    weightGrams: x.weight_grams == null ? "" : String(x.weight_grams),
     imageUrl: x.image_url || "",
     variantStatus: x.status || "active",
   };
@@ -633,12 +637,10 @@ export default function AllInWarehouse() {
         barcode: edit.barcode,
         colorCode: edit.colorCode,
         colorName: edit.colorName,
-        colorHex: edit.colorHex,
         size: edit.size,
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         compareAtPrice: edit.compareAtPrice,
-        weightGrams: edit.weightGrams,
         imageUrl: edit.imageUrl,
         status: edit.variantStatus,
       });
@@ -1001,7 +1003,18 @@ export default function AllInWarehouse() {
                 <p className="text-sm text-white/65">Termékadatlap</p>
                 <h2 className="text-xl">{detail.item?.title_ro || "Termék"}</h2>
               </div>
-              <button className={btnSoft} onClick={() => setDetail(null)}><X size={16} /> Bezárás</button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  className={btn}
+                  onClick={() => goBarcodeManager(detail.item?.id, edit.barcode, edit.titleRo || detail.item?.title_ro)}
+                  disabled={!detail.item?.id}
+                  type="button"
+                  title="Külön vonalkód- és címkemodul megnyitása"
+                >
+                  <Barcode size={16} /> Vonalkód / címke
+                </button>
+                <button className={btnSoft} onClick={() => setDetail(null)}><X size={16} /> Bezárás</button>
+              </div>
             </div>
             <div className="space-y-4 p-4">
               {detailBusy && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-4 text-sm text-white/65">Betöltés...</div>}
@@ -1017,6 +1030,7 @@ export default function AllInWarehouse() {
                   </label>
                   <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
                     <p>Belső azonosító: {detail.item?.internal_sku || "-"}</p>
+                    <p className="mt-1">Vonalkód / SKU alap: {edit.barcode || "nincs megadva"}</p>
                     <p className="mt-1">Utolsó módosítás: {dateShort(detail.item?.updated_at)}</p>
                   </div>
                 </div>
@@ -1040,12 +1054,10 @@ export default function AllInWarehouse() {
                   <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
-                      <label className={label}>Vonalkód<input className={input} value={edit.barcode} onChange={(e) => setEdit((x) => ({ ...x, barcode: e.target.value }))} /></label>
+                      <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={edit.barcode} onChange={(e) => setEdit((x) => ({ ...x, barcode: e.target.value }))} /><span className="text-[11px] text-white/45">Egyedi variánsazonosító. Később ez kerül a Shopify SKU mezőbe.</span></label>
                       <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} /></label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
-                      <label className={label}>Szín HEX<input className={input} value={edit.colorHex} onChange={(e) => setEdit((x) => ({ ...x, colorHex: e.target.value }))} placeholder="#000000" /></label>
                       <label className={label}>Méret<input className={input} value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} /></label>
-                      <label className={label}>Súly grammban<input className={input} value={edit.weightGrams} onChange={(e) => setEdit((x) => ({ ...x, weightGrams: e.target.value }))} /></label>
                       <label className={label}>Vételár<input className={input} value={edit.buyPrice} onChange={(e) => setEdit((x) => ({ ...x, buyPrice: e.target.value }))} /></label>
                       <label className={label}>Eladási ár<input className={input} value={edit.sellPrice} onChange={(e) => setEdit((x) => ({ ...x, sellPrice: e.target.value }))} /></label>
                       <label className={label}>Összehasonlító ár<input className={input} value={edit.compareAtPrice} onChange={(e) => setEdit((x) => ({ ...x, compareAtPrice: e.target.value }))} /></label>
