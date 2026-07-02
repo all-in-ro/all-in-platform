@@ -53,6 +53,19 @@ type SavedTemplate = {
   content: Record<ContentKey, boolean>;
 };
 
+type ColorType = {
+  id: string;
+  code: string;
+  name_ro: string;
+  name_hu?: string | null;
+  name_en?: string | null;
+  name_de?: string | null;
+  aliases?: string[] | null;
+  hex?: string | null;
+  sort_order?: number | string | null;
+  is_active?: boolean;
+};
+
 const CODE128_PATTERNS = [
   "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
   "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132",
@@ -142,6 +155,34 @@ function officialColorRo(value: unknown) {
     if (translated.length === parts.length) return Array.from(new Set(translated)).join(" / ");
   }
   return raw;
+}
+
+function officialColorFromTypes(value: unknown, colors: ColorType[]) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const key = colorKey(raw);
+  const found = (colors || []).find((c) => {
+    const aliases = Array.isArray(c.aliases) ? c.aliases : [];
+    return [c.code, c.name_ro, c.name_hu, c.name_en, c.name_de, ...aliases]
+      .filter(Boolean)
+      .some((x) => colorKey(x) === key);
+  });
+  if (found?.name_ro) return found.name_ro;
+
+  const parts = key.split(/\s+/).filter(Boolean);
+  if (parts.length > 1) {
+    const translated = parts.map((part) => {
+      const c = (colors || []).find((row) => {
+        const aliases = Array.isArray(row.aliases) ? row.aliases : [];
+        return [row.code, row.name_ro, row.name_hu, row.name_en, row.name_de, ...aliases]
+          .filter(Boolean)
+          .some((x) => colorKey(x) === part);
+      });
+      return c?.name_ro || COLOR_RO_MAP[part];
+    }).filter(Boolean);
+    if (translated.length === parts.length) return Array.from(new Set(translated)).join(" / ");
+  }
+  return officialColorRo(raw);
 }
 
 function parseHashParams() {
@@ -317,8 +358,23 @@ export default function AllInBarcodes(_props: PageProps) {
   const [templateName, setTemplateName] = useState("Standard 40x46");
   const [savedTemplates, setSavedTemplates] = useState<SavedTemplate[]>([]);
   const [status, setStatus] = useState("");
+  const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
 
   useEffect(() => {
+    let loadedColors: ColorType[] = [];
+    async function loadColorTypes() {
+      try {
+        const res = await fetch("/api/aif/meta", { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        loadedColors = Array.isArray(data?.colorTypes) ? data.colorTypes : [];
+        setColorTypes(loadedColors);
+      } catch {
+        loadedColors = [];
+      }
+    }
+
+    const colorPromise = loadColorTypes();
+
     const params = parseHashParams();
     const initialVariantId = queryValue(params, "variant", "variantId", "variant_id");
     const initialTitle = queryValue(params, "title", "name", "productName");
@@ -354,6 +410,7 @@ export default function AllInBarcodes(_props: PageProps) {
 
     async function loadVariant() {
       try {
+        await colorPromise;
         const res = await fetch(`/api/aif/variants/${encodeURIComponent(initialVariantId)}`, { credentials: "include" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || "A termékadatok betöltése nem sikerült.");
@@ -375,7 +432,7 @@ export default function AllInBarcodes(_props: PageProps) {
         const loadedCategory = firstText(item.category_name_ro, item.category_name_hu, item.category_code, initialCategory);
         const loadedDescription = firstText(item.material, item.description_ro, initialDescription);
         const loadedSize = firstText(item.size, supplierCode.supplier_size, initialSize);
-        const loadedColor = officialColorRo(firstText(item.color_name, supplierCode.supplier_color_name, item.color_code, initialColor));
+        const loadedColor = officialColorFromTypes(firstText(item.color_name, supplierCode.supplier_color_name, item.color_code, initialColor), loadedColors);
         const loadedPrice = displayMoneyValue(firstText(item.sell_price, item.compare_at_price, item.buy_price, initialPrice));
 
         setTitle((prev) => prev || loadedTitle);
@@ -398,6 +455,13 @@ export default function AllInBarcodes(_props: PageProps) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!colorTypes.length) return;
+    setColor((prev) => officialColorFromTypes(prev, colorTypes));
+  }, [colorTypes]);
+
+  const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
 
   const render = useMemo(() => code128Svg(barcode, 70), [barcode]);
   const copyCount = intNumber(copies, 1, 1, 300);
@@ -751,7 +815,7 @@ export default function AllInBarcodes(_props: PageProps) {
               </div>
               <div className="field">
                 <label>Szín</label>
-                <input value={color} onChange={(e) => setColor(e.target.value)} onBlur={() => setColor((prev) => officialColorRo(prev))} placeholder="pl. negru" />
+                <input value={color} onChange={(e) => setColor(e.target.value)} onBlur={() => setColor((prev) => normalizeColor(prev))} placeholder="pl. negru" />
               </div>
               <div className="field full">
                 <label>Összetétel / leírás a címkére</label>
