@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  MoveRight,
   Trash2,
   X,
 } from "lucide-react";
@@ -22,6 +23,8 @@ import {
   apiAifIgnoreImportRow,
   apiAifListReceptions,
   apiAifMeta,
+  apiAifMoveImportRow,
+  apiAifUpdateReception,
   apiAifUpdateImportRow,
   apiAifReceptionExportCsvUrl,
 } from "../lib/aif/api";
@@ -69,6 +72,7 @@ function statusText(s?: string | null) {
   if (v === "draft") return "Vázlat";
   if (v === "parsed") return "Ellenőrizve";
   if (v === "needs_review") return "Ellenőrzés szükséges";
+  if (v === "review") return "Folyamatban";
   if (v === "committed") return "Készletre véve";
   if (v === "ignored") return "Kihagyva";
   if (v === "cancelled") return "Törölve";
@@ -97,6 +101,11 @@ export default function AllInReceptions(_props: Props) {
   const [detail, setDetail] = useState<AifReceptionDetail | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [rowDrafts, setRowDrafts] = useState<Record<string, Record<string, unknown>>>({});
+  const [receptionDraft, setReceptionDraft] = useState<Record<string, string>>({});
+  const [rowStatusFilter, setRowStatusFilter] = useState("active");
+  const [moveTarget, setMoveTarget] = useState<any | null>(null);
+  const [moveToReceptionId, setMoveToReceptionId] = useState("");
+  const [savingHeader, setSavingHeader] = useState(false);
   const [savingRows, setSavingRows] = useState(false);
   const [committingRows, setCommittingRows] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AifReceptionSummary | null>(null);
@@ -152,6 +161,7 @@ export default function AllInReceptions(_props: Props) {
     try {
       const next = await apiAifGetReception(id);
       setDetail(next);
+      setReceptionDraft(buildReceptionDraft(next.item));
       setRowDrafts(buildDrafts(next.rows || []));
       setSelectedRows(new Set((next.rows || []).filter(rowCanWork).map((row: any) => row.id)));
     } catch (e: any) {
@@ -211,6 +221,83 @@ export default function AllInReceptions(_props: Props) {
     return next;
   }
 
+  function buildReceptionDraft(item: AifReceptionSummary) {
+    return {
+      invoiceNumber: String(item.invoice_number || ""),
+      invoiceDate: dateText(item.invoice_date) === "-" ? "" : dateText(item.invoice_date),
+      receptionDate: dateText(item.reception_date) === "-" ? "" : dateText(item.reception_date),
+      currencyCode: String(item.currency_code || ""),
+      exchangeRateToRon: String(item.exchange_rate_to_ron || ""),
+      tvaMode: String(item.tva_mode || "without_tva"),
+      tvaRate: String(item.tva_rate ?? ""),
+      shippingCost: String(item.shipping_cost ?? ""),
+      invoiceGross: String(item.invoice_gross ?? ""),
+      note: String((item as any).note || ""),
+    };
+  }
+
+  function updateReceptionDraft(key: string, value: string) {
+    setReceptionDraft((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === "tvaMode" && value === "no_tva") next.tvaRate = "0";
+      return next;
+    });
+  }
+
+  const visibleRows = useMemo(() => {
+    const rows = detail?.rows || [];
+    if (rowStatusFilter === "all") return rows;
+    if (rowStatusFilter === "committed") return rows.filter((r) => r.status === "committed");
+    if (rowStatusFilter === "ignored") return rows.filter((r) => r.status === "ignored");
+    if (rowStatusFilter === "error") return rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
+    return rows.filter((r) => r.status !== "committed" && r.status !== "ignored");
+  }, [detail, rowStatusFilter]);
+
+  async function saveReceptionHeader() {
+    if (!detail) return;
+    setSavingHeader(true);
+    setMessage("");
+    try {
+      await apiAifUpdateReception(detail.item.id, {
+        invoiceNumber: receptionDraft.invoiceNumber,
+        invoiceDate: receptionDraft.invoiceDate,
+        receptionDate: receptionDraft.receptionDate,
+        currencyCode: receptionDraft.currencyCode,
+        exchangeRateToRon: receptionDraft.exchangeRateToRon,
+        tvaMode: receptionDraft.tvaMode,
+        tvaRate: receptionDraft.tvaMode === "no_tva" ? 0 : receptionDraft.tvaRate,
+        shippingCost: receptionDraft.shippingCost,
+        invoiceGross: receptionDraft.invoiceGross,
+        note: receptionDraft.note,
+      });
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("Receptió fejadatai mentve.");
+    } catch (e: any) {
+      setMessage(e?.message || "A receptió fejadatai nem menthetők.");
+    } finally {
+      setSavingHeader(false);
+    }
+  }
+
+  async function moveRowToReception() {
+    if (!detail || !moveTarget || !moveToReceptionId) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifMoveImportRow(moveTarget.id, moveToReceptionId);
+      setMoveTarget(null);
+      setMoveToReceptionId("");
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("Terméksor áthelyezve.");
+    } catch (e: any) {
+      setMessage(e?.message || "A terméksor áthelyezése nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function updateRowDraft(rowId: string, key: string, value: unknown) {
     setRowDrafts((prev) => ({
       ...prev,
@@ -243,6 +330,7 @@ export default function AllInReceptions(_props: Props) {
     if (!detailId) return;
     const next = await apiAifGetReception(detailId);
     setDetail(next);
+    setReceptionDraft(buildReceptionDraft(next.item));
     setRowDrafts(buildDrafts(next.rows || []));
     setSelectedRows(new Set((next.rows || []).filter(rowCanWork).map((row: any) => row.id)));
   }
@@ -312,7 +400,7 @@ export default function AllInReceptions(_props: Props) {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.13em] text-white/70">AllInFashion</p>
-              <h1 className="mt-1 text-2xl text-white">Receptiók</h1>
+              <h1 className="mt-1 text-2xl text-white font-normal">Receptiók</h1>
               <p className="mt-1 text-sm text-white/80">Számlás bevételezések, export, részletezés és tesztadatok törlése.</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -368,6 +456,7 @@ export default function AllInReceptions(_props: Props) {
                 <option value="draft">Vázlat</option>
                 <option value="parsed">Ellenőrizve</option>
                 <option value="needs_review">Ellenőrzés szükséges</option>
+                <option value="review">Folyamatban</option>
                 <option value="committed">Készletre véve</option>
               </select>
             </label>
@@ -394,7 +483,7 @@ export default function AllInReceptions(_props: Props) {
           <div className="mt-3 overflow-hidden rounded-xl border border-white/12">
             <div className="hidden overflow-x-auto lg:block">
               <table className="min-w-full text-left text-sm">
-                <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72">
+                <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                   <tr>
                     <th className="px-3 py-2">Számla</th>
                     <th className="px-3 py-2">Beszállító</th>
@@ -422,7 +511,7 @@ export default function AllInReceptions(_props: Props) {
                       <td className="px-3 py-2 text-white/82">{statusText(r.status)}</td>
                       <td className="px-3 py-2">
                         <div className="flex justify-end gap-1.5">
-                          <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> Adatok</button>
+                          <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
                           <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> Export</button>
                           <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
                         </div>
@@ -450,7 +539,7 @@ export default function AllInReceptions(_props: Props) {
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> Adatok</button>
+                    <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
                     <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> Export</button>
                     <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
                   </div>
@@ -468,7 +557,7 @@ export default function AllInReceptions(_props: Props) {
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/18 bg-[#303b4e] px-4 py-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.1em] text-white/60">Receptió részletei</p>
-                <h2 className="text-lg text-white">{cell(detail.item.invoice_number)}</h2>
+                <h2 className="text-lg text-white font-normal">{cell(detail.item.invoice_number)}</h2>
               </div>
               <div className="flex gap-2">
                 <button className={neutralBtn} onClick={() => exportCsv(detail.item.id)} type="button"><Download size={15} /> Export</button>
@@ -487,12 +576,41 @@ export default function AllInReceptions(_props: Props) {
               <div className="rounded-xl border border-white/14 bg-[#354153] p-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
+                    <p className="text-sm text-white">Receptió fejadatai</p>
+                    <p className="mt-1 text-xs text-white/64">Számlaszám, árfolyam, TVA és végösszeg javítása. A még nem készletre vett sorok RON értékei újraszámolódnak.</p>
+                  </div>
+                  <button className={primaryBtn} onClick={saveReceptionHeader} disabled={busy || savingHeader} type="button"><Save size={15} /> Fejadatok mentése</button>
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-4">
+                  <label className={label}>Számlaszám<input className={input} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
+                  <label className={label}>Számla dátuma<input className={input} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
+                  <label className={label}>Receptió dátuma<input className={input} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
+                  <label className={label}>Pénznem<select className={select} value={receptionDraft.currencyCode || ""} onChange={(e) => updateReceptionDraft("currencyCode", e.target.value)}>{(meta?.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} - {c.name}</option>)}</select></label>
+                  <label className={label}>Árfolyam RON<input className={input} value={receptionDraft.exchangeRateToRon || ""} onChange={(e) => updateReceptionDraft("exchangeRateToRon", e.target.value)} /></label>
+                  <label className={label}>TVA kezelés<select className={select} value={receptionDraft.tvaMode || "without_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="without_tva">Árak nettóban</option><option value="with_tva">Árak bruttóban</option><option value="no_tva">TVA nélkül</option></select></label>
+                  <label className={label}>TVA %<input className={input} disabled={receptionDraft.tvaMode === "no_tva"} value={receptionDraft.tvaMode === "no_tva" ? "0" : (receptionDraft.tvaRate || "")} onChange={(e) => updateReceptionDraft("tvaRate", e.target.value)} /></label>
+                  <label className={label}>Szállítás<input className={input} value={receptionDraft.shippingCost || ""} onChange={(e) => updateReceptionDraft("shippingCost", e.target.value)} /></label>
+                  <label className={label}>Számla végösszeg<input className={input} value={receptionDraft.invoiceGross || ""} onChange={(e) => updateReceptionDraft("invoiceGross", e.target.value)} /></label>
+                  <label className={`${label} lg:col-span-3`}>Megjegyzés<input className={input} value={receptionDraft.note || ""} onChange={(e) => updateReceptionDraft("note", e.target.value)} /></label>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/14 bg-[#354153] p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
                     <p className="text-sm text-white">Terméksorok feldolgozása</p>
                     <p className="mt-1 text-xs text-white/64">
                       A hibátlan sorok külön is készletre vehetők. Ami még nincs kész, az marad javítható állapotban.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    <select className={select} value={rowStatusFilter} onChange={(e) => setRowStatusFilter(e.target.value)}>
+                      <option value="active">Még dolgozandó sorok</option>
+                      <option value="all">Minden sor</option>
+                      <option value="committed">Készletre vett</option>
+                      <option value="error">Hibás</option>
+                      <option value="ignored">Kihagyott</option>
+                    </select>
                     <button className={tinyBtn} onClick={selectReadyRows} disabled={busy || savingRows || committingRows} type="button">
                       Kész sorok kijelölése
                     </button>
@@ -509,7 +627,7 @@ export default function AllInReceptions(_props: Props) {
               <div className="overflow-hidden rounded-xl border border-white/12">
                 <div className="max-h-[46vh] overflow-auto">
                   <table className="min-w-[1180px] text-left text-sm">
-                    <thead className="sticky top-0 z-10 bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72">
+                    <thead className="sticky top-0 z-10 bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                       <tr>
                         <th className="px-3 py-2">Kijelölés</th>
                         <th className="px-3 py-2">Sorszám</th>
@@ -526,7 +644,7 @@ export default function AllInReceptions(_props: Props) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/10 bg-[#4d5869]">
-                      {detail.rows.map((r) => {
+                      {visibleRows.map((r) => {
                         const draft: any = rowDrafts[r.id] || r.normalized || {};
                         const editable = rowCanWork(r);
                         const checked = selectedRows.has(r.id);
@@ -567,6 +685,9 @@ export default function AllInReceptions(_props: Props) {
                             <td className="px-3 py-2 text-right text-white/82">{money(r.buy_price_ron, "RON")}</td>
                             <td className="px-3 py-2">
                               <div className="flex justify-end gap-1.5">
+                                <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!editable || busy} type="button">
+                                  <MoveRight size={13} /> Áthelyezés
+                                </button>
                                 <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!editable || busy} type="button">
                                   Kihagy
                                 </button>
@@ -575,7 +696,7 @@ export default function AllInReceptions(_props: Props) {
                           </tr>
                         );
                       })}
-                      {!detail.rows.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={12}>Ehhez a receptióhoz nincs mentett terméksor.</td></tr>}
+                      {!visibleRows.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={12}>Nincs sor ebben a nézetben.</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -586,10 +707,35 @@ export default function AllInReceptions(_props: Props) {
         </div>
       )}
 
+      {moveTarget && detail && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-white/24 bg-[#4d5869] p-4 shadow-2xl">
+            <h2 className="text-lg text-white font-normal">Terméksor áthelyezése</h2>
+            <p className="mt-2 text-sm text-white/76">Csak még nem készletre vett sor helyezhető át másik nyitott receptióba.</p>
+            <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] p-3 text-sm text-white">
+              {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)}
+            </div>
+            <label className={`${label} mt-3`}>
+              Cél receptió
+              <select className={select} value={moveToReceptionId} onChange={(e) => setMoveToReceptionId(e.target.value)}>
+                <option value="">Válassz receptiót</option>
+                {items.filter((r) => r.id !== detail.item.id && r.status !== "committed" && r.status !== "cancelled").map((r) => (
+                  <option key={r.id} value={r.id}>{cell(r.invoice_number)} • {cell(r.supplier_name)} • {dateText(r.reception_date)}</option>
+                ))}
+              </select>
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className={neutralBtn} onClick={() => setMoveTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
+              <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || !moveToReceptionId} type="button"><MoveRight size={15} /> Áthelyezés</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteTarget && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-white/24 bg-[#4d5869] p-4 shadow-2xl">
-            <h2 className="text-lg text-white">Receptió törlése</h2>
+            <h2 className="text-lg text-white font-normal">Receptió törlése</h2>
             <p className="mt-2 text-sm text-white/76">A törlés a receptióhoz tartozó mentett import sorokat is eltávolítja, ha még nem történt készletre vétel.</p>
             <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] p-3 text-sm text-white">
               {cell(deleteTarget.invoice_number)} • {cell(deleteTarget.supplier_name)} • {money(deleteTarget.invoice_gross, deleteTarget.currency_code)}
