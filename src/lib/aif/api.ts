@@ -49,6 +49,21 @@ export type AifCurrency = {
   updated_at?: string;
 };
 
+export type AifColorType = {
+  id: string;
+  code: string;
+  name_ro: string;
+  name_hu?: string | null;
+  name_en?: string | null;
+  name_de?: string | null;
+  aliases?: string[] | null;
+  hex?: string | null;
+  sort_order?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AifReceptionInput = {
   invoiceNumber?: string;
   invoiceDate?: string;
@@ -152,6 +167,7 @@ export type AifMeta = {
   locations: AifLocation[];
   locationTypes?: AifLocationType[];
   currencies?: AifCurrency[];
+  colorTypes?: AifColorType[];
   profiles: AifImportProfile[];
 };
 
@@ -495,6 +511,59 @@ export function apiAifDeleteCurrency(code: string) {
   });
 }
 
+export function apiAifListColorTypes(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifColorType[] }>(`/color-types${suffix}`);
+}
+
+export function apiAifCreateColorType(input: {
+  nameRo: string;
+  code?: string;
+  nameHu?: string;
+  nameEn?: string;
+  nameDe?: string;
+  aliases?: string[] | string;
+  hex?: string;
+  sortOrder?: number | string;
+}) {
+  return fetchAifJSON<{ item: AifColorType }>("/color-types", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateColorType(id: string, input: {
+  nameRo?: string;
+  code?: string;
+  nameHu?: string | null;
+  nameEn?: string | null;
+  nameDe?: string | null;
+  aliases?: string[] | string;
+  hex?: string | null;
+  sortOrder?: number | string;
+  is_active?: boolean;
+}) {
+  return fetchAifJSON<{ item: AifColorType }>(`/color-types/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteColorType(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/color-types/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifNormalizeColor(color: string) {
+  return fetchAifJSON<{ input: string; color: string; item?: AifColorType | null }>("/color-types/normalize", {
+    method: "POST",
+    body: JSON.stringify({ color }),
+  });
+}
+
 export function apiAifListReceptions(options?: {
   limit?: number;
   search?: string;
@@ -522,8 +591,8 @@ export function apiAifGetReception(id: string) {
 }
 
 export function apiAifUpdateReception(id: string, reception: Partial<AifReceptionInput>) {
-  return fetchAifJSON<{ ok: true; item?: AifReceptionSummary | null }>(`/receptions/${encodeURIComponent(id)}/update`, {
-    method: "POST",
+  return fetchAifJSON<{ ok: true }>(`/receptions/${encodeURIComponent(id)}`, {
+    method: "PATCH",
     body: JSON.stringify({ reception }),
   });
 }
