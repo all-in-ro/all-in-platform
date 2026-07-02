@@ -651,7 +651,7 @@ export default function AllInReceptions(_props: Props) {
                 <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
-            <div className="space-y-3 p-3">
+            <div className="space-y-3 px-3 pt-3 pb-6">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.supplier_name)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Cél hely</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.location_name)}</p></div>
@@ -746,7 +746,7 @@ export default function AllInReceptions(_props: Props) {
               </div>
 
               <div className="overflow-hidden rounded-xl border border-white/12">
-                <div className="max-h-[40vh] overflow-auto">
+                <div className="max-h-[40vh] overflow-auto pb-4">
                   <table className="min-w-[1080px] text-left text-xs">
                     <thead className="sticky top-0 z-10 bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                       <tr>
@@ -820,6 +820,7 @@ export default function AllInReceptions(_props: Props) {
                       {!visibleRows.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={12}>Nincs sor ebben a nézetben.</td></tr>}
                     </tbody>
                   </table>
+                  <div className="h-3" aria-hidden="true" />
                 </div>
               </div>
 
