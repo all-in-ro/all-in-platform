@@ -1444,7 +1444,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.post("/color-types", requireAdminOrSecret, async (req, res) => {
+  router.post("/color-types", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const nameRo = text(body.nameRo || body.name_ro || body.name || body.nameRoOfficial);
     const code = normCode(body.code || nameRo);
@@ -1476,7 +1476,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.patch("/color-types/:id", requireAdminOrSecret, async (req, res) => {
+  router.patch("/color-types/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const body = req.body || {};
     const sets = [];
@@ -1519,7 +1519,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.delete("/color-types/:id", requireAdminOrSecret, async (req, res) => {
+  router.delete("/color-types/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const client = await pool.connect();
     try {
