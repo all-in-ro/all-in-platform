@@ -5,6 +5,7 @@ import {
   CheckCircle,
   Edit3,
   FileSpreadsheet,
+  Download,
   MapPin,
   Plus,
   RefreshCw,
@@ -119,27 +120,6 @@ function moneyText(value: number, currency = "") {
   return `${n.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
 }
 
-
-async function aifPostJson(path: string, payload: unknown) {
-  const res = await fetch(path, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const text = await res.text();
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { error: text };
-  }
-  if (!res.ok) {
-    throw new Error(data?.error || "A mentés nem sikerült.");
-  }
-  return data || {};
-}
-
 function confidenceText(value: number) {
   if (value >= 85) return "Magas";
   if (value >= 60) return "Közepes";
@@ -232,7 +212,6 @@ export default function AllInIncoming(_props: Props) {
   const [workbenchOpen, setWorkbenchOpen] = useState(true);
   const [previewLimit, setPreviewLimit] = useState(25);
   const [approvedRows, setApprovedRows] = useState<Record<string, boolean>>({});
-  const [manualRowsOpen, setManualRowsOpen] = useState(true);
   const [manualProductCode, setManualProductCode] = useState("");
   const [manualTitle, setManualTitle] = useState("");
   const [manualBrandCode, setManualBrandCode] = useState("");
@@ -243,6 +222,7 @@ export default function AllInIncoming(_props: Props) {
   const [manualSize, setManualSize] = useState("");
   const [manualQty, setManualQty] = useState("");
   const [manualBuyPrice, setManualBuyPrice] = useState("");
+  const [manualRowsOpen, setManualRowsOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [locationModalOpen, setLocationModalOpen] = useState(false);
@@ -292,13 +272,6 @@ export default function AllInIncoming(_props: Props) {
       setDefaultBrandCode("");
     }
   }, [brandOptionsForSupplier, defaultBrandCode]);
-
-
-  useEffect(() => {
-    setManualBrandCode((current) => current || defaultBrandCode);
-    setManualCategoryCode((current) => current || defaultCategoryCode);
-    setManualGender((current) => current || defaultGender);
-  }, [defaultBrandCode, defaultCategoryCode, defaultGender]);
 
   function brandValueForRow(n: Record<string, unknown>) {
     const raw = String(n.brandCode || n.brandName || "").trim();
@@ -481,7 +454,6 @@ export default function AllInIncoming(_props: Props) {
     setMessage("A kijelölés törölve. A beolvasott adatok továbbra is csak előnézetben vannak.");
   }
 
-
   function resetManualRowForm() {
     setManualProductCode("");
     setManualTitle("");
@@ -496,26 +468,27 @@ export default function AllInIncoming(_props: Props) {
   }
 
   function addManualRow() {
+    const nextRowNo = rows.length + 1;
     const brandCode = manualBrandCode || defaultBrandCode;
     const categoryCode = manualCategoryCode || defaultCategoryCode;
     const gender = manualGender || defaultGender;
+    const brand = activeBrands.find((b) => (b.code || b.id) === brandCode);
+    const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
     const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
     const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
-    const brand = brandOptionsForSupplier.find((b) => (b.code || b.id) === brandCode);
-    const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
 
     const manualRow: AifParsedRow = {
-      rowNo: rows.length + 1,
+      rowNo: nextRowNo,
       raw: {
         source: "manual",
-        productCode: manualProductCode.trim(),
-        title: manualTitle.trim(),
-        brand: brand?.name || brandCode,
-        category: category ? categoryLabel(category) : categoryCode,
+        productCode: manualProductCode,
+        title: manualTitle,
+        brandCode,
+        categoryCode,
         gender,
-        colorName: manualColorName.trim(),
-        colorCode: manualColorCode.trim(),
-        size: manualSize.trim(),
+        colorName: manualColorName,
+        colorCode: manualColorCode,
+        size: manualSize,
         qty,
         buyPrice,
       },
@@ -523,11 +496,11 @@ export default function AllInIncoming(_props: Props) {
         supplierProductCode: manualProductCode.trim(),
         modelCode: manualProductCode.trim(),
         titleRo: manualTitle.trim(),
-        brandCode: brandCode || null,
+        brandCode,
         brandName: brand?.name || "",
-        categoryCode: categoryCode || null,
+        categoryCode,
         categoryName: category ? categoryLabel(category) : "",
-        gender: gender || "",
+        gender,
         colorName: manualColorName.trim(),
         colorCode: manualColorCode.trim(),
         size: manualSize.trim(),
@@ -535,25 +508,18 @@ export default function AllInIncoming(_props: Props) {
         buyPrice,
         source: "manual",
       },
-      status: "parsed",
-      errors: [],
-    } as any;
+    };
 
     const errors = aifRowErrors(manualRow);
     const rowIndex = rows.length;
     const key = rowKey(manualRow, rowIndex);
-    setRows((current) => [...current, errors.length ? { ...manualRow, status: "error" as any } : manualRow]);
-    setWorkbench(null);
+    setRows((current) => [...current, manualRow]);
     setFileName((current) => current || "Manuális bevételezés");
+    setWorkbenchOpen(false);
     setPreviewLimit((current) => Math.max(current, rowIndex + 1));
-    if (!errors.length) {
-      setApprovedRows((current) => ({ ...current, [key]: true }));
-      setMessage("A manuális terméksor hozzáadva és mentésre kijelölve. Mentés előtt ellenőrizd a receptió adatait.");
-    } else {
-      setApprovedRows((current) => ({ ...current, [key]: false }));
-      setMessage(`A manuális terméksor ellenőrzést igényel: ${errors.join(" ")}`);
-    }
+    setApprovedRows((current) => ({ ...current, [key]: errors.length === 0 }));
     resetManualRowForm();
+    setMessage(errors.length ? "A manuális sor hozzáadva előnézethez, de javítás szükséges." : "A manuális sor hozzáadva és mentésre kijelölve.");
   }
 
   async function loadMeta() {
@@ -661,11 +627,11 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const saved = await aifPostJson("/api/aif/import-batches/full", {
+      const batch = await apiAifCreateImportBatch({
         supplierId,
         targetLocationId: locationId,
-        sourceFileName: fileName || "Manuális bevételezés",
-        sourceFormat: fileName ? "xls" : "manual",
+        sourceFileName: fileName || "import.xls",
+        sourceFormat: "xls",
         note,
         reception: {
           invoiceNumber,
@@ -684,10 +650,10 @@ export default function AllInIncoming(_props: Props) {
           totalQty: approvedQty,
           note,
         },
-        rows: approvedRowList,
       });
+      const saved = await apiAifReplaceImportRows(batch.id, approvedRowList);
       await Promise.all([loadBatches(), loadReceptions()]);
-      setMessage(`Import mentve: ${saved.rowCount || approvedCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount || 0}. Kizárt sorok: ${excludedCount}.`);
+      setMessage(`Import mentve: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni az importot.");
     } finally {
@@ -1412,63 +1378,49 @@ export default function AllInIncoming(_props: Props) {
           {manualRowsOpen && (
             <div className="mt-3 space-y-3">
               <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/74">
-                Manuális bevételezéshez tölts ki egy terméksort, majd add hozzá az előnézethez. A sor ugyanúgy ellenőrizhető és kijelölhető, mint az importált adat.
+                Manuális bevételezéshez tölts ki egy terméksort, majd add hozzá az előnézethez. Mentés előtt ugyanúgy ellenőrizhető és kijelölhető, mint az importált sor.
               </div>
-              <div className="grid gap-3 lg:grid-cols-3">
-                <label className={label}>
-                  Termékkód
+              <div className="grid gap-3 lg:grid-cols-4">
+                <label className={label}>Termékkód
                   <input className={`${input} w-full`} value={manualProductCode} onChange={(e) => setManualProductCode(e.target.value)} placeholder="pl. UA-123" />
                 </label>
-                <label className={label}>
-                  Terméknév
+                <label className={label}>Terméknév
                   <input className={`${input} w-full`} value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Termék megnevezése" />
                 </label>
-                <label className={label}>
-                  Márka
+                <label className={label}>Márka
                   <select className={`${selectInput} w-full`} value={manualBrandCode || defaultBrandCode} onChange={(e) => setManualBrandCode(e.target.value)}>
-                    <option style={mutedOptionStyle} value="">Márka kiválasztása</option>
-                    {brandOptionsForSupplier.map((b) => (
-                      <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>
-                    ))}
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
                   </select>
                 </label>
-                <label className={label}>
-                  Kategória
+                <label className={label}>Kategória
                   <select className={`${selectInput} w-full`} value={manualCategoryCode || defaultCategoryCode} onChange={(e) => setManualCategoryCode(e.target.value)}>
-                    <option style={mutedOptionStyle} value="">Kategória kiválasztása</option>
-                    {activeCategories.map((c) => (
-                      <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>
-                    ))}
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                   </select>
                 </label>
-                <label className={label}>
-                  Nem
+              </div>
+              <div className="grid gap-3 lg:grid-cols-6">
+                <label className={label}>Nem
                   <select className={`${selectInput} w-full`} value={manualGender || defaultGender} onChange={(e) => setManualGender(e.target.value)}>
-                    <option style={mutedOptionStyle} value="">Nem kiválasztása</option>
-                    {activeGenderTypes.map((g) => (
-                      <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>
-                    ))}
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
                   </select>
                 </label>
-                <label className={label}>
-                  Szín
+                <label className={label}>Szín
                   <input className={`${input} w-full`} value={manualColorName} onChange={(e) => setManualColorName(e.target.value)} placeholder="pl. fekete" />
                 </label>
-                <label className={label}>
-                  Színkód
+                <label className={label}>Színkód
                   <input className={`${input} w-full`} value={manualColorCode} onChange={(e) => setManualColorCode(e.target.value)} placeholder="pl. 001" />
                 </label>
-                <label className={label}>
-                  Méret
+                <label className={label}>Méret
                   <input className={`${input} w-full`} value={manualSize} onChange={(e) => setManualSize(e.target.value)} placeholder="pl. M vagy 42" />
                 </label>
-                <label className={label}>
-                  Darab
+                <label className={label}>Darab
                   <input className={`${input} w-full`} value={manualQty} onChange={(e) => setManualQty(e.target.value)} placeholder="pl. 1" />
                 </label>
-                <label className={label}>
-                  Vételár
-                  <input className={`${input} w-full`} value={manualBuyPrice} onChange={(e) => setManualBuyPrice(e.target.value)} placeholder="a kiválasztott pénznemben" />
+                <label className={label}>Vételár
+                  <input className={`${input} w-full`} value={manualBuyPrice} onChange={(e) => setManualBuyPrice(e.target.value)} placeholder="pénznemben" />
                 </label>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
@@ -1598,7 +1550,7 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Receptiók" right={<span className="text-xs text-white/60">Legutóbbi számlás bevételezések</span>} />
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Receptiók" right={<button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Összes receptió</button>} />
           <div className="mt-3 grid gap-2">
             {receptions.map((r) => (
               <div key={r.id} className="rounded-xl border border-white/12 bg-[#354153] p-3">
@@ -1631,6 +1583,10 @@ export default function AllInIncoming(_props: Props) {
                     <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Állapot</p>
                     <p className="mt-1 text-sm text-white">{r.status || "-"}</p>
                   </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Adatok</button>
+                  <button className={tinyBtn} onClick={() => window.open(`/api/aif/receptions/${encodeURIComponent(r.id)}/export.csv`, "_blank", "noopener,noreferrer")} type="button"><Download size={13} /> Export</button>
                 </div>
               </div>
             ))}
