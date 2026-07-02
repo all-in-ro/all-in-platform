@@ -1497,16 +1497,16 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>
                   TVA kezelés
-                  <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate(""); }}>
+                  <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); }}>
                     <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
-                    <option style={optionStyle} value="without_tva">Árak TVA nélkül</option>
-                    <option style={optionStyle} value="with_tva">Árak TVA-val</option>
+                    <option style={optionStyle} value="without_tva">Árak nettóban</option>
+                    <option style={optionStyle} value="with_tva">Árak bruttóban</option>
                     <option style={optionStyle} value="no_tva">TVA nélkül</option>
                   </select>
                 </label>
                 <label className={label}>
                   TVA %
-                  <input className={requiredInput(requiredMissing.tvaRate)} value={tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} placeholder={tvaMode === "no_tva" ? "Nem szükséges" : "pl. 19"} />
+                  <input className={`${requiredInput(tvaMode === "no_tva" ? false : requiredMissing.tvaRate)} ${tvaMode === "no_tva" ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode === "no_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} placeholder={tvaMode === "no_tva" ? "Nem szükséges" : "pl. 19"} />
                 </label>
                 <label className={label}>
                   Szállítás
