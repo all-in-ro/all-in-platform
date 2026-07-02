@@ -903,21 +903,274 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  function csvCell(v) {
+    const s = String(v ?? "");
+    if (/["\n\r,;]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function csvLine(values) {
+    return values.map(csvCell).join(";");
+  }
+
   router.get("/receptions", requireAuthed, async (req, res) => {
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
-    const r = await pool.query(
-      `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
-              r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
-              r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-              s.name AS supplier_name, l.name AS location_name
-       FROM aif_receptions r
-       LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
-       LEFT JOIN aif_locations l ON l.id=r.target_location_id
-       ORDER BY r.created_at DESC
-       LIMIT $1`,
-      [limit]
-    );
+    const limit = Math.min(300, Math.max(1, Number(req.query.limit || 80)));
+    const search = text(req.query.q || req.query.search);
+    const supplier = text(req.query.supplier || req.query.supplier_id || req.query.supplierId);
+    const location = text(req.query.location || req.query.location_id || req.query.locationId);
+    const currency = currencyCode(req.query.currency || req.query.currency_code);
+    const status = text(req.query.status);
+    const from = emptyToNull(req.query.from);
+    const to = emptyToNull(req.query.to);
+
+    const args = [];
+    const where = [];
+    const addArg = (value) => {
+      args.push(value);
+      return `$${args.length}`;
+    };
+
+    if (search) {
+      const p = addArg(`%${search}%`);
+      where.push(`(
+        r.invoice_number ILIKE ${p}
+        OR r.note ILIKE ${p}
+        OR s.name ILIKE ${p}
+        OR l.name ILIKE ${p}
+        OR r.currency_code ILIKE ${p}
+      )`);
+    }
+    if (supplier) {
+      const p = addArg(supplier);
+      where.push(`(s.id::text=${p} OR s.code=${p})`);
+    }
+    if (location) {
+      const p = addArg(location);
+      where.push(`(l.id::text=${p} OR l.code=${p})`);
+    }
+    if (currency) {
+      const p = addArg(currency);
+      where.push(`r.currency_code=${p}`);
+    }
+    if (status) {
+      const p = addArg(status);
+      where.push(`r.status=${p}`);
+    }
+    if (from) {
+      const p = addArg(from);
+      where.push(`r.reception_date >= ${p}::date`);
+    }
+    if (to) {
+      const p = addArg(to);
+      where.push(`r.reception_date < (${p}::date + interval '1 day')`);
+    }
+
+    const limitParam = addArg(limit);
+    const sql = `
+      SELECT
+        r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+        r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
+        r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
+        r.note, r.supplier_id, r.target_location_id,
+        s.name AS supplier_name,
+        l.name AS location_name,
+        count(DISTINCT b.id)::int AS import_batches,
+        count(rw.id)::int AS import_rows,
+        count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
+        (count(sm.id) > 0) AS has_stock_movements,
+        (
+          r.status <> 'committed'
+          AND count(DISTINCT b.id) FILTER (WHERE b.status='committed') = 0
+          AND count(sm.id) = 0
+        ) AS can_delete
+      FROM aif_receptions r
+      LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+      LEFT JOIN aif_locations l ON l.id=r.target_location_id
+      LEFT JOIN aif_import_batches b ON b.reception_id=r.id
+      LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
+      LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      GROUP BY r.id, s.name, l.name
+      ORDER BY r.created_at DESC
+      LIMIT ${limitParam}
+    `;
+    const r = await pool.query(sql, args);
     res.json({ items: r.rows });
+  });
+
+  router.get("/receptions/:id/export.csv", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "reception id required" });
+    try {
+      const rec = await pool.query(
+        `SELECT r.*, s.name AS supplier_name, l.name AS location_name
+         FROM aif_receptions r
+         LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+         LEFT JOIN aif_locations l ON l.id=r.target_location_id
+         WHERE r.id::text=$1
+         LIMIT 1`,
+        [id]
+      );
+      if (!rec.rowCount) return res.status(404).json({ error: "reception not found" });
+
+      const rows = await pool.query(
+        `SELECT
+           b.id AS batch_id, b.status AS batch_status, b.source_file_name,
+           rw.row_no, rw.status AS row_status, rw.qty, rw.buy_price, rw.buy_price_ron,
+           rw.sell_price, rw.sell_price_ron, rw.supplier_product_code, rw.supplier_variant_code,
+           rw.supplier_color_code, rw.supplier_size, rw.normalized
+         FROM aif_import_batches b
+         LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
+         WHERE b.reception_id=$1
+         ORDER BY b.created_at ASC, rw.row_no ASC NULLS LAST`,
+        [rec.rows[0].id]
+      );
+
+      const head = rec.rows[0];
+      const lines = [];
+      lines.push(csvLine(["Receptio", head.invoice_number || ""]));
+      lines.push(csvLine(["Beszallito", head.supplier_name || ""]));
+      lines.push(csvLine(["Cel hely", head.location_name || ""]));
+      lines.push(csvLine(["Szamla datum", head.invoice_date ? String(head.invoice_date).slice(0, 10) : ""]));
+      lines.push(csvLine(["Receptio datum", head.reception_date ? String(head.reception_date).slice(0, 10) : ""]));
+      lines.push(csvLine(["Penznem", head.currency_code || ""]));
+      lines.push(csvLine(["Arfolyam RON", head.exchange_rate_to_ron || ""]));
+      lines.push(csvLine(["Szamla vegosszeg", head.invoice_gross || ""]));
+      lines.push("");
+      lines.push(csvLine([
+        "Sor", "Allapot", "Termekkod", "Variant kod", "Nev", "Marka", "Kategoria", "Nem",
+        "Szin", "Szinkod", "Meret", "Darab", "Vetelar", "Vetelar RON", "Eladasi ar", "Eladasi ar RON", "Forras fajl"
+      ]));
+      for (const x of rows.rows) {
+        const n = x.normalized || {};
+        lines.push(csvLine([
+          x.row_no || "",
+          x.row_status || x.batch_status || "",
+          x.supplier_product_code || n.supplierProductCode || n.modelCode || "",
+          x.supplier_variant_code || n.supplierVariantCode || "",
+          n.titleRo || n.productName || "",
+          n.brandName || n.brandCode || "",
+          n.categoryCode || "",
+          n.gender || "",
+          n.colorName || "",
+          x.supplier_color_code || n.colorCode || "",
+          x.supplier_size || n.size || "",
+          x.qty || n.qty || "",
+          x.buy_price || "",
+          x.buy_price_ron || "",
+          x.sell_price || "",
+          x.sell_price_ron || "",
+          x.source_file_name || "",
+        ]));
+      }
+      const csv = "\ufeff" + lines.join("\n");
+      const safeName = String(head.invoice_number || "receptio").replace(/[^a-zA-Z0-9._-]+/g, "_");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="receptio_${safeName}.csv"`);
+      res.send(csv);
+    } catch (e) {
+      console.error("AIF reception CSV export failed", e);
+      res.status(500).json({ error: "failed to export reception" });
+    }
+  });
+
+  router.get("/receptions/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "reception id required" });
+    try {
+      const item = await pool.query(
+        `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+                r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
+                r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
+                r.note, r.supplier_id, r.target_location_id,
+                s.name AS supplier_name, l.name AS location_name,
+                count(DISTINCT b.id)::int AS import_batches,
+                count(rw.id)::int AS import_rows,
+                count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
+                (count(sm.id) > 0) AS has_stock_movements,
+                (r.status <> 'committed' AND count(DISTINCT b.id) FILTER (WHERE b.status='committed') = 0 AND count(sm.id)=0) AS can_delete
+         FROM aif_receptions r
+         LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+         LEFT JOIN aif_locations l ON l.id=r.target_location_id
+         LEFT JOIN aif_import_batches b ON b.reception_id=r.id
+         LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
+         LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
+         WHERE r.id::text=$1
+         GROUP BY r.id, s.name, l.name
+         LIMIT 1`,
+        [id]
+      );
+      if (!item.rowCount) return res.status(404).json({ error: "reception not found" });
+
+      const batches = await pool.query(
+        `SELECT b.id, b.created_at, b.updated_at, b.status, b.row_count, b.error_count,
+                b.source_file_name, b.note, b.committed_at, b.reception_id, b.invoice_number,
+                b.currency_code, b.exchange_rate_to_ron, s.code AS supplier_code, s.name AS supplier_name,
+                l.code AS location_code, l.name AS location_name, p.name AS profile_name, p.version AS profile_version
+         FROM aif_import_batches b
+         JOIN aif_suppliers s ON s.id=b.supplier_id
+         LEFT JOIN aif_locations l ON l.id=b.target_location_id
+         LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
+         WHERE b.reception_id=$1
+         ORDER BY b.created_at ASC`,
+        [item.rows[0].id]
+      );
+      const rows = await pool.query(
+        `SELECT rw.id, rw.batch_id, rw.row_no, rw.raw, rw.normalized, rw.status, rw.error_messages,
+                rw.variant_id, rw.supplier_product_code, rw.supplier_variant_code, rw.supplier_color_code,
+                rw.supplier_size, rw.qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron
+         FROM aif_import_batches b
+         JOIN aif_import_rows rw ON rw.batch_id=b.id
+         WHERE b.reception_id=$1
+         ORDER BY b.created_at ASC, rw.row_no ASC`,
+        [item.rows[0].id]
+      );
+      res.json({ item: item.rows[0], batches: batches.rows, rows: rows.rows });
+    } catch (e) {
+      console.error("AIF reception detail failed", e);
+      res.status(500).json({ error: "failed to load reception" });
+    }
+  });
+
+  router.delete("/receptions/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const rec = await client.query(`SELECT id, status FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!rec.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "reception not found" });
+      }
+      const batches = await client.query(`SELECT id, status FROM aif_import_batches WHERE reception_id=$1 FOR UPDATE`, [rec.rows[0].id]);
+      const batchIds = batches.rows.map((x) => x.id);
+      const committed = batches.rows.some((x) => x.status === "committed") || rec.rows[0].status === "committed";
+      let movementCount = 0;
+      if (batchIds.length) {
+        const movements = await client.query(
+          `SELECT count(*)::int AS c FROM aif_stock_movements WHERE source_type='import_batch' AND source_id = ANY($1::text[])`,
+          [batchIds.map(String)]
+        );
+        movementCount = Number(movements.rows[0]?.c || 0);
+      }
+      if (committed || movementCount > 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "A receptió már készletmozgáshoz kapcsolódik, nem törölhető közvetlenül." });
+      }
+      if (batchIds.length) {
+        await client.query(`DELETE FROM aif_import_rows WHERE batch_id = ANY($1::uuid[])`, [batchIds]);
+        await client.query(`DELETE FROM aif_import_batches WHERE id = ANY($1::uuid[])`, [batchIds]);
+      }
+      await client.query(`DELETE FROM aif_receptions WHERE id=$1`, [rec.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted" });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete reception failed", e);
+      res.status(500).json({ error: "failed to delete reception" });
+    } finally {
+      client.release();
+    }
   });
 
   router.get("/brands", requireAuthed, async (_req, res) => {
