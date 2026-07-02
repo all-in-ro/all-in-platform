@@ -1222,9 +1222,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const currency = fresh.rows[0]?.currency_code || null;
 
       // Recalculate non-committed row RON values after exchange-rate/currency changes.
-      // If this secondary maintenance step fails, the header save itself should not vanish
-      // into a 500-shaped hole. The row error is returned as a warning instead.
+      // PostgreSQL marks the whole transaction as aborted after any failed SQL statement.
+      // So this optional maintenance query must run inside a savepoint. If it fails, we
+      // roll back only this small part and still keep the already validated header update.
       let rowRecalcWarning = null;
+      await client.query("SAVEPOINT aif_reception_row_recalc");
       try {
         await client.query(
           `UPDATE aif_import_rows rw
@@ -1236,7 +1238,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
           [rec.rows[0].id, rate, currency]
         );
+        await client.query("RELEASE SAVEPOINT aif_reception_row_recalc");
       } catch (rowErr) {
+        try { await client.query("ROLLBACK TO SAVEPOINT aif_reception_row_recalc"); } catch {}
+        try { await client.query("RELEASE SAVEPOINT aif_reception_row_recalc"); } catch {}
         rowRecalcWarning = rowErr?.message || "A nem készletre vett sorok RON újraszámolása nem sikerült.";
         console.error("AIF reception row recalc failed", rowErr);
       }
