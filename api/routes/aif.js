@@ -166,6 +166,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR code=$2
           OR lower(name_ro)=lower($1)
           OR lower(COALESCE(name_hu,''))=lower($1)
+          OR EXISTS (
+            SELECT 1 FROM unnest(COALESCE(aliases, '{}'::text[])) a
+            WHERE lower(a)=lower($1) OR lower(a)=lower($2)
+          )
        ORDER BY is_active DESC, sort_order ASC
        LIMIT 1`,
       [raw, code]
@@ -490,11 +494,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rowCount > 0;
   }
 
-  function colorAliasesFromInput(value) {
+  function splitAliasesFromInput(value) {
     if (Array.isArray(value)) {
       return Array.from(new Set(value.map((x) => text(x)).filter(Boolean)));
     }
     return Array.from(new Set(text(value).split(/[\n,;]+/).map((x) => text(x)).filter(Boolean)));
+  }
+
+  function colorAliasesFromInput(value) {
+    return splitAliasesFromInput(value);
+  }
+
+  function categoryAliasesFromInput(value) {
+    return splitAliasesFromInput(value);
   }
 
   async function normalizeColorName(client, value) {
@@ -1565,7 +1577,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/categories", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const r = await pool.query(
-      `SELECT id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active, created_at, updated_at
+      `SELECT id, code, parent_id, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active, created_at, updated_at
        FROM aif_categories
        ${includeInactive ? "" : "WHERE is_active=true"}
        ORDER BY is_active DESC, sort_order ASC, name_ro ASC`
@@ -1573,28 +1585,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
-  router.post("/categories", requireAdminOrSecret, async (req, res) => {
+  router.post("/categories", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const nameRo = text(body.nameRo || body.name_ro || body.name);
     const nameHu = emptyToNull(body.nameHu || body.name_hu);
     const code = normCode(body.code || nameRo);
     const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    const aliases = categoryAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
     const shopifyHandle = emptyToNull(body.shopifyCollectionHandle || body.shopify_collection_handle);
     if (!nameRo) return res.status(400).json({ error: "category name required" });
     if (!code) return res.status(400).json({ error: "category code required" });
     try {
       const r = await pool.query(
-        `INSERT INTO aif_categories (code, name_ro, name_hu, shopify_collection_handle, sort_order, is_active)
-         VALUES ($1,$2,$3,$4,$5,true)
+        `INSERT INTO aif_categories (code, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active)
+         VALUES ($1,$2,$3,$4::text[],$5,$6,true)
          ON CONFLICT (code) DO UPDATE SET
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
+           aliases=EXCLUDED.aliases,
            shopify_collection_handle=EXCLUDED.shopify_collection_handle,
            sort_order=EXCLUDED.sort_order,
            is_active=true,
            updated_at=now()
-         RETURNING id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
-        [code, nameRo, nameHu, shopifyHandle, sortOrder]
+         RETURNING id, code, parent_id, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
+        [code, nameRo, nameHu, aliases, shopifyHandle, sortOrder]
       );
       res.json({ item: r.rows[0] });
     } catch (e) {
@@ -1603,7 +1617,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.patch("/categories/:id", requireAdminOrSecret, async (req, res) => {
+  router.patch("/categories/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const body = req.body || {};
     const sets = [];
@@ -1619,6 +1633,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (body.nameHu !== undefined || body.name_hu !== undefined) {
       sets.push(`name_hu=$${i++}`);
       args.push(emptyToNull(body.nameHu ?? body.name_hu));
+    }
+    if (body.aliases !== undefined || body.aliasList !== undefined || body.alias_list !== undefined) {
+      sets.push(`aliases=$${i++}::text[]`);
+      args.push(categoryAliasesFromInput(body.aliases ?? body.aliasList ?? body.alias_list));
     }
     if (body.code !== undefined) {
       const code = normCode(body.code);
@@ -1647,7 +1665,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_categories
          SET ${sets.join(", ")}, updated_at=now()
          WHERE id::text=$${i} OR code=$${i}
-         RETURNING id, code, parent_id, name_ro, name_hu, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
+         RETURNING id, code, parent_id, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
         args
       );
       if (!r.rowCount) return res.status(404).json({ error: "category not found" });
@@ -1658,7 +1676,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.delete("/categories/:id", requireAdminOrSecret, async (req, res) => {
+  router.delete("/categories/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const client = await pool.connect();
     try {
@@ -2069,7 +2087,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
-      pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`SELECT id, code, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT code, name, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
