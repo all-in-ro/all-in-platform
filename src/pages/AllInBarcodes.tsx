@@ -651,7 +651,7 @@ export default function AllInBarcodes(_props: PageProps) {
           <div>
             <div className="eyebrow">AllInFashion</div>
             <h1>Vonalkód / címke központ</h1>
-            <div className="muted">Egyszerű címkekészítés: termékadat, vonalkód, sablon, előnézet, nyomtatás.</div>
+            <div className="muted">Címkekészítés: termékadat, vonalkód, sablon, előnézet, nyomtatás.</div>
             <div className="stepLine">
               <div className="stepBox"><span>1. adat</span>Termék és vonalkód</div>
               <div className="stepBox"><span>2. tartalom</span>Mi kerüljön rá</div>
@@ -736,7 +736,7 @@ export default function AllInBarcodes(_props: PageProps) {
             </div>
 
             <div className="helpBox">
-              Ez belső AllIn / Shopify SKU alapú Code128 címke. GS1 EAN/GTIN csak licencelt prefixszel kerülhet be később, mert kamu EAN-t gyártani pont olyan okos ötlet, mint Excelben raktárat vezetni örökké.
+              Ez belső AllIn / Shopify SKU alapú Code128 címke.
             </div>
             {status && <div className="statusBox" style={{ marginTop: 10 }}>{status}</div>}
           </div>
@@ -839,7 +839,7 @@ export default function AllInBarcodes(_props: PageProps) {
               <button type="button" onClick={exportCsv}>CSV export</button>
             </div>
             <div className="helpBox">
-              A nyomtatási nézet A4-re számol. A címke és margó értékek kézzel finomíthatók, így nem kell a boltban valakinek mérnöki diplomát szereznie csak azért, hogy ármatricát nyomtasson.
+              A nyomtatási nézet A4-re számol. A címke és margó értékek kézzel finomíthatók.
             </div>
           </div>
         </section>
