@@ -98,6 +98,52 @@ const CONTENT_OPTIONS: { key: ContentKey; label: string; hint: string }[] = [
   { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
 ];
 
+const DEFAULT_COMPANY_NAME = "TITAN EURO-COM SRL";
+
+const COLOR_RO_MAP: Record<string, string> = {
+  black: "negru", schwarz: "negru", nero: "negru", noir: "negru", fekete: "negru", negru: "negru",
+  white: "alb", weiss: "alb", weiß: "alb", blanco: "alb", bianco: "alb", feher: "alb", fehér: "alb", alb: "alb",
+  red: "roșu", rot: "roșu", rosso: "roșu", rojo: "roșu", piros: "roșu", rosu: "roșu", roșu: "roșu",
+  blue: "albastru", blau: "albastru", bleu: "albastru", blu: "albastru", albastru: "albastru", kek: "albastru", kék: "albastru",
+  "dark blue": "bleumarin", navy: "bleumarin", marine: "bleumarin", bleumarin: "bleumarin", sotetkek: "bleumarin", "sotet kek": "bleumarin", "sötét kék": "bleumarin",
+  green: "verde", grun: "verde", grün: "verde", verde: "verde", zold: "verde", zöld: "verde",
+  yellow: "galben", gelb: "galben", giallo: "galben", galben: "galben", sarga: "galben", sárga: "galben",
+  grey: "gri", gray: "gri", grau: "gri", gri: "gri", szurke: "gri", szürke: "gri",
+  orange: "portocaliu", portocaliu: "portocaliu", narancs: "portocaliu",
+  brown: "maro", braun: "maro", marrone: "maro", maro: "maro", barna: "maro",
+  beige: "bej", bej: "bej", bezs: "bej", bézs: "bej",
+  purple: "mov", violet: "mov", lila: "mov", mov: "mov",
+  pink: "roz", rosa: "roz", roz: "roz",
+  gold: "auriu", golden: "auriu", auriu: "auriu", arany: "auriu",
+  silver: "argintiu", silber: "argintiu", argintiu: "argintiu", ezust: "argintiu", ezüst: "argintiu",
+  cream: "crem", crem: "crem", ivory: "fildeș", fildeş: "fildeș", fildes: "fildeș",
+  turquoise: "turcoaz", turkis: "turcoaz", türkis: "turcoaz", turcoaz: "turcoaz",
+  khaki: "kaki", kaki: "kaki",
+  multi: "multicolor", multicolor: "multicolor", multicolour: "multicolor",
+};
+
+function colorKey(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function officialColorRo(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const key = colorKey(raw);
+  if (COLOR_RO_MAP[key]) return COLOR_RO_MAP[key];
+  const parts = key.split(/\s+/).filter(Boolean);
+  if (parts.length > 1) {
+    const translated = parts.map((part) => COLOR_RO_MAP[part]).filter(Boolean);
+    if (translated.length === parts.length) return Array.from(new Set(translated)).join(" / ");
+  }
+  return raw;
+}
+
 function parseHashParams() {
   const raw = window.location.hash || "";
   const query = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
@@ -258,7 +304,7 @@ export default function AllInBarcodes(_props: PageProps) {
   const [price, setPrice] = useState("");
   const [currency, setCurrency] = useState("RON");
   const [unitText, setUnitText] = useState("LEI/BUC");
-  const [companyName, setCompanyName] = useState("ALL IN FASHION");
+  const [companyName, setCompanyName] = useState(DEFAULT_COMPANY_NAME);
   const [labelWidth, setLabelWidth] = useState("40");
   const [labelHeight, setLabelHeight] = useState("46");
   const [pageCols, setPageCols] = useState("5");
@@ -290,7 +336,7 @@ export default function AllInBarcodes(_props: PageProps) {
     setBarcode(initialBarcode);
     setBrand(initialBrand);
     setSize(initialSize);
-    setColor(initialColor);
+    setColor(officialColorRo(initialColor));
     setPrice(initialPrice);
     setProductCode(initialCode);
     setCategory(initialCategory);
@@ -329,7 +375,7 @@ export default function AllInBarcodes(_props: PageProps) {
         const loadedCategory = firstText(item.category_name_ro, item.category_name_hu, item.category_code, initialCategory);
         const loadedDescription = firstText(item.material, item.description_ro, initialDescription);
         const loadedSize = firstText(item.size, supplierCode.supplier_size, initialSize);
-        const loadedColor = firstText(item.color_name, supplierCode.supplier_color_name, item.color_code, initialColor);
+        const loadedColor = officialColorRo(firstText(item.color_name, supplierCode.supplier_color_name, item.color_code, initialColor));
         const loadedPrice = displayMoneyValue(firstText(item.sell_price, item.compare_at_price, item.buy_price, initialPrice));
 
         setTitle((prev) => prev || loadedTitle);
@@ -705,7 +751,7 @@ export default function AllInBarcodes(_props: PageProps) {
               </div>
               <div className="field">
                 <label>Szín</label>
-                <input value={color} onChange={(e) => setColor(e.target.value)} placeholder="pl. fekete" />
+                <input value={color} onChange={(e) => setColor(e.target.value)} onBlur={() => setColor((prev) => officialColorRo(prev))} placeholder="pl. negru" />
               </div>
               <div className="field full">
                 <label>Összetétel / leírás a címkére</label>
@@ -730,7 +776,7 @@ export default function AllInBarcodes(_props: PageProps) {
               </div>
               <div className="field">
                 <label>Cég neve a címkén</label>
-                <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="ALL IN FASHION" />
+                <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="TITAN EURO-COM SRL" />
               </div>
             </div>
 
