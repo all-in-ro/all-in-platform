@@ -269,6 +269,26 @@ export function apiAifCreateImportBatch(input: {
   });
 }
 
+export function apiAifCreateFullImportBatch(input: {
+  supplierId?: string;
+  supplierCode?: string;
+  targetLocationId?: string;
+  locationCode?: string;
+  sourceFileName?: string;
+  sourceFormat?: string;
+  note?: string;
+  reception?: AifReceptionInput;
+  rows: AifParsedRow[];
+}) {
+  return fetchAifJSON<{ ok: true; id: string; receptionId: string; rowCount: number; errorCount: number }>(
+    "/import-batches/full",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
 export function apiAifReplaceImportRows(batchId: string, rows: AifParsedRow[]) {
   return fetchAifJSON<{ ok: true; rowCount: number; errorCount: number }>(
     `/import-batches/${encodeURIComponent(batchId)}/rows`,
