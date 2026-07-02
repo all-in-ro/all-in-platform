@@ -111,14 +111,38 @@ function receptionBalance(item: any, rows: any[], drafts: Record<string, Record<
 
   const diff = invoiceGross - calculatedTotal;
   const absDiff = Math.abs(diff);
-  const status = absDiff < 0.01 ? "Egyezik" : diff > 0 ? "Hiányzik a sorokból" : "Túllépés";
-  const className = absDiff < 0.01
+  const isOk = absDiff < 0.01;
+  const isMissing = diff > 0;
+  const status = isOk ? "Egyezik" : isMissing ? "Hiányzik a sorokból" : "Túllépés";
+  const className = isOk
     ? "border-emerald-200/45 bg-emerald-300/10"
-    : diff > 0
-      ? "border-amber-200/50 bg-amber-300/12"
-      : "border-red-200/50 bg-red-300/12";
+    : "border-red-300/55 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.18),0_0_24px_rgba(239,68,68,0.24)]";
+  const badgeClassName = isOk
+    ? "border-emerald-200/35 bg-emerald-400/14 text-emerald-50"
+    : "border-red-200/35 bg-red-500/18 text-red-50 shadow-[0_0_12px_rgba(239,68,68,0.35)]";
+  const amountClassName = isOk ? "text-white" : "text-red-100";
+  const labelClassName = isOk ? "text-white/72" : "text-red-100/88";
+  const ledClassName = isOk
+    ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.85)]"
+    : "bg-red-400 shadow-[0_0_12px_rgba(248,113,113,1),0_0_24px_rgba(239,68,68,0.8)] animate-pulse";
 
-  return { invoiceGross, rowsValue, shipping, tvaValue, calculatedTotal, diff, status, className };
+  return {
+    invoiceGross,
+    rowsValue,
+    shipping,
+    tvaValue,
+    calculatedTotal,
+    diff,
+    absDiff,
+    status,
+    isOk,
+    isMissing,
+    className,
+    badgeClassName,
+    amountClassName,
+    labelClassName,
+    ledClassName,
+  };
 }
 
 function SectionTitle(props: { title: string; icon?: React.ReactNode; right?: React.ReactNode }) {
@@ -638,18 +662,34 @@ export default function AllInReceptions(_props: Props) {
 
               {detailBalance && (
                 <div className={`rounded-xl border px-3 py-2 ${detailBalance.className}`}>
-                  <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.08em] text-white/72">Számla egyeztetés</p>
-                      <p className="mt-0.5 text-sm text-white">Különbözet: {money(detailBalance.diff, detail.item.currency_code)}</p>
+                  <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="relative mt-0.5 shrink-0">
+                        {!detailBalance.isOk && <span className="absolute inset-0 rounded-full bg-red-400/55 blur-md animate-pulse" />}
+                        <span className={`relative block h-3.5 w-3.5 rounded-full ${detailBalance.ledClassName}`} />
+                      </div>
+                      <div>
+                        <p className={`text-[11px] uppercase tracking-[0.14em] ${detailBalance.labelClassName}`}>Számla egyeztetés</p>
+                        <div className="mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1">
+                          <p className={`text-base sm:text-lg ${detailBalance.amountClassName}`}>
+                            Különbözet: <span className={!detailBalance.isOk ? "text-red-50 [text-shadow:0_0_14px_rgba(248,113,113,0.45)]" : ""}>{money(detailBalance.diff, detail.item.currency_code)}</span>
+                          </p>
+                          {!detailBalance.isOk && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-red-200/35 bg-red-500/15 px-2 py-0.5 text-[11px] text-red-50 shadow-[0_0_14px_rgba(239,68,68,0.35)]">
+                              <span className="h-2 w-2 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.95)] animate-pulse" />
+                              Figyelem: a számla még nem talál
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <span className="rounded-full border border-white/20 bg-slate-950/18 px-2 py-1 text-xs text-white/90">{detailBalance.status}</span>
+                    <span className={`self-start rounded-full border px-2.5 py-1 text-xs ${detailBalance.badgeClassName}`}>{detailBalance.status}</span>
                   </div>
-                  <div className="mt-2 grid gap-2 text-xs text-white/82 sm:grid-cols-4">
-                    <div>Sorok értéke: {money(detailBalance.rowsValue, detail.item.currency_code)}</div>
-                    <div>TVA: {money(detailBalance.tvaValue, detail.item.currency_code)}</div>
-                    <div>Szállítás: {money(detailBalance.shipping, detail.item.currency_code)}</div>
-                    <div>Számított: {money(detailBalance.calculatedTotal, detail.item.currency_code)}</div>
+                  <div className="mt-2 grid gap-2 text-xs sm:grid-cols-4">
+                    <div className={detailBalance.labelClassName}>Sorok értéke: <span className="text-white">{money(detailBalance.rowsValue, detail.item.currency_code)}</span></div>
+                    <div className={detailBalance.labelClassName}>TVA: <span className="text-white">{money(detailBalance.tvaValue, detail.item.currency_code)}</span></div>
+                    <div className={detailBalance.labelClassName}>Szállítás: <span className="text-white">{money(detailBalance.shipping, detail.item.currency_code)}</span></div>
+                    <div className={detailBalance.labelClassName}>Számított: <span className="text-white">{money(detailBalance.calculatedTotal, detail.item.currency_code)}</span></div>
                   </div>
                 </div>
               )}
