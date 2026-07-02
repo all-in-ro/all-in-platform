@@ -20,6 +20,7 @@ import {
 import {
   AifCurrency,
   AifReceptionSummary,
+  AifReceptionDetail,
   AifImportBatchSummary,
   AifLocation,
   AifLocationType,
@@ -35,6 +36,7 @@ import {
   apiAifDeleteLocationType,
   apiAifListCurrencies,
   apiAifListReceptions,
+  apiAifGetReception,
   apiAifListLocationTypes,
   apiAifUpdateLocation,
   apiAifUpdateLocationType,
@@ -114,6 +116,21 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function dateOnly(v?: string | null) {
+  if (!v) return "";
+  return String(v).slice(0, 10);
+}
+
+function receptionStatusLabel(value?: string | null) {
+  const v = String(value || "").toLowerCase();
+  if (v === "committed") return "Készletre vett";
+  if (v === "parsed") return "Ellenőrizve";
+  if (v === "needs_review") return "Ellenőrzendő";
+  if (v === "draft") return "Folyamatban";
+  if (v === "cancelled") return "Törölt";
+  return value || "-";
+}
+
 function moneyText(value: number, currency = "") {
   const n = Number.isFinite(value) ? value : 0;
   return `${n.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
@@ -183,6 +200,9 @@ export default function AllInIncoming(_props: Props) {
   const [defaultCategoryCode, setDefaultCategoryCode] = useState("");
   const [defaultGender, setDefaultGender] = useState("");
   const [receptions, setReceptions] = useState<AifReceptionSummary[]>([]);
+  const [selectedReceptionId, setSelectedReceptionId] = useState("");
+  const [receptionPickerId, setReceptionPickerId] = useState("");
+  const [loadedReception, setLoadedReception] = useState<AifReceptionDetail | null>(null);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [supplierId, setSupplierId] = useState("");
   const [locationId, setLocationId] = useState("");
@@ -254,6 +274,11 @@ export default function AllInIncoming(_props: Props) {
     if (!linkedBrandIds.size) return activeBrands;
     return activeBrands.filter((brand) => linkedBrandIds.has(String(brand.id)));
   }, [activeBrands, supplierBrands, supplierId]);
+
+  const selectedReceptionSummary = useMemo(
+    () => receptions.find((r) => String(r.id) === String(selectedReceptionId)) || loadedReception?.item || null,
+    [receptions, selectedReceptionId, loadedReception]
+  );
 
   const activeLocationTypes = useMemo(() => locationTypes.filter((t) => t.is_active), [locationTypes]);
   const activeCurrencies = useMemo(() => currencies.filter((c) => c.is_active), [currencies]);
@@ -466,6 +491,85 @@ export default function AllInIncoming(_props: Props) {
     setManualBuyPrice("");
   }
 
+  function clearImportedRows() {
+    setFileName("");
+    setRows([]);
+    setWorkbench(null);
+    setApprovedRows({});
+    setPreviewLimit(25);
+  }
+
+  function startNewEmptyReception() {
+    setSelectedReceptionId("");
+    setReceptionPickerId("");
+    setLoadedReception(null);
+    setSupplierId("");
+    setLocationId("");
+    setNote("");
+    setInvoiceNumber("");
+    setInvoiceDate("");
+    setReceptionDate("");
+    setCurrencyCode("");
+    setExchangeRateToRon("");
+    setTvaMode("");
+    setTvaRate("");
+    setShippingCost("");
+    setInvoiceGross("");
+    setDefaultBrandCode("");
+    setDefaultCategoryCode("");
+    setDefaultGender("");
+    clearImportedRows();
+    resetManualRowForm();
+    setManualRowsOpen(true);
+    setReceptionOpen(true);
+    setWorkbenchOpen(false);
+    setMessage("Új üres bevételezés indítva. Előbb válassz beszállítót és töltsd ki a receptiót, majd jöhet kézi sor vagy XLS.");
+  }
+
+  function fillReceptionHeader(detail: AifReceptionDetail) {
+    const item = detail.item;
+    setSelectedReceptionId(item.id);
+    setReceptionPickerId(item.id);
+    setLoadedReception(detail);
+    setSupplierId(String(item.supplier_id || ""));
+    setLocationId(String(item.target_location_id || ""));
+    setInvoiceNumber(String(item.invoice_number || ""));
+    setInvoiceDate(dateOnly(item.invoice_date));
+    setReceptionDate(dateOnly(item.reception_date));
+    setCurrencyCode(String(item.currency_code || ""));
+    setExchangeRateToRon(String(item.exchange_rate_to_ron || ""));
+    setTvaMode((String(item.tva_mode || "") as any) || "");
+    setTvaRate(String(item.tva_rate ?? ""));
+    setShippingCost(String(item.shipping_cost ?? ""));
+    setInvoiceGross(String(item.invoice_gross ?? ""));
+    setNote(String((item as any).note || ""));
+    clearImportedRows();
+    resetManualRowForm();
+    setManualRowsOpen(true);
+    setReceptionOpen(true);
+    setWorkbenchOpen(false);
+  }
+
+  async function loadReceptionIntoWorkspace(id?: string) {
+    const rid = id || receptionPickerId;
+    if (!rid) {
+      setMessage("Válassz receptiót a listából.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const detail = await apiAifGetReception(rid);
+      fillReceptionHeader(detail);
+      const remaining = Number((detail.item as any).remaining_rows || 0);
+      setMessage(`Receptió betöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Új sorokat is hozzáadhatsz ehhez a receptióhoz."}`);
+    } catch (e: any) {
+      setMessage(e?.message || "A receptió betöltése nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function addManualRow() {
     const nextRowNo = rows.length + 1;
     const brandCode = manualBrandCode || defaultBrandCode;
@@ -543,11 +647,8 @@ export default function AllInIncoming(_props: Props) {
       if (current && activeTypes.some((t) => t.code === current)) return current;
       return activeTypes[0]?.code || "warehouse";
     });
-    setSupplierId((current) => current || activeSuppliers.find((x) => x.code === "under_armour")?.id || activeSuppliers[0]?.id || "");
-    setLocationId((current) => {
-      if (current && activeLocations.some((l) => l.id === current)) return current;
-      return activeLocations.find((x) => x.code === "main_warehouse")?.id || activeLocations[0]?.id || "";
-    });
+    setSupplierId((current) => (current && activeSuppliers.some((s) => s.id === current) ? current : ""));
+    setLocationId((current) => (current && activeLocations.some((l) => l.id === current) ? current : ""));
     setCurrencyCode((current) => {
       const active = (currencyData.items || meta.currencies || []).filter((c) => c.is_active);
       if (current && active.some((c) => c.code === current)) return current;
@@ -626,7 +727,7 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const saved = await apiAifCreateFullImportBatch({
+      const payload: any = {
         supplierId,
         targetLocationId: locationId,
         sourceFileName: fileName || "Manuális bevételezés",
@@ -650,9 +751,20 @@ export default function AllInIncoming(_props: Props) {
           note,
         },
         rows: approvedRowList,
-      });
+      };
+      if (selectedReceptionId) payload.receptionId = selectedReceptionId;
+      const saved = await apiAifCreateFullImportBatch(payload);
+      clearImportedRows();
+      resetManualRowForm();
       await Promise.all([loadBatches(), loadReceptions()]);
-      setMessage(`Import mentve: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
+      const savedReceptionId = selectedReceptionId || saved.receptionId;
+      if (savedReceptionId) {
+        const detail = await apiAifGetReception(savedReceptionId);
+        setSelectedReceptionId(savedReceptionId);
+        setReceptionPickerId(savedReceptionId);
+        setLoadedReception(detail);
+      }
+      setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni az importot.");
     } finally {
@@ -1242,12 +1354,63 @@ export default function AllInIncoming(_props: Props) {
         {message && <div className="rounded-xl border border-emerald-200/30 bg-emerald-400/12 px-3 py-2 text-sm text-white/92">{message}</div>}
 
         <section className={card}>
+          <SectionTitle
+            icon={<FileSpreadsheet size={16} />}
+            title="Munkafolyamat"
+            right={<span className="text-xs text-white/60">Új bevételezés vagy meglévő receptió folytatása</span>}
+          />
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_2fr_auto] lg:items-end">
+            <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2">
+              <p className="text-xs uppercase tracking-[0.08em] text-white/58">Aktuális mód</p>
+              <p className="mt-1 text-sm text-white">{selectedReceptionId ? "Meglévő receptió folytatása" : "Új üres bevételezés"}</p>
+              {selectedReceptionSummary && (
+                <p className="mt-1 text-xs text-white/62">
+                  {selectedReceptionSummary.invoice_number || "Számlaszám nélkül"} • {receptionStatusLabel(selectedReceptionSummary.status)} • {moneyText(toNumber(selectedReceptionSummary.invoice_gross), selectedReceptionSummary.currency_code || "")}
+                </p>
+              )}
+            </div>
+            <label className={label}>
+              Receptió kiválasztása listából
+              <select className={`${selectInput} w-full`} value={receptionPickerId} onChange={(e) => setReceptionPickerId(e.target.value)}>
+                <option style={mutedOptionStyle} value="">Válassz meglévő receptiót</option>
+                {receptions.map((r) => (
+                  <option style={optionStyle} key={r.id} value={r.id}>
+                    {r.invoice_number || "Számlaszám nélkül"} • {r.supplier_name || "-"} • {receptionStatusLabel(r.status)} • {moneyText(toNumber(r.invoice_gross), r.currency_code || "")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap gap-2 lg:justify-end">
+              <button className={primaryBtn} onClick={() => loadReceptionIntoWorkspace()} disabled={busy || !receptionPickerId} type="button">
+                <Edit3 size={14} /> Betöltés / folytatás
+              </button>
+              <button className={neutralBtn} onClick={startNewEmptyReception} disabled={busy} type="button">
+                <Plus size={14} /> Új üres
+              </button>
+            </div>
+          </div>
+          {selectedReceptionSummary && (
+            <div className="mt-3 grid gap-2 md:grid-cols-5">
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Számla</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.invoice_number || "-"}</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Beszállító</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.supplier_name || "-"}</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Cél hely</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.location_name || "-"}</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Sorok</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.committed_rows || 0} kész / {selectedReceptionSummary.remaining_rows || 0} dolgozandó</p></div>
+              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Állapot</p><p className="mt-1 text-sm text-white">{receptionStatusLabel(selectedReceptionSummary.status)}</p></div>
+            </div>
+          )}
+          <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white/72">
+            Oldalnyitáskor nincs automatikusan beszállító, cél hely vagy számla kitöltve. Válassz meglévő receptiót a folytatáshoz, vagy indíts új üres bevételezést.
+          </div>
+        </section>
+
+        <section className={card}>
           <SectionTitle icon={<FileSpreadsheet size={16} />} title="Import alapadatok" right={<span className="text-xs text-white/60">Beszállító, cél hely, fájl</span>} />
 
           <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
             <label className={label}>
               Beszállító
               <select className={`${selectInput} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                <option style={mutedOptionStyle} value="">Beszállító kiválasztása</option>
                 {suppliers.map((s) => (
                   <option style={optionStyle} key={s.id} value={s.id}>{s.name}</option>
                 ))}
@@ -1258,6 +1421,7 @@ export default function AllInIncoming(_props: Props) {
               Cél hely
               <div className="grid grid-cols-[1fr_auto] gap-2">
                 <select className={`${selectInput} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                  <option style={mutedOptionStyle} value="">Cél hely kiválasztása</option>
                   {locations.map((l) => (
                     <option style={optionStyle} key={l.id} value={l.id}>{l.name}</option>
                   ))}
@@ -1559,47 +1723,37 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Receptiók" right={<button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Összes receptió</button>} />
+          <SectionTitle
+            icon={<FileSpreadsheet size={16} />}
+            title="Receptió gyorslista"
+            right={<button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Összes receptió</button>}
+          />
           <div className="mt-3 grid gap-2">
-            {receptions.map((r) => (
-              <div key={r.id} className="rounded-xl border border-white/12 bg-[#354153] p-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="text-sm text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
-                    <p className="mt-1 text-xs text-white/62">
-                      {r.supplier_name || "-"} • {r.location_name || "-"} • {r.currency_code || "-"}
-                    </p>
-                  </div>
-                  <div className="text-left text-xs text-white/70 sm:text-right">
-                    <p>{r.invoice_date || "-"}</p>
-                    <p className="mt-1">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p>
-                  </div>
-                </div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-4">
-                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
-                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Árfolyam</p>
-                    <p className="mt-1 text-sm text-white">{cell(r.exchange_rate_to_ron)}</p>
-                  </div>
-                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
-                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Terméksor</p>
-                    <p className="mt-1 text-sm text-white">{r.line_count || 0}</p>
-                  </div>
-                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
-                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Darab</p>
-                    <p className="mt-1 text-sm text-white">{r.total_qty || 0}</p>
-                  </div>
-                  <div className="rounded-lg border border-white/10 bg-[#303b4e] px-3 py-2">
-                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Állapot</p>
-                    <p className="mt-1 text-sm text-white">{r.status || "-"}</p>
+            {receptions.slice(0, 6).map((r) => {
+              const active = String(r.id) === String(selectedReceptionId);
+              return (
+                <div key={r.id} className={`rounded-xl border px-3 py-2 ${active ? "border-emerald-200/45 bg-emerald-400/10" : "border-white/12 bg-[#354153]"}`}>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-white">{r.invoice_number || "Számlaszám nélkül"}</p>
+                      <p className="mt-1 truncate text-xs text-white/62">{r.supplier_name || "-"} • {r.location_name || "-"} • {r.currency_code || "-"}</p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs md:min-w-[360px]">
+                      <div className="rounded-lg border border-white/10 bg-[#303b4e] px-2 py-1.5"><p className="text-white/50">Terméksor</p><p className="text-white">{r.line_count || 0}</p></div>
+                      <div className="rounded-lg border border-white/10 bg-[#303b4e] px-2 py-1.5"><p className="text-white/50">Érték</p><p className="text-white">{moneyText(toNumber(r.invoice_gross), r.currency_code || "")}</p></div>
+                      <div className="rounded-lg border border-white/10 bg-[#303b4e] px-2 py-1.5"><p className="text-white/50">Állapot</p><p className="text-white">{receptionStatusLabel(r.status)}</p></div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 md:justify-end">
+                      <button className={tinyBtn} onClick={() => loadReceptionIntoWorkspace(r.id)} disabled={busy} type="button">
+                        <Edit3 size={13} /> Betöltés
+                      </button>
+                      <button className={tinyBtn} onClick={() => window.open(`/api/aif/receptions/${encodeURIComponent(r.id)}/export.csv`, "_blank", "noopener,noreferrer")} type="button"><Download size={13} /> CSV</button>
+                    </div>
                   </div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Adatok</button>
-                  <button className={tinyBtn} onClick={() => window.open(`/api/aif/receptions/${encodeURIComponent(r.id)}/export.csv`, "_blank", "noopener,noreferrer")} type="button"><Download size={13} /> Export</button>
-                </div>
-              </div>
-            ))}
-            {!receptions.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs receptió.</p>}
+              );
+            })}
+            {!receptions.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs receptió. Új üres bevételezéssel lehet kezdeni.</p>}
           </div>
         </section>
 
