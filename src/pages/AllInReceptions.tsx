@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   CalendarDays,
+  CheckCircle,
   Download,
   Eye,
   FileText,
   RefreshCw,
+  Save,
   Search,
   Trash2,
   X,
@@ -14,10 +16,13 @@ import {
   AifMeta,
   AifReceptionDetail,
   AifReceptionSummary,
+  apiAifCommitReceptionRows,
   apiAifDeleteReception,
   apiAifGetReception,
+  apiAifIgnoreImportRow,
   apiAifListReceptions,
   apiAifMeta,
+  apiAifUpdateImportRow,
   apiAifReceptionExportCsvUrl,
 } from "../lib/aif/api";
 
@@ -65,6 +70,7 @@ function statusText(s?: string | null) {
   if (v === "parsed") return "Ellenőrizve";
   if (v === "needs_review") return "Ellenőrzés szükséges";
   if (v === "committed") return "Készletre véve";
+  if (v === "ignored") return "Kihagyva";
   if (v === "cancelled") return "Törölve";
   return s || "-";
 }
@@ -89,6 +95,10 @@ export default function AllInReceptions(_props: Props) {
   const [meta, setMeta] = useState<AifMeta | null>(null);
   const [items, setItems] = useState<AifReceptionSummary[]>([]);
   const [detail, setDetail] = useState<AifReceptionDetail | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [rowDrafts, setRowDrafts] = useState<Record<string, Record<string, unknown>>>({});
+  const [savingRows, setSavingRows] = useState(false);
+  const [committingRows, setCommittingRows] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AifReceptionSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -140,7 +150,10 @@ export default function AllInReceptions(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      setDetail(await apiAifGetReception(id));
+      const next = await apiAifGetReception(id);
+      setDetail(next);
+      setRowDrafts(buildDrafts(next.rows || []));
+      setSelectedRows(new Set((next.rows || []).filter(rowCanWork).map((row: any) => row.id)));
     } catch (e: any) {
       setMessage(e?.message || "A receptió részletei nem tölthetők be.");
     } finally {
@@ -175,6 +188,122 @@ export default function AllInReceptions(_props: Props) {
     setTo("");
     setTimeout(() => load(), 0);
   }
+
+  function rowCanWork(row: any) {
+    return row.status !== "committed" && row.status !== "ignored";
+  }
+
+  function buildDrafts(rows: any[]) {
+    const next: Record<string, Record<string, unknown>> = {};
+    for (const row of rows || []) {
+      const n: any = row.normalized || {};
+      next[row.id] = {
+        ...n,
+        supplierProductCode: row.supplier_product_code || n.supplierProductCode || n.modelCode || "",
+        titleRo: n.titleRo || "",
+        colorName: n.colorName || "",
+        colorCode: row.supplier_color_code || n.colorCode || "",
+        size: row.supplier_size || n.size || "",
+        qty: row.qty ?? n.qty ?? "",
+        buyPrice: row.buy_price ?? n.buyPrice ?? "",
+      };
+    }
+    return next;
+  }
+
+  function updateRowDraft(rowId: string, key: string, value: unknown) {
+    setRowDrafts((prev) => ({
+      ...prev,
+      [rowId]: {
+        ...(prev[rowId] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
+  function toggleRow(rowId: string) {
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+
+  function selectReadyRows() {
+    if (!detail) return;
+    const ids = detail.rows
+      .filter((row) => row.status !== "committed" && row.status !== "ignored" && row.status !== "error")
+      .map((row) => row.id);
+    setSelectedRows(new Set(ids));
+  }
+
+  async function reloadDetail(id?: string) {
+    const detailId = id || detail?.item?.id;
+    if (!detailId) return;
+    const next = await apiAifGetReception(detailId);
+    setDetail(next);
+    setRowDrafts(buildDrafts(next.rows || []));
+    setSelectedRows(new Set((next.rows || []).filter(rowCanWork).map((row: any) => row.id)));
+  }
+
+  async function saveRowEdits() {
+    if (!detail) return;
+    setSavingRows(true);
+    setMessage("");
+    try {
+      const editable = detail.rows.filter((row) => rowCanWork(row));
+      for (const row of editable) {
+        await apiAifUpdateImportRow(row.id, rowDrafts[row.id] || row.normalized || {});
+      }
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("Terméksorok mentve.");
+    } catch (e: any) {
+      setMessage(e?.message || "A terméksorok mentése nem sikerült.");
+    } finally {
+      setSavingRows(false);
+    }
+  }
+
+  async function commitSelectedRows() {
+    if (!detail) return;
+    const ids = Array.from(selectedRows);
+    if (!ids.length) {
+      setMessage("Nincs kijelölt készletre vehető terméksor.");
+      return;
+    }
+    setCommittingRows(true);
+    setMessage("");
+    try {
+      await saveRowEdits();
+      await apiAifCommitReceptionRows(detail.item.id, ids);
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("A kijelölt terméksorok készletre véve.");
+    } catch (e: any) {
+      setMessage(e?.message || "A kijelölt terméksorok készletre vétele nem sikerült.");
+    } finally {
+      setCommittingRows(false);
+    }
+  }
+
+  async function ignoreRow(rowId: string) {
+    if (!detail) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiAifIgnoreImportRow(rowId);
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("Terméksor kihagyva.");
+    } catch (e: any) {
+      setMessage(e?.message || "A terméksor kihagyása nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
 
   return (
     <div className={page}>
@@ -355,40 +484,103 @@ export default function AllInReceptions(_props: Props) {
                 <div className={statCard}><p className="text-xs uppercase text-white/56">Végösszeg</p><p className="mt-1 text-sm text-white">{money(detail.item.invoice_gross, detail.item.currency_code)}</p></div>
               </div>
 
-              <div className="overflow-hidden rounded-xl border border-white/12">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72">
-                    <tr>
-                      <th className="px-3 py-2">Sorszám</th>
-                      <th className="px-3 py-2">Állapot</th>
-                      <th className="px-3 py-2">Termékkód</th>
-                      <th className="px-3 py-2">Név</th>
-                      <th className="px-3 py-2">Méret</th>
-                      <th className="px-3 py-2 text-right">Darab</th>
-                      <th className="px-3 py-2 text-right">Vételár</th>
-                      <th className="px-3 py-2 text-right">Vételár RON</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/10 bg-[#4d5869]">
-                    {detail.rows.map((r) => {
-                      const norm: any = r.normalized || {};
-                      return (
-                        <tr key={r.id}>
-                          <td className="px-3 py-2 text-white/82">{r.row_no}</td>
-                          <td className="px-3 py-2 text-white/82">{statusText(r.status)}</td>
-                          <td className="px-3 py-2 text-white/82">{cell(r.supplier_product_code || norm.supplierProductCode || norm.modelCode)}</td>
-                          <td className="px-3 py-2 text-white">{cell(norm.titleRo)}</td>
-                          <td className="px-3 py-2 text-white/82">{cell(r.supplier_size || norm.size)}</td>
-                          <td className="px-3 py-2 text-right text-white/82">{r.qty || norm.qty || 0}</td>
-                          <td className="px-3 py-2 text-right text-white/82">{money(r.buy_price, detail.item.currency_code)}</td>
-                          <td className="px-3 py-2 text-right text-white/82">{money(r.buy_price_ron, "RON")}</td>
-                        </tr>
-                      );
-                    })}
-                    {!detail.rows.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={8}>Ehhez a receptióhoz nincs mentett terméksor.</td></tr>}
-                  </tbody>
-                </table>
+              <div className="rounded-xl border border-white/14 bg-[#354153] p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm text-white">Terméksorok feldolgozása</p>
+                    <p className="mt-1 text-xs text-white/64">
+                      A hibátlan sorok külön is készletre vehetők. Ami még nincs kész, az marad javítható állapotban.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button className={tinyBtn} onClick={selectReadyRows} disabled={busy || savingRows || committingRows} type="button">
+                      Kész sorok kijelölése
+                    </button>
+                    <button className={tinyBtn} onClick={saveRowEdits} disabled={busy || savingRows || committingRows} type="button">
+                      <Save size={13} /> Sorok mentése
+                    </button>
+                    <button className={primaryBtn} onClick={commitSelectedRows} disabled={busy || savingRows || committingRows || !selectedRows.size} type="button">
+                      <CheckCircle size={15} /> Kijelölt sorok készletre
+                    </button>
+                  </div>
+                </div>
               </div>
+
+              <div className="overflow-hidden rounded-xl border border-white/12">
+                <div className="max-h-[46vh] overflow-auto">
+                  <table className="min-w-[1180px] text-left text-sm">
+                    <thead className="sticky top-0 z-10 bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72">
+                      <tr>
+                        <th className="px-3 py-2">Kijelölés</th>
+                        <th className="px-3 py-2">Sorszám</th>
+                        <th className="px-3 py-2">Állapot</th>
+                        <th className="px-3 py-2">Termékkód</th>
+                        <th className="px-3 py-2">Név</th>
+                        <th className="px-3 py-2">Méret</th>
+                        <th className="px-3 py-2">Szín</th>
+                        <th className="px-3 py-2">Színkód</th>
+                        <th className="px-3 py-2 text-right">Darab</th>
+                        <th className="px-3 py-2 text-right">Vételár</th>
+                        <th className="px-3 py-2 text-right">Vételár RON</th>
+                        <th className="px-3 py-2 text-right">Művelet</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10 bg-[#4d5869]">
+                      {detail.rows.map((r) => {
+                        const draft: any = rowDrafts[r.id] || r.normalized || {};
+                        const editable = rowCanWork(r);
+                        const checked = selectedRows.has(r.id);
+                        return (
+                          <tr key={r.id} className={r.status === "committed" ? "bg-emerald-300/8" : r.status === "ignored" ? "opacity-55" : ""}>
+                            <td className="px-3 py-2">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-emerald-300"
+                                checked={checked}
+                                disabled={!editable || r.status === "error"}
+                                onChange={() => toggleRow(r.id)}
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-white/82">{r.row_no}</td>
+                            <td className="px-3 py-2 text-white/82">{statusText(r.status)}</td>
+                            <td className="px-3 py-2">
+                              <input className={input} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input className={input} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input className={input} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input className={input} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input className={input} value={String(draft.colorCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input className={`${input} text-right`} value={String(draft.qty ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input className={`${input} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
+                            </td>
+                            <td className="px-3 py-2 text-right text-white/82">{money(r.buy_price_ron, "RON")}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex justify-end gap-1.5">
+                                <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!editable || busy} type="button">
+                                  Kihagy
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!detail.rows.length && <tr><td className="px-3 py-8 text-center text-white/62" colSpan={12}>Ehhez a receptióhoz nincs mentett terméksor.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
