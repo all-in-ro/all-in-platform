@@ -29,6 +29,7 @@ type LabelPreset = {
 
 type ContentKey =
   | "company"
+  | "brand"
   | "title"
   | "barcode"
   | "description"
@@ -75,6 +76,7 @@ const PRESETS: LabelPreset[] = [
 
 const DEFAULT_CONTENT: Record<ContentKey, boolean> = {
   company: true,
+  brand: true,
   title: true,
   barcode: true,
   description: true,
@@ -86,6 +88,7 @@ const DEFAULT_CONTENT: Record<ContentKey, boolean> = {
 
 const CONTENT_OPTIONS: { key: ContentKey; label: string; hint: string }[] = [
   { key: "company", label: "Cég neve", hint: "A címke tetején jelenik meg." },
+  { key: "brand", label: "Márka", hint: "A terméknév felett vagy alatt jelenik meg." },
   { key: "title", label: "Terméknév", hint: "A fő terméknév, lehet 1-2 sor." },
   { key: "barcode", label: "Vonalkód", hint: "Code128 belső AllIn / Shopify SKU azonosító." },
   { key: "description", label: "Összetétel", hint: "Például 80% bumbac, 20% poliester." },
@@ -479,6 +482,7 @@ export default function AllInBarcodes(_props: PageProps) {
     return (
       <>
         {content.company && companyName && <div className="labelCompany">{cleanText(companyName, 48)}</div>}
+        {content.brand && brand && <div className="labelBrand">{cleanText(brand, 42)}</div>}
         {content.title && <div className="labelTitle">{cleanText(title || "Denumire produs", 78)}</div>}
         {content.sizeColor && (size || color) && <div className="labelMeta">{size && <span>{cleanText(size, 16)}</span>}{color && <span>{cleanText(color, 24)}</span>}</div>}
         {content.barcode && <div className="barcodeSvgWrap" dangerouslySetInnerHTML={{ __html: render.ok ? render.svg : "" }} />}
@@ -584,7 +588,8 @@ export default function AllInBarcodes(_props: PageProps) {
           overflow:hidden;
         }
         .labelPreview.noBorder, .printLabel.noBorder { box-shadow:none; border-color:transparent; }
-        .labelCompany { font-size:12px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:5px; }
+        .labelCompany { font-size:12px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:4px; }
+        .labelBrand { font-size:12px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:4px; }
         .labelTitle { font-size:17px; line-height:1.12; margin-bottom:6px; }
         .labelMeta { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; color:#333; font-size:12px; margin-bottom:7px; }
         .labelDescription { border-top:1px solid #ddd; padding-top:5px; margin-top:5px; text-align:center; font-size:12px; color:#222; }
@@ -632,7 +637,8 @@ export default function AllInBarcodes(_props: PageProps) {
             flex-direction:column;
             justify-content:center;
           }
-          .printLabel .labelCompany { font-size:7.5pt; margin-bottom:1mm; }
+          .printLabel .labelCompany { font-size:7.5pt; margin-bottom:.7mm; }
+          .printLabel .labelBrand { font-size:7pt; margin-bottom:.7mm; }
           .printLabel .labelTitle { font-size:9.5pt; margin-bottom:1mm; }
           .printLabel .labelMeta { font-size:7.5pt; margin-bottom:1mm; }
           .printLabel .labelDescription { font-size:7pt; padding-top:.8mm; margin-top:.8mm; }
