@@ -17,6 +17,7 @@ export type AifCategory = {
   code: string;
   name_ro: string;
   name_hu?: string | null;
+  aliases?: string[] | null;
   sort_order?: number;
   is_active: boolean;
 };
