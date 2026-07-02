@@ -62,6 +62,11 @@ function dateText(v?: string | null) {
   return String(v).slice(0, 10);
 }
 
+function dateOnly(v?: string | null) {
+  if (!v) return "";
+  return String(v).slice(0, 10);
+}
+
 function cell(v: unknown) {
   const s = String(v ?? "").trim();
   return s || "-";
