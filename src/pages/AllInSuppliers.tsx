@@ -420,6 +420,7 @@ export default function AllInSuppliers() {
   const [createOpen, setCreateOpen] = useState(false);
   const [brandsOpen, setBrandsOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
+  const reportRef = useRef<HTMLElement | null>(null);
   const [form, setForm] = useState<FormState>({
     name: "",
     code: "",
@@ -446,9 +447,6 @@ export default function AllInSuppliers() {
   );
   const [brandDeleteTarget, setBrandDeleteTarget] = useState<AifBrand | null>(null);
   const [linkDeleteTarget, setLinkDeleteTarget] = useState<AifSupplierBrandLink | null>(null);
-
-  const reportRef = useRef<HTMLElement | null>(null);
-  const brandLinksRef = useRef<HTMLElement | null>(null);
 
   const reportBySupplier = useMemo(() => {
     const map = new Map<string, AifSupplierReportItem>();
@@ -483,45 +481,43 @@ export default function AllInSuppliers() {
     return brands.filter((b) => b.is_active);
   }, [brands]);
 
-  const linksByBrand = useMemo(() => {
+  const supplierNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of suppliers) map.set(s.id, s.name);
+    return map;
+  }, [suppliers]);
+
+  const linksByBrandId = useMemo(() => {
     const map = new Map<string, AifSupplierBrandLink[]>();
     for (const link of supplierBrandLinks) {
       const list = map.get(link.brand_id) || [];
       list.push(link);
       map.set(link.brand_id, list);
     }
-    for (const list of map.values()) {
-      list.sort((a, b) => {
-        if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
-        if (a.is_preferred !== b.is_preferred) return a.is_preferred ? -1 : 1;
-        return String(a.supplier_name || "").localeCompare(String(b.supplier_name || ""));
-      });
-    }
     return map;
   }, [supplierBrandLinks]);
 
+  const currentBrandSupplierId =
+    brandSupplierId || selectedSupplierId || suppliers[0]?.id || "";
+
+  const currentBrandSupplierName = currentBrandSupplierId
+    ? supplierNameById.get(currentBrandSupplierId) || "-"
+    : "-";
+
   const selectedSupplierBrandLinks = useMemo(() => {
-    const sid = brandSupplierId || selectedSupplierId;
-    if (!sid) return [];
-    return supplierBrandLinks.filter((x) => x.supplier_id === sid);
-  }, [brandSupplierId, selectedSupplierId, supplierBrandLinks]);
+    if (!currentBrandSupplierId) return [];
+    return supplierBrandLinks.filter((x) => x.supplier_id === currentBrandSupplierId);
+  }, [currentBrandSupplierId, supplierBrandLinks]);
 
-  const selectedSupplierForBrandLinks = useMemo(() => {
-    const sid = brandSupplierId || selectedSupplierId;
-    return suppliers.find((s) => s.id === sid) || null;
-  }, [brandSupplierId, selectedSupplierId, suppliers]);
-
-  const selectedSupplierBrandIdSet = useMemo(() => {
-    return new Set(selectedSupplierBrandLinks.map((x) => x.brand_id));
+  const selectedSupplierActiveBrandIds = useMemo(() => {
+    return new Set(
+      selectedSupplierBrandLinks.filter((x) => x.is_active).map((x) => x.brand_id),
+    );
   }, [selectedSupplierBrandLinks]);
 
   const availableBrandsForSelectedSupplier = useMemo(() => {
-    return activeBrands.filter((brand) => !selectedSupplierBrandIdSet.has(brand.id));
-  }, [activeBrands, selectedSupplierBrandIdSet]);
-
-  const selectedBrandForLink = useMemo(() => {
-    return brands.find((brand) => brand.id === brandId) || null;
-  }, [brandId, brands]);
+    return activeBrands.filter((brand) => !selectedSupplierActiveBrandIds.has(brand.id));
+  }, [activeBrands, selectedSupplierActiveBrandIds]);
 
   const selectedReport = useMemo(() => {
     if (selectedSupplierId) {
@@ -642,10 +638,10 @@ export default function AllInSuppliers() {
       if (brandId) setBrandId("");
       return;
     }
-    if (!brandId || selectedSupplierBrandIdSet.has(brandId)) {
+    if (!availableBrandsForSelectedSupplier.some((brand) => brand.id === brandId)) {
       setBrandId(availableBrandsForSelectedSupplier[0].id);
     }
-  }, [availableBrandsForSelectedSupplier, brandId, selectedSupplierBrandIdSet]);
+  }, [availableBrandsForSelectedSupplier, brandId]);
 
   function applyPeriod(range: { from: string; to: string }) {
     setFrom(range.from);
@@ -660,28 +656,19 @@ export default function AllInSuppliers() {
     load({ from: "", to: "", compareMode: "none" });
   }
 
-  function changeCompareMode(mode: CompareMode) {
-    setCompareMode(mode);
-    load({ compareMode: mode });
-  }
-
-  function selectSupplierForDetails(id: string) {
+  function openSupplierDetails(id: string) {
     setSelectedSupplierId(id);
     setBrandSupplierId(id);
     setReportOpen(true);
     setBrandsOpen(true);
-    requestAnimationFrame(() => {
+    window.setTimeout(() => {
       reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    }, 0);
   }
 
-  function selectSupplierForBrandLinks(id: string) {
-    setSelectedSupplierId(id);
-    setBrandSupplierId(id);
-    setBrandsOpen(true);
-    requestAnimationFrame(() => {
-      brandLinksRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+  function changeCompareMode(mode: CompareMode) {
+    setCompareMode(mode);
+    load({ compareMode: mode });
   }
 
   function updateFormName(name: string) {
@@ -870,7 +857,11 @@ export default function AllInSuppliers() {
       return;
     }
     if (!brandId) {
-      setMessage("Válassz márkát.");
+      setMessage("Nincs kapcsolható márka ehhez a beszállítóhoz.");
+      return;
+    }
+    if (selectedSupplierActiveBrandIds.has(brandId)) {
+      setMessage("Ez a márka már kapcsolva van ehhez a beszállítóhoz.");
       return;
     }
     setBusy(true);
@@ -882,9 +873,6 @@ export default function AllInSuppliers() {
         isPreferred: linkPreferred,
         notes: linkNotes,
       });
-      setSelectedSupplierId(supplierId);
-      setBrandSupplierId(supplierId);
-      setBrandId("");
       setLinkNotes("");
       setLinkPreferred(false);
       await load();
@@ -1217,7 +1205,7 @@ export default function AllInSuppliers() {
           )}
         </section>
 
-        <section className={card} ref={reportRef}>
+        <section ref={reportRef} className={card}>
           <SectionToggle
             icon={<BarChart3 size={17} />}
             title="Vásárlási kimutatás"
@@ -1276,7 +1264,7 @@ export default function AllInSuppliers() {
                   <select
                     className={`${input} w-full`}
                     value={selectedReport?.id || selectedSupplierId}
-                    onChange={(e) => setSelectedSupplierId(e.target.value)}
+                    onChange={(e) => openSupplierDetails(e.target.value)}
                   >
                     {sortedReport.map((r) => (
                       <option key={r.id} value={r.id}>
@@ -1516,7 +1504,7 @@ export default function AllInSuppliers() {
           )}
         </section>
 
-        <section className={card} ref={brandLinksRef}>
+        <section className={card}>
           <SectionToggle
             icon={<Building2 size={16} />}
             title="Márkák és beszállítói kapcsolatok"
@@ -1548,10 +1536,16 @@ export default function AllInSuppliers() {
                 <div className="mt-3 grid gap-2">
                   {brands.map((brand) => {
                     const editing = editingBrandId === brand.id;
-                    const linkedSuppliers = linksByBrand.get(brand.id) || [];
-                    const linkedToSelectedSupplier = selectedSupplierBrandIdSet.has(brand.id);
+                    const brandLinks = linksByBrandId.get(brand.id) || [];
+                    const activeBrandLinks = brandLinks.filter((link) => link.is_active);
+                    const linkedToCurrentSupplier = activeBrandLinks.some(
+                      (link) => link.supplier_id === currentBrandSupplierId,
+                    );
                     return (
-                      <div key={brand.id} className={`rounded-xl border p-2.5 ${linkedToSelectedSupplier ? "border-emerald-300/36 bg-emerald-400/10" : "border-white/14 bg-[#414c5f]"}`}>
+                      <div
+                        key={brand.id}
+                        className={`rounded-xl border p-2.5 ${linkedToCurrentSupplier ? "border-emerald-300/38 bg-[#3d505c]" : "border-white/14 bg-[#414c5f]"}`}
+                      >
                         {editing ? (
                           <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
                             <input
@@ -1567,49 +1561,40 @@ export default function AllInSuppliers() {
                             </button>
                           </div>
                         ) : (
-                          <div className="grid gap-2">
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm text-white">{brand.name}</p>
-                                  <span className={`${chip} ${brand.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
-                                    {brand.is_active ? "Aktív" : "Inaktív"}
-                                  </span>
-                                  {linkedToSelectedSupplier && (
-                                    <span className={`${chip} border-emerald-300/35 text-emerald-100`}>
-                                      Kapcsolva a kiválasztott beszállítóhoz
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {linkedSuppliers.length ? (
-                                    linkedSuppliers.map((link) => (
-                                      <button
-                                        key={link.id}
-                                        className={`${chip} ${link.is_active ? "border-white/20 text-white/76" : "border-white/12 text-white/48"}`}
-                                        onClick={() => selectSupplierForBrandLinks(link.supplier_id)}
-                                        type="button"
-                                        title="Beszállító kiválasztása"
-                                      >
-                                        {link.supplier_name}{link.is_preferred ? " • elsődleges" : ""}
-                                      </button>
-                                    ))
-                                  ) : (
-                                    <span className="text-xs text-white/54">Nincs beszállítóhoz kapcsolva.</span>
-                                  )}
-                                </div>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="text-sm text-white">{brand.name}</p>
+                              <span className={`${chip} mt-1 ${brand.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
+                                {brand.is_active ? "Aktív" : "Inaktív"}
+                              </span>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {activeBrandLinks.length ? (
+                                  activeBrandLinks.map((link) => (
+                                    <button
+                                      key={link.id}
+                                      className={`${chip} ${link.supplier_id === currentBrandSupplierId ? "border-emerald-300/42 bg-emerald-300/10 text-emerald-50" : "border-white/18 bg-slate-950/18 text-white/72"}`}
+                                      onClick={() => openSupplierDetails(link.supplier_id)}
+                                      type="button"
+                                      title="Beszállító kiválasztása"
+                                    >
+                                      {link.supplier_name}{link.is_preferred ? " • elsődleges" : ""}
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span className="text-xs text-white/58">Nincs beszállítóhoz kapcsolva.</span>
+                                )}
                               </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                <button className={tinyBtn} onClick={() => startBrandEdit(brand)} type="button">
-                                  <Edit3 size={13} /> Módosít
-                                </button>
-                                <button className={tinyBtn} onClick={() => toggleBrandActive(brand)} disabled={busy} type="button">
-                                  <Power size={13} /> {brand.is_active ? "Inaktív" : "Aktív"}
-                                </button>
-                                <button className={tinyDangerBtn} onClick={() => setBrandDeleteTarget(brand)} disabled={busy} type="button">
-                                  <Trash2 size={13} /> Törlés
-                                </button>
-                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button className={tinyBtn} onClick={() => startBrandEdit(brand)} type="button">
+                                <Edit3 size={13} /> Módosít
+                              </button>
+                              <button className={tinyBtn} onClick={() => toggleBrandActive(brand)} disabled={busy} type="button">
+                                <Power size={13} /> {brand.is_active ? "Inaktív" : "Aktív"}
+                              </button>
+                              <button className={tinyDangerBtn} onClick={() => setBrandDeleteTarget(brand)} disabled={busy} type="button">
+                                <Trash2 size={13} /> Törlés
+                              </button>
                             </div>
                           </div>
                         )}
@@ -1634,8 +1619,8 @@ export default function AllInSuppliers() {
                     Beszállító
                     <select
                       className={`${input} w-full`}
-                      value={brandSupplierId || selectedSupplierId}
-                      onChange={(e) => setBrandSupplierId(e.target.value)}
+                      value={currentBrandSupplierId}
+                      onChange={(e) => openSupplierDetails(e.target.value)}
                     >
                       {suppliers.map((s) => (
                         <option key={s.id} value={s.id}>{s.name}</option>
@@ -1649,12 +1634,12 @@ export default function AllInSuppliers() {
                       value={brandId}
                       onChange={(e) => setBrandId(e.target.value)}
                     >
-                      {!availableBrandsForSelectedSupplier.length && (
-                        <option value="">Minden aktív márka kapcsolva</option>
-                      )}
                       {availableBrandsForSelectedSupplier.map((brand) => (
                         <option key={brand.id} value={brand.id}>{brand.name}</option>
                       ))}
+                      {!availableBrandsForSelectedSupplier.length && (
+                        <option value="">Nincs kapcsolható márka</option>
+                      )}
                     </select>
                   </label>
                   <label className={`${label} lg:col-span-2`}>
@@ -1666,11 +1651,8 @@ export default function AllInSuppliers() {
                       placeholder="pl. hivatalos forgalmazás, szezonális, külön árlista"
                     />
                   </label>
-                  <div className="rounded-xl border border-emerald-300/26 bg-emerald-400/10 px-3 py-2 text-sm text-white/86 lg:col-span-2">
-                    <span className="text-white/62">Kapcsolás:</span>{" "}
-                    <span>{selectedSupplierForBrandLinks?.name || "Nincs beszállító kiválasztva"}</span>
-                    <span className="px-2 text-white/42">→</span>
-                    <span>{selectedBrandForLink?.name || "Nincs választható márka"}</span>
+                  <div className="rounded-lg border border-emerald-300/28 bg-emerald-300/10 px-3 py-2 text-sm text-white/86 lg:col-span-2">
+                    Kapcsolás: {currentBrandSupplierName} → {availableBrandsForSelectedSupplier.find((brand) => brand.id === brandId)?.name || "nincs kiválasztott márka"}
                   </div>
                   <label className="flex h-8 items-center gap-2 rounded-lg border border-white/18 bg-[#303b4e] px-3 text-sm text-white/78">
                     <input
@@ -1681,7 +1663,7 @@ export default function AllInSuppliers() {
                     />
                     Elsődleges márka ennél a beszállítónál
                   </label>
-                  <button className={`${primaryBtn} justify-self-start`} onClick={createSupplierBrandLink} disabled={busy || !brandId || !selectedSupplierForBrandLinks} type="button">
+                  <button className={`${primaryBtn} justify-self-start`} onClick={createSupplierBrandLink} disabled={busy} type="button">
                     <Plus size={14} /> Kapcsolás
                   </button>
                 </div>
@@ -1692,7 +1674,6 @@ export default function AllInSuppliers() {
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                           <p className="text-sm text-white">{link.brand_name}</p>
-                          <p className="mt-0.5 text-xs text-white/58">{link.supplier_name}</p>
                           <div className="mt-1 flex flex-wrap gap-1.5">
                             {link.is_preferred && <span className={`${chip} border-emerald-300/35 text-emerald-100`}>Elsődleges</span>}
                             <span className={`${chip} ${link.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
@@ -1840,7 +1821,7 @@ export default function AllInSuppliers() {
                           <div className="mt-3 grid grid-cols-4 gap-2">
                             <button
                               className={tinyBtn}
-                              onClick={() => selectSupplierForDetails(s.id)}
+                              onClick={() => openSupplierDetails(s.id)}
                               type="button"
                             >
                               Adatok
@@ -1983,7 +1964,7 @@ export default function AllInSuppliers() {
                               <div className="flex justify-end gap-1.5 whitespace-nowrap">
                                 <button
                                   className={tinyBtn}
-                                  onClick={() => selectSupplierForDetails(s.id)}
+                                  onClick={() => openSupplierDetails(s.id)}
                                   type="button"
                                 >
                                   Adatok
