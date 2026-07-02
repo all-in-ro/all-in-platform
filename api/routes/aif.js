@@ -2299,38 +2299,99 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       await client.query("BEGIN");
 
-      const receptionRes = await client.query(
-        `INSERT INTO aif_receptions (
-           supplier_id, target_location_id, invoice_number, invoice_date, reception_date,
-           currency_code, exchange_rate_to_ron, tva_mode, tva_rate, shipping_cost,
-           goods_value, invoice_net, invoice_vat, invoice_gross, total_qty, line_count,
-           status, note, raw_meta, created_by, actor
-         )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft',$17,$18::jsonb,$19,$20)
-         RETURNING id`,
-        [
-          supplier.id,
-          targetLocationId,
-          reception.invoiceNumber,
-          reception.invoiceDate,
-          reception.receptionDate,
-          reception.currencyCode,
-          reception.exchangeRateToRon,
-          reception.tvaMode,
-          reception.tvaRate,
-          reception.shippingCost,
-          reception.goodsValue,
-          reception.invoiceNet,
-          reception.invoiceVat,
-          reception.invoiceGross,
-          reception.totalQty,
-          reception.lineCount,
-          reception.note,
-          JSON.stringify(reception.rawMeta || {}),
-          req.session?.role || "system",
-          actorFrom(req),
-        ]
-      );
+      const existingReceptionId = emptyToNull(body.receptionId || body.reception_id);
+      let receptionId = null;
+
+      if (existingReceptionId) {
+        const currentReception = await client.query(
+          `SELECT id, status FROM aif_receptions WHERE id::text=$1 FOR UPDATE`,
+          [existingReceptionId]
+        );
+        if (!currentReception.rowCount) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "A kiválasztott receptió nem található." });
+        }
+        receptionId = currentReception.rows[0].id;
+        await client.query(
+          `UPDATE aif_receptions SET
+             supplier_id=$2,
+             target_location_id=$3,
+             invoice_number=$4,
+             invoice_date=$5,
+             reception_date=$6,
+             currency_code=$7,
+             exchange_rate_to_ron=$8,
+             tva_mode=$9,
+             tva_rate=$10,
+             shipping_cost=$11,
+             goods_value=COALESCE(goods_value,0) + COALESCE($12,0),
+             invoice_net=COALESCE($13, invoice_net),
+             invoice_vat=COALESCE($14, invoice_vat),
+             invoice_gross=$15,
+             total_qty=COALESCE(total_qty,0) + $16,
+             line_count=COALESCE(line_count,0) + $17,
+             status=CASE WHEN status='cancelled' THEN status ELSE 'draft' END,
+             note=COALESCE($18, note),
+             raw_meta=COALESCE(raw_meta,'{}'::jsonb) || $19::jsonb,
+             updated_at=now()
+           WHERE id=$1`,
+          [
+            receptionId,
+            supplier.id,
+            targetLocationId,
+            reception.invoiceNumber,
+            reception.invoiceDate,
+            reception.receptionDate,
+            reception.currencyCode,
+            reception.exchangeRateToRon,
+            reception.tvaMode,
+            reception.tvaRate,
+            reception.shippingCost,
+            reception.goodsValue,
+            reception.invoiceNet,
+            reception.invoiceVat,
+            reception.invoiceGross,
+            reception.totalQty,
+            reception.lineCount,
+            reception.note,
+            JSON.stringify(reception.rawMeta || {}),
+          ]
+        );
+      } else {
+        const receptionRes = await client.query(
+          `INSERT INTO aif_receptions (
+             supplier_id, target_location_id, invoice_number, invoice_date, reception_date,
+             currency_code, exchange_rate_to_ron, tva_mode, tva_rate, shipping_cost,
+             goods_value, invoice_net, invoice_vat, invoice_gross, total_qty, line_count,
+             status, note, raw_meta, created_by, actor
+           )
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft',$17,$18::jsonb,$19,$20)
+           RETURNING id`,
+          [
+            supplier.id,
+            targetLocationId,
+            reception.invoiceNumber,
+            reception.invoiceDate,
+            reception.receptionDate,
+            reception.currencyCode,
+            reception.exchangeRateToRon,
+            reception.tvaMode,
+            reception.tvaRate,
+            reception.shippingCost,
+            reception.goodsValue,
+            reception.invoiceNet,
+            reception.invoiceVat,
+            reception.invoiceGross,
+            reception.totalQty,
+            reception.lineCount,
+            reception.note,
+            JSON.stringify(reception.rawMeta || {}),
+            req.session?.role || "system",
+            actorFrom(req),
+          ]
+        );
+        receptionId = receptionRes.rows[0].id;
+      }
 
       const batchRes = await client.query(
         `INSERT INTO aif_import_batches (
@@ -2344,7 +2405,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           supplier.id,
           profileId,
           targetLocationId,
-          receptionRes.rows[0].id,
+          receptionId,
           emptyToNull(body.sourceFileName || body.source_file_name || body.fileName),
           emptyToNull(body.sourceFileUrl || body.source_file_url || body.fileUrl),
           normCode(body.sourceFormat || body.source_format || "manual") || "manual",
@@ -2411,7 +2472,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
 
       await client.query("COMMIT");
-      res.json({ ok: true, id: batchId, receptionId: receptionRes.rows[0].id, rowCount: normalizedRows.length, errorCount });
+      res.json({ ok: true, id: batchId, receptionId, rowCount: normalizedRows.length, errorCount });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF create full import batch failed", e);
