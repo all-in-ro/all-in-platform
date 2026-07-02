@@ -10,6 +10,7 @@ import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
 import AllInInventory from "./pages/AllInInventory";
 import AllInSuppliers from "./pages/AllInSuppliers";
+import AllInReceptions from "./pages/AllInReceptions";
 
 import AllInAdmin from "./pages/AllInAdmin";
 import AllInProductMoves from "./pages/AllInProductMoves";
@@ -29,6 +30,7 @@ type ScreenName =
   | "stockmoves"
   | "inventory"
   | "suppliers"
+  | "receptions"
   | "admin"
   | "productmoves"
   | "vacations"
@@ -69,6 +71,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "stockmoves") return { name: "stockmoves" };
   if (key === "inventory") return { name: "inventory" };
   if (key === "suppliers") return { name: "suppliers" };
+  if (key === "receptions") return { name: "receptions" };
   if (key === "admin") return { name: "admin" };
   if (key === "productmoves") return { name: "productmoves" };
   if (key === "vacations") return { name: "vacations" };
@@ -86,6 +89,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allinstockmoves" || key === "allin-stockmoves" || key === "allin-stock-moves") return { name: "stockmoves" };
   if (key === "allininventory") return { name: "inventory" };
   if (key === "allinsuppliers" || key === "allin-suppliers" || key === "aif-suppliers") return { name: "suppliers" };
+  if (key === "allinreceptions" || key === "allin-receptions" || key === "aif-receptions") return { name: "receptions" };
 
   if (key === "allinadmin") return { name: "admin" };
   if (key === "allinproductmoves") return { name: "productmoves" };
@@ -201,6 +205,7 @@ export default function App() {
       {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
       {screen.name === "inventory" && <AllInInventory {...(commonProps as any)} />}
       {screen.name === "suppliers" && <AllInSuppliers {...(commonProps as any)} />}
+      {screen.name === "receptions" && <AllInReceptions {...(commonProps as any)} />}
 
       {screen.name === "admin" && <AllInAdmin {...(commonProps as any)} />}
       {screen.name === "productmoves" && <AllInProductMoves {...(commonProps as any)} />}
