@@ -153,6 +153,11 @@ export default function AllInHome(props: { onLogout?: () => void }) {
               <Truck className="h-4 w-4" />
             </MenuButton>
 
+            <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinreceptions")}>
+              <span>RECEPTIÓK</span>
+              <ClipboardList className="h-4 w-4" />
+            </MenuButton>
+
             <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinsuppliers")}>
               <span>BESZÁLLÍTÓK</span>
               <Building2 className="h-4 w-4" />
