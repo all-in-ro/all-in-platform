@@ -503,6 +503,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return null;
   }
 
+  function dateOnly(v) {
+    const s = text(v);
+    if (!s) return null;
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+    const slash = s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);
+    if (slash) {
+      const a = Number(slash[1]);
+      const b = Number(slash[2]);
+      const y = slash[3];
+      // Browser date inputs normally submit YYYY-MM-DD, but if a localized
+      // display string slips through, keep the common Romanian/Hungarian
+      // day/month order when the first part is above 12. Otherwise use
+      // the US-style month/day display Chrome often shows. Yes, dates are
+      // apparently still humanity's punishment for inventing calendars.
+      const dayFirst = a > 12;
+      const m = String(dayFirst ? b : a).padStart(2, "0");
+      const d = String(dayFirst ? a : b).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+    const parsed = new Date(s);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+    return s;
+  }
+
+
   async function currencyUsage(client, code) {
     const r = await client.query(
       `SELECT
@@ -1079,29 +1105,61 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const src = body.reception && typeof body.reception === "object" ? body.reception : body;
     const client = await pool.connect();
+
     try {
       await client.query("BEGIN");
-      const rec = await client.query(`SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
+
+      const rec = await client.query(
+        `SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`,
+        [id]
+      );
       if (!rec.rowCount) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Receptió nem található." });
       }
-      const sets = [];
-      const args = [];
-      let i = 1;
-      const add = (col, value) => { sets.push(`${col}=$${i++}`); args.push(value); };
 
-      if (src.invoiceNumber !== undefined || src.invoice_number !== undefined) add("invoice_number", emptyToNull(src.invoiceNumber ?? src.invoice_number));
-      if (src.invoiceDate !== undefined || src.invoice_date !== undefined) add("invoice_date", emptyToNull(src.invoiceDate ?? src.invoice_date));
-      if (src.receptionDate !== undefined || src.reception_date !== undefined) add("reception_date", emptyToNull(src.receptionDate ?? src.reception_date));
+      const setMap = new Map();
+      const put = (column, value) => setMap.set(column, value);
+
+      if (src.invoiceNumber !== undefined || src.invoice_number !== undefined) {
+        const invoiceNumber = emptyToNull(src.invoiceNumber ?? src.invoice_number);
+        if (!invoiceNumber) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Számlaszám megadása kötelező." });
+        }
+        put("invoice_number", invoiceNumber);
+      }
+      if (src.invoiceDate !== undefined || src.invoice_date !== undefined) {
+        const invoiceDate = dateOnly(src.invoiceDate ?? src.invoice_date);
+        if (!invoiceDate) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Számla dátuma kötelező." });
+        }
+        put("invoice_date", invoiceDate);
+      }
+      if (src.receptionDate !== undefined || src.reception_date !== undefined) {
+        const receptionDate = dateOnly(src.receptionDate ?? src.reception_date);
+        if (!receptionDate) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Receptió dátuma kötelező." });
+        }
+        put("reception_date", receptionDate);
+      }
       if (src.currencyCode !== undefined || src.currency_code !== undefined) {
         const c = currencyCode(src.currencyCode ?? src.currency_code);
-        const exists = await client.query(`SELECT 1 FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [c]);
+        if (!c) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Pénznem kiválasztása kötelező." });
+        }
+        const exists = await client.query(
+          `SELECT 1 FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`,
+          [c]
+        );
         if (!exists.rowCount) {
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "A kiválasztott pénznem nem létezik vagy inaktív." });
         }
-        add("currency_code", c);
+        put("currency_code", c);
       }
       if (src.exchangeRateToRon !== undefined || src.exchange_rate_to_ron !== undefined) {
         const rate = toMoney(src.exchangeRateToRon ?? src.exchange_rate_to_ron);
@@ -1109,7 +1167,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "Pozitív RON árfolyam szükséges." });
         }
-        add("exchange_rate_to_ron", rate);
+        put("exchange_rate_to_ron", rate);
       }
       if (src.tvaMode !== undefined || src.tva_mode !== undefined) {
         const mode = tvaMode(src.tvaMode ?? src.tva_mode);
@@ -1117,58 +1175,110 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "Érvénytelen TVA kezelés." });
         }
-        add("tva_mode", mode);
-        if (mode === "no_tva") add("tva_rate", 0);
+        put("tva_mode", mode);
+        if (mode === "no_tva") put("tva_rate", 0);
       }
-      if (src.tvaRate !== undefined || src.tva_rate !== undefined) add("tva_rate", toMoney(src.tvaRate ?? src.tva_rate) ?? 0);
-      if (src.shippingCost !== undefined || src.shipping_cost !== undefined) add("shipping_cost", toMoney(src.shippingCost ?? src.shipping_cost) ?? 0);
-      if (src.goodsValue !== undefined || src.goods_value !== undefined) add("goods_value", toMoney(src.goodsValue ?? src.goods_value));
-      if (src.invoiceNet !== undefined || src.invoice_net !== undefined) add("invoice_net", toMoney(src.invoiceNet ?? src.invoice_net));
-      if (src.invoiceVat !== undefined || src.invoice_vat !== undefined) add("invoice_vat", toMoney(src.invoiceVat ?? src.invoice_vat));
-      if (src.invoiceGross !== undefined || src.invoice_gross !== undefined) add("invoice_gross", toMoney(src.invoiceGross ?? src.invoice_gross));
-      if (src.note !== undefined) add("note", emptyToNull(src.note));
+      if (src.tvaRate !== undefined || src.tva_rate !== undefined) {
+        put("tva_rate", toMoney(src.tvaRate ?? src.tva_rate) ?? 0);
+      }
+      if (src.shippingCost !== undefined || src.shipping_cost !== undefined) {
+        put("shipping_cost", toMoney(src.shippingCost ?? src.shipping_cost) ?? 0);
+      }
+      if (src.goodsValue !== undefined || src.goods_value !== undefined) {
+        put("goods_value", toMoney(src.goodsValue ?? src.goods_value));
+      }
+      if (src.invoiceNet !== undefined || src.invoice_net !== undefined) {
+        put("invoice_net", toMoney(src.invoiceNet ?? src.invoice_net));
+      }
+      if (src.invoiceVat !== undefined || src.invoice_vat !== undefined) {
+        put("invoice_vat", toMoney(src.invoiceVat ?? src.invoice_vat));
+      }
+      if (src.invoiceGross !== undefined || src.invoice_gross !== undefined) {
+        const gross = toMoney(src.invoiceGross ?? src.invoice_gross);
+        if (gross === null || gross === undefined) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Számla végösszeg megadása kötelező." });
+        }
+        put("invoice_gross", gross);
+      }
+      if (src.note !== undefined) put("note", emptyToNull(src.note));
 
-      if (sets.length) {
+      if (setMap.size) {
+        const entries = Array.from(setMap.entries());
+        const sets = entries.map(([column], idx) => `${column}=$${idx + 1}`);
+        const args = entries.map(([, value]) => value);
         args.push(rec.rows[0].id);
-        await client.query(`UPDATE aif_receptions SET ${sets.join(", ")}, updated_at=now() WHERE id=$${i}`, args);
+        await client.query(
+          `UPDATE aif_receptions SET ${sets.join(", ")}, updated_at=now() WHERE id=$${args.length}`,
+          args
+        );
       }
 
-      const fresh = await client.query(`SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`, [rec.rows[0].id]);
-      const rate = Number(fresh.rows[0].exchange_rate_to_ron || 1);
-      const currency = fresh.rows[0].currency_code;
-      await client.query(
-        `UPDATE aif_import_rows rw
-         SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round(rw.buy_price * $2::numeric, 2) END,
-             sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $2::numeric, 2) END,
-             normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
-             updated_at=now()
-         FROM aif_import_batches b
-         WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
-        [rec.rows[0].id, rate, currency]
+      const fresh = await client.query(
+        `SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`,
+        [rec.rows[0].id]
       );
+      const rate = Number(fresh.rows[0]?.exchange_rate_to_ron || 1);
+      const currency = fresh.rows[0]?.currency_code || null;
+
+      // Recalculate non-committed row RON values after exchange-rate/currency changes.
+      // If this secondary maintenance step fails, the header save itself should not vanish
+      // into a 500-shaped hole. The row error is returned as a warning instead.
+      let rowRecalcWarning = null;
+      try {
+        await client.query(
+          `UPDATE aif_import_rows rw
+           SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round((rw.buy_price * $2::numeric)::numeric, 2) END,
+               sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round((rw.sell_price * $2::numeric)::numeric, 2) END,
+               normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
+               updated_at=now()
+           FROM aif_import_batches b
+           WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
+          [rec.rows[0].id, rate, currency]
+        );
+      } catch (rowErr) {
+        rowRecalcWarning = rowErr?.message || "A nem készletre vett sorok RON újraszámolása nem sikerült.";
+        console.error("AIF reception row recalc failed", rowErr);
+      }
+
       const updated = await client.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
                 r.note, r.supplier_id, r.target_location_id,
-                s.name AS supplier_name, l.name AS location_name
+                s.name AS supplier_name, l.name AS location_name,
+                count(DISTINCT b.id)::int AS import_batches,
+                count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
+                count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
+                count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows,
+                count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
+                count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows
          FROM aif_receptions r
          LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
          LEFT JOIN aif_locations l ON l.id=r.target_location_id
+         LEFT JOIN aif_import_batches b ON b.reception_id=r.id
+         LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
          WHERE r.id=$1
+         GROUP BY r.id, s.name, l.name
          LIMIT 1`,
         [rec.rows[0].id]
       );
+
       await client.query("COMMIT");
-      res.json({ ok: true, item: updated.rows[0] || null });
+      res.json({ ok: true, item: updated.rows[0] || null, warning: rowRecalcWarning });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update reception failed", e);
-      res.status(500).json({ error: e?.message || "A receptió mentése nem sikerült." });
+      const status = e?.code === "22P02" || e?.code === "23514" ? 400 : 500;
+      res.status(status).json({
+        error: e?.message || "A receptió mentése nem sikerült.",
+        code: e?.code || null,
+      });
     } finally {
       client.release();
     }
   }
+
 
 
 
