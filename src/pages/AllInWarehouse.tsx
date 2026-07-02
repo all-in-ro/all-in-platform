@@ -11,6 +11,7 @@ import {
   Filter,
   ImagePlus,
   MoreVertical,
+  Trash2,
   RefreshCw,
   Save,
   Search,
@@ -30,11 +31,11 @@ const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
 const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
-const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/16 bg-[#4b5362] shadow-2xl";
+const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
 const taxonomyCard = "rounded-2xl border border-white/18 bg-[#566171] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(15,23,42,0.10)]";
 const taxonomyTabBase = "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs transition-colors font-normal";
-const taxonomyTabActive = `${taxonomyTabBase} border-emerald-300/35 bg-emerald-500/14 text-white shadow-[0_0_0_1px_rgba(110,231,183,0.08)]`;
-const taxonomyTabIdle = `${taxonomyTabBase} border-white/12 bg-white/[0.05] text-white/75 hover:bg-white/[0.1]`;
+const taxonomyTabActive = `${taxonomyTabBase} border-emerald-300/42 bg-emerald-500/18 text-white shadow-[0_0_0_1px_rgba(110,231,183,0.12)]`;
+const taxonomyTabIdle = `${taxonomyTabBase} border-white/16 bg-[#3f4959] text-white/78 hover:bg-[#475365]`;
 const taxonomySmallBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/18 bg-[#3f4959] px-2.5 text-[11px] text-white/88 hover:bg-[#475365] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-emerald-300/35 bg-[#276454] px-3 text-xs text-white hover:bg-[#2d735f] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-300/30 bg-[#d31126] px-2.5 text-[11px] text-white shadow-[0_0_0_1px_rgba(248,113,113,0.06)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -876,9 +877,9 @@ export default function AllInWarehouse() {
           <MoreVertical size={15} />
         </button>
         {isOpen && (
-          <div className={`absolute right-0 z-30 w-44 rounded-xl border border-white/18 bg-[#2f394a] p-1.5 shadow-2xl ${args.openUp ? "bottom-full mb-2" : "top-full mt-2"}`}>
+          <div className={`absolute right-0 z-30 w-40 rounded-xl border border-white/18 bg-[#2f394a] p-1.5 shadow-2xl ${args.openUp ? "bottom-full mb-2" : "top-full mt-2"}`}>
             <button
-              className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-white/88 hover:bg-white/10"
+              className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-white/90 hover:bg-white/10"
               onClick={() => {
                 setOpenTaxonomyMenu(null);
                 args.onEdit();
@@ -888,7 +889,7 @@ export default function AllInWarehouse() {
               <Edit3 size={13} /> Szerkesztés
             </button>
             <button
-              className="mt-1 flex h-8 w-full items-center gap-2 rounded-lg bg-[#d31126] px-2.5 text-left text-xs text-white hover:bg-[#b90f21]"
+              className="mt-1 flex h-8 w-full items-center gap-2 rounded-lg border border-rose-300/28 bg-[#cf1028] px-2.5 text-left text-xs text-white shadow-[0_0_14px_rgba(207,16,40,0.25)] hover:bg-[#aa0d21]"
               onClick={() => {
                 setOpenTaxonomyMenu(null);
                 args.onDelete();
@@ -1188,7 +1189,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `category-${c.id}`,
-                            openUp: index >= Math.max(0, categories.length - 3),
+                            openUp: index >= Math.max(0, categories.length - 5),
                             onEdit: () => editCategoryRow(c),
                             onDelete: () => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) }),
                           })}
@@ -1241,7 +1242,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `gender-${g.code}`,
-                            openUp: index >= Math.max(0, genderTypes.length - 3),
+                            openUp: index >= Math.max(0, genderTypes.length - 5),
                             onEdit: () => editGenderRow(g),
                             onDelete: () => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name }),
                           })}
@@ -1304,7 +1305,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `color-${c.id}`,
-                            openUp: index >= Math.max(0, colorTypes.length - 3),
+                            openUp: index >= Math.max(0, colorTypes.length - 5),
                             onEdit: () => editColorRow(c),
                             onDelete: () => setDeleteTarget({ kind: "color", id: String(c.id), name: c.name_ro }),
                           })}
@@ -1316,20 +1317,29 @@ export default function AllInWarehouse() {
                 </div>
               )}
 
-              {deleteTarget && (
-                <div className="rounded-2xl border border-rose-200/20 bg-rose-500/10 p-3.5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm text-white">Törlés vagy inaktiválás megerősítése</p>
-                      <p className="mt-1 text-xs text-white/65">Elem: {deleteTarget.name}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button className={taxonomySmallBtn} onClick={() => setDeleteTarget(null)}>Mégse</button>
-                      <button className={taxonomyDangerBtn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy}>Megerősítés</button>
-                    </div>
-                  </div>
-                </div>
-              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/64 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] p-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-rose-300/30 bg-[#cf1028] text-white shadow-[0_0_22px_rgba(207,16,40,0.35)]">
+                <Trash2 size={18} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-base text-white">Törlés megerősítése</p>
+                <p className="mt-1 text-sm text-white/68">A kiválasztott törzsadat törlésre kerül. Ha már használatban van, a rendszer inaktiválja, hogy a korábbi adatok ne sérüljenek.</p>
+              </div>
+            </div>
+            <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white">
+              {deleteTarget.name}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className={taxonomySmallBtn} onClick={() => setDeleteTarget(null)} disabled={taxonomyBusy} type="button"><X size={13} /> Mégse</button>
+              <button className={taxonomyDangerBtn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy} type="button"><Trash2 size={13} /> Törlés</button>
             </div>
           </div>
         </div>
