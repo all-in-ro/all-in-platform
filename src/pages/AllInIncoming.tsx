@@ -211,6 +211,17 @@ export default function AllInIncoming(_props: Props) {
   const [workbenchOpen, setWorkbenchOpen] = useState(true);
   const [previewLimit, setPreviewLimit] = useState(25);
   const [approvedRows, setApprovedRows] = useState<Record<string, boolean>>({});
+  const [manualProductCode, setManualProductCode] = useState("");
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualBrandCode, setManualBrandCode] = useState("");
+  const [manualCategoryCode, setManualCategoryCode] = useState("");
+  const [manualGender, setManualGender] = useState("");
+  const [manualColorName, setManualColorName] = useState("");
+  const [manualColorCode, setManualColorCode] = useState("");
+  const [manualSize, setManualSize] = useState("");
+  const [manualQty, setManualQty] = useState("");
+  const [manualBuyPrice, setManualBuyPrice] = useState("");
+  const [manualRowsOpen, setManualRowsOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [locationModalOpen, setLocationModalOpen] = useState(false);
@@ -440,6 +451,74 @@ export default function AllInIncoming(_props: Props) {
   function clearApprovedRows() {
     setApprovedRows({});
     setMessage("A kijelölés törölve. A beolvasott adatok továbbra is csak előnézetben vannak.");
+  }
+
+  function resetManualRowForm() {
+    setManualProductCode("");
+    setManualTitle("");
+    setManualBrandCode(defaultBrandCode);
+    setManualCategoryCode(defaultCategoryCode);
+    setManualGender(defaultGender);
+    setManualColorName("");
+    setManualColorCode("");
+    setManualSize("");
+    setManualQty("");
+    setManualBuyPrice("");
+  }
+
+  function addManualRow() {
+    const nextRowNo = rows.length + 1;
+    const brandCode = manualBrandCode || defaultBrandCode;
+    const categoryCode = manualCategoryCode || defaultCategoryCode;
+    const gender = manualGender || defaultGender;
+    const brand = activeBrands.find((b) => (b.code || b.id) === brandCode);
+    const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
+    const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
+    const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
+
+    const manualRow: AifParsedRow = {
+      rowNo: nextRowNo,
+      raw: {
+        source: "manual",
+        productCode: manualProductCode,
+        title: manualTitle,
+        brandCode,
+        categoryCode,
+        gender,
+        colorName: manualColorName,
+        colorCode: manualColorCode,
+        size: manualSize,
+        qty,
+        buyPrice,
+      },
+      normalized: {
+        supplierProductCode: manualProductCode.trim(),
+        modelCode: manualProductCode.trim(),
+        titleRo: manualTitle.trim(),
+        brandCode,
+        brandName: brand?.name || "",
+        categoryCode,
+        categoryName: category ? categoryLabel(category) : "",
+        gender,
+        colorName: manualColorName.trim(),
+        colorCode: manualColorCode.trim(),
+        size: manualSize.trim(),
+        qty,
+        buyPrice,
+        source: "manual",
+      },
+    };
+
+    const errors = aifRowErrors(manualRow);
+    const rowIndex = rows.length;
+    const key = rowKey(manualRow, rowIndex);
+    setRows((current) => [...current, manualRow]);
+    setFileName((current) => current || "Manuális bevételezés");
+    setWorkbenchOpen(false);
+    setPreviewLimit((current) => Math.max(current, rowIndex + 1));
+    setApprovedRows((current) => ({ ...current, [key]: errors.length === 0 }));
+    resetManualRowForm();
+    setMessage(errors.length ? "A manuális sor hozzáadva előnézethez, de javítás szükséges." : "A manuális sor hozzáadva és mentésre kijelölve.");
   }
 
   async function loadMeta() {
@@ -1282,6 +1361,73 @@ export default function AllInIncoming(_props: Props) {
               A beolvasás csak előnézet. Importként kizárólag a kijelölt és hibátlan sorok menthetők.
             </div>
           ) : null}
+        </section>
+
+        <section className={card}>
+          <SectionTitle
+            icon={<Plus size={16} />}
+            title="Manuális terméksor"
+            right={
+              <button className={tinyBtn} onClick={() => setManualRowsOpen((v) => !v)} type="button">
+                {manualRowsOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {manualRowsOpen ? "Bezárás" : "Megnyitás"}
+              </button>
+            }
+          />
+
+          {manualRowsOpen && (
+            <div className="mt-3 space-y-3">
+              <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/74">
+                Manuális bevételezéshez tölts ki egy terméksort, majd add hozzá az előnézethez. Mentés előtt ugyanúgy ellenőrizhető és kijelölhető, mint az importált sor.
+              </div>
+              <div className="grid gap-3 lg:grid-cols-4">
+                <label className={label}>Termékkód
+                  <input className={`${input} w-full`} value={manualProductCode} onChange={(e) => setManualProductCode(e.target.value)} placeholder="pl. UA-123" />
+                </label>
+                <label className={label}>Terméknév
+                  <input className={`${input} w-full`} value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Termék megnevezése" />
+                </label>
+                <label className={label}>Márka
+                  <select className={`${selectInput} w-full`} value={manualBrandCode || defaultBrandCode} onChange={(e) => setManualBrandCode(e.target.value)}>
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
+                  </select>
+                </label>
+                <label className={label}>Kategória
+                  <select className={`${selectInput} w-full`} value={manualCategoryCode || defaultCategoryCode} onChange={(e) => setManualCategoryCode(e.target.value)}>
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-6">
+                <label className={label}>Nem
+                  <select className={`${selectInput} w-full`} value={manualGender || defaultGender} onChange={(e) => setManualGender(e.target.value)}>
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
+                  </select>
+                </label>
+                <label className={label}>Szín
+                  <input className={`${input} w-full`} value={manualColorName} onChange={(e) => setManualColorName(e.target.value)} placeholder="pl. fekete" />
+                </label>
+                <label className={label}>Színkód
+                  <input className={`${input} w-full`} value={manualColorCode} onChange={(e) => setManualColorCode(e.target.value)} placeholder="pl. 001" />
+                </label>
+                <label className={label}>Méret
+                  <input className={`${input} w-full`} value={manualSize} onChange={(e) => setManualSize(e.target.value)} placeholder="pl. M vagy 42" />
+                </label>
+                <label className={label}>Darab
+                  <input className={`${input} w-full`} value={manualQty} onChange={(e) => setManualQty(e.target.value)} placeholder="pl. 1" />
+                </label>
+                <label className={label}>Vételár
+                  <input className={`${input} w-full`} value={manualBuyPrice} onChange={(e) => setManualBuyPrice(e.target.value)} placeholder="pénznemben" />
+                </label>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button className={neutralBtn} onClick={resetManualRowForm} type="button">Mezők törlése</button>
+                <button className={primaryBtn} onClick={addManualRow} type="button"><Plus size={14} /> Sor hozzáadása</button>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className={card}>
