@@ -5,7 +5,6 @@ import {
   CheckCircle,
   Edit3,
   FileSpreadsheet,
-  Download,
   MapPin,
   Plus,
   RefreshCw,
@@ -27,7 +26,7 @@ import {
   AifSupplier,
   apiAifCommitImportBatch,
   apiAifCreateCurrency,
-  apiAifCreateImportBatch,
+  apiAifCreateFullImportBatch,
   apiAifCreateLocation,
   apiAifCreateLocationType,
   apiAifDeleteCurrency,
@@ -40,7 +39,6 @@ import {
   apiAifUpdateLocationType,
   apiAifListImportBatches,
   apiAifMeta,
-  apiAifReplaceImportRows,
   apiAifUpdateCurrency,
 } from "../lib/aif/api";
 import {
@@ -627,11 +625,11 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const batch = await apiAifCreateImportBatch({
+      const saved = await apiAifCreateFullImportBatch({
         supplierId,
         targetLocationId: locationId,
-        sourceFileName: fileName || "import.xls",
-        sourceFormat: "xls",
+        sourceFileName: fileName || "Manuális bevételezés",
+        sourceFormat: fileName ? "xls" : "manual",
         note,
         reception: {
           invoiceNumber,
@@ -650,10 +648,10 @@ export default function AllInIncoming(_props: Props) {
           totalQty: approvedQty,
           note,
         },
+        rows: approvedRowList,
       });
-      const saved = await apiAifReplaceImportRows(batch.id, approvedRowList);
       await Promise.all([loadBatches(), loadReceptions()]);
-      setMessage(`Import mentve: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
+      setMessage(`Bevételezés mentve: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni az importot.");
     } finally {
@@ -1550,7 +1548,7 @@ export default function AllInIncoming(_props: Props) {
         </section>
 
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Receptiók" right={<button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Összes receptió</button>} />
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Receptiók" right={<span className="text-xs text-white/60">Legutóbbi számlás bevételezések</span>} />
           <div className="mt-3 grid gap-2">
             {receptions.map((r) => (
               <div key={r.id} className="rounded-xl border border-white/12 bg-[#354153] p-3">
@@ -1583,10 +1581,6 @@ export default function AllInIncoming(_props: Props) {
                     <p className="text-[11px] uppercase tracking-[0.06em] text-white/56">Állapot</p>
                     <p className="mt-1 text-sm text-white">{r.status || "-"}</p>
                   </div>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button className={tinyBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Adatok</button>
-                  <button className={tinyBtn} onClick={() => window.open(`/api/aif/receptions/${encodeURIComponent(r.id)}/export.csv`, "_blank", "noopener,noreferrer")} type="button"><Download size={13} /> Export</button>
                 </div>
               </div>
             ))}
