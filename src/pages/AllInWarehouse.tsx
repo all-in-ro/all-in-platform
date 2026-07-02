@@ -337,13 +337,7 @@ function formFromDetail(d: DetailResponse): EditForm {
 
 
 function nextSortOrder(rows: Array<{ sort_order?: number | string | null }>) {
-  const nums = rows
-    .map((x) => Number(x.sort_order))
-    .filter((x) => Number.isFinite(x) && x > 0);
-  if (!nums.length) return "10";
-  const max = Math.max(...nums);
-  const useTens = nums.some((x) => x >= 10 && x % 10 === 0);
-  return String(max + (useTens ? 10 : 1));
+  return String(rows.length + 1);
 }
 
 export default function AllInWarehouse() {
@@ -513,7 +507,7 @@ export default function AllInWarehouse() {
       id: String(c.id || c.code || ""),
       nameRo: String(c.name_ro || c.name || ""),
       nameHu: String(c.name_hu || ""),
-      sortOrder: c.sort_order == null ? "100" : String(c.sort_order),
+      sortOrder: c.sort_order == null ? nextCategorySortOrder : String(c.sort_order),
     });
   }
 
@@ -523,7 +517,7 @@ export default function AllInWarehouse() {
 
   function editGenderRow(g: GenderType) {
     setTaxonomyTab("genders");
-    setGenderForm({ code: String(g.code || ""), name: String(g.name || ""), sortOrder: g.sort_order == null ? "100" : String(g.sort_order) });
+    setGenderForm({ code: String(g.code || ""), name: String(g.name || ""), sortOrder: g.sort_order == null ? nextGenderSortOrder : String(g.sort_order) });
   }
 
   async function saveCategoryForm() {
