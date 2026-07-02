@@ -97,6 +97,10 @@ export type AifReceptionSummary = {
   error_rows?: number | null;
   ignored_rows?: number | null;
   committed_batches?: number | null;
+  committed_rows?: number | null;
+  pending_rows?: number | null;
+  error_rows?: number | null;
+  ignored_rows?: number | null;
   has_stock_movements?: boolean | null;
   can_delete?: boolean | null;
 };
@@ -104,6 +108,7 @@ export type AifReceptionSummary = {
 
 export type AifReceptionDetailRow = {
   id: string;
+  batch_id?: string;
   row_no: number;
   status: string;
   error_messages?: string[] | null;
@@ -516,6 +521,13 @@ export function apiAifGetReception(id: string) {
   return fetchAifJSON<AifReceptionDetail>(`/receptions/${encodeURIComponent(id)}`);
 }
 
+export function apiAifUpdateReception(id: string, reception: Partial<AifReceptionInput>) {
+  return fetchAifJSON<{ ok: true }>(`/receptions/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ reception }),
+  });
+}
+
 export function apiAifDeleteReception(id: string) {
   return fetchAifJSON<{ ok: true; mode: "deleted" }>(`/receptions/${encodeURIComponent(id)}`, {
     method: "DELETE",
@@ -552,3 +564,13 @@ export function apiAifIgnoreImportRow(rowId: string) {
 export function apiAifReceptionExportCsvUrl(id: string) {
   return `/api/aif/receptions/${encodeURIComponent(id)}/export.csv`;
 }
+
+
+export function apiAifMoveImportRow(rowId: string, targetReceptionId: string) {
+  return fetchAifJSON<{ ok: true; targetBatchId?: string }>(`/import-rows/${encodeURIComponent(rowId)}/move-reception`, {
+    method: "POST",
+    body: JSON.stringify({ targetReceptionId }),
+  });
+}
+
+export const apiAifCommitReceptionSelected = apiAifCommitReceptionRows;
