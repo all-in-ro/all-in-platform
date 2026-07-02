@@ -84,6 +84,14 @@ function statusText(s?: string | null) {
   return s || "-";
 }
 
+function tvaModeText(s?: string | null) {
+  const v = String(s || "").toLowerCase();
+  if (v === "without_tva") return "preturi fara TVA";
+  if (v === "with_tva") return "preturi cu TVA inclus";
+  if (v === "no_tva") return "fara TVA";
+  return s || "-";
+}
+
 function rowDraftValue(row: any, drafts: Record<string, Record<string, unknown>>) {
   if (!row || row.status === "ignored") return 0;
   const draft = drafts[row.id] || row.normalized || {};
@@ -160,6 +168,237 @@ function SectionTitle(props: { title: string; icon?: React.ReactNode; right?: Re
 function exportCsv(id: string) {
   window.open(apiAifReceptionExportCsvUrl(id), "_blank", "noopener,noreferrer");
 }
+
+function pdfEscape(v: unknown) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function fileSafe(v: unknown) {
+  return String(v ?? "receptie")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "receptie";
+}
+
+function pdfNumber(v: unknown, digits = 2) {
+  const x = n(v);
+  return x.toLocaleString("ro-RO", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function pdfDate(v?: string | null) {
+  const s = dateOnly(v);
+  return s || "-";
+}
+
+function rowDraft(row: any, drafts: Record<string, Record<string, unknown>>) {
+  return { ...(row?.normalized || {}), ...(drafts[row?.id] || {}) } as any;
+}
+
+function rowSku(row: any, draft: any) {
+  return cell(row?.supplier_product_code || draft.supplierProductCode || draft.modelCode || row?.supplier_variant_code || draft.supplierVariantCode);
+}
+
+function rowTitle(row: any, draft: any) {
+  const name = cell(draft.titleRo || draft.productName || row?.supplier_product_code);
+  const color = String(draft.colorName || row?.supplier_color_code || "").trim();
+  const size = String(draft.size || row?.supplier_size || "").trim();
+  const suffix = [color, size].filter(Boolean).join(" / ");
+  return suffix ? `${name} - ${suffix}` : name;
+}
+
+function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<string, Record<string, unknown>> = {}) {
+  const item: any = detail.item || {};
+  const rows = (detail.rows || []).filter((row: any) => row.status !== "ignored");
+  const currency = String(item.currency_code || "").toUpperCase() || "RON";
+  const rate = n(item.exchange_rate_to_ron) || 1;
+  const shipping = n(item.shipping_cost);
+  const shippingRon = shipping * rate;
+
+  const baseLines = rows.map((row: any) => {
+    const draft = rowDraft(row, drafts);
+    const qty = n(draft.qty ?? row.qty);
+    const price = n(draft.buyPrice ?? row.buy_price ?? draft.buyPriceOriginal);
+    const priceRon = price * rate;
+    const value = qty * price;
+    return { row, draft, qty, price, priceRon, value };
+  });
+
+  const totalValue = baseLines.reduce((sum, x) => sum + x.value, 0);
+  const lines = baseLines.map((x) => {
+    const share = totalValue > 0 ? x.value / totalValue : 0;
+    const transportRonTotal = shippingRon * share;
+    const transportPerUnitRon = x.qty > 0 ? transportRonTotal / x.qty : 0;
+    const costPerUnitRon = x.priceRon + transportPerUnitRon;
+    const valueRon = costPerUnitRon * x.qty;
+    return { ...x, transportPerUnitRon, costPerUnitRon, valueRon };
+  });
+
+  const totalQty = lines.reduce((sum, x) => sum + x.qty, 0);
+  const totalRon = lines.reduce((sum, x) => sum + x.valueRon, 0);
+  const nrIntern = `REC-${String(item.invoice_number || item.id || "").replace(/[^a-zA-Z0-9-]+/g, "").slice(0, 18) || "-"}`;
+  const title = `Receptie ${item.invoice_number || nrIntern}`;
+  const today = new Date().toLocaleDateString("ro-RO");
+
+  const tableRows = lines.map((x) => `
+    <tr>
+      <td>${pdfEscape(rowTitle(x.row, x.draft))}</td>
+      <td>${pdfEscape(rowSku(x.row, x.draft))}</td>
+      <td class="num">${pdfNumber(x.qty, 0)}</td>
+      <td class="num">${pdfNumber(x.price)}</td>
+      <td class="num">${pdfNumber(x.priceRon)}</td>
+      <td class="num">${pdfNumber(x.transportPerUnitRon)}</td>
+      <td class="num">${pdfNumber(x.costPerUnitRon)}</td>
+      <td class="num">${pdfNumber(x.value)}</td>
+      <td class="num">${pdfNumber(x.valueRon)}</td>
+    </tr>`).join("");
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${pdfEscape(title)}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #111827; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 10px; }
+    .doc { width: 100%; }
+    .header { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; border-bottom: 2px solid #111827; padding-bottom: 8px; margin-bottom: 10px; }
+    .company { font-size: 10px; line-height: 1.45; }
+    .company-name { font-size: 15px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 3px; }
+    .title { text-align: right; }
+    .title h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: .05em; text-transform: uppercase; }
+    .title .nr { font-size: 12px; }
+    .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+    .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 5px 6px; min-height: 34px; }
+    .box .label { color: #6b7280; text-transform: uppercase; font-size: 8px; letter-spacing: .05em; margin-bottom: 2px; }
+    .box .value { font-size: 10px; }
+    .note { border: 1px solid #d1d5db; background: #f9fafb; padding: 6px 8px; margin: 8px 0 10px; line-height: 1.35; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    thead { display: table-header-group; }
+    tfoot { display: table-row-group; }
+    th { background: #111827; color: #fff; font-weight: 400; text-transform: uppercase; font-size: 8px; letter-spacing: .03em; padding: 5px 4px; border: 1px solid #111827; }
+    td { padding: 4px; border: 1px solid #d1d5db; vertical-align: top; font-size: 9px; line-height: 1.25; overflow-wrap: anywhere; }
+    .num { text-align: right; white-space: nowrap; }
+    .totals td { font-size: 10px; border-top: 2px solid #111827; background: #f3f4f6; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-top: 18px; font-size: 10px; }
+    .sig { padding-top: 22px; border-top: 1px solid #111827; }
+    .footer { margin-top: 10px; color: #6b7280; font-size: 8px; display: flex; justify-content: space-between; }
+    .screen-actions { margin: 0 0 10px; display: flex; gap: 8px; }
+    .screen-actions button { border: 1px solid #111827; background: #111827; color: #fff; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    @media print { .screen-actions { display: none; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+  <div class="screen-actions">
+    <button onclick="window.print()">Tiparire / Salvare PDF</button>
+    <button onclick="window.close()">Inchide</button>
+  </div>
+  <div class="doc">
+    <div class="header">
+      <div class="company">
+        <div class="company-name">SC TITAN EURO-COM SRL</div>
+        <div>Cod Fiscal: RO17495362</div>
+        <div>Nr. Reg. Com.: J19/420/2005</div>
+        <div>Miercurea Ciuc, Jud. Harghita, Str. Mihail Sadoveanu 33/c/17</div>
+      </div>
+      <div class="title">
+        <h1>Receptie marfa</h1>
+        <div class="nr">Nr. intern: ${pdfEscape(nrIntern)}</div>
+        <div>Data: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
+      </div>
+    </div>
+
+    <div class="meta">
+      <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
+      <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
+      <div class="box"><div class="label">Deviza factura</div><div class="value">${pdfEscape(currency)}</div></div>
+      <div class="box"><div class="label">Curs RON</div><div class="value">${pdfNumber(rate, 4)}</div></div>
+      <div class="box"><div class="label">Transport ${pdfEscape(currency)}</div><div class="value">${pdfNumber(shipping)}</div></div>
+      <div class="box"><div class="label">Transport RON</div><div class="value">${pdfNumber(shippingRon)}</div></div>
+    </div>
+
+    <div class="note">Repartizare transport: proportional dupa valoarea liniei. TVA: ${pdfEscape(tvaModeText(item.tva_mode))}. Document generat din AllInFashion.</div>
+
+    <table>
+      <colgroup>
+        <col style="width: 29%" />
+        <col style="width: 10%" />
+        <col style="width: 6%" />
+        <col style="width: 8%" />
+        <col style="width: 8%" />
+        <col style="width: 8%" />
+        <col style="width: 9%" />
+        <col style="width: 9%" />
+        <col style="width: 9%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Denumire</th>
+          <th>SKU</th>
+          <th>Cant.</th>
+          <th>Pret ${pdfEscape(currency)}</th>
+          <th>Pret RON</th>
+          <th>Tr/db RON</th>
+          <th>Cost/db RON</th>
+          <th>Val ${pdfEscape(currency)}</th>
+          <th>Val RON</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${tableRows || `<tr><td colspan="9" style="text-align:center;padding:18px;">Nu exista linii de receptie.</td></tr>`}
+      </tbody>
+      <tfoot>
+        <tr class="totals">
+          <td colspan="2">TOTAL</td>
+          <td class="num">${pdfNumber(totalQty, 0)}</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td class="num">${pdfNumber(totalValue)}</td>
+          <td class="num">${pdfNumber(totalRon)}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="signatures">
+      <div class="sig">Responsabil gestiune</div>
+      <div class="sig">Semnatura</div>
+      <div class="sig">Data</div>
+    </div>
+
+    <div class="footer">
+      <span>SC TITAN EURO-COM SRL - receptie marfa</span>
+      <span>Generat: ${pdfEscape(today)}</span>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function openOfficialReceptionPdf(detail: AifReceptionDetail, drafts: Record<string, Record<string, unknown>> = {}) {
+  const html = buildOfficialReceptionHtml(detail, drafts);
+  const fileName = `receptie_${fileSafe((detail.item as any)?.invoice_number || (detail.item as any)?.id)}.pdf`;
+  const w = window.open("", "_blank", "noopener,noreferrer,width=1200,height=850");
+  if (!w) {
+    throw new Error("Browserul a blocat fereastra PDF. Permite ferestre pop-up pentru aceasta pagina.");
+  }
+  w.document.open();
+  w.document.write(html.replace("</head>", `<script>document.title=${JSON.stringify(fileName)};</script></head>`));
+  w.document.close();
+  setTimeout(() => {
+    try { w.focus(); w.print(); } catch {}
+  }, 350);
+}
+
 
 export default function AllInReceptions(_props: Props) {
   const [meta, setMeta] = useState<AifMeta | null>(null);
@@ -249,6 +488,21 @@ export default function AllInReceptions(_props: Props) {
       setMessage("Receptió törölve.");
     } catch (e: any) {
       setMessage(e?.message || "A receptió törlése nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportReceptionPdf(id: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = detail?.item?.id === id ? detail : await apiAifGetReception(id);
+      if (!data) throw new Error("A receptió nem tölthető be PDF exporthoz.");
+      const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
+      openOfficialReceptionPdf(data, drafts);
+    } catch (e: any) {
+      setMessage(e?.message || "A PDF export nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -599,7 +853,8 @@ export default function AllInReceptions(_props: Props) {
                       <td className="px-2 py-1.5">
                         <div className="flex justify-end gap-1.5">
                           <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
-                          <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> Export</button>
+                          <button className={tinyBtn} onClick={() => exportReceptionPdf(r.id)} disabled={busy} type="button"><FileText size={13} /> PDF</button>
+                          <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> CSV</button>
                           <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
                         </div>
                       </td>
@@ -627,7 +882,8 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
-                    <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> Export</button>
+                    <button className={tinyBtn} onClick={() => exportReceptionPdf(r.id)} disabled={busy} type="button"><FileText size={13} /> PDF</button>
+                          <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> CSV</button>
                     <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
                   </div>
                 </div>
@@ -647,7 +903,8 @@ export default function AllInReceptions(_props: Props) {
                 <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
               </div>
               <div className="flex gap-2">
-                <button className={neutralBtn} onClick={() => exportCsv(detail.item.id)} type="button"><Download size={15} /> Export</button>
+                <button className={neutralBtn} onClick={() => exportReceptionPdf(detail.item.id)} disabled={busy} type="button"><FileText size={15} /> PDF</button>
+                <button className={neutralBtn} onClick={() => exportCsv(detail.item.id)} type="button"><Download size={15} /> CSV</button>
                 <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
