@@ -385,18 +385,29 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
 }
 
 function openOfficialReceptionPdf(detail: AifReceptionDetail, drafts: Record<string, Record<string, unknown>> = {}) {
-  const html = buildOfficialReceptionHtml(detail, drafts);
   const fileName = `receptie_${fileSafe((detail.item as any)?.invoice_number || (detail.item as any)?.id)}.pdf`;
-  const w = window.open("", "_blank", "noopener,noreferrer,width=1200,height=850");
+  const html = buildOfficialReceptionHtml(detail, drafts).replace(
+    "</head>",
+    `<script>
+      document.title=${JSON.stringify(fileName)};
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          try { window.focus(); window.print(); } catch (e) {}
+        }, 450);
+      });
+    </script></head>`
+  );
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank", "width=1200,height=850,scrollbars=yes,resizable=yes");
+
   if (!w) {
+    URL.revokeObjectURL(url);
     throw new Error("Browserul a blocat fereastra PDF. Permite ferestre pop-up pentru aceasta pagina.");
   }
-  w.document.open();
-  w.document.write(html.replace("</head>", `<script>document.title=${JSON.stringify(fileName)};</script></head>`));
-  w.document.close();
-  setTimeout(() => {
-    try { w.focus(); w.print(); } catch {}
-  }, 350);
+
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 
