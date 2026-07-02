@@ -29,6 +29,18 @@ const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
 const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
+const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/16 bg-[#4b5362] shadow-2xl";
+const taxonomyCard = "rounded-2xl border border-white/12 bg-white/[0.05] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
+const taxonomyTabBase = "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs transition-colors font-normal";
+const taxonomyTabActive = `${taxonomyTabBase} border-emerald-300/35 bg-emerald-500/14 text-white shadow-[0_0_0_1px_rgba(110,231,183,0.08)]`;
+const taxonomyTabIdle = `${taxonomyTabBase} border-white/12 bg-white/[0.05] text-white/75 hover:bg-white/[0.1]`;
+const taxonomySmallBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/14 bg-white/[0.06] px-2.5 text-[11px] text-white/85 hover:bg-white/[0.11] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-emerald-300/30 bg-emerald-500/16 px-3 text-xs text-white hover:bg-emerald-500/22 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const taxonomyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-rose-300/25 bg-rose-500/14 px-2.5 text-[11px] text-rose-50 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const taxonomyField = "grid gap-1.5 text-[11px] text-white/65";
+const taxonomyInput = "h-9 rounded-xl border border-white/14 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/40 focus:border-white/35";
+const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/14 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/40 focus:border-white/35";
+const taxonomyRow = "flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5";
 
 type InventoryItem = {
   variant_id: string;
@@ -1061,147 +1073,205 @@ export default function AllInWarehouse() {
 
       {taxonomyOpen && (
         <div className={modalWrap}>
-          <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
-              <div>
-                <p className="text-sm text-white/65">Raktár törzsadatok</p>
-                <h2 className="text-xl">Kategóriák, nemek és színek kezelése</h2>
+          <div className={taxonomyModal}>
+            <div className="sticky top-0 z-10 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek és színek kezelése</h2>
+                  <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
+                </div>
+                <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
               </div>
-              <button className={btnSoft} onClick={() => setTaxonomyOpen(false)}><X size={16} /> Bezárás</button>
             </div>
-            <div className="space-y-4 p-4">
-              <div className="flex flex-wrap gap-2">
-                <button className={taxonomyTab === "categories" ? btn : btnSoft} onClick={() => setTaxonomyTab("categories")}>Kategóriák</button>
-                <button className={taxonomyTab === "genders" ? btn : btnSoft} onClick={() => setTaxonomyTab("genders")}>Nemek</button>
-                <button className={taxonomyTab === "colors" ? btn : btnSoft} onClick={() => setTaxonomyTab("colors")}>Színek</button>
+            <div className="space-y-3 p-4">
+              <div className="inline-flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-black/10 p-1">
+                <button className={taxonomyTab === "categories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => setTaxonomyTab("categories")}>
+                  Kategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{categories.length}</span>
+                </button>
+                <button className={taxonomyTab === "genders" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => setTaxonomyTab("genders")}>
+                  Nemek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{genderTypes.length}</span>
+                </button>
+                <button className={taxonomyTab === "colors" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => setTaxonomyTab("colors")}>
+                  Színek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{colorTypes.length}</span>
+                </button>
               </div>
 
               {taxonomyTab === "categories" && (
-                <div className="grid gap-4 lg:grid-cols-[1fr,1.25fr]">
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                <div className="grid gap-3 lg:grid-cols-[0.94fr,1.28fr]">
+                  <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
-                      <p className="text-sm text-white/85">{categoryForm.id ? "Kategória módosítása" : "Új kategória"}</p>
-                      {categoryForm.id && <button className={btnSoft} onClick={resetCategoryForm}>Új kategória</button>}
+                      <div>
+                        <p className="text-sm text-white/88">{categoryForm.id ? "Kategória módosítása" : "Új kategória"}</p>
+                        <p className="text-[11px] text-white/50">Román és magyar megnevezés, majd sorrend.</p>
+                      </div>
+                      {categoryForm.id && <button className={taxonomySmallBtn} onClick={resetCategoryForm}>Új</button>}
                     </div>
-                    <div className="grid gap-3">
-                      <label className={label}>Megnevezés románul<input className={input} value={categoryForm.nameRo} onChange={(e) => setCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
-                      <label className={label}>Megnevezés magyarul<input className={input} value={categoryForm.nameHu} onChange={(e) => setCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
-                      <label className={label}>Sorrend
-                        <input className={input} value={categoryForm.sortOrder} onChange={(e) => setCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} />
-                        {!categoryForm.id && <span className="text-[11px] text-white/50">Következő javasolt sorrend: {nextCategorySortOrder}</span>}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Megnevezés románul<input className={taxonomyInput} value={categoryForm.nameRo} onChange={(e) => setCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
+                      <label className={taxonomyField}>Megnevezés magyarul<input className={taxonomyInput} value={categoryForm.nameHu} onChange={(e) => setCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
+                      <label className={`${taxonomyField} md:max-w-[180px]`}>Sorrend
+                        <input className={taxonomyInput} value={categoryForm.sortOrder} onChange={(e) => setCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!categoryForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextCategorySortOrder}</span>}
                       </label>
-                      <button className={btn} onClick={saveCategoryForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveCategoryForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                    <p className="mb-3 text-sm text-white/85">Kategória lista</p>
-                    <div className="space-y-2">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Kategória lista</p>
+                        <p className="text-[11px] text-white/50">Aktív elemek törzsrendi kezelése.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{categories.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {categories.map((c) => (
-                        <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                          <div><p className="text-sm text-white">{categoryLabel(c)}</p>{c.name_ro && c.name_hu && <p className="text-xs text-white/55">{c.name_ro}</p>}</div>
+                        <div key={c.id} className={taxonomyRow}>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-white">{categoryLabel(c)}</p>
+                              {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-white/50">RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
+                          </div>
                           <div className="flex gap-2">
-                            <button className={btnSoft} onClick={() => editCategoryRow(c)}><Edit3 size={14} /> Módosítás</button>
-                            <button className={dangerBtn} onClick={() => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) })}>Törlés</button>
+                            <button className={taxonomySmallBtn} onClick={() => editCategoryRow(c)}><Edit3 size={13} /> Módosítás</button>
+                            <button className={taxonomyDangerBtn} onClick={() => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) })}>Törlés</button>
                           </div>
                         </div>
                       ))}
-                      {!categories.length && <p className="text-sm text-white/55">Nincs aktív kategória.</p>}
+                      {!categories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív kategória.</p>}
                     </div>
                   </section>
                 </div>
               )}
 
               {taxonomyTab === "genders" && (
-                <div className="grid gap-4 lg:grid-cols-[1fr,1.25fr]">
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                <div className="grid gap-3 lg:grid-cols-[0.9fr,1.1fr]">
+                  <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
-                      <p className="text-sm text-white/85">{genderForm.code ? "Nem módosítása" : "Új nem"}</p>
-                      {genderForm.code && <button className={btnSoft} onClick={resetGenderForm}>Új nem</button>}
+                      <div>
+                        <p className="text-sm text-white/88">{genderForm.code ? "Nem módosítása" : "Új nem"}</p>
+                        <p className="text-[11px] text-white/50">Rövid, letisztult név és sorrend.</p>
+                      </div>
+                      {genderForm.code && <button className={taxonomySmallBtn} onClick={resetGenderForm}>Új</button>}
                     </div>
-                    <div className="grid gap-3">
-                      <label className={label}>Megnevezés<input className={input} value={genderForm.name} onChange={(e) => setGenderForm((x) => ({ ...x, name: e.target.value }))} /></label>
-                      <label className={label}>Sorrend
-                        <input className={input} value={genderForm.sortOrder} onChange={(e) => setGenderForm((x) => ({ ...x, sortOrder: e.target.value }))} />
-                        {!genderForm.code && <span className="text-[11px] text-white/50">Következő javasolt sorrend: {nextGenderSortOrder}</span>}
+                    <div className="grid gap-3 md:grid-cols-[1fr,170px]">
+                      <label className={taxonomyField}>Megnevezés<input className={taxonomyInput} value={genderForm.name} onChange={(e) => setGenderForm((x) => ({ ...x, name: e.target.value }))} /></label>
+                      <label className={taxonomyField}>Sorrend
+                        <input className={taxonomyInput} value={genderForm.sortOrder} onChange={(e) => setGenderForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!genderForm.code && <span className="text-[11px] text-white/45">Javasolt következő: {nextGenderSortOrder}</span>}
                       </label>
-                      <button className={btn} onClick={saveGenderForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveGenderForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                    <p className="mb-3 text-sm text-white/85">Nemek listája</p>
-                    <div className="space-y-2">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Nemek listája</p>
+                        <p className="text-[11px] text-white/50">A termékekhez használható nemek.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{genderTypes.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {genderTypes.map((g) => (
-                        <div key={g.code} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                          <p className="text-sm text-white">{g.name}</p>
+                        <div key={g.code} className={taxonomyRow}>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-white">{g.name}</p>
+                              {g.sort_order !== undefined && g.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{g.sort_order}</span>}
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-white/45">Kód: {g.code}</p>
+                          </div>
                           <div className="flex gap-2">
-                            <button className={btnSoft} onClick={() => editGenderRow(g)}><Edit3 size={14} /> Módosítás</button>
-                            <button className={dangerBtn} onClick={() => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name })}>Törlés</button>
+                            <button className={taxonomySmallBtn} onClick={() => editGenderRow(g)}><Edit3 size={13} /> Módosítás</button>
+                            <button className={taxonomyDangerBtn} onClick={() => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name })}>Törlés</button>
                           </div>
                         </div>
                       ))}
-                      {!genderTypes.length && <p className="text-sm text-white/55">Nincs aktív elem.</p>}
+                      {!genderTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív elem.</p>}
                     </div>
                   </section>
                 </div>
               )}
 
               {taxonomyTab === "colors" && (
-                <div className="grid gap-4 lg:grid-cols-[1fr,1.25fr]">
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
+                  <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
-                      <p className="text-sm text-white/85">{colorForm.id ? "Szín módosítása" : "Új szín"}</p>
-                      {colorForm.id && <button className={btnSoft} onClick={resetColorForm}>Új szín</button>}
+                      <div>
+                        <p className="text-sm text-white/88">{colorForm.id ? "Szín módosítása" : "Új szín"}</p>
+                        <p className="text-[11px] text-white/50">Hivatalos román név, fordítások és import aliasok.</p>
+                      </div>
+                      {colorForm.id && <button className={taxonomySmallBtn} onClick={resetColorForm}>Új szín</button>}
                     </div>
-                    <div className="grid gap-3">
-                      <label className={label}>Román hivatalos név<input className={input} value={colorForm.nameRo} onChange={(e) => setColorForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. negru" /></label>
-                      <label className={label}>Magyar név<input className={input} value={colorForm.nameHu} onChange={(e) => setColorForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. fekete" /></label>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className={label}>Angol név<input className={input} value={colorForm.nameEn} onChange={(e) => setColorForm((x) => ({ ...x, nameEn: e.target.value }))} placeholder="pl. black" /></label>
-                        <label className={label}>Német név<input className={input} value={colorForm.nameDe} onChange={(e) => setColorForm((x) => ({ ...x, nameDe: e.target.value }))} placeholder="pl. schwarz" /></label>
-                      </div>
-                      <label className={label}>Aliasok / import nevek<textarea className="min-h-[76px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={colorForm.aliases} onChange={(e) => setColorForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="Black, schwarz, fekete, nero, noir" /></label>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className={label}>HEX<input className={input} value={colorForm.hex} onChange={(e) => setColorForm((x) => ({ ...x, hex: e.target.value }))} placeholder="#000000" /></label>
-                        <label className={label}>Sorrend
-                          <input className={input} value={colorForm.sortOrder} onChange={(e) => setColorForm((x) => ({ ...x, sortOrder: e.target.value }))} />
-                          {!colorForm.id && <span className="text-[11px] text-white/50">Következő javasolt sorrend: {nextColorSortOrder}</span>}
-                        </label>
-                      </div>
-                      <button className={btn} onClick={saveColorForm} disabled={taxonomyBusy}><Save size={16} /> Mentés</button>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Román hivatalos név<input className={taxonomyInput} value={colorForm.nameRo} onChange={(e) => setColorForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. negru" /></label>
+                      <label className={taxonomyField}>Magyar név<input className={taxonomyInput} value={colorForm.nameHu} onChange={(e) => setColorForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. fekete" /></label>
+                      <label className={taxonomyField}>Angol név<input className={taxonomyInput} value={colorForm.nameEn} onChange={(e) => setColorForm((x) => ({ ...x, nameEn: e.target.value }))} placeholder="pl. black" /></label>
+                      <label className={taxonomyField}>Német név<input className={taxonomyInput} value={colorForm.nameDe} onChange={(e) => setColorForm((x) => ({ ...x, nameDe: e.target.value }))} placeholder="pl. schwarz" /></label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={colorForm.aliases} onChange={(e) => setColorForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="Black, schwarz, fekete, nero, noir" /></label>
+                      <label className={taxonomyField}>HEX<input className={taxonomyInput} value={colorForm.hex} onChange={(e) => setColorForm((x) => ({ ...x, hex: e.target.value }))} placeholder="#000000" /></label>
+                      <label className={taxonomyField}>Sorrend
+                        <input className={taxonomyInput} value={colorForm.sortOrder} onChange={(e) => setColorForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!colorForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextColorSortOrder}</span>}
+                      </label>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveColorForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
-                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                    <p className="mb-3 text-sm text-white/85">Szín lista</p>
-                    <div className="space-y-2">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Szín lista</p>
+                        <p className="text-[11px] text-white/50">Fordításokkal és import aliasokkal együtt.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorTypes.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
                       {colorTypes.map((c) => (
-                        <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                          <div className="flex min-w-0 items-center gap-3">
-                            <span className="h-6 w-6 shrink-0 rounded-full border border-white/25 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                        <div key={c.id} className={taxonomyRow}>
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/25 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={c.hex ? { backgroundColor: c.hex } : undefined} />
                             <div className="min-w-0">
-                              <p className="text-sm text-white">{c.name_ro}</p>
-                              <p className="text-xs text-white/55">{[c.name_hu, c.name_en, c.name_de].filter(Boolean).join(" • ") || "-"}</p>
-                              {!!c.aliases?.length && <p className="mt-0.5 max-w-xl truncate text-[11px] text-white/45">Alias: {c.aliases.join(", ")}</p>}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm text-white">{c.name_ro}</p>
+                                {c.hex && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">{c.hex}</span>}
+                                {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
+                              </div>
+                              <p className="mt-0.5 text-[11px] text-white/50">HU: {c.name_hu || "-"} • EN: {c.name_en || "-"} • DE: {c.name_de || "-"}</p>
+                              {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
                             </div>
                           </div>
                           <div className="flex gap-2">
-                            <button className={btnSoft} onClick={() => editColorRow(c)}><Edit3 size={14} /> Módosítás</button>
-                            <button className={dangerBtn} onClick={() => setDeleteTarget({ kind: "color", id: String(c.id), name: c.name_ro })}>Törlés</button>
+                            <button className={taxonomySmallBtn} onClick={() => editColorRow(c)}><Edit3 size={13} /> Módosítás</button>
+                            <button className={taxonomyDangerBtn} onClick={() => setDeleteTarget({ kind: "color", id: String(c.id), name: c.name_ro })}>Törlés</button>
                           </div>
                         </div>
                       ))}
-                      {!colorTypes.length && <p className="text-sm text-white/55">Nincs aktív szín.</p>}
+                      {!colorTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív szín.</p>}
                     </div>
                   </section>
                 </div>
               )}
 
               {deleteTarget && (
-                <div className="rounded-xl border border-rose-200/25 bg-rose-500/10 p-4">
-                  <p className="text-sm text-white">Törlés vagy inaktiválás megerősítése</p>
-                  <p className="mt-1 text-sm text-white/70">{deleteTarget.name}</p>
-                  <div className="mt-3 flex flex-wrap justify-end gap-2">
-                    <button className={btnSoft} onClick={() => setDeleteTarget(null)}>Mégse</button>
-                    <button className={dangerBtn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy}>Megerősítés</button>
+                <div className="rounded-2xl border border-rose-200/20 bg-rose-500/10 p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-white">Törlés vagy inaktiválás megerősítése</p>
+                      <p className="mt-1 text-xs text-white/65">Elem: {deleteTarget.name}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className={taxonomySmallBtn} onClick={() => setDeleteTarget(null)}>Mégse</button>
+                      <button className={taxonomyDangerBtn} onClick={confirmDeleteTaxonomy} disabled={taxonomyBusy}>Megerősítés</button>
+                    </div>
                   </div>
                 </div>
               )}
