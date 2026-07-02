@@ -1076,6 +1076,271 @@ export default function AllInIncoming(_props: Props) {
     }
   }
 
+
+  async function saveOpenedReceptionHeader() {
+    if (!selectedReceptionId) {
+      setMessage("Új receptió fejadatai a kijelölt sorok mentésekor jönnek létre.");
+      return;
+    }
+    if (!invoiceNumber.trim() || !invoiceDate || !receptionDate || !currencyCode || rateValue <= 0 || !tvaMode || !invoiceGrossProvided) {
+      setMessage("A mentéshez töltsd ki a receptió kötelező mezőit.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch(`/api/aif/receptions/${encodeURIComponent(selectedReceptionId)}/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          reception: {
+            invoiceNumber,
+            invoiceDate,
+            receptionDate,
+            currencyCode,
+            exchangeRateToRon: rateValue,
+            tvaMode,
+            tvaRate: tvaMode === "no_tva" ? 0 : vatRateValue,
+            shippingCost: shippingValue,
+            invoiceGross: invoiceGrossValue,
+            note,
+          },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "A receptió fejadatai nem menthetők.");
+      await Promise.all([loadReceptions(), loadBatches()]);
+      await loadReceptionIntoWorkspace(selectedReceptionId);
+      setMessage("A megnyitott receptió fejadatai mentve.");
+    } catch (e: any) {
+      setMessage(e?.message || "A receptió fejadatai nem menthetők.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renderReceptionHeaderEditor() {
+    return (
+      <section className={card}>
+        <SectionTitle
+          icon={<FileSpreadsheet size={16} />}
+          title={selectedReceptionId ? "Megnyitott receptió adatai" : "Új receptió adatai"}
+          right={
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {selectedReceptionId ? (
+                <button className={primaryBtn} onClick={saveOpenedReceptionHeader} disabled={busy} type="button">
+                  <Save size={14} /> Fejadatok mentése
+                </button>
+              ) : (
+                <span className="text-xs text-white/60">Új receptió a kijelölt sorok mentésekor jön létre</span>
+              )}
+              {selectedReceptionId && (
+                <button className={neutralBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">
+                  Receptió részletei
+                </button>
+              )}
+            </div>
+          }
+        />
+
+        <div className="mt-3 space-y-3">
+          <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/76">
+            Itt van a megnyitott receptió fejrésze. Előbb ezt ellenőrizd, utána jöhet XLS import vagy kézi terméksor.
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
+            <label className={label}>
+              Beszállító
+              <select className={`${selectInput} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                <option style={mutedOptionStyle} value="">Beszállító kiválasztása</option>
+                {suppliers.map((s) => (
+                  <option style={optionStyle} key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className={label}>
+              Cél hely
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <select className={`${selectInput} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                  <option style={mutedOptionStyle} value="">Cél hely kiválasztása</option>
+                  {locations.map((l) => (
+                    <option style={optionStyle} key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+                <button className={neutralBtn} onClick={() => setLocationModalOpen(true)} type="button" title="Cél helyek kezelése">
+                  <MapPin size={14} /> Kezelés
+                </button>
+              </div>
+            </label>
+
+            <label className={label}>
+              Megjegyzés
+              <input className={`${input} w-full`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="pl. Under Armour új lista" />
+            </label>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-4">
+            <label className={label}>
+              Számlaszám
+              <input className={requiredInput(requiredMissing.invoiceNumber)} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Számla száma" />
+            </label>
+            <label className={label}>
+              Számla dátuma
+              <input className={requiredInput(requiredMissing.invoiceDate)} type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+            </label>
+            <label className={label}>
+              Receptió dátuma
+              <input className={requiredInput(requiredMissing.receptionDate)} type="date" value={receptionDate} onChange={(e) => setReceptionDate(e.target.value)} />
+            </label>
+            <label className={label}>
+              Pénznem
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <select
+                  className={requiredSelectInput(requiredMissing.currencyCode)}
+                  value={currencyCode}
+                  onChange={(e) => setCurrencyCode(e.target.value)}
+                >
+                  <option style={mutedOptionStyle} value="">Pénznem kiválasztása</option>
+                  {activeCurrencies.map((c) => (
+                    <option style={optionStyle} key={c.code} value={c.code}>{c.code} • {c.name}</option>
+                  ))}
+                </select>
+                <button className={neutralBtn} onClick={() => setCurrencyModalOpen(true)} type="button">
+                  Kezelés
+                </button>
+              </div>
+            </label>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-5">
+            <label className={label}>
+              Árfolyam RON
+              <input className={requiredInput(requiredMissing.exchangeRateToRon)} value={exchangeRateToRon} onChange={(e) => setExchangeRateToRon(e.target.value)} placeholder="pl. 4.97" />
+            </label>
+            <label className={label}>
+              TVA kezelés
+              <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); }}>
+                <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
+                <option style={optionStyle} value="without_tva">Árak nettóban</option>
+                <option style={optionStyle} value="with_tva">Árak bruttóban</option>
+                <option style={optionStyle} value="no_tva">TVA nélkül</option>
+              </select>
+            </label>
+            <label className={label}>
+              TVA %
+              <input className={`${requiredInput(tvaMode === "no_tva" ? false : requiredMissing.tvaRate)} ${tvaMode === "no_tva" ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode === "no_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} placeholder={tvaMode === "no_tva" ? "Nem szükséges" : "pl. 19"} />
+            </label>
+            <label className={label}>
+              Szállítás
+              <input className={`${input} w-full`} value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} placeholder="ha nincs, hagyd üresen" />
+            </label>
+            <label className={label}>
+              Számla végösszeg
+              <input className={requiredInput(requiredMissing.invoiceGross)} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder="Számla végösszege" />
+            </label>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-6">
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Új kijelölt sorok</p>
+              <p className="mt-1 text-sm text-white">{moneyText(approvedGoodsValue, currencyCode)}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Nettó</p>
+              <p className="mt-1 text-sm text-white">{moneyText(computedReception.net, currencyCode)}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">TVA</p>
+              <p className="mt-1 text-sm text-white">{moneyText(computedReception.vat, currencyCode)}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított összeg</p>
+              <p className="mt-1 text-sm text-white">{moneyText(computedReception.gross, currencyCode)}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eltérés</p>
+              <p className={`mt-1 text-sm ${invoiceGrossProvided && Math.abs(invoiceDifference) > 0.01 ? "text-amber-100" : "text-white"}`}>{invoiceGrossProvided ? moneyText(invoiceDifference, currencyCode) : "-"}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
+              <p className="mt-1 text-sm text-white">{rateValue > 0 ? moneyText(receptionRonValue, "RON") : "-"}</p>
+            </div>
+          </div>
+
+          {!receptionReady && (
+            <div className="rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
+              Mentés előtt töltsd ki a kötelező receptió mezőket. A pirossal jelölt mezők hiányoznak vagy hibásak.
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function renderLoadedReceptionContent() {
+    if (!loadedReception) return null;
+    return (
+      <section className={card}>
+        <SectionTitle
+          icon={<CheckCircle size={16} />}
+          title="Betöltött receptió tartalma"
+          right={<span className="text-xs text-white/60">A már mentett sorok áttekintése</span>}
+        />
+        <div className="mt-3 grid gap-2 md:grid-cols-4">
+          <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Összes sor</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.total}</p></div>
+          <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Készleten</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.committed}</p></div>
+          <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Még dolgozandó</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.remaining}</p></div>
+          <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Darab / érték</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.qty} db • {moneyText(loadedReceptionRowTotals.value, loadedReception.item?.currency_code || currencyCode)}</p></div>
+        </div>
+        <div className="mt-3 overflow-auto rounded-xl border border-white/14">
+          <table className="min-w-[980px] w-full text-left text-sm">
+            <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
+              <tr>
+                <th className="px-3 py-2 font-normal">Állapot</th>
+                <th className="px-3 py-2 font-normal">Termékkód</th>
+                <th className="px-3 py-2 font-normal">Név</th>
+                <th className="px-3 py-2 font-normal">Márka</th>
+                <th className="px-3 py-2 font-normal">Kategória</th>
+                <th className="px-3 py-2 font-normal">Nem</th>
+                <th className="px-3 py-2 font-normal">Szín</th>
+                <th className="px-3 py-2 font-normal">Méret</th>
+                <th className="px-3 py-2 text-right font-normal">Darab</th>
+                <th className="px-3 py-2 text-right font-normal">Vételár</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {loadedReceptionRows.map((row: any) => (
+                <tr key={row.id || `${row.batch_id}-${row.row_no}`} className={row.status === "committed" ? "bg-emerald-400/10" : row.status === "error" ? "bg-red-500/10" : "bg-[#445064]"}>
+                  <td className="px-3 py-2.5 text-xs text-white/80">{rowStatusText(row.status)}</td>
+                  <td className="px-3 py-2.5 text-white/88">{cell(row.supplier_product_code || row.normalized?.supplierProductCode || row.normalized?.modelCode)}</td>
+                  <td className="px-3 py-2.5 text-white">{normValue(row, "titleRo")}</td>
+                  <td className="px-3 py-2.5 text-white/82">{normValue(row, "brandName", row.normalized?.brandCode)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{normValue(row, "categoryName", row.normalized?.categoryCode)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{genderLabel(row.normalized?.gender, activeGenderTypes)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{normValue(row, "colorName")}</td>
+                  <td className="px-3 py-2.5 text-white/82">{cell(row.supplier_size || row.normalized?.size)}</td>
+                  <td className="px-3 py-2.5 text-right text-white/88">{cell(row.qty || row.normalized?.qty)}</td>
+                  <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.buy_price || row.normalized?.buyPrice), loadedReception.item?.currency_code || currencyCode)}</td>
+                </tr>
+              ))}
+              {!loadedReceptionRows.length && (
+                <tr>
+                  <td className="px-3 py-6 text-center text-white/60" colSpan={10}>Ebben a receptióban még nincs mentett terméksor.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <button className={neutralBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Receptió részletei</button>
+          <button className={neutralBtn} onClick={() => loadReceptionIntoWorkspace(selectedReceptionId)} disabled={busy || !selectedReceptionId} type="button"><RefreshCw size={14} /> Újratöltés</button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <main className={page}>
       <style>{`
@@ -1424,112 +1689,15 @@ export default function AllInIncoming(_props: Props) {
               </button>
             </div>
           </div>
-          {selectedReceptionSummary && (
-            <div className="mt-3 grid gap-2 md:grid-cols-5">
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Számla</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.invoice_number || "-"}</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Beszállító</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.supplier_name || "-"}</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Cél hely</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.location_name || "-"}</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Sorok</p><p className="mt-1 text-sm text-white">{selectedReceptionSummary.committed_rows || 0} kész / {selectedReceptionSummary.remaining_rows || 0} dolgozandó</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Állapot</p><p className="mt-1 text-sm text-white">{receptionStatusLabel(selectedReceptionSummary.status)}</p></div>
-            </div>
-          )}
-          <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white/72">
-            Oldalnyitáskor nincs automatikusan beszállító, cél hely vagy számla kitöltve. Válassz meglévő receptiót a folytatáshoz, vagy indíts új üres bevételezést.
-          </div>
         </section>
 
-        {loadedReception && (
-          <section className={card}>
-            <SectionTitle
-              icon={<CheckCircle size={16} />}
-              title="Betöltött receptió tartalma"
-              right={<span className="text-xs text-white/60">A már mentett sorok áttekintése</span>}
-            />
-            <div className="mt-3 grid gap-2 md:grid-cols-4">
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Összes sor</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.total}</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Készleten</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.committed}</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Még dolgozandó</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.remaining}</p></div>
-              <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Darab / érték</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.qty} db • {moneyText(loadedReceptionRowTotals.value, loadedReception.item?.currency_code || currencyCode)}</p></div>
-            </div>
-            <div className="mt-3 overflow-auto rounded-xl border border-white/14">
-              <table className="min-w-[980px] w-full text-left text-sm">
-                <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
-                  <tr>
-                    <th className="px-3 py-2 font-normal">Állapot</th>
-                    <th className="px-3 py-2 font-normal">Termékkód</th>
-                    <th className="px-3 py-2 font-normal">Név</th>
-                    <th className="px-3 py-2 font-normal">Márka</th>
-                    <th className="px-3 py-2 font-normal">Kategória</th>
-                    <th className="px-3 py-2 font-normal">Nem</th>
-                    <th className="px-3 py-2 font-normal">Szín</th>
-                    <th className="px-3 py-2 font-normal">Méret</th>
-                    <th className="px-3 py-2 text-right font-normal">Darab</th>
-                    <th className="px-3 py-2 text-right font-normal">Vételár</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/10">
-                  {loadedReceptionRows.map((row: any) => (
-                    <tr key={row.id || `${row.batch_id}-${row.row_no}`} className={row.status === "committed" ? "bg-emerald-400/10" : row.status === "error" ? "bg-red-500/10" : "bg-[#445064]"}>
-                      <td className="px-3 py-2.5 text-xs text-white/80">{rowStatusText(row.status)}</td>
-                      <td className="px-3 py-2.5 text-white/88">{cell(row.supplier_product_code || row.normalized?.supplierProductCode || row.normalized?.modelCode)}</td>
-                      <td className="px-3 py-2.5 text-white">{normValue(row, "titleRo")}</td>
-                      <td className="px-3 py-2.5 text-white/82">{normValue(row, "brandName", row.normalized?.brandCode)}</td>
-                      <td className="px-3 py-2.5 text-white/82">{normValue(row, "categoryName", row.normalized?.categoryCode)}</td>
-                      <td className="px-3 py-2.5 text-white/82">{genderLabel(row.normalized?.gender, activeGenderTypes)}</td>
-                      <td className="px-3 py-2.5 text-white/82">{normValue(row, "colorName")}</td>
-                      <td className="px-3 py-2.5 text-white/82">{cell(row.supplier_size || row.normalized?.size)}</td>
-                      <td className="px-3 py-2.5 text-right text-white/88">{cell(row.qty || row.normalized?.qty)}</td>
-                      <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.buy_price || row.normalized?.buyPrice), loadedReception.item?.currency_code || currencyCode)}</td>
-                    </tr>
-                  ))}
-                  {!loadedReceptionRows.length && (
-                    <tr>
-                      <td className="px-3 py-6 text-center text-white/60" colSpan={10}>Ebben a receptióban még nincs mentett terméksor.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-3 flex flex-wrap justify-end gap-2">
-              <button className={neutralBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Receptió részletei</button>
-              <button className={neutralBtn} onClick={() => loadReceptionIntoWorkspace(selectedReceptionId)} disabled={busy || !selectedReceptionId} type="button"><RefreshCw size={14} /> Újratöltés</button>
-            </div>
-          </section>
-        )}
+        {renderReceptionHeaderEditor()}
 
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Import alapadatok" right={<span className="text-xs text-white/60">Beszállító, cél hely, fájl</span>} />
+          <SectionTitle icon={<FileSpreadsheet size={16} />} title="XLS import és sormentés" right={<span className="text-xs text-white/60">Fájl, kijelölés, mentés</span>} />
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
-            <label className={label}>
-              Beszállító
-              <select className={`${selectInput} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-                <option style={mutedOptionStyle} value="">Beszállító kiválasztása</option>
-                {suppliers.map((s) => (
-                  <option style={optionStyle} key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className={label}>
-              Cél hely
-              <div className="grid grid-cols-[1fr_auto] gap-2">
-                <select className={`${selectInput} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                  <option style={mutedOptionStyle} value="">Cél hely kiválasztása</option>
-                  {locations.map((l) => (
-                    <option style={optionStyle} key={l.id} value={l.id}>{l.name}</option>
-                  ))}
-                </select>
-                <button className={neutralBtn} onClick={() => setLocationModalOpen(true)} type="button" title="Cél helyek kezelése">
-                  <MapPin size={14} /> Kezelés
-                </button>
-              </div>
-            </label>
-
-            <label className={label}>
-              Megjegyzés
-              <input className={`${input} w-full`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="pl. Under Armour új lista" />
-            </label>
+          <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white/72">
+            Az XLS vagy kézi sorok mindig a fenti receptió fejadataihoz kerülnek. Beszállítót, cél helyet és számlaadatokat fent módosíts.
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1694,124 +1862,6 @@ export default function AllInIncoming(_props: Props) {
                 <button className={neutralBtn} onClick={resetManualRowForm} type="button">Mezők törlése</button>
                 <button className={primaryBtn} onClick={addManualRow} type="button"><Plus size={14} /> Sor hozzáadása</button>
               </div>
-            </div>
-          )}
-        </section>
-
-        <section className={card}>
-          <SectionTitle
-            icon={<FileSpreadsheet size={16} />}
-            title="Receptió és számla adatok"
-            right={
-              <button className={tinyBtn} onClick={() => setReceptionOpen((v) => !v)} type="button">
-                {receptionOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {receptionOpen ? "Bezárás" : "Megnyitás"}
-              </button>
-            }
-          />
-
-          {receptionOpen && (
-            <div className="mt-3 space-y-3">
-              <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/74">
-                A receptió a bevételezés pénzügyi fejrésze. A kötelező mezők üresen indulnak, és kitöltésig piros jelölést kapnak.
-              </div>
-
-              <div className="grid gap-3 lg:grid-cols-4">
-                <label className={label}>
-                  Számlaszám
-                  <input className={requiredInput(requiredMissing.invoiceNumber)} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Számla száma" />
-                </label>
-                <label className={label}>
-                  Számla dátuma
-                  <input className={requiredInput(requiredMissing.invoiceDate)} type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
-                </label>
-                <label className={label}>
-                  Receptió dátuma
-                  <input className={requiredInput(requiredMissing.receptionDate)} type="date" value={receptionDate} onChange={(e) => setReceptionDate(e.target.value)} />
-                </label>
-                <label className={label}>
-                  Pénznem
-                  <div className="grid grid-cols-[1fr_auto] gap-2">
-                    <select
-                      className={requiredSelectInput(requiredMissing.currencyCode)}
-                      value={currencyCode}
-                      onChange={(e) => setCurrencyCode(e.target.value)}
-                    >
-                      <option style={mutedOptionStyle} value="">Pénznem kiválasztása</option>
-                      {activeCurrencies.map((c) => (
-                        <option style={optionStyle} key={c.code} value={c.code}>{c.code} • {c.name}</option>
-                      ))}
-                    </select>
-                    <button className={neutralBtn} onClick={() => setCurrencyModalOpen(true)} type="button">
-                      Kezelés
-                    </button>
-                  </div>
-                </label>
-              </div>
-
-              <div className="grid gap-3 lg:grid-cols-5">
-                <label className={label}>
-                  Árfolyam RON
-                  <input className={requiredInput(requiredMissing.exchangeRateToRon)} value={exchangeRateToRon} onChange={(e) => setExchangeRateToRon(e.target.value)} placeholder="pl. 4.97" />
-                </label>
-                <label className={label}>
-                  TVA kezelés
-                  <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); }}>
-                    <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
-                    <option style={optionStyle} value="without_tva">Árak nettóban</option>
-                    <option style={optionStyle} value="with_tva">Árak bruttóban</option>
-                    <option style={optionStyle} value="no_tva">TVA nélkül</option>
-                  </select>
-                </label>
-                <label className={label}>
-                  TVA %
-                  <input className={`${requiredInput(tvaMode === "no_tva" ? false : requiredMissing.tvaRate)} ${tvaMode === "no_tva" ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode === "no_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} placeholder={tvaMode === "no_tva" ? "Nem szükséges" : "pl. 19"} />
-                </label>
-                <label className={label}>
-                  Szállítás
-                  <input className={`${input} w-full`} value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} placeholder="ha nincs, hagyd üresen" />
-                </label>
-                <label className={label}>
-                  Számla végösszeg
-                  <input className={requiredInput(requiredMissing.invoiceGross)} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder="Számla végösszege" />
-                </label>
-              </div>
-
-              <div className="grid gap-2 md:grid-cols-6">
-                <div className={statCard}>
-                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Kijelölt érték</p>
-                  <p className="mt-1 text-sm text-white">{moneyText(approvedGoodsValue, currencyCode)}</p>
-                </div>
-                <div className={statCard}>
-                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Nettó</p>
-                  <p className="mt-1 text-sm text-white">{moneyText(computedReception.net, currencyCode)}</p>
-                </div>
-                <div className={statCard}>
-                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">TVA</p>
-                  <p className="mt-1 text-sm text-white">{moneyText(computedReception.vat, currencyCode)}</p>
-                </div>
-                <div className={statCard}>
-                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított összeg</p>
-                  <p className="mt-1 text-sm text-white">{moneyText(computedReception.gross, currencyCode)}</p>
-                </div>
-                <div className={statCard}>
-                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eltérés</p>
-                  <p className={`mt-1 text-sm ${invoiceGrossProvided && Math.abs(invoiceDifference) > 0.01 ? "text-amber-100" : "text-white"}`}>{invoiceGrossProvided ? moneyText(invoiceDifference, currencyCode) : "-"}</p>
-                </div>
-                <div className={statCard}>
-                  <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
-                  <p className="mt-1 text-sm text-white">{rateValue > 0 ? moneyText(receptionRonValue, "RON") : "-"}</p>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white/72">
-                A sorok vételára a kiválasztott pénznemben marad az előnézetben. Mentéskor a rendszer külön RON értéket számol az árfolyam alapján.
-              </div>
-
-              {!receptionReady && (
-                <div className="rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
-                  Import mentés előtt töltsd ki a receptió kötelező mezőit. A pirossal jelölt mezők hiányoznak vagy hibásak.
-                </div>
-              )}
             </div>
           )}
         </section>
@@ -2046,6 +2096,7 @@ export default function AllInIncoming(_props: Props) {
             {!batches.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs import előzmény.</p>}
           </div>
         </section>
+        {renderLoadedReceptionContent()}
       </div>
     </main>
   );
