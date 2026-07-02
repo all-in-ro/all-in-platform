@@ -27,17 +27,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
-  async function makeUniqueCode(client, table, baseCode) {
-    const base = normCode(baseCode) || "item";
-    let code = base;
-    let i = 2;
-    while (true) {
-      const r = await client.query(`SELECT 1 FROM ${table} WHERE code=$1 LIMIT 1`, [code]);
-      if (!r.rowCount) return code;
-      code = `${base}_${i++}`;
-    }
-  }
-
   function actorFrom(req) {
     return text(req.session?.actor || req.session?.shopId || req.session?.role || "system") || "system";
   }
@@ -395,22 +384,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       `SELECT
          (SELECT count(*)::int FROM aif_import_batches WHERE supplier_id=$1) AS import_batches,
          (SELECT count(*)::int FROM aif_variant_supplier_codes WHERE supplier_id=$1) AS supplier_codes,
-         (SELECT count(*)::int FROM aif_receptions WHERE supplier_id=$1) AS receptions,
-         (SELECT count(*)::int FROM aif_supplier_import_profiles WHERE supplier_id=$1) AS profiles,
-         (SELECT count(*)::int FROM aif_supplier_brands WHERE supplier_id=$1) AS supplier_brand_links`,
+         (SELECT count(*)::int FROM aif_supplier_import_profiles WHERE supplier_id=$1) AS profiles`,
       [supplierId]
     );
-    return r.rows[0] || { import_batches: 0, supplier_codes: 0, receptions: 0, profiles: 0, supplier_brand_links: 0 };
-  }
-
-  async function brandUsage(client, brandId) {
-    const r = await client.query(
-      `SELECT
-         (SELECT count(*)::int FROM aif_product_models WHERE brand_id=$1) AS product_models,
-         (SELECT count(*)::int FROM aif_supplier_brands WHERE brand_id=$1) AS supplier_brand_links`,
-      [brandId]
-    );
-    return r.rows[0] || { product_models: 0, supplier_brand_links: 0 };
+    return r.rows[0] || { import_batches: 0, supplier_codes: 0, profiles: 0 };
   }
 
 
@@ -526,16 +503,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post("/suppliers", requireAdminOrSecret, async (req, res) => {
     const body = req.body || {};
     const name = text(body.name);
+    const code = normCode(body.code || name);
     const notes = emptyToNull(body.notes);
     if (!name) return res.status(400).json({ error: "supplier name required" });
+    if (!code) return res.status(400).json({ error: "supplier code required" });
 
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const code = await makeUniqueCode(client, "aif_suppliers", body.code || name);
       const r = await client.query(
         `INSERT INTO aif_suppliers (code, name, notes, is_active)
          VALUES ($1,$2,$3,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           notes=COALESCE(EXCLUDED.notes, aif_suppliers.notes),
+           is_active=true,
+           updated_at=now()
          RETURNING id, code, name, is_active, notes, created_at, updated_at`,
         [code, name, notes]
       );
@@ -616,30 +599,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "supplier not found" });
       }
-      const supplierId = supplier.rows[0].id;
-      const usage = await supplierUsage(client, supplierId);
-      const hasBusinessData =
-        Number(usage.import_batches || 0) > 0 ||
-        Number(usage.supplier_codes || 0) > 0 ||
-        Number(usage.receptions || 0) > 0;
+      const usage = await supplierUsage(client, supplier.rows[0].id);
 
-      if (hasBusinessData) {
-        await client.query(`UPDATE aif_suppliers SET is_active=false, updated_at=now() WHERE id=$1`, [supplierId]);
-        await client.query(`UPDATE aif_supplier_import_profiles SET is_active=false, updated_at=now() WHERE supplier_id=$1`, [supplierId]);
-        await client.query(`UPDATE aif_supplier_brands SET is_active=false, updated_at=now() WHERE supplier_id=$1`, [supplierId]);
+      if (Number(usage.import_batches || 0) > 0 || Number(usage.supplier_codes || 0) > 0) {
+        await client.query(`UPDATE aif_suppliers SET is_active=false, updated_at=now() WHERE id=$1`, [supplier.rows[0].id]);
+        await client.query(`UPDATE aif_supplier_import_profiles SET is_active=false, updated_at=now() WHERE supplier_id=$1`, [supplier.rows[0].id]);
         await client.query("COMMIT");
         return res.json({ ok: true, mode: "deactivated", usage });
       }
 
-      await client.query(`DELETE FROM aif_supplier_value_maps WHERE supplier_id=$1`, [supplierId]);
-      await client.query(
-        `DELETE FROM aif_supplier_import_columns
-         WHERE profile_id IN (SELECT id FROM aif_supplier_import_profiles WHERE supplier_id=$1)`,
-        [supplierId]
-      );
-      await client.query(`DELETE FROM aif_supplier_import_profiles WHERE supplier_id=$1`, [supplierId]);
-      await client.query(`DELETE FROM aif_supplier_brands WHERE supplier_id=$1`, [supplierId]);
-      await client.query(`DELETE FROM aif_suppliers WHERE id=$1`, [supplierId]);
+      await client.query(`DELETE FROM aif_suppliers WHERE id=$1`, [supplier.rows[0].id]);
       await client.query("COMMIT");
       res.json({ ok: true, mode: "deleted", usage });
     } catch (e) {
@@ -951,120 +920,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
-  router.get("/brands", requireAuthed, async (req, res) => {
-    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
-    const r = await pool.query(
-      `SELECT id, code, name, is_active, created_at, updated_at
-       FROM aif_brands
-       ${includeInactive ? "" : "WHERE is_active=true"}
-       ORDER BY is_active DESC, name ASC`
-    );
+  router.get("/brands", requireAuthed, async (_req, res) => {
+    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
     res.json({ items: r.rows });
-  });
-
-  router.post("/brands", requireAdminOrSecret, async (req, res) => {
-    const body = req.body || {};
-    const name = text(body.name);
-    if (!name) return res.status(400).json({ error: "brand name required" });
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const code = await makeUniqueCode(client, "aif_brands", body.code || name);
-      const r = await client.query(
-        `INSERT INTO aif_brands (code, name, is_active)
-         VALUES ($1,$2,true)
-         RETURNING id, code, name, is_active, created_at, updated_at`,
-        [code, name]
-      );
-      await client.query("COMMIT");
-      res.json({ item: r.rows[0] });
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF create brand failed", e);
-      res.status(500).json({ error: "failed to save brand" });
-    } finally {
-      client.release();
-    }
-  });
-
-  router.patch("/brands/:id", requireAdminOrSecret, async (req, res) => {
-    const id = text(req.params.id);
-    const body = req.body || {};
-    const sets = [];
-    const args = [];
-    let i = 1;
-
-    if (body.name !== undefined) {
-      const name = text(body.name);
-      if (!name) return res.status(400).json({ error: "brand name required" });
-      sets.push(`name=$${i++}`);
-      args.push(name);
-    }
-    if (body.code !== undefined) {
-      const code = normCode(body.code);
-      if (!code) return res.status(400).json({ error: "brand code required" });
-      sets.push(`code=$${i++}`);
-      args.push(code);
-    }
-    if (body.is_active !== undefined || body.isActive !== undefined) {
-      sets.push(`is_active=$${i++}`);
-      args.push(Boolean(body.is_active ?? body.isActive));
-    }
-    if (!sets.length) return res.json({ ok: true });
-    args.push(id);
-
-    try {
-      const r = await pool.query(
-        `UPDATE aif_brands
-         SET ${sets.join(", ")}, updated_at=now()
-         WHERE id::text=$${i} OR code=$${i}
-         RETURNING id, code, name, is_active, created_at, updated_at`,
-        args
-      );
-      if (!r.rowCount) return res.status(404).json({ error: "brand not found" });
-      res.json({ item: r.rows[0] });
-    } catch (e) {
-      if (e && e.code === "23505") return res.status(400).json({ error: "brand code already exists" });
-      console.error("AIF update brand failed", e);
-      res.status(500).json({ error: "failed to update brand" });
-    }
-  });
-
-  router.delete("/brands/:id", requireAdminOrSecret, async (req, res) => {
-    const id = text(req.params.id);
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const brand = await client.query(
-        `SELECT id, code, name FROM aif_brands WHERE id::text=$1 OR code=$1 FOR UPDATE`,
-        [id]
-      );
-      if (!brand.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "brand not found" });
-      }
-      const brandId = brand.rows[0].id;
-      const usage = await brandUsage(client, brandId);
-
-      if (Number(usage.product_models || 0) > 0) {
-        await client.query(`UPDATE aif_brands SET is_active=false, updated_at=now() WHERE id=$1`, [brandId]);
-        await client.query(`UPDATE aif_supplier_brands SET is_active=false, updated_at=now() WHERE brand_id=$1`, [brandId]);
-        await client.query("COMMIT");
-        return res.json({ ok: true, mode: "deactivated", usage });
-      }
-
-      await client.query(`DELETE FROM aif_supplier_brands WHERE brand_id=$1`, [brandId]);
-      await client.query(`DELETE FROM aif_brands WHERE id=$1`, [brandId]);
-      await client.query("COMMIT");
-      res.json({ ok: true, mode: "deleted", usage });
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF delete brand failed", e);
-      res.status(500).json({ error: "failed to delete brand" });
-    } finally {
-      client.release();
-    }
   });
 
   router.get("/categories", requireAuthed, async (req, res) => {
@@ -1735,6 +1593,189 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF create import batch failed", e);
       res.status(500).json({ error: "failed to create import batch" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/import-batches/full", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const rowsInput = Array.isArray(body.rows) ? body.rows : Array.isArray(body.items) ? body.items : [];
+    if (!rowsInput.length) return res.status(400).json({ error: "Nincs kijelölt menthető terméksor." });
+
+    const client = await pool.connect();
+    try {
+      const supplier = await findByIdOrCode(client, "aif_suppliers", body.supplierId || body.supplier_id || body.supplierCode || body.supplier);
+      if (!supplier) return res.status(400).json({ error: "Beszállító kiválasztása kötelező." });
+      if (supplier.is_active === false) return res.status(400).json({ error: "A kiválasztott beszállító inaktív." });
+
+      let profileId = emptyToNull(body.profileId || body.profile_id);
+      if (!profileId) {
+        const pr = await client.query(
+          `SELECT id FROM aif_supplier_import_profiles
+           WHERE supplier_id=$1 AND is_active=true
+           ORDER BY version DESC
+           LIMIT 1`,
+          [supplier.id]
+        );
+        profileId = pr.rows[0]?.id || null;
+      }
+
+      let location = null;
+      const locInput = body.targetLocationId || body.target_location_id || body.locationId || body.location_id || body.locationCode || body.location;
+      if (locInput) location = await findByIdOrCode(client, "aif_locations", locInput);
+      const targetLocationId = location?.id || await getDefaultLocationId(client);
+      if (!targetLocationId) return res.status(400).json({ error: "Cél hely kiválasztása kötelező." });
+
+      const reception = receptionFromBody(body);
+      if (!reception.invoiceNumber) return res.status(400).json({ error: "Számlaszám megadása kötelező." });
+      if (!reception.invoiceDate) return res.status(400).json({ error: "Számla dátuma kötelező." });
+      if (!reception.receptionDate) return res.status(400).json({ error: "Receptió dátuma kötelező." });
+      if (!reception.currencyCode) return res.status(400).json({ error: "Pénznem kiválasztása kötelező." });
+      if (!reception.exchangeRateToRon || reception.exchangeRateToRon <= 0) return res.status(400).json({ error: "Pozitív RON árfolyam megadása kötelező." });
+      if (!reception.tvaMode) return res.status(400).json({ error: "TVA kezelés kiválasztása kötelező." });
+      if (reception.tvaMode !== "no_tva" && (reception.tvaRate === null || reception.tvaRate === undefined)) return res.status(400).json({ error: "TVA százalék megadása kötelező." });
+      if (reception.invoiceGross === null || reception.invoiceGross === undefined) return res.status(400).json({ error: "Számla végösszeg megadása kötelező." });
+
+      const curr = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [reception.currencyCode]);
+      if (!curr.rowCount) return res.status(400).json({ error: "A kiválasztott pénznem inaktív vagy nem létezik." });
+
+      const normalizedRows = [];
+      let rowNo = 1;
+      for (const input of rowsInput) {
+        const nr = normalizeRowInput(input, rowNo++);
+        if (nr.errors.length) {
+          return res.status(400).json({
+            error: `A(z) ${nr.rowNo}. terméksor hiányos vagy hibás: ${nr.errors.join(" ")}`,
+            rowNo: nr.rowNo,
+            errors: nr.errors,
+          });
+        }
+        normalizedRows.push(nr);
+      }
+
+      await client.query("BEGIN");
+
+      const receptionRes = await client.query(
+        `INSERT INTO aif_receptions (
+           supplier_id, target_location_id, invoice_number, invoice_date, reception_date,
+           currency_code, exchange_rate_to_ron, tva_mode, tva_rate, shipping_cost,
+           goods_value, invoice_net, invoice_vat, invoice_gross, total_qty, line_count,
+           status, note, raw_meta, created_by, actor
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft',$17,$18::jsonb,$19,$20)
+         RETURNING id`,
+        [
+          supplier.id,
+          targetLocationId,
+          reception.invoiceNumber,
+          reception.invoiceDate,
+          reception.receptionDate,
+          reception.currencyCode,
+          reception.exchangeRateToRon,
+          reception.tvaMode,
+          reception.tvaRate,
+          reception.shippingCost,
+          reception.goodsValue,
+          reception.invoiceNet,
+          reception.invoiceVat,
+          reception.invoiceGross,
+          reception.totalQty,
+          reception.lineCount,
+          reception.note,
+          JSON.stringify(reception.rawMeta || {}),
+          req.session?.role || "system",
+          actorFrom(req),
+        ]
+      );
+
+      const batchRes = await client.query(
+        `INSERT INTO aif_import_batches (
+           supplier_id, profile_id, target_location_id, reception_id, source_file_name,
+           source_file_url, source_format, status, created_by, actor, note, raw_meta,
+           currency_code, exchange_rate_to_ron, invoice_number
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10,$11::jsonb,$12,$13,$14)
+         RETURNING id`,
+        [
+          supplier.id,
+          profileId,
+          targetLocationId,
+          receptionRes.rows[0].id,
+          emptyToNull(body.sourceFileName || body.source_file_name || body.fileName),
+          emptyToNull(body.sourceFileUrl || body.source_file_url || body.fileUrl),
+          normCode(body.sourceFormat || body.source_format || "manual") || "manual",
+          req.session?.role || "system",
+          actorFrom(req),
+          emptyToNull(body.note),
+          JSON.stringify(body.rawMeta || body.raw_meta || {}),
+          reception.currencyCode,
+          reception.exchangeRateToRon,
+          reception.invoiceNumber,
+        ]
+      );
+
+      const batchId = batchRes.rows[0].id;
+      const exchangeRate = Number(reception.exchangeRateToRon);
+      let errorCount = 0;
+      for (const nr of normalizedRows) {
+        const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
+          ? null
+          : Number(nr.normalized.buyPrice) * exchangeRate;
+        const sellPriceRon = nr.normalized.sellPrice == null || !Number.isFinite(exchangeRate)
+          ? null
+          : Number(nr.normalized.sellPrice) * exchangeRate;
+        const normalizedForDb = {
+          ...nr.normalized,
+          currencyCode: reception.currencyCode,
+          exchangeRateToRon: exchangeRate,
+          buyPriceRon,
+          sellPriceRon,
+        };
+
+        await client.query(
+          `INSERT INTO aif_import_rows (
+             batch_id, row_no, raw, normalized, status, error_messages,
+             supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
+             qty, buy_price, buy_price_ron, sell_price, sell_price_ron
+           )
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [
+            batchId,
+            nr.rowNo,
+            JSON.stringify(nr.raw || {}),
+            JSON.stringify(normalizedForDb),
+            nr.status,
+            nr.errors,
+            nr.normalized.supplierProductCode,
+            nr.normalized.supplierVariantCode,
+            nr.normalized.supplierColorCode,
+            nr.normalized.supplierSize,
+            nr.normalized.qty,
+            nr.normalized.buyPrice,
+            buyPriceRon,
+            nr.normalized.sellPrice,
+            sellPriceRon,
+          ]
+        );
+      }
+
+      await client.query(
+        `UPDATE aif_import_batches
+         SET row_count=$2, error_count=$3, status=$4, updated_at=now()
+         WHERE id=$1`,
+        [batchId, normalizedRows.length, errorCount, errorCount ? "needs_review" : "parsed"]
+      );
+
+      await client.query("COMMIT");
+      res.json({ ok: true, id: batchId, receptionId: receptionRes.rows[0].id, rowCount: normalizedRows.length, errorCount });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF create full import batch failed", e);
+      if (e && e.code === "23514") {
+        return res.status(400).json({ error: "A mentés nem sikerült: egy terméksor mennyisége vagy ára hibás." });
+      }
+      res.status(500).json({ error: "A mentés nem sikerült. Ellenőrizd a receptiót és a kijelölt terméksorokat." });
     } finally {
       client.release();
     }
