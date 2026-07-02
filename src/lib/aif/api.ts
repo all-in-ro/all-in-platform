@@ -92,6 +92,10 @@ export type AifReceptionSummary = {
   line_count?: number | null;
   import_batches?: number | null;
   import_rows?: number | null;
+  committed_rows?: number | null;
+  remaining_rows?: number | null;
+  error_rows?: number | null;
+  ignored_rows?: number | null;
   committed_batches?: number | null;
   has_stock_movements?: boolean | null;
   can_delete?: boolean | null;
@@ -516,6 +520,33 @@ export function apiAifDeleteReception(id: string) {
   return fetchAifJSON<{ ok: true; mode: "deleted" }>(`/receptions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export function apiAifCommitReceptionRows(id: string, rowIds?: string[]) {
+  return fetchAifJSON<{ ok: true; committed: number; batches?: any[] }>(
+    `/receptions/${encodeURIComponent(id)}/commit-selected`,
+    {
+      method: "POST",
+      body: JSON.stringify({ rowIds: rowIds || [] }),
+    }
+  );
+}
+
+export function apiAifUpdateImportRow(rowId: string, normalized: Record<string, unknown>) {
+  return fetchAifJSON<{ ok: true; status?: string; errors?: string[] }>(
+    `/import-rows/${encodeURIComponent(rowId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ normalized }),
+    }
+  );
+}
+
+export function apiAifIgnoreImportRow(rowId: string) {
+  return fetchAifJSON<{ ok: true; mode: "ignored" }>(
+    `/import-rows/${encodeURIComponent(rowId)}`,
+    { method: "DELETE" }
+  );
 }
 
 export function apiAifReceptionExportCsvUrl(id: string) {
