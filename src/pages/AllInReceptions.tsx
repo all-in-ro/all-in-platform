@@ -418,7 +418,7 @@ export default function AllInReceptions(_props: Props) {
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [rowDrafts, setRowDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [receptionDraft, setReceptionDraft] = useState<Record<string, string>>({});
-  const [rowStatusFilter, setRowStatusFilter] = useState("active");
+  const [rowStatusFilter, setRowStatusFilter] = useState("all");
   const [moveTarget, setMoveTarget] = useState<any | null>(null);
   const [moveToReceptionId, setMoveToReceptionId] = useState("");
   const [savingHeader, setSavingHeader] = useState(false);
@@ -532,6 +532,10 @@ export default function AllInReceptions(_props: Props) {
 
   function rowCanWork(row: any) {
     return row.status !== "committed" && row.status !== "ignored";
+  }
+
+  function rowCanEdit(row: any) {
+    return row.status !== "ignored";
   }
 
   function buildDrafts(rows: any[]) {
@@ -692,7 +696,7 @@ export default function AllInReceptions(_props: Props) {
     setSavingRows(true);
     setMessage("");
     try {
-      const editable = detail.rows.filter((row) => rowCanWork(row));
+      const editable = detail.rows.filter((row) => rowCanEdit(row));
       for (const row of editable) {
         await apiAifUpdateImportRow(row.id, rowDrafts[row.id] || row.normalized || {});
       }
@@ -989,7 +993,7 @@ export default function AllInReceptions(_props: Props) {
                   <div>
                     <p className="text-xs text-white">Terméksorok feldolgozása</p>
                     <p className="mt-1 text-xs text-white/64">
-                      A hibátlan sorok külön is készletre vehetők. Ami még nincs kész, az marad javítható állapotban.
+                      A hibátlan sorok külön is készletre vehetők. A készletre vett sorok adatai javíthatók, de mennyiséget már csak külön korrekcióval módosítunk.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1035,8 +1039,9 @@ export default function AllInReceptions(_props: Props) {
                     <tbody className="divide-y divide-white/10 bg-[#4d5869]">
                       {visibleRows.map((r) => {
                         const draft: any = rowDrafts[r.id] || r.normalized || {};
-                        const editable = rowCanWork(r);
-                        const checked = selectedRows.has(r.id);
+                        const editable = rowCanEdit(r);
+                        const canCommitOrMove = rowCanWork(r);
+                        const checked = canCommitOrMove && selectedRows.has(r.id);
                         return (
                           <tr key={r.id} className={r.status === "committed" ? "bg-emerald-300/8" : r.status === "ignored" ? "opacity-55" : ""}>
                             <td className="px-2 py-1.5">
@@ -1044,7 +1049,7 @@ export default function AllInReceptions(_props: Props) {
                                 type="checkbox"
                                 className="h-4 w-4 accent-emerald-300"
                                 checked={checked}
-                                disabled={!editable || r.status === "error"}
+                                disabled={!canCommitOrMove || r.status === "error"}
                                 onChange={() => toggleRow(r.id)}
                               />
                             </td>
@@ -1066,7 +1071,7 @@ export default function AllInReceptions(_props: Props) {
                               <input className={input} value={String(draft.colorCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
                             </td>
                             <td className="px-2 py-1.5">
-                              <input className={`${input} text-right`} value={String(draft.qty ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
+                              <input className={`${input} text-right`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
                             </td>
                             <td className="px-2 py-1.5">
                               <input className={`${input} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
@@ -1074,10 +1079,10 @@ export default function AllInReceptions(_props: Props) {
                             <td className="px-3 py-2 text-right text-white/82">{money(r.buy_price_ron, "RON")}</td>
                             <td className="px-2 py-1.5">
                               <div className="flex justify-end gap-1.5">
-                                <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!editable || busy} type="button">
+                                <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy} type="button">
                                   <MoveRight size={13} /> Áthelyezés
                                 </button>
-                                <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!editable || busy} type="button">
+                                <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy} type="button">
                                   Kihagy
                                 </button>
                               </div>
