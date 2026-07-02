@@ -1046,7 +1046,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         s.name AS supplier_name,
         l.name AS location_name,
         count(DISTINCT b.id)::int AS import_batches,
-        count(rw.id)::int AS import_rows,
+        count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
+        count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
+        count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows,
+        count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
+        count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
         count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
         (count(sm.id) > 0) AS has_stock_movements,
         (
@@ -1156,7 +1160,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 r.note, r.supplier_id, r.target_location_id,
                 s.name AS supplier_name, l.name AS location_name,
                 count(DISTINCT b.id)::int AS import_batches,
-                count(rw.id)::int AS import_rows,
+                count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
+                count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
+                count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows,
+                count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
+                count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
                 count(DISTINCT b.id) FILTER (WHERE b.status='committed')::int AS committed_batches,
                 (count(sm.id) > 0) AS has_stock_movements,
                 (r.status <> 'committed' AND count(DISTINCT b.id) FILTER (WHERE b.status='committed') = 0 AND count(sm.id)=0) AS can_delete
@@ -2252,126 +2260,371 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  async function commitBatchRows(client, { batchId, rowIds = null, actor = "system" }) {
+    const batchRes = await client.query(
+      `SELECT b.*, s.code AS supplier_code
+       FROM aif_import_batches b
+       JOIN aif_suppliers s ON s.id=b.supplier_id
+       WHERE b.id=$1
+       FOR UPDATE OF b`,
+      [batchId]
+    );
+    if (!batchRes.rowCount) {
+      const e = new Error("Import csomag nem található.");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const batch = batchRes.rows[0];
+    if (batch.status === "cancelled") {
+      const e = new Error("Törölt import nem vehető készletre.");
+      e.statusCode = 400;
+      throw e;
+    }
+    if (!batch.target_location_id) {
+      const e = new Error("Hiányzik a cél hely.");
+      e.statusCode = 400;
+      throw e;
+    }
+
+    const args = [batchId];
+    let where = `batch_id=$1 AND status NOT IN ('ignored','committed')`;
+    if (Array.isArray(rowIds) && rowIds.length) {
+      args.push(rowIds.map(String));
+      where += ` AND id::text = ANY($2::text[])`;
+    }
+
+    const rows = await client.query(
+      `SELECT * FROM aif_import_rows
+       WHERE ${where}
+       ORDER BY row_no ASC
+       FOR UPDATE`,
+      args
+    );
+
+    if (!rows.rowCount) {
+      const e = new Error("Nincs készletre vehető terméksor. Ellenőrizd, hogy van-e kijelölt, hibátlan és még nem készletre vett sor.");
+      e.statusCode = 400;
+      throw e;
+    }
+
+    const errors = rows.rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
+    if (errors.length) {
+      await client.query(
+        `UPDATE aif_import_batches SET status='needs_review', error_count=$2, updated_at=now() WHERE id=$1`,
+        [batchId, errors.length]
+      );
+      const e = new Error(`A készletre vétel nem indítható: ${errors.length} terméksor hibás vagy ellenőrzést igényel.`);
+      e.statusCode = 400;
+      throw e;
+    }
+
+    let committed = 0;
+    for (const row of rows.rows) {
+      try {
+        const normalized = { ...(row.normalized || {}) };
+        normalized.gender = canonicalGender(normalized.gender);
+        const qty = Number(row.qty ?? normalized.qty ?? 0);
+        if (!Number.isFinite(qty) || qty <= 0) throw new Error("a mennyiség hiányzik vagy nem pozitív");
+
+        if (row.buy_price_ron !== null && row.buy_price_ron !== undefined) {
+          normalized.buyPriceOriginal = row.buy_price;
+          normalized.buyPrice = Number(row.buy_price_ron);
+        }
+        if (row.sell_price_ron !== null && row.sell_price_ron !== undefined) {
+          normalized.sellPriceOriginal = row.sell_price;
+          normalized.sellPrice = Number(row.sell_price_ron);
+        }
+
+        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
+        const variantId = await upsertVariant(client, { modelId, normalized });
+        await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
+        await addStock(client, {
+          locationId: batch.target_location_id,
+          variantId,
+          qty: Math.floor(qty),
+          actor,
+          sourceId: batchId,
+          rowId: row.id,
+          raw: row.raw,
+        });
+
+        await client.query(
+          `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
+          [row.id, variantId]
+        );
+        committed++;
+      } catch (rowError) {
+        const e = new Error(`A(z) ${row.row_no || "?"}. terméksor készletre vétele nem sikerült: ${rowError?.message || rowError}`);
+        e.statusCode = 400;
+        throw e;
+      }
+    }
+
+    const state = await client.query(
+      `SELECT
+         count(*) FILTER (WHERE status <> 'ignored')::int AS total_rows,
+         count(*) FILTER (WHERE status = 'committed')::int AS committed_rows,
+         count(*) FILTER (WHERE status = 'error')::int AS error_rows,
+         count(*) FILTER (WHERE status NOT IN ('ignored','committed'))::int AS remaining_rows
+       FROM aif_import_rows
+       WHERE batch_id=$1`,
+      [batchId]
+    );
+    const st = state.rows[0] || { total_rows: 0, committed_rows: 0, error_rows: 0, remaining_rows: 0 };
+
+    if (Number(st.remaining_rows || 0) <= 0 && Number(st.total_rows || 0) > 0) {
+      await client.query(
+        `UPDATE aif_import_batches
+         SET status='committed', committed_at=COALESCE(committed_at, now()), error_count=0, updated_at=now()
+         WHERE id=$1`,
+        [batchId]
+      );
+    } else {
+      await client.query(
+        `UPDATE aif_import_batches
+         SET status=CASE WHEN $2::int > 0 THEN 'needs_review' ELSE 'parsed' END,
+             error_count=$2,
+             updated_at=now()
+         WHERE id=$1`,
+        [batchId, Number(st.error_rows || 0)]
+      );
+    }
+
+    if (batch.reception_id) {
+      const recState = await client.query(
+        `SELECT
+           count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS total_rows,
+           count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
+           count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
+           count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows
+         FROM aif_import_batches b
+         LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
+         WHERE b.reception_id=$1`,
+        [batch.reception_id]
+      );
+      const rs = recState.rows[0] || {};
+      if (Number(rs.total_rows || 0) > 0 && Number(rs.remaining_rows || 0) <= 0) {
+        await client.query(`UPDATE aif_receptions SET status='committed', updated_at=now() WHERE id=$1`, [batch.reception_id]);
+      } else {
+        await client.query(`UPDATE aif_receptions SET status='draft', updated_at=now() WHERE id=$1 AND status <> 'cancelled'`, [batch.reception_id]);
+      }
+    }
+
+    return {
+      committed,
+      totalRows: Number(st.total_rows || 0),
+      committedRows: Number(st.committed_rows || 0),
+      remainingRows: Number(st.remaining_rows || 0),
+      errorRows: Number(st.error_rows || 0),
+    };
+  }
+
   router.post("/import-batches/:id/commit", requireAuthed, async (req, res) => {
     const batchId = text(req.params.id);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const batchRes = await client.query(
-        `SELECT b.*, s.code AS supplier_code, r.exchange_rate_to_ron AS reception_exchange_rate
-         FROM aif_import_batches b
-         JOIN aif_suppliers s ON s.id=b.supplier_id
-         LEFT JOIN aif_receptions r ON r.id=b.reception_id
-         WHERE b.id=$1
-         FOR UPDATE OF b`,
-        [batchId]
-      );
-      if (!batchRes.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "batch not found" });
-      }
-      const batch = batchRes.rows[0];
-      if (batch.status === "committed") {
-        await client.query("COMMIT");
-        return res.json({ ok: true, already: true });
-      }
-      if (!["parsed", "needs_review", "draft"].includes(batch.status)) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "batch cannot be committed" });
-      }
-      if (!batch.target_location_id) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "target location missing" });
-      }
-
-      const rows = await client.query(
-        `SELECT * FROM aif_import_rows
-         WHERE batch_id=$1 AND status <> 'ignored'
-         ORDER BY row_no ASC
-         FOR UPDATE`,
-        [batchId]
-      );
-
-      if (!rows.rowCount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor." });
-      }
-
-      const errors = rows.rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
-      if (errors.length) {
-        await client.query(
-          `UPDATE aif_import_batches SET status='needs_review', error_count=$2, updated_at=now() WHERE id=$1`,
-          [batchId, errors.length]
-        );
-        await client.query("COMMIT");
-        return res.status(400).json({ error: "batch has row errors", errorCount: errors.length });
-      }
-
-      let committed = 0;
-      const actor = actorFrom(req);
-      for (const row of rows.rows) {
-        try {
-          const normalized = { ...(row.normalized || {}) };
-          normalized.gender = canonicalGender(normalized.gender);
-          const qty = Number(row.qty ?? normalized.qty ?? 0);
-          if (!Number.isFinite(qty) || qty <= 0) {
-            throw new Error("a mennyiség hiányzik vagy nem pozitív");
-          }
-
-          if (row.buy_price_ron !== null && row.buy_price_ron !== undefined) {
-            normalized.buyPriceOriginal = row.buy_price;
-            normalized.buyPrice = Number(row.buy_price_ron);
-          }
-          if (row.sell_price_ron !== null && row.sell_price_ron !== undefined) {
-            normalized.sellPriceOriginal = row.sell_price;
-            normalized.sellPrice = Number(row.sell_price_ron);
-          }
-
-          const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
-          const variantId = await upsertVariant(client, { modelId, normalized });
-          await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
-          await addStock(client, {
-            locationId: batch.target_location_id,
-            variantId,
-            qty: Math.floor(qty),
-            actor,
-            sourceId: batchId,
-            rowId: row.id,
-            raw: row.raw,
-          });
-
-          await client.query(
-            `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
-            [row.id, variantId]
-          );
-          committed++;
-        } catch (rowError) {
-          throw new Error(`A(z) ${row.row_no || "?"}. terméksor készletre vétele nem sikerült: ${rowError?.message || rowError}`);
-        }
-      }
-
-      await client.query(
-        `UPDATE aif_import_batches
-         SET status='committed', committed_at=now(), error_count=0, updated_at=now()
-         WHERE id=$1`,
-        [batchId]
-      );
-
-      if (batch.reception_id) {
-        await client.query(
-          `UPDATE aif_receptions
-           SET status='committed', updated_at=now()
-           WHERE id=$1`,
-          [batch.reception_id]
-        );
-      }
-
+      const result = await commitBatchRows(client, {
+        batchId,
+        rowIds: null,
+        actor: actorFrom(req),
+      });
       await client.query("COMMIT");
-      res.json({ ok: true, committed });
+      res.json({ ok: true, committed: result.committed, ...result });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF commit import batch failed", e);
-      res.status(500).json({ error: e?.message || "A készletre vétel nem sikerült." });
+      const status = Number(e?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A készletre vétel nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/receptions/:id/commit-selected", requireAuthed, async (req, res) => {
+    const receptionId = text(req.params.id);
+    const rowIds = Array.isArray(req.body?.rowIds) ? req.body.rowIds.map(String).filter(Boolean) : null;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const rec = await client.query(`SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [receptionId]);
+      if (!rec.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Receptió nem található." });
+      }
+
+      let batches;
+      if (rowIds && rowIds.length) {
+        batches = await client.query(
+          `SELECT DISTINCT b.id
+           FROM aif_import_batches b
+           JOIN aif_import_rows rw ON rw.batch_id=b.id
+           WHERE b.reception_id=$1 AND rw.id::text = ANY($2::text[])
+           ORDER BY b.id`,
+          [rec.rows[0].id, rowIds]
+        );
+      } else {
+        batches = await client.query(
+          `SELECT id
+           FROM aif_import_batches
+           WHERE reception_id=$1
+           ORDER BY created_at ASC`,
+          [rec.rows[0].id]
+        );
+      }
+
+      if (!batches.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Nincs készletre vehető mentett terméksor ebben a receptióban." });
+      }
+
+      let committed = 0;
+      const details = [];
+      for (const b of batches.rows) {
+        const batchRowIds = rowIds && rowIds.length
+          ? rowIds
+          : null;
+        const result = await commitBatchRows(client, {
+          batchId: b.id,
+          rowIds: batchRowIds,
+          actor: actorFrom(req),
+        });
+        committed += Number(result.committed || 0);
+        details.push({ batchId: b.id, ...result });
+      }
+
+      await client.query("COMMIT");
+      res.json({ ok: true, committed, batches: details });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF reception selected commit failed", e);
+      const status = Number(e?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A kijelölt sorok készletre vétele nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch("/import-rows/:id", requireAuthed, async (req, res) => {
+    const rowId = text(req.params.id);
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT rw.*, b.exchange_rate_to_ron, b.currency_code, b.status AS batch_status
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         WHERE rw.id::text=$1
+         FOR UPDATE OF rw`,
+        [rowId]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Terméksor nem található." });
+      }
+      const row = current.rows[0];
+      if (row.status === "committed") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Készletre vett terméksor már nem módosítható ezen a felületen." });
+      }
+
+      const nextNormalized = {
+        ...(row.normalized || {}),
+        ...(body.normalized && typeof body.normalized === "object" ? body.normalized : {}),
+      };
+      if (body.status === "ignored") {
+        await client.query(
+          `UPDATE aif_import_rows SET status='ignored', error_messages='{}'::text[], updated_at=now() WHERE id=$1`,
+          [row.id]
+        );
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "ignored" });
+      }
+
+      const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
+      const exchangeRate = Number(row.exchange_rate_to_ron || 1);
+      const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
+        ? null
+        : Number(nr.normalized.buyPrice) * exchangeRate;
+      const sellPriceRon = nr.normalized.sellPrice == null || !Number.isFinite(exchangeRate)
+        ? null
+        : Number(nr.normalized.sellPrice) * exchangeRate;
+      const normalizedForDb = {
+        ...nr.normalized,
+        currencyCode: row.currency_code,
+        exchangeRateToRon: exchangeRate,
+        buyPriceRon,
+        sellPriceRon,
+      };
+
+      await client.query(
+        `UPDATE aif_import_rows SET
+           normalized=$2::jsonb,
+           status=$3,
+           error_messages=$4::text[],
+           supplier_product_code=$5,
+           supplier_variant_code=$6,
+           supplier_color_code=$7,
+           supplier_size=$8,
+           qty=$9,
+           buy_price=$10,
+           buy_price_ron=$11,
+           sell_price=$12,
+           sell_price_ron=$13,
+           updated_at=now()
+         WHERE id=$1`,
+        [
+          row.id,
+          JSON.stringify(normalizedForDb),
+          nr.status,
+          nr.errors,
+          nr.normalized.supplierProductCode,
+          nr.normalized.supplierVariantCode,
+          nr.normalized.supplierColorCode,
+          nr.normalized.supplierSize,
+          nr.normalized.qty,
+          nr.normalized.buyPrice,
+          buyPriceRon,
+          nr.normalized.sellPrice,
+          sellPriceRon,
+        ]
+      );
+
+      await client.query("COMMIT");
+      res.json({ ok: true, status: nr.status, errors: nr.errors });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF update import row failed", e);
+      res.status(500).json({ error: e?.message || "A terméksor mentése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/import-rows/:id", requireAuthed, async (req, res) => {
+    const rowId = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(`SELECT id, status FROM aif_import_rows WHERE id::text=$1 FOR UPDATE`, [rowId]);
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Terméksor nem található." });
+      }
+      if (current.rows[0].status === "committed") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Készletre vett terméksor nem törölhető itt." });
+      }
+      await client.query(`UPDATE aif_import_rows SET status='ignored', error_messages='{}'::text[], updated_at=now() WHERE id=$1`, [current.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "ignored" });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF ignore import row failed", e);
+      res.status(500).json({ error: e?.message || "A terméksor kihagyása nem sikerült." });
     } finally {
       client.release();
     }
