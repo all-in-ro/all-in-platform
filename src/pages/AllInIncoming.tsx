@@ -90,6 +90,9 @@ const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md bo
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
 const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
+const compactFieldLabel = "text-[9px] uppercase tracking-[0.05em] text-white/45";
+const compactInput = "h-7 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
+const compactSelect = `${compactInput} aif-native-select pr-6`;
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
 
@@ -2009,80 +2012,117 @@ export default function AllInIncoming(_props: Props) {
 
         {rows.length > 0 && (
         <section className={card}>
-          <SectionTitle icon={<FileSpreadsheet size={16} />} title="Soronkénti előnézet" right={<span className="text-xs text-white/60">Szerkeszthető, kijelölhető sorok</span>} />
-          <div className="mt-3 overflow-auto rounded-xl border border-white/14">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
-                <tr>
-                  <th className="px-3 py-2 font-normal">Importálás</th>
-                  <th className="px-3 py-2 font-normal">Sorszám</th>
-                  <th className="px-3 py-2 font-normal">Állapot</th>
-                  <th className="px-3 py-2 font-normal">Termékkód</th>
-                  <th className="px-3 py-2 font-normal">Név</th>
-                  <th className="px-3 py-2 font-normal">Márka</th>
-                  <th className="px-3 py-2 font-normal">Kategória</th>
-                  <th className="px-3 py-2 font-normal">Nem</th>
-                  <th className="px-3 py-2 font-normal">Szín</th>
-                  <th className="px-3 py-2 font-normal">Színkód</th>
-                  <th className="px-3 py-2 font-normal">Méret</th>
-                  <th className="px-3 py-2 font-normal">Darab</th>
-                  <th className="px-3 py-2 font-normal">Vételár</th>
-                  <th className="px-3 py-2 font-normal">Döntés</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
-                {preview.map((r, idx) => {
-                  const globalIndex = idx;
-                  const n = r.normalized || {};
-                  const errors = aifRowErrors(r);
-                  const key = rowKey(r, globalIndex);
-                  const approved = Boolean(approvedRows[key]);
-                  return (
-                    <tr key={`${r.rowNo || idx}-${idx}`} className={errors.length ? "bg-red-500/10 hover:bg-red-500/15" : approved ? "bg-emerald-400/10 hover:bg-emerald-400/14" : "bg-[#445064] hover:bg-[#4b596f]"}>
-                      <td className="px-3 py-2.5">
-                        <input className="h-4 w-4 accent-emerald-300" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
-                      </td>
-                      <td className="px-3 py-2.5 text-white/62">{r.rowNo || idx + 1}</td>
-                      <td className="px-3 py-2.5 text-xs">
-                        {errors.length ? <span className="text-amber-100">Ellenőrizni</span> : <span className="text-emerald-100">Rendben</span>}
-                        {errors.length ? <p className="mt-1 max-w-[180px] text-white/60">{errors.join(" ")}</p> : null}
-                      </td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[130px]`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} /></td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[230px]`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} /></td>
-                      <td className="px-3 py-2.5">
-                        <select className={`${selectInput} h-8 w-[150px]`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <select className={`${selectInput} h-8 w-[170px]`} value={categoryValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <select className={`${selectInput} h-8 w-[130px]`} value={valueString(n.gender)} onChange={(e) => updateRowField(globalIndex, "gender", e.target.value)}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[120px]`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} /></td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[90px]`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} /></td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[85px]`} value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} /></td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[80px]`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} /></td>
-                      <td className="px-3 py-2.5"><input className={`${input} h-8 w-[95px]`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} /></td>
-                      <td className="px-3 py-2.5 text-xs">{approved ? <span className="text-emerald-100">Mentésre kijelölve</span> : <span className="text-white/55">Kizárva</span>}</td>
-                    </tr>
-                  );
-                })}
-                {!preview.length && (
-                  <tr>
-                    <td className="px-3 py-8 text-center text-white/60" colSpan={14}>Nincs beolvasott sor.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <SectionTitle
+            icon={<FileSpreadsheet size={16} />}
+            title="Soronkénti előnézet"
+            right={<span className="text-xs text-white/60">Kompakt, oldalirányú görgetés nélkül</span>}
+          />
+          <div className="mt-3 overflow-hidden rounded-xl border border-white/14">
+            <div className="hidden grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(135px,0.65fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
+              <div>Import</div>
+              <div>Termék</div>
+              <div>Besorolás</div>
+              <div>Variáns</div>
+              <div className="text-right">Darab / ár</div>
+            </div>
+            <div className="divide-y divide-white/10">
+              {preview.map((r, idx) => {
+                const globalIndex = idx;
+                const n = r.normalized || {};
+                const errors = aifRowErrors(r);
+                const key = rowKey(r, globalIndex);
+                const approved = Boolean(approvedRows[key]);
+                const rowState = errors.length ? "Ellenőrizni" : "Rendben";
+                return (
+                  <div
+                    key={`${r.rowNo || idx}-${idx}`}
+                    className={errors.length ? "bg-red-500/10 px-2 py-2 hover:bg-red-500/15" : approved ? "bg-emerald-400/10 px-2 py-2 hover:bg-emerald-400/14" : "bg-[#445064] px-2 py-2 hover:bg-[#4b596f]"}
+                  >
+                    <div className="grid gap-2 lg:grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(135px,0.65fr)] lg:items-start">
+                      <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 lg:block lg:bg-transparent lg:border-0 lg:px-0 lg:py-0">
+                        <div className="flex items-center gap-2">
+                          <input className="h-4 w-4 accent-emerald-300" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
+                          <span className="text-[11px] text-white/55">#{r.rowNo || idx + 1}</span>
+                        </div>
+                        <div className={errors.length ? "text-[10px] text-amber-100" : "text-[10px] text-emerald-100"}>{rowState}</div>
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <div className="grid grid-cols-[0.45fr,1fr] gap-1.5">
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Kód</span>
+                            <input className={`${compactInput} w-full`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} />
+                          </label>
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Név</span>
+                            <input className={`${compactInput} w-full`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} />
+                          </label>
+                        </div>
+                        {errors.length ? <p className="rounded-md border border-amber-200/20 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-50">{errors.join(" ")}</p> : null}
+                      </div>
+
+                      <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-[1fr,1.15fr,0.8fr]">
+                        <label className="grid gap-1">
+                          <span className={compactFieldLabel}>Márka</span>
+                          <select className={`${compactSelect} w-full`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
+                            <option style={mutedOptionStyle} value="">Nincs</option>
+                            {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
+                          </select>
+                        </label>
+                        <label className="grid gap-1">
+                          <span className={compactFieldLabel}>Kategória</span>
+                          <select className={`${compactSelect} w-full`} value={categoryValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
+                            <option style={mutedOptionStyle} value="">Nincs</option>
+                            {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                          </select>
+                        </label>
+                        <label className="grid gap-1">
+                          <span className={compactFieldLabel}>Nem</span>
+                          <select className={`${compactSelect} w-full`} value={valueString(n.gender)} onChange={(e) => updateRowField(globalIndex, "gender", e.target.value)}>
+                            <option style={mutedOptionStyle} value="">Nincs</option>
+                            {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
+                          </select>
+                        </label>
+                      </div>
+
+                      <div className="grid grid-cols-[1fr,0.65fr,0.55fr] gap-1.5">
+                        <label className="grid gap-1">
+                          <span className={compactFieldLabel}>Szín</span>
+                          <input className={`${compactInput} w-full`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} />
+                        </label>
+                        <label className="grid gap-1">
+                          <span className={compactFieldLabel}>Színkód</span>
+                          <input className={`${compactInput} w-full`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} />
+                        </label>
+                        <label className="grid gap-1">
+                          <span className={compactFieldLabel}>Méret</span>
+                          <input className={`${compactInput} w-full`} value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} />
+                        </label>
+                      </div>
+
+                      <div className="grid grid-cols-[0.75fr,1fr] gap-1.5 lg:grid-cols-1">
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Darab</span>
+                            <input className={`${compactInput} w-full text-right`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} />
+                          </label>
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Vételár</span>
+                            <input className={`${compactInput} w-full text-right`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} />
+                          </label>
+                        </div>
+                        <div className={approved ? "rounded-md border border-emerald-200/20 bg-emerald-400/10 px-2 py-1 text-center text-[10px] text-emerald-50" : "rounded-md border border-white/10 bg-black/10 px-2 py-1 text-center text-[10px] text-white/50"}>
+                          {approved ? "Mentésre kijelölve" : "Kizárva"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {!preview.length && (
+                <div className="px-3 py-8 text-center text-white/60">Nincs beolvasott sor.</div>
+              )}
+            </div>
           </div>
           {rows.length > preview.length && (
             <div className="mt-3 flex justify-end">
