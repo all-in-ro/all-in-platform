@@ -522,8 +522,8 @@ export function apiAifGetReception(id: string) {
 }
 
 export function apiAifUpdateReception(id: string, reception: Partial<AifReceptionInput>) {
-  return fetchAifJSON<{ ok: true }>(`/receptions/${encodeURIComponent(id)}`, {
-    method: "PATCH",
+  return fetchAifJSON<{ ok: true; item?: AifReceptionSummary | null }>(`/receptions/${encodeURIComponent(id)}/update`, {
+    method: "POST",
     body: JSON.stringify({ reception }),
   });
 }
