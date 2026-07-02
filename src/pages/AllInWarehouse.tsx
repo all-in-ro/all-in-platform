@@ -66,7 +66,7 @@ type InventoryItem = {
   model_status?: string | null;
   category_code?: string | null;
   category_name_ro?: string | null;
-  category_name_hu?: string | null;
+  category_name_hu?: string | null; aliases?: string[] | null;
   color_code?: string | null;
   color_name?: string | null;
   color_hex?: string | null;
@@ -82,13 +82,13 @@ type InventoryItem = {
   last_incoming_at?: string | null;
 };
 
-type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
+type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
 type GenderType = { code: string; name: string; sort_order?: number | string | null; is_active?: boolean };
 type ColorType = {
   id: string;
   code: string;
   name_ro: string;
-  name_hu?: string | null;
+  name_hu?: string | null; aliases?: string[] | null;
   name_en?: string | null;
   name_de?: string | null;
   aliases?: string[] | null;
@@ -490,7 +490,7 @@ export default function AllInWarehouse() {
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
   const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", sortOrder: "10" });
+  const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [genderForm, setGenderForm] = useState({ code: "", name: "", sortOrder: "10" });
   const [colorForm, setColorForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color"; id: string; name: string } | null>(null);
@@ -514,7 +514,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     if (!taxonomyOpen) return;
-    if (taxonomyTab === "categories" && !categoryForm.id && !categoryForm.nameRo.trim() && !categoryForm.nameHu.trim()) {
+    if (taxonomyTab === "categories" && !categoryForm.id && !categoryForm.nameRo.trim() && !categoryForm.nameHu.trim() && !categoryForm.aliases.trim()) {
       setCategoryForm((x) => x.sortOrder === nextCategorySortOrder ? x : { ...x, sortOrder: nextCategorySortOrder });
     }
     if (taxonomyTab === "genders" && !genderForm.code && !genderForm.name.trim()) {
@@ -532,6 +532,7 @@ export default function AllInWarehouse() {
     categoryForm.id,
     categoryForm.nameRo,
     categoryForm.nameHu,
+    categoryForm.aliases,
     genderForm.code,
     genderForm.name,
     colorForm.id,
@@ -633,7 +634,7 @@ export default function AllInWarehouse() {
   }, [stockRows]);
 
   function resetCategoryForm() {
-    setCategoryForm({ id: "", nameRo: "", nameHu: "", sortOrder: nextCategorySortOrder });
+    setCategoryForm({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: nextCategorySortOrder });
   }
 
   function editCategoryRow(c: MetaItem) {
@@ -642,6 +643,7 @@ export default function AllInWarehouse() {
       id: String(c.id || c.code || ""),
       nameRo: String(c.name_ro || c.name || ""),
       nameHu: String(c.name_hu || ""),
+      aliases: (Array.isArray(c.aliases) ? c.aliases : []).join(", "),
       sortOrder: c.sort_order == null ? nextCategorySortOrder : String(c.sort_order),
     });
   }
@@ -683,6 +685,7 @@ export default function AllInWarehouse() {
       await apiSaveCategory(categoryForm.id, {
         nameRo: categoryForm.nameRo,
         nameHu: categoryForm.nameHu,
+        aliases: categoryForm.aliases,
         sortOrder: categoryForm.sortOrder,
       });
       resetCategoryForm();
@@ -769,7 +772,7 @@ export default function AllInWarehouse() {
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
       setSupplierBrands(meta.supplierBrands || []);
-      setCategories(meta.categories || []);
+      setCategories((meta.categories || []).slice().sort((a: MetaItem, b: MetaItem) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })));
       setGenderTypes(meta.genderTypes || []);
       setColorTypes(meta.colorTypes || []);
       setLocations(meta.locations || []);
@@ -1153,13 +1156,14 @@ export default function AllInWarehouse() {
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm text-white/88">{categoryForm.id ? "Kategória módosítása" : "Új kategória"}</p>
-                        <p className="text-[11px] text-white/50">Román és magyar megnevezés, majd sorrend.</p>
+                        <p className="text-[11px] text-white/50">Román és magyar megnevezés, import aliasokkal.</p>
                       </div>
                       {categoryForm.id && <button className={taxonomySmallBtn} onClick={resetCategoryForm}>Új</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className={taxonomyField}>Megnevezés románul<input className={taxonomyInput} value={categoryForm.nameRo} onChange={(e) => setCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
                       <label className={taxonomyField}>Megnevezés magyarul<input className={taxonomyInput} value={categoryForm.nameHu} onChange={(e) => setCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={categoryForm.aliases} onChange={(e) => setCategoryForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="TSHIRT, T-Shirt, SHORTS CAS, hoodie, joggers" /></label>
                       <label className={`${taxonomyField} md:max-w-[180px]`}>Sorrend
                         <input className={taxonomyInput} value={categoryForm.sortOrder} onChange={(e) => setCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} />
                         {!categoryForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextCategorySortOrder}</span>}
@@ -1186,6 +1190,7 @@ export default function AllInWarehouse() {
                               {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/50">RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
+                            {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
                           </div>
                           {taxonomyActionMenu({
                             menuId: `category-${c.id}`,
