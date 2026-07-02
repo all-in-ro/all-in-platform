@@ -660,11 +660,21 @@ export default function AllInIncoming(_props: Props) {
     }
   }
 
-  async function commitBatch(id: string) {
+  async function commitBatch(batch: AifImportBatchSummary) {
+    if (!batch?.id) return;
+    if (Number(batch.row_count || 0) <= 0) {
+      setMessage("A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor.");
+      return;
+    }
+    if (Number(batch.error_count || 0) > 0) {
+      setMessage("A készletre vétel nem indítható: az importban ellenőrzendő vagy hibás sor van.");
+      return;
+    }
+
     setBusy(true);
     setMessage("");
     try {
-      const result = await apiAifCommitImportBatch(id);
+      const result = await apiAifCommitImportBatch(batch.id);
       await Promise.all([loadBatches(), loadReceptions()]);
       setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.`);
     } catch (e: any) {
@@ -1768,7 +1778,13 @@ export default function AllInIncoming(_props: Props) {
                     {new Date(b.created_at).toLocaleString()} • {b.location_name || "-"} • terméksor: {b.row_count || 0} • ellenőrzendő: {b.error_count || 0} • {b.status}
                   </p>
                 </div>
-                <button className={primaryBtn} disabled={busy || b.status === "committed"} onClick={() => commitBatch(b.id)} type="button">
+                <button
+                  className={primaryBtn}
+                  disabled={busy || b.status === "committed" || Number(b.row_count || 0) <= 0 || Number(b.error_count || 0) > 0}
+                  onClick={() => commitBatch(b)}
+                  title={Number(b.row_count || 0) <= 0 ? "Nincs mentett terméksor ehhez az importhoz." : Number(b.error_count || 0) > 0 ? "Az importban ellenőrzendő vagy hibás sor van." : ""}
+                  type="button"
+                >
                   <CheckCircle size={14} /> Készletre vétel
                 </button>
               </div>
