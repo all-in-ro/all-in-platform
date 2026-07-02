@@ -90,6 +90,40 @@ export type AifReceptionSummary = {
   shipping_cost?: string | number | null;
   total_qty?: number | null;
   line_count?: number | null;
+  import_batches?: number | null;
+  import_rows?: number | null;
+  committed_batches?: number | null;
+  has_stock_movements?: boolean | null;
+  can_delete?: boolean | null;
+};
+
+
+export type AifReceptionDetailRow = {
+  id: string;
+  row_no: number;
+  status: string;
+  error_messages?: string[] | null;
+  qty?: number | null;
+  buy_price?: string | number | null;
+  buy_price_ron?: string | number | null;
+  sell_price?: string | number | null;
+  sell_price_ron?: string | number | null;
+  supplier_product_code?: string | null;
+  supplier_variant_code?: string | null;
+  supplier_color_code?: string | null;
+  supplier_size?: string | null;
+  normalized?: Record<string, unknown> | null;
+  raw?: Record<string, unknown> | null;
+};
+
+export type AifReceptionDetailBatch = AifImportBatchSummary & {
+  rows?: AifReceptionDetailRow[];
+};
+
+export type AifReceptionDetail = {
+  item: AifReceptionSummary;
+  batches: AifReceptionDetailBatch[];
+  rows: AifReceptionDetailRow[];
 };
 
 export type AifImportProfile = {
@@ -431,8 +465,38 @@ export function apiAifDeleteCurrency(code: string) {
   });
 }
 
-export function apiAifListReceptions(options?: { limit?: number }) {
+export function apiAifListReceptions(options?: {
+  limit?: number;
+  search?: string;
+  supplier?: string;
+  location?: string;
+  currency?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+}) {
   const q = new URLSearchParams();
   q.set("limit", String(options?.limit || 50));
+  if (options?.search?.trim()) q.set("q", options.search.trim());
+  if (options?.supplier) q.set("supplier", options.supplier);
+  if (options?.location) q.set("location", options.location);
+  if (options?.currency) q.set("currency", options.currency);
+  if (options?.status) q.set("status", options.status);
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
   return fetchAifJSON<{ items: AifReceptionSummary[] }>(`/receptions?${q.toString()}`);
+}
+
+export function apiAifGetReception(id: string) {
+  return fetchAifJSON<AifReceptionDetail>(`/receptions/${encodeURIComponent(id)}`);
+}
+
+export function apiAifDeleteReception(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" }>(`/receptions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifReceptionExportCsvUrl(id: string) {
+  return `/api/aif/receptions/${encodeURIComponent(id)}/export.csv`;
 }
