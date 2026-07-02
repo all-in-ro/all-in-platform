@@ -1074,7 +1074,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
-  router.patch("/receptions/:id", requireAuthed, async (req, res) => {
+  async function handleReceptionHeaderUpdate(req, res) {
     const id = text(req.params.id);
     const body = req.body || {};
     const src = body.reception && typeof body.reception === "object" ? body.reception : body;
@@ -1146,8 +1146,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
         [rec.rows[0].id, rate, currency]
       );
+      const updated = await client.query(
+        `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+                r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
+                r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
+                r.note, r.supplier_id, r.target_location_id,
+                s.name AS supplier_name, l.name AS location_name
+         FROM aif_receptions r
+         LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+         LEFT JOIN aif_locations l ON l.id=r.target_location_id
+         WHERE r.id=$1
+         LIMIT 1`,
+        [rec.rows[0].id]
+      );
       await client.query("COMMIT");
-      res.json({ ok: true });
+      res.json({ ok: true, item: updated.rows[0] || null });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update reception failed", e);
@@ -1155,7 +1168,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } finally {
       client.release();
     }
-  });
+  }
+
+
+
+  router.patch("/receptions/:id", requireAuthed, handleReceptionHeaderUpdate);
+  router.post("/receptions/:id/update", requireAuthed, handleReceptionHeaderUpdate);
 
   router.get("/receptions/:id/export.csv", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
