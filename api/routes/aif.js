@@ -1139,6 +1139,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const src = body.reception && typeof body.reception === "object" ? body.reception : body;
     const client = await pool.connect();
+    let receptionId = null;
     try {
       await client.query("BEGIN");
       const rec = await client.query(`SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
@@ -1146,6 +1147,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Receptió nem található." });
       }
+      receptionId = rec.rows[0].id;
       const sets = [];
       const args = [];
       let i = 1;
@@ -1189,24 +1191,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (src.note !== undefined) add("note", emptyToNull(src.note));
 
       if (sets.length) {
-        args.push(rec.rows[0].id);
+        args.push(receptionId);
         await client.query(`UPDATE aif_receptions SET ${sets.join(", ")}, updated_at=now() WHERE id=$${i}`, args);
       }
+      await client.query("COMMIT");
 
-      const fresh = await client.query(`SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`, [rec.rows[0].id]);
-      const rate = Number(fresh.rows[0].exchange_rate_to_ron || 1);
-      const currency = fresh.rows[0].currency_code;
-      await client.query(
-        `UPDATE aif_import_rows rw
-         SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round(rw.buy_price * $2::numeric, 2) END,
-             sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $2::numeric, 2) END,
-             normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
-             updated_at=now()
-         FROM aif_import_batches b
-         WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
-        [rec.rows[0].id, rate, currency]
-      );
-      const updated = await client.query(
+      let recalcWarning = null;
+      try {
+        const fresh = await pool.query(`SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`, [receptionId]);
+        const rate = Number(fresh.rows[0]?.exchange_rate_to_ron || 1);
+        const currency = fresh.rows[0]?.currency_code || null;
+        await pool.query(
+          `UPDATE aif_import_rows rw
+           SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round(rw.buy_price * $2::numeric, 2) END,
+               sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $2::numeric, 2) END,
+               normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
+               updated_at=now()
+           FROM aif_import_batches b
+           WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
+          [receptionId, rate, currency]
+        );
+      } catch (recalcError) {
+        recalcWarning = recalcError?.message || "A nem készletre vett sorok RON újraszámolása nem sikerült.";
+        console.error("AIF reception row recalculation warning", recalcError);
+      }
+
+      const updated = await pool.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
@@ -1217,14 +1227,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_locations l ON l.id=r.target_location_id
          WHERE r.id=$1
          LIMIT 1`,
-        [rec.rows[0].id]
+        [receptionId]
       );
-      await client.query("COMMIT");
-      res.json({ ok: true, item: updated.rows[0] || null });
+      res.json({ ok: true, item: updated.rows[0] || null, warning: recalcWarning });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update reception failed", e);
-      res.status(500).json({ error: e?.message || "A receptió mentése nem sikerült." });
+      res.status(500).json({ error: e?.message || "A receptió mentése nem sikerült.", code: e?.code || null });
     } finally {
       client.release();
     }
@@ -2830,16 +2839,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.status(404).json({ error: "Terméksor nem található." });
       }
       const row = current.rows[0];
-      if (row.status === "committed") {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Készletre vett terméksor már nem módosítható ezen a felületen." });
-      }
+      const isCommitted = row.status === "committed";
 
-      const nextNormalized = {
-        ...(row.normalized || {}),
-        ...(body.normalized && typeof body.normalized === "object" ? body.normalized : {}),
-      };
       if (body.status === "ignored") {
+        if (isCommitted) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Készletre vett terméksor nem hagyható ki. Ehhez külön korrekció szükséges." });
+        }
         await client.query(
           `UPDATE aif_import_rows SET status='ignored', error_messages='{}'::text[], updated_at=now() WHERE id=$1`,
           [row.id]
@@ -2848,8 +2854,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.json({ ok: true, mode: "ignored" });
       }
 
+      const nextNormalized = {
+        ...(row.normalized || {}),
+        ...(body.normalized && typeof body.normalized === "object" ? body.normalized : {}),
+      };
+      if (isCommitted) {
+        nextNormalized.qty = row.qty ?? nextNormalized.qty;
+      }
+
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
       if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+      if (isCommitted) {
+        nr.status = "committed";
+        nr.errors = [];
+        nr.normalized.qty = row.qty;
+      }
+
       const exchangeRate = Number(row.exchange_rate_to_ron || 1);
       const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
         ? null
@@ -2890,7 +2910,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           nr.normalized.supplierVariantCode,
           nr.normalized.supplierColorCode,
           nr.normalized.supplierSize,
-          nr.normalized.qty,
+          isCommitted ? row.qty : nr.normalized.qty,
           nr.normalized.buyPrice,
           buyPriceRon,
           nr.normalized.sellPrice,
@@ -2898,16 +2918,71 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ]
       );
 
+      if (isCommitted && row.variant_id) {
+        await client.query(
+          `UPDATE aif_product_variants SET
+             barcode=COALESCE($2, barcode),
+             color_code=COALESCE($3, color_code),
+             color_name=COALESCE($4, color_name),
+             size=COALESCE($5, size),
+             buy_price=COALESCE($6, buy_price),
+             sell_price=COALESCE($7, sell_price),
+             compare_at_price=COALESCE($8, compare_at_price),
+             updated_at=now()
+           WHERE id=$1`,
+          [
+            row.variant_id,
+            nr.normalized.barcode,
+            nr.normalized.colorCode,
+            nr.normalized.colorName,
+            nr.normalized.size,
+            nr.normalized.buyPrice,
+            nr.normalized.sellPrice,
+            nr.normalized.compareAtPrice,
+          ]
+        );
+        if (nr.normalized.titleRo) {
+          await client.query(
+            `UPDATE aif_product_models m
+             SET title_ro=$2, updated_at=now()
+             FROM aif_product_variants v
+             WHERE v.model_id=m.id AND v.id=$1`,
+            [row.variant_id, nr.normalized.titleRo]
+          );
+        }
+        await client.query(
+          `UPDATE aif_variant_supplier_codes
+           SET supplier_product_code=COALESCE($2, supplier_product_code),
+               supplier_variant_code=$3,
+               supplier_color_code=$4,
+               supplier_color_name=COALESCE($5, supplier_color_name),
+               supplier_size=COALESCE($6, supplier_size),
+               raw=$7::jsonb,
+               updated_at=now()
+           WHERE variant_id=$1`,
+          [
+            row.variant_id,
+            nr.normalized.supplierProductCode,
+            nr.normalized.supplierVariantCode,
+            nr.normalized.supplierColorCode,
+            nr.normalized.colorName,
+            nr.normalized.supplierSize,
+            JSON.stringify(normalizedForDb),
+          ]
+        );
+      }
+
       await client.query("COMMIT");
-      res.json({ ok: true, status: nr.status, errors: nr.errors });
+      res.json({ ok: true, status: nr.status, errors: nr.errors, committedEdit: isCommitted });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update import row failed", e);
-      res.status(500).json({ error: e?.message || "A terméksor mentése nem sikerült." });
+      res.status(500).json({ error: e?.message || "A terméksor mentése nem sikerült.", code: e?.code || null });
     } finally {
       client.release();
     }
   });
+
 
   router.delete("/import-rows/:id", requireAuthed, async (req, res) => {
     const rowId = text(req.params.id);
