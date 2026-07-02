@@ -1054,7 +1054,22 @@ export default function AllInWarehouse() {
                   <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
-                      <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={edit.barcode} onChange={(e) => setEdit((x) => ({ ...x, barcode: e.target.value }))} /><span className="text-[11px] text-white/45">Egyedi variánsazonosító. Később ez kerül a Shopify SKU mezőbe.</span></label>
+                      <label className={label}>
+                        <span className="flex items-center gap-1.5">
+                          <span>Vonalkód / Shopify SKU alap</span>
+                          <span
+                            className="group relative inline-flex h-4 w-4 items-center justify-center rounded-full border border-amber-200/60 bg-amber-300 text-[10px] leading-none text-slate-900 shadow-[0_0_10px_rgba(252,211,77,0.32)]"
+                            tabIndex={0}
+                            aria-label="Egyedi variánsazonosító információ"
+                          >
+                            i
+                            <span className="pointer-events-none absolute left-1/2 top-full z-30 mt-1 hidden w-64 -translate-x-1/2 rounded-lg border border-amber-200/35 bg-[#1f2937] px-2 py-1.5 text-[11px] leading-snug tracking-normal text-white shadow-xl group-hover:block group-focus:block">
+                              Egyedi variánsazonosító. Később ez kerül a Shopify SKU mezőbe.
+                            </span>
+                          </span>
+                        </span>
+                        <input className={input} value={edit.barcode} onChange={(e) => setEdit((x) => ({ ...x, barcode: e.target.value }))} />
+                      </label>
                       <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} /></label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
                       <label className={label}>Méret<input className={input} value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} /></label>
