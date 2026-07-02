@@ -46,6 +46,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0]?.id || null;
   }
 
+  function canonicalGender(v) {
+    const code = normCode(v || "unisex") || "unisex";
+    const map = {
+      men: "men", man: "men", male: "men", masculin: "men", barbati: "men", barbat: "men", ferfi: "men", ffi: "men",
+      women: "women", woman: "women", female: "women", feminin: "women", femei: "women", dama: "women", dame: "women", noi: "women", no: "women",
+      kids: "kids", kid: "kids", copii: "kids", copil: "kids", gyerek: "kids", junior: "kids", copii_tineri: "kids",
+      unisex: "unisex", universal: "unisex", mixt: "unisex", mixed: "unisex"
+    };
+    return map[code] || (['men', 'women', 'kids', 'unisex'].includes(code) ? code : 'unisex');
+  }
+
   function normalizeRowInput(input, rowNo) {
     const src = input?.normalized && typeof input.normalized === "object" ? input.normalized : input || {};
 
@@ -58,18 +69,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code);
     const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size);
 
-    const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brand);
-    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.category);
+    const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brand);
+    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.categoryId || src.category_id || src.category);
 
     const normalized = {
+      brandId: emptyToNull(src.brandId || src.brand_id),
       brandCode: brandRaw ? normCode(brandRaw) : null,
       brandName: emptyToNull(src.brandName || src.brand_name || src.brand),
+      categoryId: emptyToNull(src.categoryId || src.category_id),
       categoryCode: categoryRaw ? normCode(categoryRaw) : null,
+      categoryName: emptyToNull(src.categoryName || src.category_name || src.category),
       modelCode: emptyToNull(src.modelCode || src.model_code || supplierProductCode),
       titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
       titleHu: emptyToNull(src.titleHu || src.title_hu),
       descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
-      gender: normCode(src.gender || "unisex") || "unisex",
+      gender: canonicalGender(src.gender || "unisex"),
       productType: emptyToNull(src.productType || src.product_type),
       season: emptyToNull(src.season),
       material: emptyToNull(src.material),
@@ -95,7 +109,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!normalized.size) errors.push("size missing");
     if (normalized.qty === null || normalized.qty <= 0) errors.push("qty must be > 0");
     if (!normalized.modelCode && !normalized.supplierProductCode) errors.push("model/product code missing");
-    if (!["men", "women", "kids", "unisex"].includes(normalized.gender)) normalized.gender = "unisex";
+    normalized.gender = canonicalGender(normalized.gender);
 
     return {
       rowNo: toInt(input?.rowNo ?? input?.row_no ?? rowNo) || rowNo,
@@ -107,32 +121,102 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   async function ensureBrand(client, normalized, fallbackSupplierCode) {
-    const rawCode = normalized.brandCode || normCode(fallbackSupplierCode);
-    if (!rawCode) return null;
+    const candidates = [
+      emptyToNull(normalized.brandId),
+      emptyToNull(normalized.brandCode),
+      emptyToNull(normalized.brandName),
+    ].filter(Boolean);
 
+    for (const candidate of candidates) {
+      const r = await client.query(
+        `SELECT id FROM aif_brands
+         WHERE id::text=$1 OR code=$1 OR lower(name)=lower($1)
+         LIMIT 1`,
+        [candidate]
+      );
+      if (r.rowCount) return r.rows[0].id;
+    }
+
+    const rawCode = normCode(normalized.brandCode || normalized.brandName || fallbackSupplierCode);
+    if (!rawCode) return null;
     const name = normalized.brandName || text(rawCode).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+
+    const existing = await client.query(`SELECT id FROM aif_brands WHERE code=$1 LIMIT 1`, [rawCode]);
+    if (existing.rowCount) return existing.rows[0].id;
+
     const r = await client.query(
       `INSERT INTO aif_brands (code, name)
        VALUES ($1, $2)
-       ON CONFLICT (code) DO UPDATE SET name = COALESCE(aif_brands.name, EXCLUDED.name)
        RETURNING id`,
       [rawCode, name]
     );
     return r.rows[0].id;
   }
 
-  async function findCategoryId(client, categoryCode) {
-    const code = normCode(categoryCode);
-    if (!code) return null;
-    const r = await client.query(`SELECT id FROM aif_categories WHERE code=$1 AND is_active=true LIMIT 1`, [code]);
+  async function findCategoryId(client, normalizedOrCode) {
+    const raw = typeof normalizedOrCode === "object" && normalizedOrCode
+      ? emptyToNull(normalizedOrCode.categoryId || normalizedOrCode.categoryCode || normalizedOrCode.categoryName)
+      : emptyToNull(normalizedOrCode);
+    if (!raw) return null;
+    const code = normCode(raw);
+    const r = await client.query(
+      `SELECT id FROM aif_categories
+       WHERE id::text=$1
+          OR code=$1
+          OR code=$2
+          OR lower(name_ro)=lower($1)
+          OR lower(COALESCE(name_hu,''))=lower($1)
+       ORDER BY is_active DESC, sort_order ASC
+       LIMIT 1`,
+      [raw, code]
+    );
     return r.rows[0]?.id || null;
   }
 
   async function upsertModel(client, { supplierCode, normalized }) {
-    const brandId = await ensureBrand(client, normalized, supplierCode);
-    const categoryId = await findCategoryId(client, normalized.categoryCode);
-    const baseModelCode = normalized.modelCode || normalized.supplierProductCode || normalized.titleRo;
+    const safeNormalized = { ...normalized, gender: canonicalGender(normalized.gender) };
+    const brandId = await ensureBrand(client, safeNormalized, supplierCode);
+    const categoryId = await findCategoryId(client, safeNormalized);
+    const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
     const modelCode = `${normCode(supplierCode || "aif")}:${normCode(baseModelCode)}`;
+
+    const existing = await client.query(
+      `SELECT id FROM aif_product_models WHERE model_code=$1 LIMIT 1`,
+      [modelCode]
+    );
+
+    if (existing.rowCount) {
+      const id = existing.rows[0].id;
+      await client.query(
+        `UPDATE aif_product_models SET
+           brand_id = COALESCE($2, brand_id),
+           category_id = COALESCE($3, category_id),
+           title_ro = $4,
+           title_hu = COALESCE($5, title_hu),
+           description_ro = COALESCE($6, description_ro),
+           gender = $7,
+           product_type = COALESCE($8, product_type),
+           season = COALESCE($9, season),
+           material = COALESCE($10, material),
+           shopify_title = COALESCE($11, shopify_title),
+           updated_at = now()
+         WHERE id=$1`,
+        [
+          id,
+          brandId,
+          categoryId,
+          safeNormalized.titleRo,
+          safeNormalized.titleHu,
+          safeNormalized.descriptionRo,
+          safeNormalized.gender,
+          safeNormalized.productType,
+          safeNormalized.season,
+          safeNormalized.material,
+          safeNormalized.titleRo,
+        ]
+      );
+      return id;
+    }
 
     const r = await client.query(
       `INSERT INTO aif_product_models (
@@ -140,32 +224,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          gender, product_type, season, material, shopify_title, status
        )
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft')
-       ON CONFLICT (model_code) WHERE model_code IS NOT NULL AND model_code <> ''
-       DO UPDATE SET
-         brand_id = COALESCE(EXCLUDED.brand_id, aif_product_models.brand_id),
-         category_id = COALESCE(EXCLUDED.category_id, aif_product_models.category_id),
-         title_ro = EXCLUDED.title_ro,
-         title_hu = COALESCE(EXCLUDED.title_hu, aif_product_models.title_hu),
-         description_ro = COALESCE(EXCLUDED.description_ro, aif_product_models.description_ro),
-         gender = EXCLUDED.gender,
-         product_type = COALESCE(EXCLUDED.product_type, aif_product_models.product_type),
-         season = COALESCE(EXCLUDED.season, aif_product_models.season),
-         material = COALESCE(EXCLUDED.material, aif_product_models.material),
-         shopify_title = COALESCE(EXCLUDED.shopify_title, aif_product_models.shopify_title),
-         updated_at = now()
        RETURNING id`,
       [
         brandId,
         categoryId,
         modelCode,
-        normalized.titleRo,
-        normalized.titleHu,
-        normalized.descriptionRo,
-        normalized.gender,
-        normalized.productType,
-        normalized.season,
-        normalized.material,
-        normalized.titleRo,
+        safeNormalized.titleRo,
+        safeNormalized.titleHu,
+        safeNormalized.descriptionRo,
+        safeNormalized.gender,
+        safeNormalized.productType,
+        safeNormalized.season,
+        safeNormalized.material,
+        safeNormalized.titleRo,
       ]
     );
     return r.rows[0].id;
@@ -2221,6 +2292,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [batchId]
       );
 
+      if (!rows.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "A készletre vétel nem indítható: ehhez az importhoz nincs mentett terméksor." });
+      }
+
       const errors = rows.rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
       if (errors.length) {
         await client.query(
@@ -2234,37 +2310,44 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let committed = 0;
       const actor = actorFrom(req);
       for (const row of rows.rows) {
-        const normalized = { ...(row.normalized || {}) };
-        const qty = Number(row.qty ?? normalized.qty ?? 0);
-        if (!Number.isFinite(qty) || qty <= 0) continue;
+        try {
+          const normalized = { ...(row.normalized || {}) };
+          normalized.gender = canonicalGender(normalized.gender);
+          const qty = Number(row.qty ?? normalized.qty ?? 0);
+          if (!Number.isFinite(qty) || qty <= 0) {
+            throw new Error("a mennyiség hiányzik vagy nem pozitív");
+          }
 
-        if (row.buy_price_ron !== null && row.buy_price_ron !== undefined) {
-          normalized.buyPriceOriginal = row.buy_price;
-          normalized.buyPrice = Number(row.buy_price_ron);
+          if (row.buy_price_ron !== null && row.buy_price_ron !== undefined) {
+            normalized.buyPriceOriginal = row.buy_price;
+            normalized.buyPrice = Number(row.buy_price_ron);
+          }
+          if (row.sell_price_ron !== null && row.sell_price_ron !== undefined) {
+            normalized.sellPriceOriginal = row.sell_price;
+            normalized.sellPrice = Number(row.sell_price_ron);
+          }
+
+          const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
+          const variantId = await upsertVariant(client, { modelId, normalized });
+          await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
+          await addStock(client, {
+            locationId: batch.target_location_id,
+            variantId,
+            qty: Math.floor(qty),
+            actor,
+            sourceId: batchId,
+            rowId: row.id,
+            raw: row.raw,
+          });
+
+          await client.query(
+            `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
+            [row.id, variantId]
+          );
+          committed++;
+        } catch (rowError) {
+          throw new Error(`A(z) ${row.row_no || "?"}. terméksor készletre vétele nem sikerült: ${rowError?.message || rowError}`);
         }
-        if (row.sell_price_ron !== null && row.sell_price_ron !== undefined) {
-          normalized.sellPriceOriginal = row.sell_price;
-          normalized.sellPrice = Number(row.sell_price_ron);
-        }
-
-        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
-        const variantId = await upsertVariant(client, { modelId, normalized });
-        await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
-        await addStock(client, {
-          locationId: batch.target_location_id,
-          variantId,
-          qty: Math.floor(qty),
-          actor,
-          sourceId: batchId,
-          rowId: row.id,
-          raw: row.raw,
-        });
-
-        await client.query(
-          `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
-          [row.id, variantId]
-        );
-        committed++;
       }
 
       await client.query(
@@ -2288,7 +2371,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF commit import batch failed", e);
-      res.status(500).json({ error: "failed to commit import batch" });
+      res.status(500).json({ error: e?.message || "A készletre vétel nem sikerült." });
     } finally {
       client.release();
     }
