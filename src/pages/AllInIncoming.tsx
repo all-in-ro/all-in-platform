@@ -162,7 +162,21 @@ function locationTypeLabel(v: string) {
 }
 
 function categoryLabel(c: AifCategoryOption) {
-  return c.name_ro || c.name_hu || c.name || c.code || "-";
+  return c.name_hu || c.name_ro || c.name || c.code || "-";
+}
+
+function categoryDisplay(value: unknown, categories: AifCategoryOption[]) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const key = raw.toLowerCase();
+  const found = categories.find((c) =>
+    String(c.code || "").toLowerCase() === key ||
+    String(c.id || "").toLowerCase() === key ||
+    String(c.name_ro || "").toLowerCase() === key ||
+    String(c.name_hu || "").toLowerCase() === key ||
+    String(c.name || "").toLowerCase() === key
+  );
+  return found ? categoryLabel(found) : raw;
 }
 
 function genderLabel(code: unknown, items: AifGenderOption[]) {
@@ -277,7 +291,13 @@ export default function AllInIncoming(_props: Props) {
   );
 
   const activeBrands = useMemo(() => brands.filter((b) => b.is_active !== false), [brands]);
-  const activeCategories = useMemo(() => categories.filter((c) => c.is_active !== false), [categories]);
+  const activeCategories = useMemo(
+    () => categories
+      .filter((c) => c.is_active !== false)
+      .slice()
+      .sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })),
+    [categories]
+  );
   const activeGenderTypes = useMemo(() => genderTypes.filter((g) => g.is_active !== false), [genderTypes]);
   const brandOptionsForSupplier = useMemo(() => {
     if (!supplierId) return activeBrands;
@@ -364,13 +384,15 @@ export default function AllInIncoming(_props: Props) {
     return sum + toNumber(n.qty) * toNumber(n.buyPrice);
   }, 0), [approvedRowList]);
   const approvedQty = useMemo(() => approvedRowList.reduce((sum, row) => sum + toNumber(row.normalized?.qty), 0), [approvedRowList]);
+  const savedReceptionGoodsValue = selectedReceptionId ? loadedReceptionRowTotals.value : 0;
+  const totalReceptionGoodsValue = savedReceptionGoodsValue + approvedGoodsValue;
   const rateValue = exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
   const shippingValue = shippingCost.trim() ? toNumber(shippingCost) : 0;
-  const vatRateValue = tvaRate.trim() ? toNumber(tvaRate) : 0;
-  const goodsPlusShipping = approvedGoodsValue + shippingValue;
+  const vatRateValue = tvaMode === "with_tva" && tvaRate.trim() ? toNumber(tvaRate) : 0;
+  const goodsPlusShipping = totalReceptionGoodsValue + shippingValue;
   const invoiceGrossProvided = invoiceGross.trim().length > 0;
   const invoiceGrossValue = invoiceGrossProvided ? toNumber(invoiceGross) : 0;
-  const tvaRateRequired = tvaMode === "without_tva" || tvaMode === "with_tva";
+  const tvaRateRequired = tvaMode === "with_tva";
   const requiredMissing = {
     invoiceNumber: !invoiceNumber.trim(),
     invoiceDate: !invoiceDate,
@@ -390,10 +412,7 @@ export default function AllInIncoming(_props: Props) {
       const vat = gross - net;
       return { net, vat, gross };
     }
-    if (tvaMode === "no_tva") return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
-    const net = goodsPlusShipping;
-    const vat = net * Math.max(0, vatRateValue) / 100;
-    return { net, vat, gross: net + vat };
+    return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
   }, [goodsPlusShipping, tvaMode, vatRateValue]);
   const invoiceDifference = invoiceGrossProvided ? invoiceGrossValue - computedReception.gross : 0;
   const receptionRonValue = (invoiceGrossProvided ? invoiceGrossValue : computedReception.gross) * (rateValue || 0);
@@ -1221,7 +1240,7 @@ export default function AllInIncoming(_props: Props) {
             </label>
             <label className={label}>
               TVA kezelés
-              <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); }}>
+              <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next !== "with_tva") setTvaRate("0"); }}>
                 <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
                 <option style={optionStyle} value="without_tva">Árak nettóban</option>
                 <option style={optionStyle} value="with_tva">Árak bruttóban</option>
@@ -1230,7 +1249,7 @@ export default function AllInIncoming(_props: Props) {
             </label>
             <label className={label}>
               TVA %
-              <input className={`${requiredInput(tvaMode === "no_tva" ? false : requiredMissing.tvaRate)} ${tvaMode === "no_tva" ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode === "no_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva"} placeholder={tvaMode === "no_tva" ? "Nem szükséges" : "pl. 19"} />
+              <input className={`${requiredInput(tvaMode !== "with_tva" ? false : requiredMissing.tvaRate)} ${tvaMode !== "with_tva" ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode !== "with_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode !== "with_tva"} placeholder={tvaMode !== "with_tva" ? "Nem szükséges" : "pl. 19"} />
             </label>
             <label className={label}>
               Szállítás
@@ -1242,18 +1261,18 @@ export default function AllInIncoming(_props: Props) {
             </label>
           </div>
 
-          <div className="grid gap-2 md:grid-cols-6">
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Mentett sorok</p>
+              <p className="mt-1 text-sm text-white">{moneyText(savedReceptionGoodsValue, currencyCode)}</p>
+            </div>
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Új kijelölt sorok</p>
               <p className="mt-1 text-sm text-white">{moneyText(approvedGoodsValue, currencyCode)}</p>
             </div>
             <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Nettó</p>
-              <p className="mt-1 text-sm text-white">{moneyText(computedReception.net, currencyCode)}</p>
-            </div>
-            <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">TVA</p>
-              <p className="mt-1 text-sm text-white">{moneyText(computedReception.vat, currencyCode)}</p>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Sorok összesen</p>
+              <p className="mt-1 text-sm text-white">{moneyText(totalReceptionGoodsValue, currencyCode)}</p>
             </div>
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított összeg</p>
@@ -1266,6 +1285,7 @@ export default function AllInIncoming(_props: Props) {
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
               <p className="mt-1 text-sm text-white">{rateValue > 0 ? moneyText(receptionRonValue, "RON") : "-"}</p>
+              {computedReception.vat > 0 && <p className="mt-1 text-[11px] text-white/55">TVA: {moneyText(computedReception.vat, currencyCode)}</p>}
             </div>
           </div>
 
@@ -1317,7 +1337,7 @@ export default function AllInIncoming(_props: Props) {
                   <td className="px-3 py-2.5 text-white/88">{cell(row.supplier_product_code || row.normalized?.supplierProductCode || row.normalized?.modelCode)}</td>
                   <td className="px-3 py-2.5 text-white">{normValue(row, "titleRo")}</td>
                   <td className="px-3 py-2.5 text-white/82">{normValue(row, "brandName", row.normalized?.brandCode)}</td>
-                  <td className="px-3 py-2.5 text-white/82">{normValue(row, "categoryName", row.normalized?.categoryCode)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{categoryDisplay(row.normalized?.categoryCode || row.normalized?.categoryName, activeCategories)}</td>
                   <td className="px-3 py-2.5 text-white/82">{genderLabel(row.normalized?.gender, activeGenderTypes)}</td>
                   <td className="px-3 py-2.5 text-white/82">{normValue(row, "colorName")}</td>
                   <td className="px-3 py-2.5 text-white/82">{cell(row.supplier_size || row.normalized?.size)}</td>
@@ -1866,6 +1886,7 @@ export default function AllInIncoming(_props: Props) {
           )}
         </section>
 
+        {!selectedReceptionId && (
         <section className={card}>
           <SectionTitle
             icon={<FileSpreadsheet size={16} />}
@@ -1904,6 +1925,8 @@ export default function AllInIncoming(_props: Props) {
             </div>
           )}
         </section>
+
+        )}
 
         <section className={card}>
           <SectionTitle
