@@ -490,6 +490,66 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rowCount > 0;
   }
 
+  function colorAliasesFromInput(value) {
+    if (Array.isArray(value)) {
+      return Array.from(new Set(value.map((x) => text(x)).filter(Boolean)));
+    }
+    return Array.from(new Set(text(value).split(/[\n,;]+/).map((x) => text(x)).filter(Boolean)));
+  }
+
+  async function normalizeColorName(client, value) {
+    const raw = emptyToNull(value);
+    if (!raw) return null;
+    const rawKey = normCode(raw);
+    if (!rawKey) return raw;
+
+    const r = await client.query(
+      `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases
+       FROM aif_color_types
+       WHERE is_active=true
+       ORDER BY sort_order ASC, name_ro ASC`
+    );
+
+    const direct = r.rows.find((color) => {
+      const aliases = Array.isArray(color.aliases) ? color.aliases : [];
+      const values = [color.code, color.name_ro, color.name_hu, color.name_en, color.name_de, ...aliases];
+      return values.some((x) => normCode(x) === rawKey);
+    });
+    if (direct) return direct.name_ro;
+
+    const parts = rawKey.split(/_+/).filter(Boolean);
+    if (parts.length > 1) {
+      const translated = [];
+      for (const part of parts) {
+        const match = r.rows.find((color) => {
+          const aliases = Array.isArray(color.aliases) ? color.aliases : [];
+          const values = [color.code, color.name_ro, color.name_hu, color.name_en, color.name_de, ...aliases];
+          return values.some((x) => normCode(x) === part);
+        });
+        if (!match) return raw;
+        translated.push(match.name_ro);
+      }
+      return Array.from(new Set(translated)).join(" / ");
+    }
+
+    return raw;
+  }
+
+  async function colorUsage(client, colorIdOrCode) {
+    const c = await client.query(
+      `SELECT id, code, name_ro FROM aif_color_types WHERE id::text=$1 OR code=$1 LIMIT 1`,
+      [text(colorIdOrCode)]
+    );
+    if (!c.rowCount) return { product_variants: 0 };
+    const r = await client.query(
+      `SELECT count(*)::int AS product_variants
+       FROM aif_product_variants
+       WHERE lower(COALESCE(color_name,''))=lower($1)`,
+      [c.rows[0].name_ro]
+    );
+    return r.rows[0] || { product_variants: 0 };
+  }
+
 
   function currencyCode(v) {
     return text(v).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
@@ -502,32 +562,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (["without_tva", "with_tva", "no_tva"].includes(mode)) return mode;
     return null;
   }
-
-  function dateOnly(v) {
-    const s = text(v);
-    if (!s) return null;
-    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-    const slash = s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})$/);
-    if (slash) {
-      const a = Number(slash[1]);
-      const b = Number(slash[2]);
-      const y = slash[3];
-      // Browser date inputs normally submit YYYY-MM-DD, but if a localized
-      // display string slips through, keep the common Romanian/Hungarian
-      // day/month order when the first part is above 12. Otherwise use
-      // the US-style month/day display Chrome often shows. Yes, dates are
-      // apparently still humanity's punishment for inventing calendars.
-      const dayFirst = a > 12;
-      const m = String(dayFirst ? b : a).padStart(2, "0");
-      const d = String(dayFirst ? a : b).padStart(2, "0");
-      return `${y}-${m}-${d}`;
-    }
-    const parsed = new Date(s);
-    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-    return s;
-  }
-
 
   async function currencyUsage(client, code) {
     const r = await client.query(
@@ -1105,61 +1139,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const src = body.reception && typeof body.reception === "object" ? body.reception : body;
     const client = await pool.connect();
-
     try {
       await client.query("BEGIN");
-
-      const rec = await client.query(
-        `SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`,
-        [id]
-      );
+      const rec = await client.query(`SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
       if (!rec.rowCount) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Receptió nem található." });
       }
+      const sets = [];
+      const args = [];
+      let i = 1;
+      const add = (col, value) => { sets.push(`${col}=$${i++}`); args.push(value); };
 
-      const setMap = new Map();
-      const put = (column, value) => setMap.set(column, value);
-
-      if (src.invoiceNumber !== undefined || src.invoice_number !== undefined) {
-        const invoiceNumber = emptyToNull(src.invoiceNumber ?? src.invoice_number);
-        if (!invoiceNumber) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Számlaszám megadása kötelező." });
-        }
-        put("invoice_number", invoiceNumber);
-      }
-      if (src.invoiceDate !== undefined || src.invoice_date !== undefined) {
-        const invoiceDate = dateOnly(src.invoiceDate ?? src.invoice_date);
-        if (!invoiceDate) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Számla dátuma kötelező." });
-        }
-        put("invoice_date", invoiceDate);
-      }
-      if (src.receptionDate !== undefined || src.reception_date !== undefined) {
-        const receptionDate = dateOnly(src.receptionDate ?? src.reception_date);
-        if (!receptionDate) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Receptió dátuma kötelező." });
-        }
-        put("reception_date", receptionDate);
-      }
+      if (src.invoiceNumber !== undefined || src.invoice_number !== undefined) add("invoice_number", emptyToNull(src.invoiceNumber ?? src.invoice_number));
+      if (src.invoiceDate !== undefined || src.invoice_date !== undefined) add("invoice_date", emptyToNull(src.invoiceDate ?? src.invoice_date));
+      if (src.receptionDate !== undefined || src.reception_date !== undefined) add("reception_date", emptyToNull(src.receptionDate ?? src.reception_date));
       if (src.currencyCode !== undefined || src.currency_code !== undefined) {
         const c = currencyCode(src.currencyCode ?? src.currency_code);
-        if (!c) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Pénznem kiválasztása kötelező." });
-        }
-        const exists = await client.query(
-          `SELECT 1 FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`,
-          [c]
-        );
+        const exists = await client.query(`SELECT 1 FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [c]);
         if (!exists.rowCount) {
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "A kiválasztott pénznem nem létezik vagy inaktív." });
         }
-        put("currency_code", c);
+        add("currency_code", c);
       }
       if (src.exchangeRateToRon !== undefined || src.exchange_rate_to_ron !== undefined) {
         const rate = toMoney(src.exchangeRateToRon ?? src.exchange_rate_to_ron);
@@ -1167,7 +1169,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "Pozitív RON árfolyam szükséges." });
         }
-        put("exchange_rate_to_ron", rate);
+        add("exchange_rate_to_ron", rate);
       }
       if (src.tvaMode !== undefined || src.tva_mode !== undefined) {
         const mode = tvaMode(src.tvaMode ?? src.tva_mode);
@@ -1175,115 +1177,58 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "Érvénytelen TVA kezelés." });
         }
-        put("tva_mode", mode);
-        if (mode === "no_tva") put("tva_rate", 0);
+        add("tva_mode", mode);
+        if (mode === "no_tva") add("tva_rate", 0);
       }
-      if (src.tvaRate !== undefined || src.tva_rate !== undefined) {
-        put("tva_rate", toMoney(src.tvaRate ?? src.tva_rate) ?? 0);
-      }
-      if (src.shippingCost !== undefined || src.shipping_cost !== undefined) {
-        put("shipping_cost", toMoney(src.shippingCost ?? src.shipping_cost) ?? 0);
-      }
-      if (src.goodsValue !== undefined || src.goods_value !== undefined) {
-        put("goods_value", toMoney(src.goodsValue ?? src.goods_value));
-      }
-      if (src.invoiceNet !== undefined || src.invoice_net !== undefined) {
-        put("invoice_net", toMoney(src.invoiceNet ?? src.invoice_net));
-      }
-      if (src.invoiceVat !== undefined || src.invoice_vat !== undefined) {
-        put("invoice_vat", toMoney(src.invoiceVat ?? src.invoice_vat));
-      }
-      if (src.invoiceGross !== undefined || src.invoice_gross !== undefined) {
-        const gross = toMoney(src.invoiceGross ?? src.invoice_gross);
-        if (gross === null || gross === undefined) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Számla végösszeg megadása kötelező." });
-        }
-        put("invoice_gross", gross);
-      }
-      if (src.note !== undefined) put("note", emptyToNull(src.note));
+      if (src.tvaRate !== undefined || src.tva_rate !== undefined) add("tva_rate", toMoney(src.tvaRate ?? src.tva_rate) ?? 0);
+      if (src.shippingCost !== undefined || src.shipping_cost !== undefined) add("shipping_cost", toMoney(src.shippingCost ?? src.shipping_cost) ?? 0);
+      if (src.goodsValue !== undefined || src.goods_value !== undefined) add("goods_value", toMoney(src.goodsValue ?? src.goods_value));
+      if (src.invoiceNet !== undefined || src.invoice_net !== undefined) add("invoice_net", toMoney(src.invoiceNet ?? src.invoice_net));
+      if (src.invoiceVat !== undefined || src.invoice_vat !== undefined) add("invoice_vat", toMoney(src.invoiceVat ?? src.invoice_vat));
+      if (src.invoiceGross !== undefined || src.invoice_gross !== undefined) add("invoice_gross", toMoney(src.invoiceGross ?? src.invoice_gross));
+      if (src.note !== undefined) add("note", emptyToNull(src.note));
 
-      if (setMap.size) {
-        const entries = Array.from(setMap.entries());
-        const sets = entries.map(([column], idx) => `${column}=$${idx + 1}`);
-        const args = entries.map(([, value]) => value);
+      if (sets.length) {
         args.push(rec.rows[0].id);
-        await client.query(
-          `UPDATE aif_receptions SET ${sets.join(", ")}, updated_at=now() WHERE id=$${args.length}`,
-          args
-        );
+        await client.query(`UPDATE aif_receptions SET ${sets.join(", ")}, updated_at=now() WHERE id=$${i}`, args);
       }
 
-      const fresh = await client.query(
-        `SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`,
-        [rec.rows[0].id]
+      const fresh = await client.query(`SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`, [rec.rows[0].id]);
+      const rate = Number(fresh.rows[0].exchange_rate_to_ron || 1);
+      const currency = fresh.rows[0].currency_code;
+      await client.query(
+        `UPDATE aif_import_rows rw
+         SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round(rw.buy_price * $2::numeric, 2) END,
+             sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $2::numeric, 2) END,
+             normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
+             updated_at=now()
+         FROM aif_import_batches b
+         WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
+        [rec.rows[0].id, rate, currency]
       );
-      const rate = Number(fresh.rows[0]?.exchange_rate_to_ron || 1);
-      const currency = fresh.rows[0]?.currency_code || null;
-
-      // Recalculate non-committed row RON values after exchange-rate/currency changes.
-      // PostgreSQL marks the whole transaction as aborted after any failed SQL statement.
-      // So this optional maintenance query must run inside a savepoint. If it fails, we
-      // roll back only this small part and still keep the already validated header update.
-      let rowRecalcWarning = null;
-      await client.query("SAVEPOINT aif_reception_row_recalc");
-      try {
-        await client.query(
-          `UPDATE aif_import_rows rw
-           SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round((rw.buy_price * $2::numeric)::numeric, 2) END,
-               sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round((rw.sell_price * $2::numeric)::numeric, 2) END,
-               normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
-               updated_at=now()
-           FROM aif_import_batches b
-           WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
-          [rec.rows[0].id, rate, currency]
-        );
-        await client.query("RELEASE SAVEPOINT aif_reception_row_recalc");
-      } catch (rowErr) {
-        try { await client.query("ROLLBACK TO SAVEPOINT aif_reception_row_recalc"); } catch {}
-        try { await client.query("RELEASE SAVEPOINT aif_reception_row_recalc"); } catch {}
-        rowRecalcWarning = rowErr?.message || "A nem készletre vett sorok RON újraszámolása nem sikerült.";
-        console.error("AIF reception row recalc failed", rowErr);
-      }
-
       const updated = await client.query(
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
                 r.note, r.supplier_id, r.target_location_id,
-                s.name AS supplier_name, l.name AS location_name,
-                count(DISTINCT b.id)::int AS import_batches,
-                count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
-                count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
-                count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows,
-                count(rw.id) FILTER (WHERE rw.status = 'ignored')::int AS ignored_rows,
-                count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows
+                s.name AS supplier_name, l.name AS location_name
          FROM aif_receptions r
          LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
          LEFT JOIN aif_locations l ON l.id=r.target_location_id
-         LEFT JOIN aif_import_batches b ON b.reception_id=r.id
-         LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
          WHERE r.id=$1
-         GROUP BY r.id, s.name, l.name
          LIMIT 1`,
         [rec.rows[0].id]
       );
-
       await client.query("COMMIT");
-      res.json({ ok: true, item: updated.rows[0] || null, warning: rowRecalcWarning });
+      res.json({ ok: true, item: updated.rows[0] || null });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update reception failed", e);
-      const status = e?.code === "22P02" || e?.code === "23514" ? 400 : 500;
-      res.status(status).json({
-        error: e?.message || "A receptió mentése nem sikerült.",
-        code: e?.code || null,
-      });
+      res.status(500).json({ error: e?.message || "A receptió mentése nem sikerült." });
     } finally {
       client.release();
     }
   }
-
 
 
 
@@ -1468,6 +1413,140 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
+
+  router.get("/color-types", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active, created_at, updated_at
+       FROM aif_color_types
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, name_ro ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/color-types/normalize", requireAuthed, async (req, res) => {
+    const input = text(req.body?.color || req.body?.name || req.body?.value);
+    if (!input) return res.status(400).json({ error: "color required" });
+    try {
+      const color = await normalizeColorName(pool, input);
+      const item = await pool.query(
+        `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
+         FROM aif_color_types
+         WHERE is_active=true AND lower(name_ro)=lower($1)
+         LIMIT 1`,
+        [color]
+      );
+      res.json({ input, color, item: item.rows[0] || null });
+    } catch (e) {
+      console.error("AIF normalize color failed", e);
+      res.status(500).json({ error: "failed to normalize color" });
+    }
+  });
+
+  router.post("/color-types", requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const nameRo = text(body.nameRo || body.name_ro || body.name || body.nameRoOfficial);
+    const code = normCode(body.code || nameRo);
+    const aliases = colorAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!nameRo) return res.status(400).json({ error: "color Romanian name required" });
+    if (!code) return res.status(400).json({ error: "color code required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_color_types (code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name_ro=EXCLUDED.name_ro,
+           name_hu=EXCLUDED.name_hu,
+           name_en=EXCLUDED.name_en,
+           name_de=EXCLUDED.name_de,
+           aliases=EXCLUDED.aliases,
+           hex=EXCLUDED.hex,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active, created_at, updated_at`,
+        [code, nameRo, emptyToNull(body.nameHu || body.name_hu), emptyToNull(body.nameEn || body.name_en), emptyToNull(body.nameDe || body.name_de), aliases, emptyToNull(body.hex), sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create color type failed", e);
+      res.status(500).json({ error: "failed to save color" });
+    }
+  });
+
+  router.patch("/color-types/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.nameRo !== undefined || body.name_ro !== undefined || body.name !== undefined) {
+      const nameRo = text(body.nameRo ?? body.name_ro ?? body.name);
+      if (!nameRo) return res.status(400).json({ error: "color Romanian name required" });
+      sets.push(`name_ro=$${i++}`);
+      args.push(nameRo);
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "color code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.nameHu !== undefined || body.name_hu !== undefined) { sets.push(`name_hu=$${i++}`); args.push(emptyToNull(body.nameHu ?? body.name_hu)); }
+    if (body.nameEn !== undefined || body.name_en !== undefined) { sets.push(`name_en=$${i++}`); args.push(emptyToNull(body.nameEn ?? body.name_en)); }
+    if (body.nameDe !== undefined || body.name_de !== undefined) { sets.push(`name_de=$${i++}`); args.push(emptyToNull(body.nameDe ?? body.name_de)); }
+    if (body.aliases !== undefined || body.aliasList !== undefined || body.alias_list !== undefined) { sets.push(`aliases=$${i++}::text[]`); args.push(colorAliasesFromInput(body.aliases ?? body.aliasList ?? body.alias_list)); }
+    if (body.hex !== undefined) { sets.push(`hex=$${i++}`); args.push(emptyToNull(body.hex)); }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) { sets.push(`sort_order=$${i++}`); args.push(toInt(body.sortOrder ?? body.sort_order) || 100); }
+    if (body.is_active !== undefined || body.isActive !== undefined) { sets.push(`is_active=$${i++}`); args.push(Boolean(body.is_active ?? body.isActive)); }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+    try {
+      const r = await pool.query(
+        `UPDATE aif_color_types
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "color not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update color type failed", e);
+      res.status(500).json({ error: "failed to update color" });
+    }
+  });
+
+  router.delete("/color-types/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const color = await client.query(`SELECT id, code, name_ro FROM aif_color_types WHERE id::text=$1 OR code=$1 FOR UPDATE`, [id]);
+      if (!color.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "color not found" });
+      }
+      const usage = await colorUsage(client, color.rows[0].id);
+      if (Number(usage.product_variants || 0) > 0) {
+        await client.query(`UPDATE aif_color_types SET is_active=false, updated_at=now() WHERE id=$1`, [color.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_color_types WHERE id=$1`, [color.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete color type failed", e);
+      res.status(500).json({ error: "failed to delete color" });
+    } finally {
+      client.release();
+    }
+  });
+
 
   router.get("/brands", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
@@ -1978,7 +2057,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, supplierBrands, profiles] = await Promise.all([
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
@@ -1986,6 +2065,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT code, name, symbol, sort_order, is_active FROM aif_currencies WHERE is_active=true ORDER BY sort_order ASC, code ASC`),
+      pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
+                  FROM aif_color_types
+                  WHERE is_active=true
+                  ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT sb.id, sb.supplier_id, sb.brand_id, sb.is_preferred, sb.is_active,
                          s.name AS supplier_name, b.name AS brand_name
                   FROM aif_supplier_brands sb
@@ -2007,6 +2090,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locations: locations.rows,
       locationTypes: locationTypes.rows,
       currencies: currencies.rows,
+      colorTypes: colorTypes.rows,
       supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
     });
@@ -2193,6 +2277,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let rowNo = 1;
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
+        if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
         if (nr.errors.length) {
           return res.status(400).json({
             error: `A(z) ${nr.rowNo}. terméksor hiányos vagy hibás: ${nr.errors.join(" ")}`,
@@ -2417,6 +2502,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let rowNo = 1;
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
+        if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
         if (nr.errors.length) errorCount++;
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
@@ -2542,6 +2628,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       try {
         const normalized = { ...(row.normalized || {}) };
         normalized.gender = canonicalGender(normalized.gender);
+        if (normalized.colorName) normalized.colorName = await normalizeColorName(client, normalized.colorName);
         const qty = Number(row.qty ?? normalized.qty ?? 0);
         if (!Number.isFinite(qty) || qty <= 0) throw new Error("a mennyiség hiányzik vagy nem pozitív");
 
@@ -2762,6 +2849,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
+      if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
       const exchangeRate = Number(row.exchange_rate_to_ron || 1);
       const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
         ? null
@@ -3062,7 +3150,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       if (body.barcode !== undefined) addVariant("barcode", emptyToNull(body.barcode));
       if (body.colorCode !== undefined || body.color_code !== undefined) addVariant("color_code", emptyToNull(body.colorCode ?? body.color_code));
-      if (body.colorName !== undefined || body.color_name !== undefined) addVariant("color_name", emptyToNull(body.colorName ?? body.color_name));
+      if (body.colorName !== undefined || body.color_name !== undefined) {
+        const normalizedColor = await normalizeColorName(client, body.colorName ?? body.color_name);
+        addVariant("color_name", emptyToNull(normalizedColor));
+      }
       if (body.colorHex !== undefined || body.color_hex !== undefined) addVariant("color_hex", emptyToNull(body.colorHex ?? body.color_hex));
       if (body.size !== undefined) {
         const size = text(body.size);
