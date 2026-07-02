@@ -115,6 +115,37 @@ function cleanText(input: unknown, max = 120) {
   return String(input ?? "").replace(/[<>]/g, "").slice(0, max);
 }
 
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const s = String(value ?? "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function cleanModelCode(value: unknown) {
+  const s = String(value ?? "").trim();
+  if (!s) return "";
+  const last = s.includes(":") ? s.split(":").pop() || s : s;
+  return last.trim();
+}
+
+function queryValue(params: URLSearchParams, ...keys: string[]) {
+  for (const key of keys) {
+    const v = params.get(key);
+    if (v) return v;
+  }
+  return "";
+}
+
+function displayMoneyValue(value: unknown) {
+  const s = String(value ?? "").trim();
+  if (!s) return "";
+  const n = Number(s.replace(",", "."));
+  if (!Number.isFinite(n)) return s;
+  return String(n.toFixed(2));
+}
+
 function makeInternalCode(seed = "") {
   const base = cleanInternalCode(seed).slice(0, 12) || "AIF";
   const date = new Date();
@@ -240,22 +271,83 @@ export default function AllInBarcodes(_props: PageProps) {
 
   useEffect(() => {
     const params = parseHashParams();
-    setVariantId(params.get("variant") || params.get("variantId") || "");
-    setTitle(params.get("title") || "");
-    setBarcode(params.get("barcode") || "");
-    setBrand(params.get("brand") || "");
-    setSize(params.get("size") || "");
-    setColor(params.get("color") || "");
-    setPrice(params.get("price") || "");
-    setProductCode(params.get("code") || params.get("sku") || "");
-    setCategory(params.get("category") || "");
-    setDescription(params.get("description") || "");
+    const initialVariantId = queryValue(params, "variant", "variantId", "variant_id");
+    const initialTitle = queryValue(params, "title", "name", "productName");
+    const initialBarcode = queryValue(params, "barcode", "ean", "sku");
+    const initialBrand = queryValue(params, "brand", "brandName");
+    const initialSize = queryValue(params, "size");
+    const initialColor = queryValue(params, "color", "colorName");
+    const initialPrice = queryValue(params, "price", "sellPrice");
+    const initialCode = queryValue(params, "code", "productCode", "supplierProductCode");
+    const initialCategory = queryValue(params, "category", "categoryName");
+    const initialDescription = queryValue(params, "description", "material");
+
+    setVariantId(initialVariantId);
+    setTitle(initialTitle);
+    setBarcode(initialBarcode);
+    setBrand(initialBrand);
+    setSize(initialSize);
+    setColor(initialColor);
+    setPrice(initialPrice);
+    setProductCode(initialCode);
+    setCategory(initialCategory);
+    setDescription(initialDescription);
+
     try {
       const raw = window.localStorage.getItem("aifBarcodeTemplates");
       if (raw) setSavedTemplates(JSON.parse(raw));
     } catch {
       setSavedTemplates([]);
     }
+
+    if (!initialVariantId) return;
+    let cancelled = false;
+
+    async function loadVariant() {
+      try {
+        const res = await fetch(`/api/aif/variants/${encodeURIComponent(initialVariantId)}`, { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || "A termékadatok betöltése nem sikerült.");
+        if (cancelled) return;
+
+        const item = data?.item || {};
+        const supplierCode = Array.isArray(data?.supplierCodes) && data.supplierCodes.length ? data.supplierCodes[0] : {};
+        const loadedTitle = firstText(item.title_ro, item.shopify_title, item.title_hu, initialTitle);
+        const loadedBrand = firstText(item.brand_name, item.brand_code, initialBrand);
+        const loadedProductCode = firstText(
+          supplierCode.supplier_variant_code,
+          supplierCode.supplier_product_code,
+          supplierCode.supplier_sku,
+          cleanModelCode(item.model_code),
+          item.internal_sku,
+          initialCode,
+        );
+        const loadedBarcode = firstText(item.barcode, supplierCode.supplier_barcode, supplierCode.supplier_sku, item.internal_sku, initialBarcode);
+        const loadedCategory = firstText(item.category_name_ro, item.category_name_hu, item.category_code, initialCategory);
+        const loadedDescription = firstText(item.material, item.description_ro, initialDescription);
+        const loadedSize = firstText(item.size, supplierCode.supplier_size, initialSize);
+        const loadedColor = firstText(item.color_name, supplierCode.supplier_color_name, item.color_code, initialColor);
+        const loadedPrice = displayMoneyValue(firstText(item.sell_price, item.compare_at_price, item.buy_price, initialPrice));
+
+        setTitle((prev) => prev || loadedTitle);
+        setBrand((prev) => prev || loadedBrand);
+        setProductCode((prev) => prev || loadedProductCode);
+        setBarcode((prev) => prev || loadedBarcode);
+        setCategory((prev) => prev || loadedCategory);
+        setDescription((prev) => prev || loadedDescription);
+        setSize((prev) => prev || loadedSize);
+        setColor((prev) => prev || loadedColor);
+        setPrice((prev) => prev || loadedPrice);
+        setStatus("Termékadatok betöltve a raktárból.");
+      } catch (e: any) {
+        if (!cancelled) setStatus(e?.message || "A termékadatok betöltése nem sikerült.");
+      }
+    }
+
+    loadVariant();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const render = useMemo(() => code128Svg(barcode, 70), [barcode]);
@@ -559,7 +651,7 @@ export default function AllInBarcodes(_props: PageProps) {
           <div>
             <div className="eyebrow">AllInFashion</div>
             <h1>Vonalkód / címke központ</h1>
-            <div className="muted">Egyszerű címkekészítés: termékadat, vonalkód, sablon, előnézet, nyomtatás. ForIT-időutazás nélkül, mert 2026-ban is próbálunk emberként élni.</div>
+            <div className="muted">Egyszerű címkekészítés: termékadat, vonalkód, sablon, előnézet, nyomtatás.</div>
             <div className="stepLine">
               <div className="stepBox"><span>1. adat</span>Termék és vonalkód</div>
               <div className="stepBox"><span>2. tartalom</span>Mi kerüljön rá</div>
