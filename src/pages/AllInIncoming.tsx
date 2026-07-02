@@ -69,7 +69,7 @@ type EditableImportField =
   | "buyPrice";
 
 type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
-type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; sort_order?: number | string | null; is_active?: boolean };
+type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifGenderOption = { code: string; name: string; sort_order?: number | string | null; is_active?: boolean };
 type AifSupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 
@@ -168,17 +168,22 @@ function categoryLabel(c: AifCategoryOption) {
   return c.name_hu || c.name_ro || c.name || c.code || "-";
 }
 
+function categoryAliasValues(c: AifCategoryOption) {
+  return [c.code, c.id, c.name_ro, c.name_hu, c.name, ...(Array.isArray(c.aliases) ? c.aliases : [])]
+    .filter(Boolean)
+    .map((x) => String(x));
+}
+
+function categoryMatches(c: AifCategoryOption, value: unknown) {
+  const key = String(value || "").trim().toLowerCase();
+  if (!key) return false;
+  return categoryAliasValues(c).some((x) => x.trim().toLowerCase() === key);
+}
+
 function categoryDisplay(value: unknown, categories: AifCategoryOption[]) {
   const raw = String(value ?? "").trim();
   if (!raw) return "-";
-  const key = raw.toLowerCase();
-  const found = categories.find((c) =>
-    String(c.code || "").toLowerCase() === key ||
-    String(c.id || "").toLowerCase() === key ||
-    String(c.name_ro || "").toLowerCase() === key ||
-    String(c.name_hu || "").toLowerCase() === key ||
-    String(c.name || "").toLowerCase() === key
-  );
+  const found = categories.find((c) => categoryMatches(c, raw));
   return found ? categoryLabel(found) : raw;
 }
 
@@ -367,12 +372,7 @@ export default function AllInIncoming(_props: Props) {
   function categoryValueForRow(n: Record<string, unknown>) {
     const raw = String(n.categoryCode || n.categoryName || "").trim();
     if (!raw) return "";
-    const rawLower = raw.toLowerCase();
-    const match = activeCategories.find((c) =>
-      String(c.code || "").toLowerCase() === rawLower ||
-      String(c.id || "").toLowerCase() === rawLower ||
-      String(categoryLabel(c)).toLowerCase() === rawLower
-    );
+    const match = activeCategories.find((c) => categoryMatches(c, raw));
     return match ? String(match.code || match.id) : raw;
   }
 
@@ -1983,8 +1983,13 @@ export default function AllInIncoming(_props: Props) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/10">
-                    {(workbench?.columns || []).map((c) => (
-                      <tr key={`${c.index}-${c.header}`} className="bg-[#445064] hover:bg-[#4b596f]">
+                    {(workbench?.columns || []).map((c) => {
+                      const isIgnored = c.field === "ignore";
+                      return (
+                      <tr
+                        key={`${c.index}-${c.header}`}
+                        className={isIgnored ? "bg-red-500/16 hover:bg-red-500/22 ring-1 ring-inset ring-red-300/20" : "bg-[#445064] hover:bg-[#4b596f]"}
+                      >
                         <td className="px-3 py-2.5 text-white/90">{c.header}</td>
                         <td className="px-3 py-2.5">
                           <select className={`${selectInput} h-8 w-[190px]`} value={c.field} onChange={(e) => updateColumnField(c.index, e.target.value as AifColumnField)}>
@@ -1992,12 +1997,14 @@ export default function AllInIncoming(_props: Props) {
                               <option style={optionStyle} key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
                           </select>
+                          {c.field === "ignore" && <div className="mt-1 inline-flex rounded-full border border-red-300/30 bg-red-500/16 px-2 py-0.5 text-[10px] text-red-50">Kihagyott oszlop</div>}
                         </td>
                         <td className={`px-3 py-2.5 ${confidenceClass(c.confidence)}`}>{confidenceText(c.confidence)} • {c.confidence}%</td>
                         <td className="px-3 py-2.5 text-white/70">{c.samples.length ? c.samples.join(" | ") : "-"}</td>
                         <td className="px-3 py-2.5 text-white/70">{c.warnings.length ? c.warnings.join(" ") : "-"}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {!workbench?.columns?.length && (
                       <tr>
                         <td className="px-3 py-6 text-center text-white/60" colSpan={5}>Nincs beolvasott oszlop.</td>
