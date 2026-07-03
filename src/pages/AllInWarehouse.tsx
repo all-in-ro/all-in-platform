@@ -96,6 +96,24 @@ type ColorType = {
   sort_order?: number | string | null;
   is_active?: boolean;
 };
+type BrandColorCode = {
+  id: string;
+  brand_id: string;
+  brand_code?: string | null;
+  brand_name?: string | null;
+  color_code: string;
+  color_type_id: string;
+  color_type_code?: string | null;
+  color_name_ro?: string | null;
+  color_name_hu?: string | null;
+  color_name_en?: string | null;
+  color_name_de?: string | null;
+  color_hex?: string | null;
+  notes?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
 type MaterialType = {
   id: string;
   code: string;
@@ -376,7 +394,7 @@ async function apiInventory() {
 }
 
 async function apiMeta() {
-  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; colorTypes?: ColorType[]; materialTypes?: MaterialType[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
+  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; colorTypes?: ColorType[]; brandColorCodes?: BrandColorCode[]; materialTypes?: MaterialType[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
 }
 
 async function apiStock() {
@@ -437,6 +455,19 @@ async function apiSaveColorType(id: string, payload: Record<string, unknown>) {
 
 async function apiDeleteColorType(id: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/color-types/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function apiSaveBrandColorCode(id: string, payload: Record<string, unknown>) {
+  const url = id ? `/api/aif/brand-color-codes/${encodeURIComponent(id)}` : "/api/aif/brand-color-codes";
+  return fetchJSON<{ item: BrandColorCode }>(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteBrandColorCode(id: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/brand-color-codes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 async function apiSaveMaterialType(id: string, payload: Record<string, unknown>) {
@@ -526,6 +557,7 @@ export default function AllInWarehouse() {
   const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
   const [materialTypes, setMaterialTypes] = useState<MaterialType[]>([]);
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
+  const [brandColorCodes, setBrandColorCodes] = useState<BrandColorCode[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
   const [supplier, setSupplier] = useState("all");
@@ -546,13 +578,14 @@ export default function AllInWarehouse() {
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
-  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors" | "materials">("categories");
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors" | "brandColors" | "materials">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
   const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [genderForm, setGenderForm] = useState({ code: "", name: "", aliases: "", sortOrder: "10" });
   const [colorForm, setColorForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
+  const [brandColorForm, setBrandColorForm] = useState({ id: "", brandId: "", colorCode: "", colorTypeId: "", notes: "" });
   const [materialForm, setMaterialForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: "10" });
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "material"; id: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "brandColor" | "material"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
 
@@ -747,6 +780,61 @@ export default function AllInWarehouse() {
     });
   }
 
+  function colorTypeLabel(c?: ColorType | null) {
+    if (!c) return "-";
+    return c.name_hu || c.name_ro || c.name_en || c.code || "-";
+  }
+
+  function brandLabel(b?: MetaItem | null) {
+    return b?.name || b?.code || "-";
+  }
+
+  function resetBrandColorForm() {
+    setBrandColorForm({ id: "", brandId: brands[0]?.id || "", colorCode: "", colorTypeId: colorTypes[0]?.id || "", notes: "" });
+  }
+
+  function editBrandColorRow(row: BrandColorCode) {
+    setTaxonomyTab("brandColors");
+    setBrandColorForm({
+      id: String(row.id || ""),
+      brandId: String(row.brand_id || ""),
+      colorCode: String(row.color_code || ""),
+      colorTypeId: String(row.color_type_id || ""),
+      notes: String(row.notes || ""),
+    });
+  }
+
+  async function saveBrandColorForm() {
+    if (!brandColorForm.brandId) {
+      setMessage("A márka kiválasztása kötelező.");
+      return;
+    }
+    if (!brandColorForm.colorCode.trim()) {
+      setMessage("A gyártói színkód kötelező.");
+      return;
+    }
+    if (!brandColorForm.colorTypeId) {
+      setMessage("Az AllIn szín kiválasztása kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveBrandColorCode(brandColorForm.id, {
+        brandId: brandColorForm.brandId,
+        colorCode: brandColorForm.colorCode.trim().toUpperCase(),
+        colorTypeId: brandColorForm.colorTypeId,
+        notes: brandColorForm.notes,
+      });
+      resetBrandColorForm();
+      await load();
+      setMessage("Márka színkód mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a márka színkódot.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
   function resetMaterialForm() {
     setMaterialForm({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: nextMaterialSortOrder });
   }
@@ -867,6 +955,7 @@ export default function AllInWarehouse() {
       if (deleteTarget.kind === "category") await apiDeleteCategory(deleteTarget.id);
       if (deleteTarget.kind === "gender") await apiDeleteGenderType(deleteTarget.id);
       if (deleteTarget.kind === "color") await apiDeleteColorType(deleteTarget.id);
+      if (deleteTarget.kind === "brandColor") await apiDeleteBrandColorCode(deleteTarget.id);
       if (deleteTarget.kind === "material") await apiDeleteMaterialType(deleteTarget.id);
       setDeleteTarget(null);
       setOpenTaxonomyMenu(null);
@@ -891,6 +980,7 @@ export default function AllInWarehouse() {
       setCategories((meta.categories || []).slice().sort((a: MetaItem, b: MetaItem) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })));
       setGenderTypes(meta.genderTypes || []);
       setColorTypes(meta.colorTypes || []);
+      setBrandColorCodes(meta.brandColorCodes || []);
       setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
@@ -1300,7 +1390,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek, színek és összetevők kezelése</h2>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek, színek, márka színkódok és összetevők kezelése</h2>
                   <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
                 </div>
                 <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
@@ -1316,6 +1406,9 @@ export default function AllInWarehouse() {
                 </button>
                 <button className={taxonomyTab === "colors" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("colors"); setOpenTaxonomyMenu(null); }}>
                   Színek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{colorTypes.length}</span>
+                </button>
+                <button className={taxonomyTab === "brandColors" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("brandColors"); setOpenTaxonomyMenu(null); }}>
+                  Márka színkódok <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{brandColorCodes.length}</span>
                 </button>
                 <button className={taxonomyTab === "materials" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("materials"); setOpenTaxonomyMenu(null); }}>
                   Összetevők <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{materialTypes.length}</span>
