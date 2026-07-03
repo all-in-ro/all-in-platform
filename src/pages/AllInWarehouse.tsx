@@ -126,7 +126,7 @@ type MaterialType = {
   is_active?: boolean;
 };
 type SupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
-type StockItem = { variant_id: string; location_code?: string; location_name?: string; qty?: number | string; reserved_qty?: number | string; available_qty?: number | string };
+type StockItem = { variant_id: string; location_id?: string; location_code?: string; location_name?: string; location_type?: string; qty?: number | string; reserved_qty?: number | string; available_qty?: number | string; updated_at?: string };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing";
@@ -417,6 +417,14 @@ async function apiVariantDelete(id: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/variants/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+async function apiVariantStockUpdate(id: string, rows: Array<{ locationId?: string; locationCode?: string; qty: number | string; reservedQty?: number | string }>) {
+  return fetchJSON<{ ok: true; stock: StockItem[] }>(`/api/aif/variants/${encodeURIComponent(id)}/stock`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows }),
+  });
+}
+
 
 async function apiSaveCategory(id: string, payload: Record<string, unknown>) {
   const url = id ? `/api/aif/categories/${encodeURIComponent(id)}` : "/api/aif/categories";
@@ -592,6 +600,9 @@ export default function AllInWarehouse() {
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "brandColor" | "material"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
+  const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
+  const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
+  const [stockEditorSaving, setStockEditorSaving] = useState(false);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -604,6 +615,97 @@ export default function AllInWarehouse() {
     }
     return map;
   }, [stockRows]);
+
+  const stockLocationRows = useMemo(() => {
+    return locations
+      .filter((l) => l.is_active !== false)
+      .slice()
+      .sort((a, b) => String(a.name || a.code || "").localeCompare(String(b.name || b.code || ""), "hu", { sensitivity: "base" }));
+  }, [locations]);
+
+  function stockRowsForVariant(variantId?: string | null) {
+    return stockMap.get(String(variantId || "")) || [];
+  }
+
+  function locationKey(location: MetaItem) {
+    return String(location.id || location.code || location.name || "");
+  }
+
+  function stockForLocation(rows: StockItem[], location: MetaItem) {
+    const lid = String(location.id || "");
+    const lcode = String(location.code || "");
+    const lname = String(location.name || "");
+    return rows.find((s) =>
+      (lid && String(s.location_id || "") === lid) ||
+      (lcode && String(s.location_code || "") === lcode) ||
+      (lname && String(s.location_name || "") === lname)
+    ) || null;
+  }
+
+  function openStockEditor(item: InventoryItem) {
+    const rows = stockRowsForVariant(item.variant_id);
+    const next: Record<string, string> = {};
+    for (const loc of stockLocationRows) {
+      const row = stockForLocation(rows, loc);
+      next[locationKey(loc)] = String(n(row?.qty));
+    }
+    setStockEditorTarget(item);
+    setStockEditorRows(next);
+  }
+
+  function closeStockEditor() {
+    if (stockEditorSaving) return;
+    setStockEditorTarget(null);
+    setStockEditorRows({});
+  }
+
+  async function saveStockEditor() {
+    if (!stockEditorTarget?.variant_id) return;
+    setStockEditorSaving(true);
+    setMessage("");
+    try {
+      const rows = stockLocationRows.map((loc) => ({
+        locationId: String(loc.id || ""),
+        locationCode: String(loc.code || ""),
+        qty: stockEditorRows[locationKey(loc)] ?? "0",
+      }));
+      await apiVariantStockUpdate(stockEditorTarget.variant_id, rows);
+      await load();
+      if (detail?.item?.id && String(detail.item.id) === String(stockEditorTarget.variant_id)) {
+        const d = await apiVariantDetail(stockEditorTarget.variant_id);
+        setDetail(d);
+        setEdit(formFromDetail(d));
+      }
+      setMessage("Készlet mennyiségek frissítve célhelyenként.");
+      setStockEditorTarget(null);
+      setStockEditorRows({});
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a készletet.");
+    } finally {
+      setStockEditorSaving(false);
+    }
+  }
+
+  function StockQtyButton({ item }: { item: InventoryItem }) {
+    const rows = stockRowsForVariant(item.variant_id);
+    const activeRows = rows.filter((s) => n(s.qty) > 0);
+    const label = activeRows.length
+      ? activeRows.map((s) => `${s.location_name || s.location_code || "Célhely"}: ${n(s.qty)}`).join(" • ")
+      : "Nincs célhelyenkénti készlet";
+    return (
+      <button
+        className="group inline-flex min-w-[72px] items-center justify-end gap-1.5 rounded-full border border-[#5bd0cc]/45 bg-[#203f49] px-2.5 py-1 text-right text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.10)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        onClick={() => openStockEditor(item)}
+        title={`Készlet célhelyenként: ${label}. Kattints a módosításhoz.`}
+        type="button"
+      >
+        <span className="text-sm tabular-nums">{n(item.total_qty)}</span>
+        <span className="rounded-full bg-[#2a8d8b]/28 px-1.5 py-0.5 text-[10px] text-[#cffffd] group-hover:bg-[#2a8d8b]/42">
+          {activeRows.length || "0"} hely
+        </span>
+      </button>
+    );
+  }
 
   const nextCategorySortOrder = useMemo(() => nextSortOrder(categories), [categories]);
   const nextGenderSortOrder = useMemo(() => nextSortOrder(genderTypes), [genderTypes]);
@@ -1325,7 +1427,7 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-2.5">{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-3 py-2.5">{it.size || "-"}</td>
-                        <td className="px-3 py-2.5 text-right">{n(it.total_qty)}</td>
+                        <td className="px-3 py-2.5 text-right"><StockQtyButton item={it} /></td>
                         <td className="px-3 py-2.5 text-right">{n(it.available_qty)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
@@ -1333,7 +1435,7 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5 text-right">
                           <div className="flex justify-end gap-2">
                             <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
-                            <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-300/35 bg-[#d31126] px-3 text-xs text-white hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => setProductDeleteTarget(it)}><Trash2 size={14} /> Törlés</button>
+                            <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                           </div>
                         </td>
                       </tr>
@@ -1352,7 +1454,7 @@ export default function AllInWarehouse() {
                         <p className="truncate text-sm">{it.title_ro || "-"}</p>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
-                          <span className={chip}>Készlet: {n(it.total_qty)}</span>
+                          <button className={`${chip} border-[#5bd0cc]/40 bg-[#203f49] text-[#d7fffd] hover:bg-[#25535c]`} onClick={() => openStockEditor(it)} type="button">Készlet: {n(it.total_qty)} • {stockRowsForVariant(it.variant_id).filter((s) => n(s.qty) > 0).length || 0} hely</button>
                           <span className={chip}>Elérhető: {n(it.available_qty)}</span>
                           <MissingDataIndicator item={it} />
                         </div>
@@ -1360,7 +1462,7 @@ export default function AllInWarehouse() {
                     </div>
                     <div className="mt-3 flex justify-end gap-2">
                       <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
-                      <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-300/35 bg-[#d31126] px-3 text-xs text-white hover:bg-[#b90f21] font-normal" onClick={() => setProductDeleteTarget(it)}><Trash2 size={14} /> Törlés</button>
+                      <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21]" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                     </div>
                   </article>
                 ))}
@@ -1370,6 +1472,63 @@ export default function AllInWarehouse() {
           )}
         </section>
       </div>
+
+      {stockEditorTarget && (
+        <div className={modalWrap}>
+          <div className="max-h-[88vh] w-full max-w-xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Készlet célhelyenként</p>
+                <h2 className="mt-1 text-lg text-white">{stockEditorTarget.title_ro || "Termék"}</h2>
+                <p className="mt-1 text-xs text-white/58">{stockEditorTarget.brand_name || "-"} • {colorDisplay(stockEditorTarget.color_name, stockEditorTarget.color_code)} • {stockEditorTarget.size || "-"}</p>
+              </div>
+              <button className={btnSoft} onClick={closeStockEditor} disabled={stockEditorSaving} type="button"><X size={14} /> Bezárás</button>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-[#5bd0cc]/30 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd]">
+                A teljes készlet a célhelyek összege. Itt csak a jelenlegi mennyiséget állítjuk, termékadatot nem módosít.
+              </div>
+
+              <div className="space-y-2">
+                {stockLocationRows.map((loc) => {
+                  const key = locationKey(loc);
+                  const current = stockForLocation(stockRowsForVariant(stockEditorTarget.variant_id), loc);
+                  return (
+                    <div key={key} className="grid grid-cols-[1fr_92px] items-center gap-3 rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-white">{loc.name || loc.code || "-"}</p>
+                        <p className="mt-0.5 text-[11px] text-white/50">
+                          Előző: {n(current?.qty)} • Foglalt: {n(current?.reserved_qty)} • Elérhető: {n(current?.available_qty)}
+                        </p>
+                      </div>
+                      <input
+                        className="h-9 rounded-xl border border-white/18 bg-[#303a4c] px-2 text-right text-sm text-white outline-none focus:border-[#7bd7d4]/70"
+                        inputMode="numeric"
+                        value={stockEditorRows[key] ?? "0"}
+                        onChange={(e) => setStockEditorRows((x) => ({ ...x, [key]: e.target.value.replace(/[^0-9]/g, "") }))}
+                      />
+                    </div>
+                  );
+                })}
+                {!stockLocationRows.length && <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-4 text-sm text-white/60">Nincs aktív célhely.</p>}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 pt-3">
+                <div className="text-xs text-white/60">
+                  Új összesen: <span className="text-white">{Object.values(stockEditorRows).reduce((sum, x) => sum + n(x), 0)}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button className={btnSoft} onClick={closeStockEditor} disabled={stockEditorSaving} type="button">Mégse</button>
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={saveStockEditor} disabled={stockEditorSaving || !stockLocationRows.length} type="button">
+                    <Save size={15} /> Készlet mentése
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {productDeleteTarget && (
         <div className={modalWrap}>
