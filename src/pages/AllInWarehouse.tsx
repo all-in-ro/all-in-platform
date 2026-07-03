@@ -45,6 +45,45 @@ const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 t
 const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
 const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
+const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
+
+function readSavedSelectedVariants(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(selectedProductsStorageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.reduce<Record<string, boolean>>((acc, id) => {
+        const key = String(id || "").trim();
+        if (key) acc[key] = true;
+        return acc;
+      }, {});
+    }
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed).reduce<Record<string, boolean>>((acc, [id, value]) => {
+        const key = String(id || "").trim();
+        if (key && value) acc[key] = true;
+        return acc;
+      }, {});
+    }
+  } catch {
+    return {};
+  }
+  return {};
+}
+
+function saveSelectedVariantsToStorage(selected: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  const ids = Object.keys(selected).filter((id) => selected[id]);
+  if (!ids.length) {
+    window.localStorage.removeItem(selectedProductsStorageKey);
+    return;
+  }
+  window.localStorage.setItem(selectedProductsStorageKey, JSON.stringify(ids));
+}
+
+
 type InventoryItem = {
   variant_id: string;
   internal_sku?: string | null;
@@ -604,7 +643,7 @@ export default function AllInWarehouse() {
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
-  const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>({});
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
 
   const stockMap = useMemo(() => {
@@ -871,6 +910,7 @@ export default function AllInWarehouse() {
   }
 
   useEffect(() => {
+    if (!items.length) return;
     const valid = new Set(items.map((x) => String(x.variant_id || "")).filter(Boolean));
     setSelectedVariants((current) => {
       const next: Record<string, boolean> = {};
@@ -880,6 +920,10 @@ export default function AllInWarehouse() {
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
   }, [items]);
+
+  useEffect(() => {
+    saveSelectedVariantsToStorage(selectedVariants);
+  }, [selectedVariants]);
 
   useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
@@ -1493,7 +1537,7 @@ export default function AllInWarehouse() {
                   <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(true)} type="button">
                     <Eye size={15} /> Kijelöltek megnyitása
                   </button>
-                  <button className={btnSoft} onClick={clearSelectedVariants} type="button">
+                  <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli">
                     <X size={15} /> Kijelölés törlése
                   </button>
                 </>
@@ -1632,7 +1676,7 @@ export default function AllInWarehouse() {
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Ez a kijelölt termékek munkalistája. Innen fogjuk indítani a címkézést, rendelés/PDF-et és készletmozgatást.
+                Ez a kijelölt termékek munkalistája. A kijelölés frissítés után és holnap is megmarad ebben a böngészőben, amíg innen el nem távolítod. Innen fogjuk indítani a címkézést, rendelés/PDF-et és készletmozgatást.
               </div>
 
               <div className="grid gap-2">
@@ -1659,7 +1703,7 @@ export default function AllInWarehouse() {
               </div>
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3">
-                <button className={btnSoft} onClick={clearSelectedVariants} type="button"><X size={15} /> Teljes kijelölés törlése</button>
+                <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli"><X size={15} /> Teljes kijelölés törlése</button>
                 <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(false)} type="button">Kész</button>
               </div>
             </div>
