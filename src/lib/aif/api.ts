@@ -270,6 +270,7 @@ export type AifInventoryItem = {
 };
 
 export type AifStockItem = {
+  location_id?: string;
   location_code: string;
   location_name: string;
   variant_id: string;
@@ -414,6 +415,20 @@ export function apiAifStock(locationCodeOrId?: string) {
   if (locationCodeOrId) q.set("location", locationCodeOrId);
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifStockItem[] }>(`/stock${suffix}`);
+}
+
+
+export function apiAifUpdateVariantStock(
+  variantId: string,
+  items: { locationId?: string; locationCode?: string; qty: number }[]
+) {
+  return fetchAifJSON<{ ok: true; changed: number; stock: AifStockItem[] }>(
+    `/variants/${encodeURIComponent(variantId)}/stock`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ items }),
+    }
+  );
 }
 
 export type AifSupplierDetail = AifSupplier & {
