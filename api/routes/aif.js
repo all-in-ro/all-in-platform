@@ -3666,6 +3666,106 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  router.delete("/variants/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "variant id required" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT v.id, v.model_id, v.status, m.title_ro
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
+         FOR UPDATE OF v`,
+        [id]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "variant not found" });
+      }
+
+      const variantId = current.rows[0].id;
+      const modelId = current.rows[0].model_id;
+
+      const stockUsage = await client.query(
+        `SELECT count(*)::int AS stock_rows,
+                COALESCE(sum(qty),0)::numeric AS qty,
+                COALESCE(sum(reserved_qty),0)::numeric AS reserved_qty
+         FROM aif_stock
+         WHERE variant_id=$1`,
+        [variantId]
+      );
+      const movementUsage = await client.query(
+        `SELECT count(*)::int AS movements
+         FROM aif_stock_movements
+         WHERE variant_id=$1`,
+        [variantId]
+      );
+      const importUsage = await client.query(
+        `SELECT count(*)::int AS import_rows
+         FROM aif_import_rows
+         WHERE variant_id=$1`,
+        [variantId]
+      );
+
+      await client.query(
+        `UPDATE aif_product_variants
+         SET status='archived', updated_at=now()
+         WHERE id=$1`,
+        [variantId]
+      );
+      await client.query(
+        `UPDATE aif_stock
+         SET qty=0, reserved_qty=0, updated_at=now()
+         WHERE variant_id=$1`,
+        [variantId]
+      );
+      await client.query(
+        `UPDATE aif_variant_supplier_codes
+         SET is_active=false, updated_at=now()
+         WHERE variant_id=$1`,
+        [variantId]
+      );
+
+      const activeSiblings = await client.query(
+        `SELECT count(*)::int AS c
+         FROM aif_product_variants
+         WHERE model_id=$1 AND id <> $2 AND status <> 'archived'`,
+        [modelId, variantId]
+      );
+      if (Number(activeSiblings.rows[0]?.c || 0) <= 0) {
+        await client.query(
+          `UPDATE aif_product_models
+           SET status='archived', updated_at=now()
+           WHERE id=$1`,
+          [modelId]
+        );
+      }
+
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        mode: "archived",
+        usage: {
+          stock_rows: Number(stockUsage.rows[0]?.stock_rows || 0),
+          qty: Number(stockUsage.rows[0]?.qty || 0),
+          reserved_qty: Number(stockUsage.rows[0]?.reserved_qty || 0),
+          movements: Number(movementUsage.rows[0]?.movements || 0),
+          import_rows: Number(importUsage.rows[0]?.import_rows || 0),
+        },
+      });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete variant failed", e);
+      res.status(500).json({ error: e?.message || "failed to delete variant", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
   router.get("/inventory", requireAuthed, async (req, res) => {
     const search = text(req.query.search || req.query.q);
     const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
