@@ -29,6 +29,7 @@ const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm 
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
+const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
 const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
 const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
@@ -603,6 +604,8 @@ export default function AllInWarehouse() {
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>({});
+  const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -719,7 +722,7 @@ export default function AllInWarehouse() {
       : "Nincs célhelyenkénti készlet";
     return (
       <button
-        className="group inline-flex min-w-[72px] items-center justify-center gap-1.5 rounded-full border border-[#2a8d8b]/60 bg-[#203f49] px-2.5 py-1 text-center text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.16)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        className="group inline-flex min-w-[72px] items-center justify-end gap-1.5 rounded-full border border-[#5bd0cc]/45 bg-[#203f49] px-2.5 py-1 text-right text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.10)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
         onClick={() => openStockEditor(item)}
         title={`Készlet célhelyenként: ${label}. Kattints a módosításhoz.`}
         type="button"
@@ -826,6 +829,61 @@ export default function AllInWarehouse() {
     });
     return out;
   }, [items, search, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+
+  const filteredVariantIds = useMemo(
+    () => filtered.map((x) => String(x.variant_id || "")).filter(Boolean),
+    [filtered]
+  );
+
+  const selectedItems = useMemo(() => {
+    const selected = new Set(Object.keys(selectedVariants).filter((id) => selectedVariants[id]));
+    return items.filter((x) => selected.has(String(x.variant_id || "")));
+  }, [items, selectedVariants]);
+
+  const selectedCount = selectedItems.length;
+  const selectedFilteredCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
+  const allFilteredSelected = filteredVariantIds.length > 0 && selectedFilteredCount === filteredVariantIds.length;
+
+  function toggleVariantSelection(id: string, checked: boolean) {
+    if (!id) return;
+    setSelectedVariants((current) => {
+      const next = { ...current };
+      if (checked) next[id] = true;
+      else delete next[id];
+      return next;
+    });
+  }
+
+  function toggleAllFilteredSelection(checked: boolean) {
+    setSelectedVariants((current) => {
+      const next = { ...current };
+      for (const id of filteredVariantIds) {
+        if (checked) next[id] = true;
+        else delete next[id];
+      }
+      return next;
+    });
+  }
+
+  function clearSelectedVariants() {
+    setSelectedVariants({});
+    setSelectedPanelOpen(false);
+  }
+
+  useEffect(() => {
+    const valid = new Set(items.map((x) => String(x.variant_id || "")).filter(Boolean));
+    setSelectedVariants((current) => {
+      const next: Record<string, boolean> = {};
+      for (const [id, selected] of Object.entries(current)) {
+        if (selected && valid.has(id)) next[id] = true;
+      }
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [items]);
+
+  useEffect(() => {
+    if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
+  }, [selectedPanelOpen, selectedCount]);
 
   const totals = useMemo(() => {
     return filtered.reduce(
@@ -1418,9 +1476,30 @@ export default function AllInWarehouse() {
         </section>
 
         <section className="rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
-          <div className="flex items-center justify-between gap-3 border-b border-white/16 bg-[#303a4c] px-4 py-3">
-            <div className="flex items-center gap-2 text-white/95"><Eye size={17} /><span>Terméklista</span><span className={chip}>{filtered.length} találat</span></div>
-            <button className={btnSoft} onClick={() => setListOpen((x) => !x)}>{listOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {listOpen ? "Bezárás" : "Megnyitás"}</button>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/16 bg-[#303a4c] px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2 text-white/95">
+              <Eye size={17} />
+              <span>Terméklista</span>
+              <span className={chip}>{filtered.length} találat</span>
+              {selectedCount > 0 && (
+                <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2.5 py-1 text-xs text-white">
+                  {selectedCount} kijelölve
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {selectedCount > 0 && (
+                <>
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(true)} type="button">
+                    <Eye size={15} /> Kijelöltek megnyitása
+                  </button>
+                  <button className={btnSoft} onClick={clearSelectedVariants} type="button">
+                    <X size={15} /> Kijelölés törlése
+                  </button>
+                </>
+              )}
+              <button className={btnSoft} onClick={() => setListOpen((x) => !x)}>{listOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {listOpen ? "Bezárás" : "Megnyitás"}</button>
+            </div>
           </div>
           {listOpen && (
             <div className="p-4">
@@ -1428,14 +1507,25 @@ export default function AllInWarehouse() {
                 <table className="min-w-full text-left text-[13px]">
                   <thead className="bg-[#2f3a4c] text-[11px] uppercase tracking-[0.08em] text-white/72">
                     <tr>
+                      <th className="w-10 px-3 py-3 text-center font-normal">
+                        <input
+                          className={selectBox}
+                          type="checkbox"
+                          checked={allFilteredSelected}
+                          onChange={(e) => toggleAllFilteredSelection(e.target.checked)}
+                          disabled={!filteredVariantIds.length}
+                          aria-label="Minden látható termék kijelölése"
+                          title="Minden látható termék kijelölése"
+                        />
+                      </th>
                       <th className="px-3 py-3 font-normal">Kép</th>
                       <th className="px-3 py-3 font-normal">Márka</th>
                       <th className="px-3 py-3 font-normal">Terméknév</th>
-                      <th className="px-3 py-3 text-center font-normal">Kategória</th>
-                      <th className="px-3 py-3 text-center font-normal">Szín</th>
-                      <th className="px-3 py-3 text-center font-normal">Méret</th>
-                      <th className="px-3 py-3 text-center font-normal">Készlet</th>
-                      <th className="px-3 py-3 text-center font-normal">Elérhető</th>
+                      <th className="px-3 py-3 font-normal">Kategória</th>
+                      <th className="px-3 py-3 font-normal">Szín</th>
+                      <th className="px-3 py-3 font-normal">Méret</th>
+                      <th className="px-3 py-3 text-right font-normal">Készlet</th>
+                      <th className="px-3 py-3 text-right font-normal">Elérhető</th>
                       <th className="px-3 py-3 text-right font-normal">Vételár</th>
                       <th className="px-3 py-3 text-right font-normal">Eladási ár</th>
                       <th className="px-3 py-3 text-center font-normal">Állapot</th>
@@ -1443,35 +1533,61 @@ export default function AllInWarehouse() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/12">
-                    {filtered.map((it, index) => (
-                      <tr key={it.variant_id} className="odd:bg-[#526071] even:bg-[#4c5869] hover:bg-[#617084]">
-                        <td className="px-3 py-2.5 align-middle">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
-                        <td className="px-3 py-2.5 align-middle">{it.brand_name || "-"}</td>
-                        <td className="px-3 py-2.5 align-middle"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
-                        <td className="px-3 py-2.5 text-center align-middle">{it.category_name_hu || it.category_name_ro || "-"}</td>
-                        <td className="px-3 py-2.5 text-center align-middle">{colorDisplay(it.color_name, it.color_code)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle">{it.size || "-"}</td>
-                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><StockQtyButton item={it} /></span></td>
-                        <td className="px-3 py-2.5 text-center align-middle tabular-nums">{n(it.available_qty)}</td>
-                        <td className="px-3 py-2.5 text-right align-middle tabular-nums">{money(it.buy_price)}</td>
-                        <td className="px-3 py-2.5 text-right align-middle tabular-nums">{money(it.sell_price)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></span></td>
-                        <td className="px-3 py-2.5 text-right align-middle">
+                    {filtered.map((it, index) => {
+                      const isSelected = Boolean(selectedVariants[String(it.variant_id || "")]);
+                      return (
+                      <tr key={it.variant_id} className={`${isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} hover:bg-[#617084]`}>
+                        <td className="px-3 py-2.5 text-center align-middle">
+                          <input
+                            className={selectBox}
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => toggleVariantSelection(String(it.variant_id || ""), e.target.checked)}
+                            aria-label={`${it.title_ro || "Termék"} kijelölése`}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
+                        <td className="px-3 py-2.5">{it.brand_name || "-"}</td>
+                        <td className="px-3 py-2.5"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
+                        <td className="px-3 py-2.5">{it.category_name_hu || it.category_name_ro || "-"}</td>
+                        <td className="px-3 py-2.5">{colorDisplay(it.color_name, it.color_code)}</td>
+                        <td className="px-3 py-2.5">{it.size || "-"}</td>
+                        <td className="px-3 py-2.5 text-right"><StockQtyButton item={it} /></td>
+                        <td className="px-3 py-2.5 text-right">{n(it.available_qty)}</td>
+                        <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
+                        <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
+                        <td className="px-3 py-2.5 text-center"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></span></td>
+                        <td className="px-3 py-2.5 text-right">
                           <div className="flex justify-end gap-2">
                             <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
                             <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                           </div>
                         </td>
                       </tr>
-                    ))}
-                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={12}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
+                      );
+                    })}
+                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
                   </tbody>
                 </table>
               </div>
 
               <div className="grid gap-3 lg:hidden">
-                {filtered.map((it) => (
-                  <article key={it.variant_id} className="rounded-xl border border-white/12 bg-white/[0.05] p-3">
+                {filtered.map((it) => {
+                  const isSelected = Boolean(selectedVariants[String(it.variant_id || "")]);
+                  return (
+                  <article key={it.variant_id} className={`rounded-xl border p-3 ${isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/12 bg-white/[0.05]"}`}>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label className="inline-flex items-center gap-2 text-xs text-white/76">
+                        <input
+                          className={selectBox}
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => toggleVariantSelection(String(it.variant_id || ""), e.target.checked)}
+                        />
+                        Kijelölés
+                      </label>
+                      {isSelected && <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/22 px-2 py-0.5 text-[11px] text-white">Kijelölve</span>}
+                    </div>
                     <div className="flex gap-3">
                       {it.image_url ? <img src={it.image_url} alt="" className="h-20 w-20 rounded-xl object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={20} /></div>}
                       <div className="min-w-0 flex-1">
@@ -1489,13 +1605,67 @@ export default function AllInWarehouse() {
                       <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21]" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                     </div>
                   </article>
-                ))}
+                  );
+                })}
                 {!filtered.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/60">Nincs megjeleníthető termék az AIF készletben.</div>}
               </div>
             </div>
           )}
         </section>
       </div>
+
+      {selectedPanelOpen && (
+        <div className={modalWrap}>
+          <div className="max-h-[88vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Kijelölt termékek</p>
+                <h2 className="mt-1 text-lg text-white">{selectedCount} termék kijelölve</h2>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button className={btnSoft} type="button" disabled title="Következő lépésben kötjük be."><Barcode size={15} /> Vonalkód / címke</button>
+                <button className={btnSoft} type="button" disabled title="Következő lépésben kötjük be."><Boxes size={15} /> Rendelés / PDF</button>
+                <button className={btnSoft} type="button" disabled title="Következő lépésben kötjük be."><Boxes size={15} /> Készletmozgatás</button>
+                <button className={btnSoft} onClick={() => setSelectedPanelOpen(false)} type="button"><X size={15} /> Bezárás</button>
+              </div>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                Ez a kijelölt termékek munkalistája. Innen fogjuk indítani a címkézést, rendelés/PDF-et és készletmozgatást.
+              </div>
+
+              <div className="grid gap-2">
+                {selectedItems.map((it) => (
+                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
+                    <div>
+                      {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
+                      <p className="mt-1 text-xs text-white/55">
+                        {it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}
+                      </p>
+                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Elérhető: {n(it.available_qty)} • SKU: {it.barcode || "-"}</p>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button className={btnSoft} onClick={() => { setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
+                      <button className={btnSoft} onClick={() => { setSelectedPanelOpen(false); openStockEditor(it); }} type="button"><Boxes size={14} /> Készlet</button>
+                      <button className={btnSoft} onClick={() => toggleVariantSelection(String(it.variant_id || ""), false)} type="button"><X size={14} /> Kivétel</button>
+                    </div>
+                  </div>
+                ))}
+                {!selectedItems.length && <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">Nincs kijelölt termék.</p>}
+              </div>
+
+              <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3">
+                <button className={btnSoft} onClick={clearSelectedVariants} type="button"><X size={15} /> Teljes kijelölés törlése</button>
+                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(false)} type="button">Kész</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {stockEditorTarget && (
         <div className={modalWrap}>
