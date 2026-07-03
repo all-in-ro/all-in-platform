@@ -236,14 +236,22 @@ function displayMoneyValue(value: unknown) {
   return String(n.toFixed(2));
 }
 
-function makeInternalCode(seed = "") {
-  const base = cleanInternalCode(seed).slice(0, 12) || "AIF";
-  const date = new Date();
-  const y = String(date.getFullYear()).slice(-2);
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  const t = String(Date.now()).slice(-6);
-  return cleanInternalCode(`${base}-${y}${m}${d}-${t}`);
+function shortHashCode(input: string, length = 7) {
+  const source = String(input || `${Date.now()}-${Math.random()}`);
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i += 1) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(length, "0").slice(-length);
+}
+
+function makeInternalCode(seed = "", parts: unknown[] = []) {
+  const source = [seed, ...parts]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("|");
+  return cleanInternalCode(`AIF${shortHashCode(source)}`);
 }
 
 function code128Svg(value: string, height = 74): BarcodeRender {
@@ -495,9 +503,9 @@ export default function AllInBarcodes(_props: PageProps) {
   }
 
   function generateCode() {
-    const generated = makeInternalCode(barcode || productCode || variantId || title || brand || "AIF");
+    const generated = makeInternalCode(barcode, [variantId, productCode, size, color, brand, title]);
     setBarcode(generated);
-    setStatus("Belső vonalkód létrehozva. Ez később Shopify SKU-ként is használható.");
+    setStatus("Rövid belső vonalkód létrehozva. Ez később Shopify SKU-ként is használható.");
   }
 
   async function copyBarcode() {
@@ -852,7 +860,7 @@ export default function AllInBarcodes(_props: PageProps) {
             </div>
 
             <div className="helpBox">
-              Ez belső AllIn / Shopify SKU alapú Code128 címke.
+              Ez rövid belső AllIn / Shopify SKU alapú Code128 címke. A rövidebb kód stabilabban olvasható sérült vagy kisméretű címkén is.
             </div>
             {status && <div className="statusBox" style={{ marginTop: 10 }}>{status}</div>}
           </div>
