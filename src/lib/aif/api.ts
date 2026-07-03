@@ -65,6 +65,30 @@ export type AifColorType = {
   updated_at?: string;
 };
 
+export type AifGenderType = {
+  code: string;
+  name: string;
+  aliases?: string[] | null;
+  sort_order?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AifMaterialType = {
+  id: string;
+  code: string;
+  name_ro: string;
+  name_hu?: string | null;
+  name_en?: string | null;
+  name_de?: string | null;
+  aliases?: string[] | null;
+  sort_order?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AifReceptionInput = {
   invoiceNumber?: string;
   invoiceDate?: string;
@@ -165,10 +189,12 @@ export type AifMeta = {
   suppliers: AifSupplier[];
   brands: AifBrand[];
   categories: AifCategory[];
+  genderTypes?: AifGenderType[];
   locations: AifLocation[];
   locationTypes?: AifLocationType[];
   currencies?: AifCurrency[];
   colorTypes?: AifColorType[];
+  materialTypes?: AifMaterialType[];
   profiles: AifImportProfile[];
 };
 
@@ -562,6 +588,94 @@ export function apiAifNormalizeColor(color: string) {
   return fetchAifJSON<{ input: string; color: string; item?: AifColorType | null }>("/color-types/normalize", {
     method: "POST",
     body: JSON.stringify({ color }),
+  });
+}
+
+export function apiAifListGenderTypes(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifGenderType[] }>(`/gender-types${suffix}`);
+}
+
+export function apiAifCreateGenderType(input: {
+  name: string;
+  code?: string;
+  aliases?: string[] | string;
+  sortOrder?: number | string;
+}) {
+  return fetchAifJSON<{ item: AifGenderType }>("/gender-types", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateGenderType(code: string, input: {
+  name?: string;
+  aliases?: string[] | string;
+  sortOrder?: number | string;
+  is_active?: boolean;
+}) {
+  return fetchAifJSON<{ item: AifGenderType }>(`/gender-types/${encodeURIComponent(code)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteGenderType(code: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/gender-types/${encodeURIComponent(code)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifListMaterialTypes(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifMaterialType[] }>(`/material-types${suffix}`);
+}
+
+export function apiAifCreateMaterialType(input: {
+  nameRo: string;
+  code?: string;
+  nameHu?: string;
+  nameEn?: string;
+  nameDe?: string;
+  aliases?: string[] | string;
+  sortOrder?: number | string;
+}) {
+  return fetchAifJSON<{ item: AifMaterialType }>("/material-types", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdateMaterialType(id: string, input: {
+  nameRo?: string;
+  code?: string;
+  nameHu?: string | null;
+  nameEn?: string | null;
+  nameDe?: string | null;
+  aliases?: string[] | string;
+  sortOrder?: number | string;
+  is_active?: boolean;
+}) {
+  return fetchAifJSON<{ item: AifMaterialType }>(`/material-types/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteMaterialType(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/material-types/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifNormalizeMaterial(material: string) {
+  return fetchAifJSON<{ input: string; material: string }>("/material-types/normalize", {
+    method: "POST",
+    body: JSON.stringify({ material }),
   });
 }
 
