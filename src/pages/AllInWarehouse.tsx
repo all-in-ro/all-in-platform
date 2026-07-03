@@ -1827,13 +1827,23 @@ export default function AllInWarehouse() {
                         <span className="flex items-center gap-1.5">
                           <span>Vonalkód / Shopify SKU alap</span>
                           <span
-                            className="group relative inline-flex h-4 w-4 items-center justify-center rounded-full border border-amber-200/60 bg-amber-300 text-[10px] leading-none text-slate-900 shadow-[0_0_10px_rgba(252,211,77,0.32)]"
+                            className={`group relative inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] leading-none shadow transition ${
+                              String(edit.barcode || "").trim()
+                                ? "border-[#7bd7d4]/70 bg-[#2a8d8b] text-white shadow-[0_0_10px_rgba(42,141,139,0.38)]"
+                                : "border-amber-200/60 bg-amber-300 text-slate-900 shadow-[0_0_10px_rgba(252,211,77,0.32)]"
+                            }`}
                             tabIndex={0}
-                            aria-label="Egyedi variánsazonosító információ"
+                            aria-label={String(edit.barcode || "").trim() ? "SKU alap megadva" : "Egyedi variánsazonosító információ"}
                           >
                             i
-                            <span className="pointer-events-none absolute left-1/2 top-full z-30 mt-1 hidden w-64 -translate-x-1/2 rounded-lg border border-amber-200/35 bg-[#1f2937] px-2 py-1.5 text-[11px] leading-snug tracking-normal text-white shadow-xl group-hover:block group-focus:block">
-                              Egyedi variánsazonosító. Később ez kerül a Shopify SKU mezőbe.
+                            <span
+                              className={`pointer-events-none absolute left-1/2 top-full z-30 mt-1 hidden w-64 -translate-x-1/2 rounded-lg border bg-[#1f2937] px-2 py-1.5 text-[11px] leading-snug tracking-normal text-white shadow-xl group-hover:block group-focus:block ${
+                                String(edit.barcode || "").trim() ? "border-[#2a8d8b]/55" : "border-amber-200/35"
+                              }`}
+                            >
+                              {String(edit.barcode || "").trim()
+                                ? "SKU alap megadva. Ez kerül a Shopify SKU mezőbe."
+                                : "Egyedi variánsazonosító. Később ez kerül a Shopify SKU mezőbe."}
                             </span>
                           </span>
                         </span>
