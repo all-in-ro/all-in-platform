@@ -3029,6 +3029,126 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
+
+  async function refreshReceptionAfterImportHistoryDelete(client, receptionId) {
+    if (!receptionId) return;
+
+    const stats = await client.query(
+      `SELECT
+         count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS line_count,
+         COALESCE(sum(COALESCE(rw.qty,0)) FILTER (WHERE rw.status <> 'ignored'),0)::int AS total_qty,
+         COALESCE(sum(COALESCE(rw.qty,0) * COALESCE(rw.buy_price,0)) FILTER (WHERE rw.status <> 'ignored'),0)::numeric(14,2) AS goods_value,
+         count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
+         count(rw.id) FILTER (WHERE rw.status NOT IN ('ignored','committed'))::int AS remaining_rows,
+         count(rw.id) FILTER (WHERE rw.status = 'error')::int AS error_rows
+       FROM aif_import_batches b
+       LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
+       WHERE b.reception_id=$1`,
+      [receptionId]
+    );
+
+    const st = stats.rows[0] || {};
+    const lineCount = Number(st.line_count || 0);
+    const totalQty = Number(st.total_qty || 0);
+    const goodsValue = Number(st.goods_value || 0);
+    const committedRows = Number(st.committed_rows || 0);
+    const remainingRows = Number(st.remaining_rows || 0);
+    const errorRows = Number(st.error_rows || 0);
+
+    await client.query(
+      `UPDATE aif_receptions
+       SET line_count=$2,
+           total_qty=$3,
+           goods_value=$4,
+           status=CASE
+             WHEN $5::int > 0 OR $6::int > 0 THEN 'draft'
+             WHEN $7::int > 0 THEN 'committed'
+             ELSE 'draft'
+           END,
+           updated_at=now()
+       WHERE id=$1`,
+      [receptionId, lineCount, totalQty, goodsValue, remainingRows, errorRows, committedRows]
+    );
+  }
+
+  async function deleteImportBatchHistory(req, res) {
+    const batchId = text(req.params.id);
+    if (!batchId) return res.status(400).json({ error: "Import előzmény azonosító kötelező." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const batchRes = await client.query(
+        `SELECT id, reception_id, status, row_count, source_file_name
+         FROM aif_import_batches
+         WHERE id::text=$1
+         FOR UPDATE`,
+        [batchId]
+      );
+
+      if (!batchRes.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Import előzmény nem található." });
+      }
+
+      const batch = batchRes.rows[0];
+
+      const rowStats = await client.query(
+        `SELECT
+           count(*)::int AS rows,
+           count(*) FILTER (WHERE status='committed')::int AS committed_rows
+         FROM aif_import_rows
+         WHERE batch_id=$1`,
+        [batch.id]
+      );
+
+      const deletedRows = Number(rowStats.rows[0]?.rows || 0);
+      const committedRows = Number(rowStats.rows[0]?.committed_rows || 0);
+
+      /*
+        Csak az import előzményt töröljük:
+        - aif_import_rows
+        - aif_import_batches
+
+        Direkt NEM nyúlunk ezekhez:
+        - aif_product_models
+        - aif_product_variants
+        - aif_stock
+        - aif_stock_movements
+        - aif_variant_supplier_codes
+
+        Tehát a már feltöltött / készletre vett termékek maradnak. Az Exceles régészeti ásatás meg végre nem hagy maga után 1000 fölös import előzményt.
+      */
+      await client.query(`DELETE FROM aif_import_rows WHERE batch_id=$1`, [batch.id]);
+      await client.query(`DELETE FROM aif_import_batches WHERE id=$1`, [batch.id]);
+
+      if (batch.reception_id) {
+        await refreshReceptionAfterImportHistoryDelete(client, batch.reception_id);
+      }
+
+      await client.query("COMMIT");
+
+      res.json({
+        ok: true,
+        mode: "history_deleted",
+        deletedRows,
+        committedRows,
+        receptionId: batch.reception_id || null,
+      });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete import history failed", e);
+      res.status(500).json({ error: e?.message || "Az import előzmény törlése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.delete("/import-batches/:id/history", requireAuthed, deleteImportBatchHistory);
+  router.delete("/import-batches/:id", requireAuthed, deleteImportBatchHistory);
+
+
   router.get("/import-batches/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const batch = await pool.query(
