@@ -1907,11 +1907,23 @@ export default function AllInWarehouse() {
             </div>
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. Ha leveszed innen, visszakerülnek a fő kijelölt listába.
+                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad.
               </div>
               <div className="grid gap-2">
                 {selectedItemsForAction(selectedWorkPanel).map((it) => (
-                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
+                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
+                    <div className="flex justify-center">
+                      <input
+                        className={selectBox}
+                        type="checkbox"
+                        checked
+                        onChange={(e) => {
+                          if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
+                        }}
+                        aria-label="Kivétel ebből a feladatlistából"
+                        title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
+                      />
+                    </div>
                     <div>
                       {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
                     </div>
@@ -1923,7 +1935,7 @@ export default function AllInWarehouse() {
                     <div className="flex flex-wrap justify-end gap-2">
                       <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
                       <button className={btnSoft} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button"><ArrowLeft size={14} /> Vissza a fő listába</button>
-                      <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button"><X size={14} /> Kijelölés törlése</button>
+                      <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={14} /> Törlés minden listából</button>
                     </div>
                   </div>
                 ))}
