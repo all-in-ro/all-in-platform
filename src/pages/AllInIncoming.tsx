@@ -30,6 +30,7 @@ import {
   AifBrandColorCode,
   AifColorType,
   apiAifCommitImportBatch,
+  apiAifDeleteImportBatchHistory,
   apiAifCreateCurrency,
   apiAifCreateFullImportBatch,
   apiAifCreateLocation,
@@ -563,6 +564,7 @@ export default function AllInIncoming(_props: Props) {
   const [loadedReception, setLoadedReception] = useState<AifReceptionDetail | null>(null);
   const [receptionListOpen, setReceptionListOpen] = useState(false);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
+  const [deleteImportBatchTarget, setDeleteImportBatchTarget] = useState<AifImportBatchSummary | null>(null);
   const [supplierId, setSupplierId] = useState("");
   const [locationId, setLocationId] = useState("");
   const [note, setNote] = useState("");
@@ -1258,6 +1260,43 @@ export default function AllInIncoming(_props: Props) {
       setBusy(false);
     }
   }
+
+  async function confirmDeleteImportBatchHistory() {
+    if (!deleteImportBatchTarget?.id) return;
+    const target = deleteImportBatchTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await apiAifDeleteImportBatchHistory(target.id);
+      setDeleteImportBatchTarget(null);
+
+      if (result.deletedReception && target.reception_id && String(selectedReceptionId) === String(target.reception_id)) {
+        startNewEmptyReception(false);
+      }
+
+      await Promise.all([loadBatches(), loadReceptions()]);
+
+      if (!result.deletedReception && target.reception_id && String(selectedReceptionId) === String(target.reception_id)) {
+        try {
+          const detail = await apiAifGetReception(target.reception_id);
+          fillReceptionHeader(detail);
+        } catch {
+          startNewEmptyReception(false);
+        }
+      }
+
+      setMessage(
+        result.deletedReception
+          ? `Import előzmény törölve. A kapcsolódó üres receptió is törölve. Termék/készlet nem lett módosítva. Törölt sorok: ${result.deletedRows}.`
+          : `Import előzmény törölve. Termék/készlet nem lett módosítva. Törölt sorok: ${result.deletedRows}.`
+      );
+    } catch (e: any) {
+      setMessage(e.message || "Az import előzmény törlése nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
 
   async function createLocation() {
     if (!newLocationName.trim()) {
@@ -2627,16 +2666,43 @@ export default function AllInIncoming(_props: Props) {
                   <p className="mt-1 text-xs text-white/60">
                     {new Date(b.created_at).toLocaleString()} • {b.location_name || "-"} • terméksor: {b.row_count || 0} • ellenőrzendő: {b.error_count || 0} • {b.status}
                   </p>
+                  {deleteImportBatchTarget?.id === b.id && (
+                    <p className="mt-2 max-w-xl rounded-lg border border-amber-200/30 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-50">
+                      Csak az import előzmény és a mentett import sorok törlődnek. A már létrehozott termékekhez, variánsokhoz és készlethez nem nyúl.
+                    </p>
+                  )}
                 </div>
-                <button
-                  className={primaryBtn}
-                  disabled={busy || b.status === "committed" || Number(b.row_count || 0) <= 0 || Number(b.error_count || 0) > 0}
-                  onClick={() => commitBatch(b)}
-                  title={Number(b.row_count || 0) <= 0 ? "Nincs mentett terméksor ehhez az importhoz." : Number(b.error_count || 0) > 0 ? "Az importban ellenőrzendő vagy hibás sor van." : ""}
-                  type="button"
-                >
-                  <CheckCircle size={14} /> Készletre vétel
-                </button>
+                {deleteImportBatchTarget?.id === b.id ? (
+                  <div className="flex flex-wrap gap-2 sm:justify-end">
+                    <button className={neutralBtn} onClick={() => setDeleteImportBatchTarget(null)} disabled={busy} type="button">
+                      <X size={14} /> Mégse
+                    </button>
+                    <button className={dangerBtn} onClick={confirmDeleteImportBatchHistory} disabled={busy} type="button">
+                      <Trash2 size={14} /> Előzmény törlése
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2 sm:justify-end">
+                    <button
+                      className={primaryBtn}
+                      disabled={busy || b.status === "committed" || Number(b.row_count || 0) <= 0 || Number(b.error_count || 0) > 0}
+                      onClick={() => commitBatch(b)}
+                      title={Number(b.row_count || 0) <= 0 ? "Nincs mentett terméksor ehhez az importhoz." : Number(b.error_count || 0) > 0 ? "Az importban ellenőrzendő vagy hibás sor van." : ""}
+                      type="button"
+                    >
+                      <CheckCircle size={14} /> Készletre vétel
+                    </button>
+                    <button
+                      className={dangerBtn}
+                      disabled={busy}
+                      onClick={() => setDeleteImportBatchTarget(b)}
+                      title="Csak az import előzmény törlése. Termék/készlet marad."
+                      type="button"
+                    >
+                      <Trash2 size={14} /> Törlés
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
             {!batches.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs import előzmény.</p>}
