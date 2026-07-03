@@ -3904,31 +3904,39 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         const diff = qty - beforeQty;
         if (diff !== 0 || reservedQty !== beforeReserved) {
-          await client.query(
-            `INSERT INTO aif_stock_movements (
-               movement_type, source_type, source_id, location_id, variant_id,
-               qty_delta, qty_before, qty_after, actor, raw
-             )
-             VALUES ('adjustment','manual_stock_edit',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-            [
-              `manual_stock_edit:${Date.now()}`,
-              location.id,
-              variantId,
-              diff,
-              beforeQty,
-              qty,
-              actor,
-              JSON.stringify({
-                reason: "manual_location_stock_edit",
-                locationCode: location.code,
-                locationName: location.name,
-                qtyBefore: beforeQty,
-                qtyAfter: qty,
-                reservedBefore: beforeReserved,
-                reservedAfter: reservedQty,
-              }),
-            ]
-          );
+          try {
+            await client.query("SAVEPOINT aif_stock_movement_log");
+            await client.query(
+              `INSERT INTO aif_stock_movements (
+                 movement_type, source_type, source_id, location_id, variant_id,
+                 qty_delta, qty_before, qty_after, actor, raw
+               )
+               VALUES ('adjustment','manual_stock_edit',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+              [
+                `manual_stock_edit:${Date.now()}`,
+                location.id,
+                variantId,
+                diff,
+                beforeQty,
+                qty,
+                actor,
+                JSON.stringify({
+                  reason: "manual_location_stock_edit",
+                  locationCode: location.code,
+                  locationName: location.name,
+                  qtyBefore: beforeQty,
+                  qtyAfter: qty,
+                  reservedBefore: beforeReserved,
+                  reservedAfter: reservedQty,
+                }),
+              ]
+            );
+            await client.query("RELEASE SAVEPOINT aif_stock_movement_log");
+          } catch (movementError) {
+            try { await client.query("ROLLBACK TO SAVEPOINT aif_stock_movement_log"); } catch {}
+            try { await client.query("RELEASE SAVEPOINT aif_stock_movement_log"); } catch {}
+            console.error("AIF stock movement log warning", movementError);
+          }
         }
       }
 
