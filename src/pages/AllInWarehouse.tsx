@@ -20,8 +20,8 @@ import {
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4 sm:py-7";
 const shell = "mx-auto max-w-7xl space-y-4";
-const panel = "rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
-const panelHead = "flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3";
+const panel = "overflow-hidden rounded-2xl border border-white/18 bg-white/[0.07] shadow-lg shadow-slate-950/10";
+const panelHead = "flex items-center justify-between gap-3 border-b border-white/14 bg-[#303a4c] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -34,14 +34,14 @@ const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border bo
 const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
 const taxonomyCard = "rounded-2xl border border-white/18 bg-[#566171] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(15,23,42,0.10)]";
 const taxonomyTabBase = "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs transition-colors font-normal";
-const taxonomyTabActive = `${taxonomyTabBase} border-emerald-300/42 bg-emerald-500/18 text-white shadow-[0_0_0_1px_rgba(110,231,183,0.12)]`;
+const taxonomyTabActive = `${taxonomyTabBase} border-[#7bd7d4]/42 bg-[#2a8d8b]/22 text-white shadow-[0_0_0_1px_rgba(42,141,139,0.16)]`;
 const taxonomyTabIdle = `${taxonomyTabBase} border-white/16 bg-[#3f4959] text-white/78 hover:bg-[#475365]`;
 const taxonomySmallBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/18 bg-[#3f4959] px-2.5 text-[11px] text-white/88 hover:bg-[#475365] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-emerald-300/35 bg-[#276454] px-3 text-xs text-white hover:bg-[#2d735f] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-300/30 bg-[#d31126] px-2.5 text-[11px] text-white shadow-[0_0_0_1px_rgba(248,113,113,0.06)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyField = "grid gap-1.5 text-[11px] text-white/72";
-const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
-const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
+const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/60";
+const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/60";
 const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
 type InventoryItem = {
@@ -719,13 +719,13 @@ export default function AllInWarehouse() {
       : "Nincs célhelyenkénti készlet";
     return (
       <button
-        className="group inline-flex min-w-[72px] items-center justify-end gap-1.5 rounded-full border border-[#5bd0cc]/45 bg-[#203f49] px-2.5 py-1 text-right text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.10)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        className="group mx-auto inline-flex min-w-[76px] items-center justify-center gap-1.5 rounded-full border border-[#7bd7d4]/45 bg-[#1f5558] px-2.5 py-1 text-center text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.14)] hover:border-[#9be9e7]/70 hover:bg-[#24676a] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
         onClick={() => openStockEditor(item)}
         title={`Készlet célhelyenként: ${label}. Kattints a módosításhoz.`}
         type="button"
       >
         <span className="text-sm tabular-nums">{n(item.total_qty)}</span>
-        <span className="rounded-full bg-[#2a8d8b]/28 px-1.5 py-0.5 text-[10px] text-[#cffffd] group-hover:bg-[#2a8d8b]/42">
+        <span className="rounded-full bg-[#2a8d8b] px-1.5 py-0.5 text-[10px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] group-hover:bg-[#319c99]">
           {activeRows.length || "0"} hely
         </span>
       </button>
@@ -1395,7 +1395,7 @@ export default function AllInWarehouse() {
                     {brandChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
                         <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{money(x.value)}</span></div>
-                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: `${Math.max(4, (x.value / maxBrandValue) * 100)}%` }} /></div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#2a8d8b]" style={{ width: `${x.value <= 0 || maxBrandValue <= 0 ? 0 : Math.max(4, (x.value / maxBrandValue) * 100)}%` }} /></div>
                       </div>
                     ))}
                     {!brandChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
@@ -1407,7 +1407,7 @@ export default function AllInWarehouse() {
                     {locationChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
                         <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{x.qty}</span></div>
-                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: `${Math.max(4, (x.qty / maxLocationQty) * 100)}%` }} /></div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#2a8d8b]" style={{ width: `${x.qty <= 0 || maxLocationQty <= 0 ? 0 : Math.max(4, (x.qty / maxLocationQty) * 100)}%` }} /></div>
                       </div>
                     ))}
                     {!locationChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
@@ -1418,8 +1418,8 @@ export default function AllInWarehouse() {
           )}
         </section>
 
-        <section className="rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
-          <div className="flex items-center justify-between gap-3 border-b border-white/16 bg-[#303a4c] px-4 py-3">
+        <section className="overflow-hidden rounded-2xl border border-white/18 bg-[#515d6e] shadow-xl shadow-slate-950/10">
+          <div className="flex items-center justify-between gap-3 border-b border-white/14 bg-[#303a4c] px-4 py-3">
             <div className="flex items-center gap-2 text-white/95"><Eye size={17} /><span>Terméklista</span><span className={chip}>{filtered.length} találat</span></div>
             <button className={btnSoft} onClick={() => setListOpen((x) => !x)}>{listOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {listOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
@@ -1435,7 +1435,7 @@ export default function AllInWarehouse() {
                       <th className="px-3 py-3 font-normal">Kategória</th>
                       <th className="px-3 py-3 font-normal">Szín</th>
                       <th className="px-3 py-3 font-normal">Méret</th>
-                      <th className="px-3 py-3 text-right font-normal">Készlet</th>
+                      <th className="px-3 py-3 text-center font-normal">Készlet</th>
                       <th className="px-3 py-3 text-right font-normal">Elérhető</th>
                       <th className="px-3 py-3 text-right font-normal">Vételár</th>
                       <th className="px-3 py-3 text-right font-normal">Eladási ár</th>
@@ -1452,7 +1452,7 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-2.5">{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-3 py-2.5">{it.size || "-"}</td>
-                        <td className="px-3 py-2.5 text-right"><StockQtyButton item={it} /></td>
+                        <td className="px-3 py-2.5 text-center"><StockQtyButton item={it} /></td>
                         <td className="px-3 py-2.5 text-right">{n(it.available_qty)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
@@ -1479,7 +1479,7 @@ export default function AllInWarehouse() {
                         <p className="truncate text-sm">{it.title_ro || "-"}</p>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
-                          <button className={`${chip} border-[#5bd0cc]/40 bg-[#203f49] text-[#d7fffd] hover:bg-[#25535c]`} onClick={() => openStockEditor(it)} type="button">Készlet: {n(it.total_qty)} • {stockRowsForVariant(it.variant_id).filter((s) => n(s.qty) > 0).length || 0} hely</button>
+                          <button className={`${chip} border-[#7bd7d4]/45 bg-[#1f5558] text-[#d7fffd] hover:bg-[#24676a]`} onClick={() => openStockEditor(it)} type="button">Készlet: {n(it.total_qty)} • {stockRowsForVariant(it.variant_id).filter((s) => n(s.qty) > 0).length || 0} hely</button>
                           <span className={chip}>Elérhető: {n(it.available_qty)}</span>
                           <MissingDataIndicator item={it} />
                         </div>
@@ -2090,7 +2090,7 @@ export default function AllInWarehouse() {
                   <p className="mb-3 text-sm text-white/80">Hiányzó adatok</p>
                   <div className="flex flex-wrap gap-2">
                     {missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size }).map((x) => <span key={x} className="rounded-full border border-amber-200/25 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-100">{x}</span>)}
-                    {!missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size }).length && <span className="rounded-full border border-emerald-200/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-100">Nincs jelölt hiány</span>}
+                    {!missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size }).length && <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/16 px-2.5 py-1 text-xs text-[#d7fffd]">Nincs jelölt hiány</span>}
                   </div>
                 </section>
               </div>
