@@ -392,10 +392,88 @@ function categoryAliasValues(c: AifCategoryOption) {
     .map((x) => String(x));
 }
 
+function normMatchKey(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+const sourceCategoryAliases: Record<string, string[]> = {
+  apparel: ["imbracaminte", "îmbrăcăminte", "haine", "ruha", "clothing", "apparel"],
+  tricou: ["tricou", "tricouri", "trikó", "póló", "polo", "t shirt", "t-shirt", "tee", "training tee"],
+  tricouri: ["tricou", "tricouri", "trikó", "póló", "polo", "t shirt", "t-shirt", "tee"],
+  pantaloni: ["pantaloni", "nadrag", "nadrág", "pants", "trousers"],
+  shorts: ["shorts", "pantaloni scurti", "pantaloni scurți", "rövidnadrág", "rovidnadrag"],
+  hanorac: ["hanorac", "hoodie", "pulover", "sweatshirt", "kapucnis", "pulóver", "puloverek"],
+  jacheta: ["jacheta", "jachetă", "geaca", "geacă", "jacket", "kabát", "dzseki"],
+  vesta: ["vesta", "vestă", "vest", "melleny", "mellény"],
+  incaltaminte: ["incaltaminte", "încălțăminte", "pantofi", "adidasi", "adidași", "shoes", "sneakers", "cipő", "cipo"],
+  rochie: ["rochie", "rochii", "dress", "ruha"],
+  fusta: ["fusta", "fustă", "fuste", "skirt", "szoknya"],
+  geanta: ["geanta", "geantă", "genti", "genți", "bag", "táska", "taska"],
+  curea: ["curea", "belt", "öv", "ov"],
+  sosete: ["sosete", "șosete", "socks", "zokni"],
+};
+
+function categorySearchKeys(value: unknown) {
+  const raw = normMatchKey(value);
+  if (!raw) return [];
+  const direct = sourceCategoryAliases[raw] || [];
+  const byToken = raw.split(" ").flatMap((token) => sourceCategoryAliases[token] || []);
+  return Array.from(new Set([raw, ...direct, ...byToken].map(normMatchKey).filter(Boolean)));
+}
+
 function categoryMatches(c: AifCategoryOption, value: unknown) {
-  const key = String(value || "").trim().toLowerCase();
-  if (!key) return false;
-  return categoryAliasValues(c).some((x) => x.trim().toLowerCase() === key);
+  const sourceKeys = categorySearchKeys(value);
+  if (!sourceKeys.length) return false;
+  const optionKeys = categoryAliasValues(c).map(normMatchKey).filter(Boolean);
+  return sourceKeys.some((sourceKey) =>
+    optionKeys.some((optionKey) =>
+      optionKey === sourceKey ||
+      (sourceKey.length >= 4 && optionKey.length >= 4 && (optionKey.startsWith(sourceKey) || sourceKey.startsWith(optionKey)))
+    )
+  );
+}
+
+function rawValueByHeader(row: any, headers: string[]) {
+  const raw = row?.raw;
+  if (!raw || typeof raw !== "object") return "";
+  const wanted = headers.map(normMatchKey);
+  for (const [key, value] of Object.entries(raw)) {
+    const normalizedKey = normMatchKey(key);
+    if (wanted.includes(normalizedKey)) return value;
+  }
+  return "";
+}
+
+function categoryCandidatesForRow(row: any) {
+  const normalized = row?.normalized || row || {};
+  return [
+    rawValueByHeader(row, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE"]),
+    (normalized as any).subCategoryCode,
+    (normalized as any).subcategoryCode,
+    (normalized as any).subCategoryName,
+    (normalized as any).subcategoryName,
+    (normalized as any).productType,
+    (normalized as any).type,
+    (normalized as any).categoryCode,
+    (normalized as any).categoryName,
+    rawValueByHeader(row, ["CATEGORIE", "CATEGORY"]),
+  ].filter((x) => String(x ?? "").trim());
+}
+
+function findCategoryForRow(row: any, categories: AifCategoryOption[]) {
+  const candidates = categoryCandidatesForRow(row);
+  for (const candidate of candidates) {
+    const found = categories.find((c) => categoryMatches(c, candidate));
+    if (found) return found;
+  }
+  return null;
 }
 
 function categoryDisplay(value: unknown, categories: AifCategoryOption[]) {
@@ -593,11 +671,31 @@ export default function AllInIncoming(_props: Props) {
     return match ? String(match.code || match.id) : raw;
   }
 
-  function categoryValueForRow(n: Record<string, unknown>) {
-    const raw = String(n.categoryCode || n.categoryName || "").trim();
-    if (!raw) return "";
-    const match = activeCategories.find((c) => categoryMatches(c, raw));
-    return match ? String(match.code || match.id) : raw;
+  function categoryValueForRow(rowOrNormalized: AifParsedRow | Record<string, unknown>) {
+    const row = (rowOrNormalized as any)?.normalized ? rowOrNormalized : { normalized: rowOrNormalized };
+    const match = findCategoryForRow(row, activeCategories);
+    return match ? String(match.code || match.id) : "";
+  }
+
+  function importedCategoryHint(row: AifParsedRow) {
+    const raw = categoryCandidatesForRow(row).find((x) => String(x ?? "").trim());
+    return String(raw ?? "").trim();
+  }
+
+  function normalizeImportedRowsWithMeta(inputRows: AifParsedRow[]) {
+    return inputRows.map((row) => {
+      const normalized = { ...(row.normalized || {}) } as any;
+      const match = findCategoryForRow({ ...row, normalized }, activeCategories);
+      if (match) {
+        normalized.categoryCode = String(match.code || match.id);
+        normalized.categoryName = categoryLabel(match);
+      } else if (String(normalized.categoryCode || normalized.categoryName || "").trim()) {
+        normalized.sourceCategory = normalized.sourceCategory || normalized.categoryCode || normalized.categoryName;
+        normalized.categoryCode = "";
+        normalized.categoryName = "";
+      }
+      return { ...row, normalized };
+    });
   }
 
   const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
@@ -668,7 +766,7 @@ export default function AllInIncoming(_props: Props) {
       columns: workbench.columns.map((col) => (col.index === index ? { ...col, field, label: AIF_COLUMN_FIELD_OPTIONS.find((x) => x.value === field)?.label || col.label } : col)),
     };
     setWorkbench(next);
-    setRows((current) => applyAifColumnMapping(current, next, selectedSupplier));
+    setRows((current) => normalizeImportedRowsWithMeta(applyAifColumnMapping(current, next, selectedSupplier)));
   }
 
   function updateRowField(index: number, field: EditableImportField, value: string) {
@@ -974,13 +1072,14 @@ export default function AllInIncoming(_props: Props) {
     setMessage("");
     try {
       const parsed = await readAifWorkbookWithAnalysis(file, selectedSupplier);
+      const normalizedRows = normalizeImportedRowsWithMeta(parsed.rows);
       setFileName(file.name);
-      setRows(parsed.rows);
+      setRows(normalizedRows);
       setWorkbench(parsed.analysis);
       setWorkbenchOpen(true);
       setPreviewLimit(25);
       setApprovedRows({});
-      setMessage(`${parsed.rows.length} sor beolvasva előnézetre. Importáláshoz előbb jelöld ki a valóban használható sorokat.`);
+      setMessage(`${normalizedRows.length} sor beolvasva előnézetre. Importáláshoz előbb jelöld ki a valóban használható sorokat.`);
     } catch (e: any) {
       setRows([]);
       setWorkbench(null);
@@ -2302,6 +2401,8 @@ export default function AllInIncoming(_props: Props) {
                 const key = rowKey(r, globalIndex);
                 const approved = Boolean(approvedRows[key]);
                 const rowState = errors.length ? "Ellenőrizni" : "Rendben";
+                const categoryValue = categoryValueForRow(r);
+                const categoryHint = importedCategoryHint(r);
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
@@ -2340,10 +2441,11 @@ export default function AllInIncoming(_props: Props) {
                         </label>
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Kategória</span>
-                          <select className={`${compactSelect} w-full`} value={categoryValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
+                          <select className={`${compactSelect} w-full`} value={categoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
                             {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                           </select>
+                          {categoryHint && !categoryValue ? <span className="text-[9px] text-amber-100">XLS: {categoryHint}</span> : null}
                         </label>
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Nem</span>
