@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   Barcode,
   Boxes,
+  ClipboardList,
+  PackageCheck,
   ChevronDown,
   ChevronUp,
   Edit3,
@@ -46,6 +48,48 @@ const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f
 const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
+const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariantActions:v1";
+
+type SelectedWorkAction = "label" | "order" | "move";
+
+const selectedWorkActionLabels: Record<SelectedWorkAction, string> = {
+  label: "Vonalkód / címke",
+  order: "Rendelés / PDF",
+  move: "Készletmozgatás",
+};
+
+function readSavedSelectedVariantActions(): Record<string, SelectedWorkAction> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(selectedProductActionsStorageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const allowed = new Set(["label", "order", "move"]);
+    return Object.entries(parsed).reduce<Record<string, SelectedWorkAction>>((acc, [id, value]) => {
+      const key = String(id || "").trim();
+      const action = String(value || "") as SelectedWorkAction;
+      if (key && allowed.has(action)) acc[key] = action;
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function saveSelectedVariantActionsToStorage(actions: Record<string, SelectedWorkAction>) {
+  if (typeof window === "undefined") return;
+  const clean = Object.entries(actions).reduce<Record<string, SelectedWorkAction>>((acc, [id, action]) => {
+    const key = String(id || "").trim();
+    if (key && ["label", "order", "move"].includes(action)) acc[key] = action;
+    return acc;
+  }, {});
+  if (!Object.keys(clean).length) {
+    window.localStorage.removeItem(selectedProductActionsStorageKey);
+    return;
+  }
+  window.localStorage.setItem(selectedProductActionsStorageKey, JSON.stringify(clean));
+}
 
 function readSavedSelectedVariants(): Record<string, boolean> {
   if (typeof window === "undefined") return {};
@@ -645,6 +689,9 @@ export default function AllInWarehouse() {
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
+  const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
+  const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
+  const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -880,8 +927,67 @@ export default function AllInWarehouse() {
   }, [items, selectedVariants]);
 
   const selectedCount = selectedItems.length;
+  const selectedUnassignedItems = useMemo(
+    () => selectedItems.filter((x) => !selectedWorkActions[String(x.variant_id || "")]),
+    [selectedItems, selectedWorkActions]
+  );
+  const selectedLabelItems = useMemo(
+    () => selectedItems.filter((x) => selectedWorkActions[String(x.variant_id || "")] === "label"),
+    [selectedItems, selectedWorkActions]
+  );
+  const selectedOrderItems = useMemo(
+    () => selectedItems.filter((x) => selectedWorkActions[String(x.variant_id || "")] === "order"),
+    [selectedItems, selectedWorkActions]
+  );
+  const selectedMoveItems = useMemo(
+    () => selectedItems.filter((x) => selectedWorkActions[String(x.variant_id || "")] === "move"),
+    [selectedItems, selectedWorkActions]
+  );
+  const selectedWorkCounts: Record<SelectedWorkAction, number> = {
+    label: selectedLabelItems.length,
+    order: selectedOrderItems.length,
+    move: selectedMoveItems.length,
+  };
   const selectedFilteredCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedFilteredCount === filteredVariantIds.length;
+
+  function assignSelectedItemToAction(item: InventoryItem, action: SelectedWorkAction) {
+    const id = String(item.variant_id || "");
+    if (!id) return;
+    setSelectedVariants((current) => ({ ...current, [id]: true }));
+    setSelectedWorkActions((current) => ({ ...current, [id]: action }));
+    setSelectedActionTarget(null);
+    setSelectedWorkPanel(action);
+  }
+
+  function returnSelectedItemToMainList(id: string) {
+    if (!id) return;
+    setSelectedWorkActions((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function removeSelectedItemEverywhere(id: string) {
+    if (!id) return;
+    setSelectedVariants((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setSelectedWorkActions((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function selectedItemsForAction(action: SelectedWorkAction) {
+    if (action === "label") return selectedLabelItems;
+    if (action === "order") return selectedOrderItems;
+    return selectedMoveItems;
+  }
 
   function toggleVariantSelection(id: string, checked: boolean) {
     if (!id) return;
@@ -891,6 +997,13 @@ export default function AllInWarehouse() {
       else delete next[id];
       return next;
     });
+    if (!checked) {
+      setSelectedWorkActions((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    }
   }
 
   function toggleAllFilteredSelection(checked: boolean) {
@@ -906,6 +1019,9 @@ export default function AllInWarehouse() {
 
   function clearSelectedVariants() {
     setSelectedVariants({});
+    setSelectedWorkActions({});
+    setSelectedActionTarget(null);
+    setSelectedWorkPanel(null);
     setSelectedPanelOpen(false);
   }
 
@@ -919,6 +1035,13 @@ export default function AllInWarehouse() {
       }
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
+    setSelectedWorkActions((current) => {
+      const next: Record<string, SelectedWorkAction> = {};
+      for (const [id, action] of Object.entries(current)) {
+        if (valid.has(id)) next[id] = action;
+      }
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
   }, [items]);
 
   useEffect(() => {
@@ -926,8 +1049,13 @@ export default function AllInWarehouse() {
   }, [selectedVariants]);
 
   useEffect(() => {
+    saveSelectedVariantActionsToStorage(selectedWorkActions);
+  }, [selectedWorkActions]);
+
+  useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
-  }, [selectedPanelOpen, selectedCount]);
+    if (selectedWorkPanel && selectedWorkCounts[selectedWorkPanel] <= 0) setSelectedWorkPanel(null);
+  }, [selectedPanelOpen, selectedCount, selectedWorkPanel, selectedWorkCounts.label, selectedWorkCounts.order, selectedWorkCounts.move]);
 
   const totals = useMemo(() => {
     return filtered.reduce(
@@ -1667,21 +1795,39 @@ export default function AllInWarehouse() {
                 <h2 className="mt-1 text-lg text-white">{selectedCount} termék kijelölve</h2>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <button className={btnSoft} type="button" disabled title="Következő lépésben kötjük be."><Barcode size={15} /> Vonalkód / címke</button>
-                <button className={btnSoft} type="button" disabled title="Következő lépésben kötjük be."><Boxes size={15} /> Rendelés / PDF</button>
-                <button className={btnSoft} type="button" disabled title="Következő lépésben kötjük be."><Boxes size={15} /> Készletmozgatás</button>
+                <button className={btnSoft} type="button" disabled={!selectedWorkCounts.label} onClick={() => setSelectedWorkPanel("label")} title="Vonalkód / címke listára tett termékek">
+                  <Barcode size={15} /> Vonalkód / címke {selectedWorkCounts.label > 0 ? `(${selectedWorkCounts.label})` : ""}
+                </button>
+                <button className={btnSoft} type="button" disabled={!selectedWorkCounts.order} onClick={() => setSelectedWorkPanel("order")} title="Rendelés / PDF listára tett termékek">
+                  <ClipboardList size={15} /> Rendelés / PDF {selectedWorkCounts.order > 0 ? `(${selectedWorkCounts.order})` : ""}
+                </button>
+                <button className={btnSoft} type="button" disabled={!selectedWorkCounts.move} onClick={() => setSelectedWorkPanel("move")} title="Készletmozgatás listára tett termékek">
+                  <PackageCheck size={15} /> Készletmozgatás {selectedWorkCounts.move > 0 ? `(${selectedWorkCounts.move})` : ""}
+                </button>
                 <button className={btnSoft} onClick={() => setSelectedPanelOpen(false)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Ez a kijelölt termékek munkalistája. A kijelölés frissítés után és holnap is megmarad ebben a böngészőben, amíg innen el nem távolítod. Innen fogjuk indítani a címkézést, rendelés/PDF-et és készletmozgatást.
+                Ez a kijelölt termékek munkalistája. A kijelölés frissítés után és holnap is megmarad ebben a böngészőben, amíg innen el nem távolítod. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez vagy készletmozgatáshoz kerüljön.
               </div>
 
               <div className="grid gap-2">
-                {selectedItems.map((it) => (
-                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
+                {selectedUnassignedItems.map((it) => (
+                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
+                    <div className="flex justify-center">
+                      <input
+                        className={selectBox}
+                        type="checkbox"
+                        checked={false}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedActionTarget(it);
+                        }}
+                        aria-label="Feladat kiválasztása"
+                        title="Feladat kiválasztása"
+                      />
+                    </div>
                     <div>
                       {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
                     </div>
@@ -1695,16 +1841,95 @@ export default function AllInWarehouse() {
                     <div className="flex flex-wrap justify-end gap-2">
                       <button className={btnSoft} onClick={() => { setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
                       <button className={btnSoft} onClick={() => { setSelectedPanelOpen(false); openStockEditor(it); }} type="button"><Boxes size={14} /> Készlet</button>
-                      <button className={btnSoft} onClick={() => toggleVariantSelection(String(it.variant_id || ""), false)} type="button"><X size={14} /> Kivétel</button>
+                      <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button"><X size={14} /> Kivétel</button>
                     </div>
                   </div>
                 ))}
-                {!selectedItems.length && <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">Nincs kijelölt termék.</p>}
+                {!selectedUnassignedItems.length && (
+                  <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">
+                    Nincs szabadon várakozó kijelölt termék. A felső gombokkal megnyithatók a feladatlisták.
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3">
                 <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli"><X size={15} /> Teljes kijelölés törlése</button>
                 <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(false)} type="button">Kész</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedActionTarget && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-3 py-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Feladat kiválasztása</p>
+                <h2 className="mt-1 text-lg text-white">{selectedActionTarget.title_ro || "Termék"}</h2>
+              </div>
+              <button className={btnSoft} onClick={() => setSelectedActionTarget(null)} type="button"><X size={14} /> Bezárás</button>
+            </div>
+            <div className="space-y-3 p-4">
+              <p className="text-sm text-white/70">Válaszd ki, melyik munkalistára kerüljön a kijelölt termék.</p>
+              <div className="grid gap-2">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-3 py-3 text-left text-sm text-white hover:bg-[#2a8d8b]/26" onClick={() => assignSelectedItemToAction(selectedActionTarget, "label")} type="button">
+                  <span className="inline-flex items-center gap-2"><Barcode size={16} /> Vonalkód / címke</span>
+                  <span className="text-xs text-white/55">címkelista</span>
+                </button>
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-3 py-3 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "order")} type="button">
+                  <span className="inline-flex items-center gap-2"><ClipboardList size={16} /> Rendelés / PDF</span>
+                  <span className="text-xs text-white/55">rendelési lista</span>
+                </button>
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-3 py-3 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "move")} type="button">
+                  <span className="inline-flex items-center gap-2"><PackageCheck size={16} /> Készletmozgatás</span>
+                  <span className="text-xs text-white/55">átadási lista</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedWorkPanel && (
+        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/45 px-3 py-4 backdrop-blur-sm">
+          <div className="max-h-[88vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">{selectedWorkActionLabels[selectedWorkPanel]}</p>
+                <h2 className="mt-1 text-lg text-white">{selectedItemsForAction(selectedWorkPanel).length} termék a listában</h2>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
+                <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); }} type="button"><X size={15} /> Bezárás</button>
+              </div>
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. Ha leveszed innen, visszakerülnek a fő kijelölt listába.
+              </div>
+              <div className="grid gap-2">
+                {selectedItemsForAction(selectedWorkPanel).map((it) => (
+                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
+                    <div>
+                      {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
+                      <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Elérhető: {n(it.available_qty)} • SKU: {it.barcode || "-"}</p>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
+                      <button className={btnSoft} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button"><ArrowLeft size={14} /> Vissza a fő listába</button>
+                      <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button"><X size={14} /> Kijelölés törlése</button>
+                    </div>
+                  </div>
+                ))}
+                {!selectedItemsForAction(selectedWorkPanel).length && (
+                  <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">Nincs termék ebben a listában.</p>
+                )}
               </div>
             </div>
           </div>
