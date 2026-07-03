@@ -386,6 +386,22 @@ export function apiAifCommitImportBatch(batchId: string) {
   );
 }
 
+
+export function apiAifDeleteImportBatchHistory(batchId: string) {
+  return fetchAifJSON<{
+    ok: true;
+    mode: "history_deleted";
+    deletedRows: number;
+    committedRows: number;
+    receptionId?: string | null;
+  }>(
+    `/import-batches/${encodeURIComponent(batchId)}/history`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
 export function apiAifInventory(search = "", limit = 300) {
   const q = new URLSearchParams();
   if (search.trim()) q.set("search", search.trim());
