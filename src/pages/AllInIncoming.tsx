@@ -2546,9 +2546,23 @@ export default function AllInIncoming(_props: Props) {
                           <input className={`${compactInput} w-full`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} />
                         </label>
                         <label className="grid gap-1">
-                          <span className={compactFieldLabel}>Színkód</span>
+                          <span className={`${compactFieldLabel} inline-flex items-center gap-1`}>
+                            Színkód
+                            {colorMissingHint ? (
+                              <span className="group relative inline-flex">
+                                <span
+                                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-300 text-[11px] leading-none text-black shadow-sm ring-1 ring-yellow-100/70"
+                                  title={`Nincs mapping: ${colorMissingHint}`}
+                                >
+                                  !
+                                </span>
+                                <span className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-1 hidden w-max max-w-[240px] -translate-x-1/2 rounded-md border border-yellow-200/70 bg-slate-950 px-2 py-1 text-[10px] normal-case leading-snug tracking-normal text-yellow-50 shadow-xl group-hover:block">
+                                  Nincs mapping: {colorMissingHint}
+                                </span>
+                              </span>
+                            ) : null}
+                          </span>
                           <input className={`${compactInput} w-full`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} />
-                          {colorMissingHint ? <span className="text-[9px] text-amber-100">Nincs mapping: {colorMissingHint}</span> : null}
                         </label>
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Méret</span>
