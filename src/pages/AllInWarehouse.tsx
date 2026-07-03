@@ -82,17 +82,28 @@ type InventoryItem = {
   last_incoming_at?: string | null;
 };
 
-type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
-type GenderType = { code: string; name: string; sort_order?: number | string | null; is_active?: boolean };
+type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
+type GenderType = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type ColorType = {
   id: string;
   code: string;
   name_ro: string;
-  name_hu?: string | null; aliases?: string[] | null;
+  name_hu?: string | null;
   name_en?: string | null;
   name_de?: string | null;
   aliases?: string[] | null;
   hex?: string | null;
+  sort_order?: number | string | null;
+  is_active?: boolean;
+};
+type MaterialType = {
+  id: string;
+  code: string;
+  name_ro: string;
+  name_hu?: string | null;
+  name_en?: string | null;
+  name_de?: string | null;
+  aliases?: string[] | null;
   sort_order?: number | string | null;
   is_active?: boolean;
 };
@@ -336,7 +347,7 @@ async function apiInventory() {
 }
 
 async function apiMeta() {
-  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; colorTypes?: ColorType[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
+  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; colorTypes?: ColorType[]; materialTypes?: MaterialType[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
 }
 
 async function apiStock() {
@@ -393,6 +404,19 @@ async function apiSaveColorType(id: string, payload: Record<string, unknown>) {
 
 async function apiDeleteColorType(id: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/color-types/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function apiSaveMaterialType(id: string, payload: Record<string, unknown>) {
+  const url = id ? `/api/aif/material-types/${encodeURIComponent(id)}` : "/api/aif/material-types";
+  return fetchJSON<{ item: MaterialType }>(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteMaterialType(id: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/material-types/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 async function uploadImage(file: File, variantId: string) {
@@ -467,6 +491,7 @@ export default function AllInWarehouse() {
   const [supplierBrands, setSupplierBrands] = useState<SupplierBrandLink[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
   const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
+  const [materialTypes, setMaterialTypes] = useState<MaterialType[]>([]);
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
@@ -488,12 +513,13 @@ export default function AllInWarehouse() {
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
-  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors">("categories");
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors" | "materials">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
   const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
-  const [genderForm, setGenderForm] = useState({ code: "", name: "", sortOrder: "10" });
+  const [genderForm, setGenderForm] = useState({ code: "", name: "", aliases: "", sortOrder: "10" });
   const [colorForm, setColorForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color"; id: string; name: string } | null>(null);
+  const [materialForm, setMaterialForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: "10" });
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "material"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
 
   const stockMap = useMemo(() => {
@@ -511,6 +537,7 @@ export default function AllInWarehouse() {
   const nextCategorySortOrder = useMemo(() => nextSortOrder(categories), [categories]);
   const nextGenderSortOrder = useMemo(() => nextSortOrder(genderTypes), [genderTypes]);
   const nextColorSortOrder = useMemo(() => nextSortOrder(colorTypes), [colorTypes]);
+  const nextMaterialSortOrder = useMemo(() => nextSortOrder(materialTypes), [materialTypes]);
 
   useEffect(() => {
     if (!taxonomyOpen) return;
@@ -523,12 +550,16 @@ export default function AllInWarehouse() {
     if (taxonomyTab === "colors" && !colorForm.id && !colorForm.nameRo.trim()) {
       setColorForm((x) => x.sortOrder === nextColorSortOrder ? x : { ...x, sortOrder: nextColorSortOrder });
     }
+    if (taxonomyTab === "materials" && !materialForm.id && !materialForm.nameRo.trim()) {
+      setMaterialForm((x) => x.sortOrder === nextMaterialSortOrder ? x : { ...x, sortOrder: nextMaterialSortOrder });
+    }
   }, [
     taxonomyOpen,
     taxonomyTab,
     nextCategorySortOrder,
     nextGenderSortOrder,
     nextColorSortOrder,
+    nextMaterialSortOrder,
     categoryForm.id,
     categoryForm.nameRo,
     categoryForm.nameHu,
@@ -537,6 +568,8 @@ export default function AllInWarehouse() {
     genderForm.name,
     colorForm.id,
     colorForm.nameRo,
+    materialForm.id,
+    materialForm.nameRo,
   ]);
 
   const selectedSupplier = useMemo(() => {
@@ -649,12 +682,17 @@ export default function AllInWarehouse() {
   }
 
   function resetGenderForm() {
-    setGenderForm({ code: "", name: "", sortOrder: nextGenderSortOrder });
+    setGenderForm({ code: "", name: "", aliases: "", sortOrder: nextGenderSortOrder });
   }
 
   function editGenderRow(g: GenderType) {
     setTaxonomyTab("genders");
-    setGenderForm({ code: String(g.code || ""), name: String(g.name || ""), sortOrder: g.sort_order == null ? nextGenderSortOrder : String(g.sort_order) });
+    setGenderForm({
+      code: String(g.code || ""),
+      name: String(g.name || ""),
+      aliases: (Array.isArray(g.aliases) ? g.aliases : []).join(", "),
+      sortOrder: g.sort_order == null ? nextGenderSortOrder : String(g.sort_order),
+    });
   }
 
   function resetColorForm() {
@@ -672,6 +710,23 @@ export default function AllInWarehouse() {
       aliases: (Array.isArray(c.aliases) ? c.aliases : []).join(", "),
       hex: String(c.hex || ""),
       sortOrder: c.sort_order == null ? nextColorSortOrder : String(c.sort_order),
+    });
+  }
+
+  function resetMaterialForm() {
+    setMaterialForm({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: nextMaterialSortOrder });
+  }
+
+  function editMaterialRow(m: MaterialType) {
+    setTaxonomyTab("materials");
+    setMaterialForm({
+      id: String(m.id || ""),
+      nameRo: String(m.name_ro || ""),
+      nameHu: String(m.name_hu || ""),
+      nameEn: String(m.name_en || ""),
+      nameDe: String(m.name_de || ""),
+      aliases: (Array.isArray(m.aliases) ? m.aliases : []).join(", "),
+      sortOrder: m.sort_order == null ? nextMaterialSortOrder : String(m.sort_order),
     });
   }
 
@@ -707,6 +762,7 @@ export default function AllInWarehouse() {
     try {
       await apiSaveGenderType(genderForm.code, {
         name: genderForm.name,
+        aliases: genderForm.aliases,
         sortOrder: genderForm.sortOrder,
       });
       resetGenderForm();
@@ -745,6 +801,31 @@ export default function AllInWarehouse() {
     }
   }
 
+  async function saveMaterialForm() {
+    if (!materialForm.nameRo.trim()) {
+      setMessage("A román hivatalos összetevőnév kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveMaterialType(materialForm.id, {
+        nameRo: materialForm.nameRo,
+        nameHu: materialForm.nameHu,
+        nameEn: materialForm.nameEn,
+        nameDe: materialForm.nameDe,
+        aliases: materialForm.aliases,
+        sortOrder: materialForm.sortOrder,
+      });
+      resetMaterialForm();
+      await load();
+      setMessage("Összetevő törzsadat mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni az összetevő törzsadatot.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
   async function confirmDeleteTaxonomy() {
     if (!deleteTarget) return;
     setTaxonomyBusy(true);
@@ -752,6 +833,7 @@ export default function AllInWarehouse() {
       if (deleteTarget.kind === "category") await apiDeleteCategory(deleteTarget.id);
       if (deleteTarget.kind === "gender") await apiDeleteGenderType(deleteTarget.id);
       if (deleteTarget.kind === "color") await apiDeleteColorType(deleteTarget.id);
+      if (deleteTarget.kind === "material") await apiDeleteMaterialType(deleteTarget.id);
       setDeleteTarget(null);
       setOpenTaxonomyMenu(null);
       await load();
@@ -775,6 +857,7 @@ export default function AllInWarehouse() {
       setCategories((meta.categories || []).slice().sort((a: MetaItem, b: MetaItem) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })));
       setGenderTypes(meta.genderTypes || []);
       setColorTypes(meta.colorTypes || []);
+      setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
     } catch (e: any) {
@@ -1131,7 +1214,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek és színek kezelése</h2>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek, színek és összetevők kezelése</h2>
                   <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
                 </div>
                 <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
@@ -1147,6 +1230,9 @@ export default function AllInWarehouse() {
                 </button>
                 <button className={taxonomyTab === "colors" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("colors"); setOpenTaxonomyMenu(null); }}>
                   Színek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{colorTypes.length}</span>
+                </button>
+                <button className={taxonomyTab === "materials" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("materials"); setOpenTaxonomyMenu(null); }}>
+                  Összetevők <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{materialTypes.length}</span>
                 </button>
               </div>
 
@@ -1212,7 +1298,7 @@ export default function AllInWarehouse() {
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm text-white/88">{genderForm.code ? "Nem módosítása" : "Új nem"}</p>
-                        <p className="text-[11px] text-white/50">Rövid, letisztult név és sorrend.</p>
+                        <p className="text-[11px] text-white/50">Megnevezés, import aliasok és sorrend.</p>
                       </div>
                       {genderForm.code && <button className={taxonomySmallBtn} onClick={resetGenderForm}>Új</button>}
                     </div>
@@ -1222,6 +1308,7 @@ export default function AllInWarehouse() {
                         <input className={taxonomyInput} value={genderForm.sortOrder} onChange={(e) => setGenderForm((x) => ({ ...x, sortOrder: e.target.value }))} />
                         {!genderForm.code && <span className="text-[11px] text-white/45">Javasolt következő: {nextGenderSortOrder}</span>}
                       </label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={genderForm.aliases} onChange={(e) => setGenderForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="Barbat, Bărbat, Men, Ladies, Dama, Junior" /></label>
                     </div>
                     <div className="mt-3 flex justify-end">
                       <button className={taxonomyPrimaryBtn} onClick={saveGenderForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
@@ -1244,6 +1331,7 @@ export default function AllInWarehouse() {
                               {g.sort_order !== undefined && g.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{g.sort_order}</span>}
                             </div>
                             <p className="mt-0.5 text-[11px] text-white/45">Kód: {g.code}</p>
+                            {!!g.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {g.aliases.join(", ")}</p>}
                           </div>
                           {taxonomyActionMenu({
                             menuId: `gender-${g.code}`,
@@ -1317,6 +1405,64 @@ export default function AllInWarehouse() {
                         </div>
                       ))}
                       {!colorTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív szín.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {taxonomyTab === "materials" && (
+                <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">{materialForm.id ? "Összetevő módosítása" : "Új összetevő"}</p>
+                        <p className="text-[11px] text-white/50">Hivatalos román név, fordítások és import aliasok.</p>
+                      </div>
+                      {materialForm.id && <button className={taxonomySmallBtn} onClick={resetMaterialForm}>Új összetevő</button>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Román hivatalos név<input className={taxonomyInput} value={materialForm.nameRo} onChange={(e) => setMaterialForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. bumbac" /></label>
+                      <label className={taxonomyField}>Magyar név<input className={taxonomyInput} value={materialForm.nameHu} onChange={(e) => setMaterialForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. pamut" /></label>
+                      <label className={taxonomyField}>Angol név<input className={taxonomyInput} value={materialForm.nameEn} onChange={(e) => setMaterialForm((x) => ({ ...x, nameEn: e.target.value }))} placeholder="pl. cotton" /></label>
+                      <label className={taxonomyField}>Német név<input className={taxonomyInput} value={materialForm.nameDe} onChange={(e) => setMaterialForm((x) => ({ ...x, nameDe: e.target.value }))} placeholder="pl. baumwolle" /></label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={materialForm.aliases} onChange={(e) => setMaterialForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="COTTON, BODY FABRIC COTTON, Baumwolle, pamut" /></label>
+                      <label className={taxonomyField}>Sorrend
+                        <input className={taxonomyInput} value={materialForm.sortOrder} onChange={(e) => setMaterialForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!materialForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextMaterialSortOrder}</span>}
+                      </label>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveMaterialForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                    </div>
+                  </section>
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Összetevő lista</p>
+                        <p className="text-[11px] text-white/50">Import nevek hivatalos román összetevőkre fordítva.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{materialTypes.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
+                      {materialTypes.map((m, index) => (
+                        <div key={m.id} className={taxonomyRow}>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-white">{m.name_hu || m.name_ro}</p>
+                              {m.sort_order !== undefined && m.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{m.sort_order}</span>}
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-white/50">RO: {m.name_ro || "-"} • HU: {m.name_hu || "-"} • EN: {m.name_en || "-"} • DE: {m.name_de || "-"}</p>
+                            {!!m.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {m.aliases.join(", ")}</p>}
+                          </div>
+                          {taxonomyActionMenu({
+                            menuId: `material-${m.id}`,
+                            openUp: index >= Math.max(0, materialTypes.length - 5),
+                            onEdit: () => editMaterialRow(m),
+                            onDelete: () => setDeleteTarget({ kind: "material", id: String(m.id), name: m.name_hu || m.name_ro }),
+                          })}
+                        </div>
+                      ))}
+                      {!materialTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív összetevő.</p>}
                     </div>
                   </section>
                 </div>
