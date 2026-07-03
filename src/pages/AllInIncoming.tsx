@@ -5,6 +5,7 @@ import {
   CheckCircle,
   Edit3,
   FileSpreadsheet,
+  FileText,
   Download,
   MapPin,
   Plus,
@@ -137,6 +138,222 @@ function receptionStatusLabel(value?: string | null) {
 function moneyText(value: number, currency = "") {
   const n = Number.isFinite(value) ? value : 0;
   return `${n.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
+}
+
+function pdfEscape(v: unknown) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function fileSafe(v: unknown) {
+  return String(v ?? "receptie")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "receptie";
+}
+
+function pdfNumber(v: unknown, digits = 2) {
+  const x = toNumber(v);
+  return x.toLocaleString("ro-RO", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function pdfDate(v?: string | null) {
+  const s = dateOnly(v);
+  return s || "-";
+}
+
+function normPdfKey(v: unknown) {
+  return String(v ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function rowCheckSku(row: any) {
+  const normalized = row?.normalized || {};
+  return cell(row?.supplier_product_code || normalized.supplierProductCode || normalized.modelCode || row?.supplier_variant_code || normalized.supplierVariantCode);
+}
+
+function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: AifCategoryOption[] = [], genderTypes: AifGenderOption[] = []) {
+  const item: any = detail.item || {};
+  const rows = (detail.rows || []).filter((row: any) => row.status !== "ignored");
+  const title = `Fisa verificare marfa ${item.invoice_number || item.id || ""}`;
+  const today = new Date().toLocaleDateString("ro-RO");
+  const lines = rows.map((row: any, index: number) => {
+    const normalized = row.normalized || {};
+    const rawCategory = normalized.categoryName || normalized.categoryCode;
+    const rawGender = normalized.gender;
+    const qty = toNumber(row.qty ?? normalized.qty);
+    return `
+      <tr>
+        <td class="num">${index + 1}</td>
+        <td>${pdfEscape(rowCheckSku(row))}</td>
+        <td>${pdfEscape(cell(normalized.titleRo || normalized.productName || row.supplier_product_code))}</td>
+        <td>${pdfEscape(cell(normalized.brandName || normalized.brandCode))}</td>
+        <td>${pdfEscape(categoryDisplay(rawCategory, categories))}</td>
+        <td>${pdfEscape(genderLabel(rawGender, genderTypes))}</td>
+        <td>${pdfEscape(cell(normalized.colorName))}</td>
+        <td>${pdfEscape(cell(row.supplier_color_code || normalized.colorCode))}</td>
+        <td>${pdfEscape(cell(row.supplier_size || normalized.size))}</td>
+        <td class="num">${pdfNumber(qty, 0)}</td>
+        <td class="write"></td>
+        <td class="check"></td>
+        <td class="write"></td>
+        <td class="write wide"></td>
+      </tr>`;
+  }).join("");
+  const totalQty = rows.reduce((sum: number, row: any) => sum + toNumber(row.qty ?? row.normalized?.qty), 0);
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${pdfEscape(title)}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #111827; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 9px; }
+    .doc { width: 100%; }
+    .header { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; border-bottom: 2px solid #111827; padding-bottom: 7px; margin-bottom: 8px; }
+    .company { font-size: 9px; line-height: 1.42; }
+    .company-name { font-size: 14px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 2px; }
+    .title { text-align: right; }
+    .title h1 { margin: 0 0 5px; font-size: 20px; letter-spacing: .05em; text-transform: uppercase; }
+    .title .sub { font-size: 10px; border: 1px solid #111827; display: inline-block; padding: 3px 8px; margin-top: 3px; }
+    .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 8px; }
+    .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 4px 5px; min-height: 30px; }
+    .box .label { color: #6b7280; text-transform: uppercase; font-size: 7px; letter-spacing: .05em; margin-bottom: 2px; }
+    .box .value { font-size: 9px; }
+    .note { border: 1px solid #f59e0b; background: #fffbeb; padding: 5px 7px; margin: 7px 0 8px; line-height: 1.35; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    thead { display: table-header-group; }
+    th { background: #111827; color: #fff; font-weight: 400; text-transform: uppercase; font-size: 7px; letter-spacing: .02em; padding: 4px 3px; border: 1px solid #111827; }
+    td { padding: 3px; border: 1px solid #d1d5db; vertical-align: top; font-size: 8px; line-height: 1.18; overflow-wrap: anywhere; min-height: 18px; }
+    tbody tr:nth-child(even) td { background: #f9fafb; }
+    .num { text-align: right; white-space: nowrap; }
+    .write { min-height: 20px; background: #fff; }
+    .wide { min-width: 56px; }
+    .check::before { content: ''; display: block; width: 12px; height: 12px; border: 1.5px solid #111827; margin: 0 auto; }
+    .totals td { border-top: 2px solid #111827; background: #f3f4f6; font-size: 9px; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-top: 16px; font-size: 9px; }
+    .sig { padding-top: 20px; border-top: 1px solid #111827; }
+    .footer { margin-top: 8px; color: #6b7280; font-size: 7px; display: flex; justify-content: space-between; }
+    .screen-actions { margin: 0 0 8px; display: flex; gap: 8px; }
+    .screen-actions button { border: 1px solid #111827; background: #111827; color: #fff; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    @media print { .screen-actions { display: none; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+  <div class="screen-actions">
+    <button onclick="window.print()">Tiparire / Salvare PDF</button>
+    <button onclick="window.close()">Inchide</button>
+  </div>
+  <div class="doc">
+    <div class="header">
+      <div class="company">
+        <div class="company-name">SC TITAN EURO-COM SRL</div>
+        <div>Cod Fiscal: RO17495362</div>
+        <div>Nr. Reg. Com.: J19/420/2005</div>
+        <div>Miercurea Ciuc, Jud. Harghita, Str. Mihail Sadoveanu 33/c/17</div>
+      </div>
+      <div class="title">
+        <h1>Fisa verificare marfa</h1>
+        <div>Data: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
+        <div class="sub">Document fara preturi</div>
+      </div>
+    </div>
+    <div class="meta">
+      <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
+      <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
+      <div class="box"><div class="label">Total factura</div><div class="value">${pdfNumber(totalQty, 0)} buc.</div></div>
+    </div>
+    <div class="note">Lista pentru verificarea fizica a marfii primite. Nu contine preturi. Completeaza cantitatea receptionata, bifeaza OK sau noteaza problema si observatiile.</div>
+    <table>
+      <colgroup>
+        <col style="width: 3%" />
+        <col style="width: 8%" />
+        <col style="width: 19%" />
+        <col style="width: 9%" />
+        <col style="width: 9%" />
+        <col style="width: 7%" />
+        <col style="width: 8%" />
+        <col style="width: 7%" />
+        <col style="width: 6%" />
+        <col style="width: 6%" />
+        <col style="width: 7%" />
+        <col style="width: 4%" />
+        <col style="width: 8%" />
+        <col style="width: 9%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Nr.</th>
+          <th>Cod produs</th>
+          <th>Denumire produs</th>
+          <th>Brand</th>
+          <th>Categorie</th>
+          <th>Gen</th>
+          <th>Culoare</th>
+          <th>Cod culoare</th>
+          <th>Marime</th>
+          <th>Cant. factura</th>
+          <th>Cant. receptionata</th>
+          <th>OK</th>
+          <th>Lipsa / problema</th>
+          <th>Observatii</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lines || `<tr><td colspan="14" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
+      </tbody>
+      <tfoot>
+        <tr class="totals"><td colspan="9">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="4"></td></tr>
+      </tfoot>
+    </table>
+    <div class="signatures">
+      <div class="sig">Verificat de</div>
+      <div class="sig">Semnatura</div>
+      <div class="sig">Data</div>
+    </div>
+    <div class="footer">
+      <span>SC TITAN EURO-COM SRL - fisa verificare marfa</span>
+      <span>Generat: ${pdfEscape(today)}</span>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function openReceptionVerificationPdf(detail: AifReceptionDetail, categories: AifCategoryOption[] = [], genderTypes: AifGenderOption[] = []) {
+  const fileName = `verificare_marfa_${fileSafe((detail.item as any)?.invoice_number || (detail.item as any)?.id)}.pdf`;
+  const html = buildReceptionVerificationHtml(detail, categories, genderTypes).replace(
+    "</head>",
+    `<script>
+      document.title=${JSON.stringify(fileName)};
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          try { window.focus(); window.print(); } catch (e) {}
+        }, 450);
+      });
+    </script></head>`
+  );
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank", "width=1200,height=850,scrollbars=yes,resizable=yes");
+  if (!w) {
+    URL.revokeObjectURL(url);
+    throw new Error("Browserul a blocat fereastra PDF. Permite ferestre pop-up pentru aceasta pagina.");
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function confidenceText(value: number) {
@@ -1148,6 +1365,23 @@ export default function AllInIncoming(_props: Props) {
     }
   }
 
+  async function exportOpenedReceptionCheckPdf() {
+    if (!selectedReceptionId) {
+      setMessage("Előbb válassz vagy ments receptiót az ellenőrző PDF-hez.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const detail = loadedReception || await apiAifGetReception(selectedReceptionId);
+      openReceptionVerificationPdf(detail, activeCategories, activeGenderTypes);
+    } catch (e: any) {
+      setMessage(e?.message || "Az ellenőrző PDF export nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function renderReceptionHeaderEditor() {
     return (
       <section className={card}>
@@ -1157,9 +1391,14 @@ export default function AllInIncoming(_props: Props) {
           right={
             <div className="flex flex-wrap items-center justify-end gap-2">
               {selectedReceptionId ? (
-                <button className={primaryBtn} onClick={saveOpenedReceptionHeader} disabled={busy} type="button">
-                  <Save size={14} /> Fejadatok mentése
-                </button>
+                <>
+                  <button className={neutralBtn} onClick={exportOpenedReceptionCheckPdf} disabled={busy} type="button">
+                    <FileText size={14} /> Ellenőrző PDF
+                  </button>
+                  <button className={primaryBtn} onClick={saveOpenedReceptionHeader} disabled={busy} type="button">
+                    <Save size={14} /> Fejadatok mentése
+                  </button>
+                </>
               ) : (
                 <span className="text-xs text-white/60">Új receptió a kijelölt sorok mentésekor jön létre</span>
               )}
@@ -1363,6 +1602,7 @@ export default function AllInIncoming(_props: Props) {
           </table>
         </div>
         <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <button className={neutralBtn} onClick={exportOpenedReceptionCheckPdf} disabled={busy || !selectedReceptionId} type="button"><FileText size={14} /> Ellenőrző PDF</button>
           <button className={neutralBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Receptió részletei</button>
           <button className={neutralBtn} onClick={() => loadReceptionIntoWorkspace(selectedReceptionId)} disabled={busy || !selectedReceptionId} type="button"><RefreshCw size={14} /> Újratöltés</button>
         </div>
