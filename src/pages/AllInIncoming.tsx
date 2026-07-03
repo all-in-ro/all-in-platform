@@ -85,7 +85,8 @@ const selectInput = `${input} aif-native-select [color-scheme:dark]`;
 const optionStyle = { backgroundColor: "#303b4e", color: "#ffffff" };
 const mutedOptionStyle = { backgroundColor: "#303b4e", color: "#a9b3c7" };
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
+const primaryBtn = `${btnBase} border-[#67d4d1]/45 bg-[#208d8b] shadow-sm shadow-[#208d8b]/20 hover:bg-[#249b99] active:bg-[#1a7270]`;
+const compactPrimaryBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-[#67d4d1]/45 bg-[#208d8b] px-2 text-[11px] text-white shadow-sm shadow-[#208d8b]/20 transition hover:bg-[#249b99] active:bg-[#1a7270] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
 const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[11px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
@@ -2268,7 +2269,22 @@ export default function AllInIncoming(_props: Props) {
           <SectionTitle
             icon={<FileSpreadsheet size={16} />}
             title="Soronkénti előnézet"
-            right={<span className="text-xs text-white/60">Kompakt, oldalirányú görgetés nélkül</span>}
+            right={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="text-xs text-white/60">Kompakt, oldalirányú görgetés nélkül</span>
+                {approvedCount > 0 && (
+                  <button
+                    className={compactPrimaryBtn}
+                    onClick={saveDraft}
+                    disabled={busy || !canSaveApprovedRows}
+                    title={!canSaveApprovedRows ? "A mentéshez legyen kitöltve a receptió és ne legyen hibás kijelölt sor." : "Kijelölt sorok mentése"}
+                    type="button"
+                  >
+                    <UploadCloud size={13} /> Kijelölt sorok mentése
+                  </button>
+                )}
+              </div>
+            }
           />
           <div className="mt-3 overflow-hidden rounded-xl border border-white/14">
             <div className="hidden grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(135px,0.65fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
@@ -2289,12 +2305,12 @@ export default function AllInIncoming(_props: Props) {
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
-                    className={errors.length ? "bg-red-500/10 px-2 py-2 hover:bg-red-500/15" : approved ? "bg-emerald-400/10 px-2 py-2 hover:bg-emerald-400/14" : "bg-[#445064] px-2 py-2 hover:bg-[#4b596f]"}
+                    className={errors.length ? "bg-red-500/10 px-2 py-2 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-2 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-2 hover:bg-[#4b596f]"}
                   >
                     <div className="grid gap-2 lg:grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(135px,0.65fr)] lg:items-start">
                       <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 lg:block lg:bg-transparent lg:border-0 lg:px-0 lg:py-0">
                         <div className="flex items-center gap-2">
-                          <input className="h-4 w-4 accent-emerald-300" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
+                          <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
                           <span className="text-[11px] text-white/55">#{r.rowNo || idx + 1}</span>
                         </div>
                         <div className={errors.length ? "text-[10px] text-amber-100" : "text-[10px] text-emerald-100"}>{rowState}</div>
@@ -2364,8 +2380,21 @@ export default function AllInIncoming(_props: Props) {
                             <input className={`${compactInput} w-full text-right`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} />
                           </label>
                         </div>
-                        <div className={approved ? "rounded-md border border-emerald-200/20 bg-emerald-400/10 px-2 py-1 text-center text-[10px] text-emerald-50" : "rounded-md border border-white/10 bg-black/10 px-2 py-1 text-center text-[10px] text-white/50"}>
-                          {approved ? "Mentésre kijelölve" : "Kizárva"}
+                        <div className="grid gap-1.5">
+                          <div className={approved ? "rounded-md border border-[#67d4d1]/35 bg-[#208d8b]/18 px-2 py-1 text-center text-[10px] text-white" : "rounded-md border border-white/10 bg-black/10 px-2 py-1 text-center text-[10px] text-white/50"}>
+                            {approved ? "Mentésre kijelölve" : "Kizárva"}
+                          </div>
+                          {approved && (
+                            <button
+                              className={compactPrimaryBtn}
+                              onClick={saveDraft}
+                              disabled={busy || !canSaveApprovedRows}
+                              title={!canSaveApprovedRows ? "A mentéshez legyen kitöltve a receptió és ne legyen hibás kijelölt sor." : "Kijelölt sorok mentése"}
+                              type="button"
+                            >
+                              <UploadCloud size={13} /> Mentés most
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
