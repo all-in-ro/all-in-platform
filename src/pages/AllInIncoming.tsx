@@ -70,7 +70,7 @@ type EditableImportField =
 
 type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
 type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
-type AifGenderOption = { code: string; name: string; sort_order?: number | string | null; is_active?: boolean };
+type AifGenderOption = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifSupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
@@ -187,9 +187,15 @@ function categoryDisplay(value: unknown, categories: AifCategoryOption[]) {
   return found ? categoryLabel(found) : raw;
 }
 
+function genderAliasValues(g: AifGenderOption) {
+  return [g.code, g.name, ...(Array.isArray(g.aliases) ? g.aliases : [])]
+    .filter(Boolean)
+    .map((x) => String(x).trim().toLowerCase());
+}
+
 function genderLabel(code: unknown, items: AifGenderOption[]) {
   const key = String(code ?? "").trim().toLowerCase();
-  return items.find((g) => String(g.code).toLowerCase() === key)?.name || String(code || "-");
+  return items.find((g) => genderAliasValues(g).some((x) => x === key))?.name || String(code || "-");
 }
 
 function rowStatusText(value?: string | null) {
