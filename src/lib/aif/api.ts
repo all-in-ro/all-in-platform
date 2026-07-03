@@ -65,6 +65,25 @@ export type AifColorType = {
   updated_at?: string;
 };
 
+export type AifBrandColorCode = {
+  id: string;
+  brand_id: string;
+  brand_code?: string | null;
+  brand_name?: string | null;
+  color_code: string;
+  color_type_id: string;
+  color_type_code?: string | null;
+  color_name_ro?: string | null;
+  color_name_hu?: string | null;
+  color_name_en?: string | null;
+  color_name_de?: string | null;
+  color_hex?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AifGenderType = {
   code: string;
   name: string;
@@ -194,6 +213,7 @@ export type AifMeta = {
   locationTypes?: AifLocationType[];
   currencies?: AifCurrency[];
   colorTypes?: AifColorType[];
+  brandColorCodes?: AifBrandColorCode[];
   materialTypes?: AifMaterialType[];
   profiles: AifImportProfile[];
 };
@@ -580,6 +600,38 @@ export function apiAifUpdateColorType(id: string, input: {
 
 export function apiAifDeleteColorType(id: string) {
   return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/color-types/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifListBrandColorCodes(options?: { includeInactive?: boolean; brand?: string }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  if (options?.brand) q.set("brand", options.brand);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifBrandColorCode[] }>(`/brand-color-codes${suffix}`);
+}
+
+export function apiAifSaveBrandColorCode(id: string, input: {
+  brandId?: string;
+  brandCode?: string;
+  brand?: string;
+  colorCode?: string;
+  colorTypeId?: string;
+  colorTypeCode?: string;
+  color?: string;
+  notes?: string | null;
+  is_active?: boolean;
+}) {
+  const url = id ? `/brand-color-codes/${encodeURIComponent(id)}` : "/brand-color-codes";
+  return fetchAifJSON<{ item: AifBrandColorCode }>(url, {
+    method: id ? "PATCH" : "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteBrandColorCode(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deactivated" }>(`/brand-color-codes/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
 }
