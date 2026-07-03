@@ -41,7 +41,7 @@ const input = "h-8 rounded-lg border border-white/24 bg-[#303b4e] px-2.5 text-xs
 const select = `${input} pr-8`;
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] text-white hover:bg-[#2d735f]`;
-const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
+const neutralBtn = `${btnBase} border-white/24 bg-[#354153] text-white hover:bg-[#3e4d63]`;
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const tinyBtn = "inline-flex h-6 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[10.5px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const tinyDangerBtn = "inline-flex h-6 items-center justify-center gap-1 rounded-md border border-red-300/24 bg-[#c90d22] px-2 text-[10.5px] text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -50,10 +50,10 @@ const lightPanel = "rounded-xl border border-slate-200 bg-white p-3 text-slate-9
 const lightLabel = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-slate-600 font-normal";
 const lightInput = "h-8 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-emerald-200/70 focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
 const lightSelect = `${lightInput} pr-8`;
-const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-white/68 font-normal";
+const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-white font-normal";
 const rowInput = "h-7 w-full rounded-md border border-white/18 bg-[#253146] px-2 text-[11px] text-white caret-white outline-none transition placeholder:text-white/40 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/25 disabled:bg-[#3a4556] disabled:text-white/55 font-normal";
-const rowRead = "flex h-7 items-center justify-end rounded-md border border-white/14 bg-[#253146] px-2 text-[11px] text-white/86 font-normal";
-const rowStatusPill = "inline-flex h-7 min-w-[104px] items-center justify-center rounded-full border border-white/16 bg-white/[0.08] px-2 text-[11px] text-white/82 font-normal";
+const rowRead = "flex h-7 items-center justify-end rounded-md border border-white/14 bg-[#253146] px-2 text-[11px] text-white font-normal";
+const rowStatusPill = "inline-flex h-7 min-w-[104px] items-center justify-center rounded-full border border-white/16 bg-white/[0.08] px-2 text-[11px] text-white font-normal";
 const rowActionBtn = "inline-flex h-8 w-[112px] items-center justify-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const rowPrimaryBtn = `${rowActionBtn} border-emerald-300/28 bg-[#276454] text-white hover:bg-[#2d735f]`;
 const rowNeutralBtn = `${rowActionBtn} border-white/18 bg-[#3a4556] text-white hover:bg-[#445267]`;
@@ -1119,11 +1119,11 @@ export default function AllInReceptions(_props: Props) {
         </section>
 
         <section className={card}>
-          <SectionTitle title="Receptió lista" right={<span className="text-xs text-white/70">{items.length} találat</span>} />
+          <SectionTitle title="Receptió lista" right={<span className="text-xs text-white">{items.length} találat</span>} />
           <div className="mt-3 overflow-hidden rounded-xl border border-white/12">
             <div className="hidden overflow-x-auto lg:block">
               <table className="min-w-full text-left text-xs">
-                <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
+                <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.06em] text-white [&_th]:font-normal">
                   <tr>
                     <th className="px-2 py-1.5">Számla</th>
                     <th className="px-2 py-1.5">Beszállító</th>
@@ -1200,7 +1200,7 @@ export default function AllInReceptions(_props: Props) {
           <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/24 bg-[#4d5869] shadow-2xl">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/18 bg-[#303b4e] px-3 py-2">
               <div>
-                <p className="text-xs uppercase tracking-[0.1em] text-white/60">Receptió részletei</p>
+                <p className="text-xs uppercase tracking-[0.1em] text-white">Receptió részletei</p>
                 <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
               </div>
               <div className="flex gap-2">
@@ -1279,7 +1279,7 @@ export default function AllInReceptions(_props: Props) {
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-xs text-white">Terméksorok feldolgozása</p>
-                    <p className="mt-1 text-xs text-white/64">
+                    <p className="mt-1 text-xs text-white/85">
                       A hibátlan sorok külön is készletre vehetők. A készletre vett sorok adatai javíthatók, de mennyiséget már csak külön korrekcióval módosítunk.
                     </p>
                   </div>
@@ -1321,19 +1321,19 @@ export default function AllInReceptions(_props: Props) {
                     const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
                     const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
                     const rowClass = r.status === "committed"
-                      ? "border-emerald-300/35 bg-[#303b4e]"
+                      ? "border-emerald-300/35 bg-[#303b4e] text-white"
                       : r.status === "ignored"
                         ? "border-white/10 bg-[#3a4352] opacity-70"
                         : r.status === "error" || (r.error_messages || []).length
-                          ? "border-rose-300/45 bg-[#4b2f3c]"
+                          ? "border-rose-300/45 bg-[#4b2f3c] text-white"
                           : checked
-                            ? "border-emerald-300/45 bg-[#2f4053]"
-                            : "border-white/14 bg-[#303b4e]";
+                            ? "border-emerald-300/45 bg-[#2f4053] text-white"
+                            : "border-white/14 bg-[#303b4e] text-white";
                     return (
-                      <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm shadow-slate-950/20 ${rowClass}`}>
+                      <div key={r.id} className={`rounded-xl border p-2.5 text-white shadow-sm shadow-slate-950/20 ${rowClass}`}>
                         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-white/12 pb-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <label className="inline-flex items-center gap-2 text-[11px] text-white/72">
+                            <label className="inline-flex items-center gap-2 text-[11px] text-white">
                               <input
                                 type="checkbox"
                                 className="h-4 w-4 accent-emerald-500"
@@ -1343,7 +1343,7 @@ export default function AllInReceptions(_props: Props) {
                               />
                               Kijelölés
                             </label>
-                            <span className="inline-flex h-7 items-center rounded-lg border border-white/14 bg-white/[0.08] px-2 text-[11px] text-white/72">Nr. {r.row_no}</span>
+                            <span className="inline-flex h-7 items-center rounded-lg border border-white/14 bg-white/[0.08] px-2 text-[11px] text-white">Nr. {r.row_no}</span>
                             <span className={rowStatusPill}>{statusText(r.status)}</span>
                           </div>
                           <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
