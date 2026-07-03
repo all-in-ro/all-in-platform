@@ -277,6 +277,92 @@ type WarehouseBarcodeRender = {
   error?: string;
 };
 
+type WarehouseLabelContentKey =
+  | "company"
+  | "brand"
+  | "title"
+  | "barcode"
+  | "description"
+  | "category"
+  | "sizeColor"
+  | "code"
+  | "price";
+
+type WarehouseLabelTemplate = {
+  name: string;
+  labelWidth: string;
+  labelHeight: string;
+  labelCols: string;
+  labelRows: string;
+  labelMarginX: string;
+  labelMarginY: string;
+  labelCompanyName: string;
+  labelCurrency: string;
+  labelUnitText: string;
+  labelShowBorder: boolean;
+  labelContent: Record<WarehouseLabelContentKey, boolean>;
+};
+
+type WarehouseLabelPreset = {
+  id: string;
+  name: string;
+  width: string;
+  height: string;
+  cols: string;
+  rows: string;
+  marginX: string;
+  marginY: string;
+};
+
+const WAREHOUSE_LABEL_COMPANY = "TITAN EURO-COM SRL";
+
+const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
+  { id: "40x46", name: "40 × 46 mm, 5 × 6 pe A4", width: "40", height: "46", cols: "5", rows: "6", marginX: "5", marginY: "5" },
+  { id: "50x30", name: "50 × 30 mm, 4 × 8 pe A4", width: "50", height: "30", cols: "4", rows: "8", marginX: "5", marginY: "5" },
+  { id: "60x40", name: "60 × 40 mm, 3 × 6 pe A4", width: "60", height: "40", cols: "3", rows: "6", marginX: "6", marginY: "6" },
+  { id: "70x36", name: "70 × 36 mm, 2 × 7 pe A4", width: "70", height: "36", cols: "2", rows: "7", marginX: "8", marginY: "6" },
+];
+
+const WAREHOUSE_LABEL_DEFAULT_CONTENT: Record<WarehouseLabelContentKey, boolean> = {
+  company: true,
+  brand: true,
+  title: true,
+  barcode: true,
+  description: false,
+  category: true,
+  sizeColor: true,
+  code: true,
+  price: true,
+};
+
+const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: string; hint: string }[] = [
+  { key: "company", label: "Cég neve", hint: "A címke tetején jelenik meg." },
+  { key: "brand", label: "Márka", hint: "A terméknév felett vagy alatt jelenik meg." },
+  { key: "title", label: "Terméknév", hint: "A fő terméknév, lehet 1-2 sor." },
+  { key: "barcode", label: "Vonalkód", hint: "Code128 belső AllIn / Shopify SKU azonosító." },
+  { key: "description", label: "Összetétel", hint: "Anyag vagy rövid leírás a címkén." },
+  { key: "category", label: "Kategória", hint: "Póló, pantaloni, pantofi, stb." },
+  { key: "sizeColor", label: "Méret / szín", hint: "A variáns gyors azonosításához." },
+  { key: "code", label: "Termékkód", hint: "Beszállítói / belső cikkszám." },
+  { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
+];
+
+function readWarehouseLabelTemplates(): WarehouseLabelTemplate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem("aifWarehouseLabelTemplates");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveWarehouseLabelTemplates(templates: WarehouseLabelTemplate[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem("aifWarehouseLabelTemplates", JSON.stringify(templates));
+}
+
 type WarehouseLabelPrintItem = {
   key: string;
   variantId: string;
@@ -286,6 +372,8 @@ type WarehouseLabelPrintItem = {
   category: string;
   size: string;
   color: string;
+  description: string;
+  productCode: string;
   price: string;
   stockQty: number;
   copyIndex: number;
@@ -839,6 +927,12 @@ export default function AllInWarehouse() {
   const [labelMarginX, setLabelMarginX] = useState("5");
   const [labelMarginY, setLabelMarginY] = useState("5");
   const [labelShowBorder, setLabelShowBorder] = useState(true);
+  const [labelCompanyName, setLabelCompanyName] = useState(WAREHOUSE_LABEL_COMPANY);
+  const [labelCurrency, setLabelCurrency] = useState("RON");
+  const [labelUnitText, setLabelUnitText] = useState("RON");
+  const [labelContent, setLabelContent] = useState<Record<WarehouseLabelContentKey, boolean>>(WAREHOUSE_LABEL_DEFAULT_CONTENT);
+  const [labelTemplateName, setLabelTemplateName] = useState("Standard 40x46");
+  const [labelTemplates, setLabelTemplates] = useState<WarehouseLabelTemplate[]>(() => readWarehouseLabelTemplates());
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -1136,6 +1230,66 @@ export default function AllInWarehouse() {
     return selectedMoveItems;
   }
 
+  function labelProductCodeForItem(item: InventoryItem) {
+    const raw = String(item.model_code || item.internal_sku || item.barcode || "").trim();
+    const clean = raw.includes(":") ? raw.split(":").pop() || raw : raw;
+    return labelCleanText(clean, 48);
+  }
+
+  function toggleLabelContent(key: WarehouseLabelContentKey) {
+    setLabelContent((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  function applyWarehouseLabelPreset(id: string) {
+    const preset = WAREHOUSE_LABEL_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    setLabelWidth(preset.width);
+    setLabelHeight(preset.height);
+    setLabelCols(preset.cols);
+    setLabelRows(preset.rows);
+    setLabelMarginX(preset.marginX);
+    setLabelMarginY(preset.marginY);
+  }
+
+  function saveCurrentWarehouseLabelTemplate() {
+    const name = labelTemplateName.trim() || "Standard 40x46";
+    const template: WarehouseLabelTemplate = {
+      name,
+      labelWidth,
+      labelHeight,
+      labelCols,
+      labelRows,
+      labelMarginX,
+      labelMarginY,
+      labelCompanyName,
+      labelCurrency,
+      labelUnitText,
+      labelShowBorder,
+      labelContent,
+    };
+    const next = [template, ...labelTemplates.filter((x) => x.name !== name)].slice(0, 20);
+    setLabelTemplates(next);
+    saveWarehouseLabelTemplates(next);
+    setMessage("Címke sablon mentve.");
+  }
+
+  function loadWarehouseLabelTemplate(name: string) {
+    const template = labelTemplates.find((x) => x.name === name);
+    if (!template) return;
+    setLabelTemplateName(template.name);
+    setLabelWidth(template.labelWidth || "40");
+    setLabelHeight(template.labelHeight || "46");
+    setLabelCols(template.labelCols || "5");
+    setLabelRows(template.labelRows || "6");
+    setLabelMarginX(template.labelMarginX || "5");
+    setLabelMarginY(template.labelMarginY || "5");
+    setLabelCompanyName(template.labelCompanyName || WAREHOUSE_LABEL_COMPANY);
+    setLabelCurrency(template.labelCurrency || "RON");
+    setLabelUnitText(template.labelUnitText || template.labelCurrency || "RON");
+    setLabelShowBorder(template.labelShowBorder !== false);
+    setLabelContent({ ...WAREHOUSE_LABEL_DEFAULT_CONTENT, ...(template.labelContent || {}) });
+  }
+
   function defaultLabelCopiesForItem(item: InventoryItem) {
     const qty = Math.floor(n(item.total_qty || item.available_qty));
     return String(Math.max(1, qty || 1));
@@ -1208,6 +1362,8 @@ export default function AllInWarehouse() {
         category: item.category_name_hu || item.category_name_ro || "-",
         size: item.size || "-",
         color,
+        description: item.material || item.product_type || "",
+        productCode: labelProductCodeForItem(item),
         price,
         stockQty: Math.floor(n(item.total_qty)),
         render: labelCode128Svg(barcode, 58),
@@ -1228,6 +1384,8 @@ export default function AllInWarehouse() {
           category: row.category,
           size: row.size,
           color: row.color,
+          description: row.description,
+          productCode: row.productCode,
           price: row.price,
           stockQty: row.stockQty,
           copyIndex: i + 1,
@@ -1267,21 +1425,24 @@ export default function AllInWarehouse() {
     const priceParts = labelPriceParts(label.price);
     return (
       <>
-        <div className="aifWhLabelCompany">AllInFashion</div>
-        {label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
-        <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>
-        <div className="aifWhLabelMeta">
-          {label.size && label.size !== "-" && <span>{labelCleanText(label.size, 16)}</span>}
-          {label.color && label.color !== "-" && <span>{labelCleanText(label.color, 24)}</span>}
-        </div>
-        <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />
-        {label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
-        <div className="aifWhLabelCode">Cod: {labelCleanText(label.barcode, 44)}</div>
-        {priceParts.major && (
+        {labelContent.company && labelCompanyName && <div className="aifWhLabelCompany">{labelCleanText(labelCompanyName, 48)}</div>}
+        {labelContent.brand && label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
+        {labelContent.title && <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>}
+        {labelContent.sizeColor && (label.size || label.color) && (
+          <div className="aifWhLabelMeta">
+            {label.size && label.size !== "-" && <span>{labelCleanText(label.size, 16)}</span>}
+            {label.color && label.color !== "-" && <span>{labelCleanText(label.color, 24)}</span>}
+          </div>
+        )}
+        {labelContent.barcode && <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />}
+        {labelContent.description && label.description && <div className="aifWhLabelDescription">{labelCleanText(label.description, 90)}</div>}
+        {labelContent.category && label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
+        {labelContent.code && (label.productCode || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(label.productCode || label.barcode, 44)}</div>}
+        {labelContent.price && priceParts.major && (
           <div className="aifWhLabelPrice">
             <span className="aifWhPriceMajor">{priceParts.major}</span>
             {priceParts.cents && <span className="aifWhPriceCents">{priceParts.cents}</span>}
-            <span className="aifWhPriceUnit">RON</span>
+            <span className="aifWhPriceUnit">{labelCleanText(labelUnitText || labelCurrency, 12)}</span>
           </div>
         )}
       </>
@@ -1825,6 +1986,7 @@ export default function AllInWarehouse() {
         .aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
         .aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
         .aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
+        .aifWhLabelDescription { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; font-size:9.5px; line-height:1.08; color:#222; }
         .aifWhBarcodeSvgWrap { width:100%; overflow:hidden; }
         .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:54px; }
         .aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
@@ -1878,6 +2040,7 @@ export default function AllInWarehouse() {
           .aifWarehousePrintLabel .aifWhLabelBrand { font-size:7pt; margin-bottom:.6mm; }
           .aifWarehousePrintLabel .aifWhLabelTitle { font-size:9.2pt; margin-bottom:.8mm; }
           .aifWarehousePrintLabel .aifWhLabelMeta { font-size:7.2pt; margin-bottom:.8mm; }
+          .aifWarehousePrintLabel .aifWhLabelDescription { font-size:6.7pt; padding-top:.7mm; margin-top:.7mm; }
           .aifWarehousePrintLabel .aifWhBarcodeSvgWrap svg { max-height:13mm; }
           .aifWarehousePrintLabel .aifWhLabelCategory { font-size:7.6pt; padding-top:.6mm; margin-top:.6mm; }
           .aifWarehousePrintLabel .aifWhLabelCode { font-size:6.4pt; }
@@ -2258,28 +2421,88 @@ export default function AllInWarehouse() {
 
             <div className="space-y-4 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                A példányszám alapból a készlet mennyisége, de szabadon növelhető. A címkék egy A4-es ívre kerülnek egymás után, több termék együtt is, szükség esetén több oldalra.
+                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A beállítások megegyeznek a külön vonalkód/címke központ logikájával, de itt a kiválasztott terméklistán dolgozunk.
               </div>
 
-              <section className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm text-white">Címke kiosztás</p>
-                  <span className="rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
-                    {labelColCount} oszlop × {labelRowCount} sor • {labelsPerPage} címke / oldal • {Math.max(1, labelPrintPages.length)} oldal
-                  </span>
+              <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
+                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm text-white">Címke tartalma</p>
+                    <span className="text-xs text-white/55">Kapcsold ki, ami nem kell a címkére</span>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {WAREHOUSE_LABEL_CONTENT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        className={`flex min-h-[48px] items-start gap-2 rounded-xl border px-3 py-2 text-left transition ${
+                          labelContent[opt.key]
+                            ? "border-[#7bd7d4]/60 bg-[#2a8d8b]/20 text-white"
+                            : "border-white/16 bg-[#303a4c] text-white/76"
+                        }`}
+                        onClick={() => toggleLabelContent(opt.key)}
+                      >
+                        <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] ${
+                          labelContent[opt.key] ? "border-[#9af4d8]/80 bg-[#6ee7c8] text-[#123328]" : "border-white/35 bg-white/[0.04] text-white/30"
+                        }`}>
+                          {labelContent[opt.key] ? "✓" : ""}
+                        </span>
+                        <span className="grid gap-0.5">
+                          <span className="text-xs text-white">{opt.label}</span>
+                          <span className="text-[11px] leading-snug text-white/55">{opt.hint}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="grid gap-3 md:grid-cols-6">
-                  <label className={label}>Szélesség mm<input className={input} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} /></label>
-                  <label className={label}>Magasság mm<input className={input} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} /></label>
-                  <label className={label}>Oszlop<input className={input} value={labelCols} onChange={(e) => setLabelCols(e.target.value)} /></label>
-                  <label className={label}>Sor<input className={input} value={labelRows} onChange={(e) => setLabelRows(e.target.value)} /></label>
-                  <label className={label}>Margó X mm<input className={input} value={labelMarginX} onChange={(e) => setLabelMarginX(e.target.value)} /></label>
-                  <label className={label}>Margó Y mm<input className={input} value={labelMarginY} onChange={(e) => setLabelMarginY(e.target.value)} /></label>
+
+                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-white">Méret, kiosztás és sablon</p>
+                    <span className="rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
+                      {labelColCount} oszlop × {labelRowCount} sor • {labelsPerPage} címke / oldal • {Math.max(1, labelPrintPages.length)} oldal
+                    </span>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <label className={`${label} min-w-0`}>Gyors sablon
+                      <select className={`${select} w-full min-w-0`} onChange={(e) => applyWarehouseLabelPreset(e.target.value)} defaultValue="40x46">
+                        {WAREHOUSE_LABEL_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                      </select>
+                    </label>
+                    <label className={`${label} min-w-0`}>Címke szélesség mm<input className={`${input} w-full min-w-0`} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} inputMode="decimal" /></label>
+                    <label className={`${label} min-w-0`}>Címke magasság mm<input className={`${input} w-full min-w-0`} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} inputMode="decimal" /></label>
+                    <label className={`${label} min-w-0`}>Oszlop / A4<input className={`${input} w-full min-w-0`} value={labelCols} onChange={(e) => setLabelCols(e.target.value)} inputMode="numeric" /></label>
+                    <label className={`${label} min-w-0`}>Sor / A4<input className={`${input} w-full min-w-0`} value={labelRows} onChange={(e) => setLabelRows(e.target.value)} inputMode="numeric" /></label>
+                    <label className={`${label} min-w-0`}>Margó bal-jobb mm<input className={`${input} w-full min-w-0`} value={labelMarginX} onChange={(e) => setLabelMarginX(e.target.value)} inputMode="decimal" /></label>
+                    <label className={`${label} min-w-0`}>Margó fent-lent mm<input className={`${input} w-full min-w-0`} value={labelMarginY} onChange={(e) => setLabelMarginY(e.target.value)} inputMode="decimal" /></label>
+                    <label className={`${label} min-w-0`}>Cég neve a címkén<input className={`${input} w-full min-w-0`} value={labelCompanyName} onChange={(e) => setLabelCompanyName(e.target.value)} placeholder={WAREHOUSE_LABEL_COMPANY} /></label>
+                    <label className={`${label} min-w-0`}>Pénznem
+                      <select className={`${select} w-full min-w-0`} value={labelCurrency} onChange={(e) => { setLabelCurrency(e.target.value); if (!labelUnitText.trim() || labelUnitText === labelCurrency) setLabelUnitText(e.target.value); }}>
+                        <option value="RON">RON</option>
+                        <option value="EUR">EUR</option>
+                        <option value="USD">USD</option>
+                        <option value="HUF">HUF</option>
+                      </select>
+                    </label>
+                    <label className={`${label} min-w-0`}>Ár melletti egység<input className={`${input} w-full min-w-0`} value={labelUnitText} onChange={(e) => setLabelUnitText(e.target.value)} placeholder="RON" /></label>
+                    <label className={`${label} min-w-0`}>Sablon neve<input className={`${input} w-full min-w-0`} value={labelTemplateName} onChange={(e) => setLabelTemplateName(e.target.value)} placeholder="Standard 40x46" /></label>
+                    <label className={`${label} min-w-0`}>Mentett sablon
+                      <select className={`${select} w-full min-w-0`} value="" onChange={(e) => loadWarehouseLabelTemplate(e.target.value)}>
+                        <option value="">Betöltés</option>
+                        {labelTemplates.map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <label className="inline-flex items-center gap-2 text-xs text-white/72">
+                      <input className={selectBox} type="checkbox" checked={labelShowBorder} onChange={(e) => setLabelShowBorder(e.target.checked)} />
+                      Címke keret nyomtatása
+                    </label>
+                    <button className={btnSoft} type="button" onClick={saveCurrentWarehouseLabelTemplate}><Save size={14} /> Sablon mentése</button>
+                  </div>
                 </div>
-                <label className="mt-3 inline-flex items-center gap-2 text-xs text-white/72">
-                  <input className={selectBox} type="checkbox" checked={labelShowBorder} onChange={(e) => setLabelShowBorder(e.target.checked)} />
-                  Címke keret nyomtatása
-                </label>
               </section>
 
               <section className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
