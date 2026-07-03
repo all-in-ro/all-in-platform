@@ -27,6 +27,37 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+  function rawValueByHeaders(raw, headers) {
+    if (!raw || typeof raw !== "object") return null;
+    const wanted = new Set((headers || []).map((x) => normCode(x)).filter(Boolean));
+    for (const [key, value] of Object.entries(raw)) {
+      if (wanted.has(normCode(key))) return emptyToNull(value);
+    }
+    return null;
+  }
+
+  function splitBrandProductCode(value) {
+    const raw = text(value);
+    if (!raw) return { fullCode: null, modelCode: null, colorCode: null };
+    const match = raw.match(/^(.+)-([A-Za-z0-9]{1,16})$/);
+    if (!match) return { fullCode: raw, modelCode: raw, colorCode: null };
+    return {
+      fullCode: raw,
+      modelCode: text(match[1]),
+      colorCode: text(match[2]),
+    };
+  }
+
+  function applyProductCodeSplit(normalized) {
+    if (!normalized || typeof normalized !== "object") return normalized;
+    const split = splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
+    if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
+    if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
+    if (split.colorCode && !normalized.colorCode) normalized.colorCode = split.colorCode;
+    if (split.colorCode && !normalized.supplierColorCode) normalized.supplierColorCode = split.colorCode;
+    return normalized;
+  }
+
   function actorFrom(req) {
     return text(req.session?.actor || req.session?.shopId || req.session?.role || "system") || "system";
   }
@@ -36,6 +67,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!v) return null;
     const r = await client.query(
       `SELECT id, code, name, is_active FROM ${table} WHERE id::text = $1 OR code = $1 LIMIT 1`,
+      [v]
+    );
+    return r.rows[0] || null;
+  }
+
+  async function findColorTypeByIdOrCode(client, idOrCode) {
+    const v = text(idOrCode);
+    if (!v) return null;
+    const r = await client.query(
+      `SELECT id, code, name_ro, is_active
+       FROM aif_color_types
+       WHERE id::text=$1 OR code=$1 OR lower(name_ro)=lower($1) OR lower(COALESCE(name_hu,''))=lower($1)
+       LIMIT 1`,
       [v]
     );
     return r.rows[0] || null;
@@ -59,14 +103,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function normalizeRowInput(input, rowNo) {
     const src = input?.normalized && typeof input.normalized === "object" ? input.normalized : input || {};
+    const raw = input?.raw && typeof input.raw === "object" ? input.raw : input || {};
 
-    const supplierProductCode = emptyToNull(
-      src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.code || input?.product_code
+    const rawProductCode = rawValueByHeaders(raw, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code", "cod produs"]);
+    const supplierProductCodeRaw = emptyToNull(
+      src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.code || input?.product_code || rawProductCode
     );
+    const productSplit = splitBrandProductCode(supplierProductCodeRaw);
+    const supplierProductCode = productSplit.fullCode || supplierProductCodeRaw;
     const supplierVariantCode = emptyToNull(
       src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code || input?.variant_code
     );
-    const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code);
+    const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code || productSplit.colorCode);
     const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size);
 
     const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brand);
@@ -79,7 +127,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       categoryId: emptyToNull(src.categoryId || src.category_id),
       categoryCode: categoryRaw ? normCode(categoryRaw) : null,
       categoryName: emptyToNull(src.categoryName || src.category_name || src.category),
-      modelCode: emptyToNull(src.modelCode || src.model_code || supplierProductCode),
+      modelCode: emptyToNull(src.modelCode || src.model_code || productSplit.modelCode || supplierProductCode),
       titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
       titleHu: emptyToNull(src.titleHu || src.title_hu),
       descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
@@ -88,7 +136,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       productType: emptyToNull(src.productType || src.product_type),
       season: emptyToNull(src.season),
       material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric),
-      colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode),
+      colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
       colorName: emptyToNull(src.colorName || src.color_name),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
       size: emptyToNull(src.size || supplierSize),
@@ -182,8 +230,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const safeNormalized = { ...normalized, gender: normalized.gender ? normCode(normalized.gender) : "unisex" };
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
+    applyProductCodeSplit(safeNormalized);
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
-    const modelCode = `${normCode(supplierCode || "aif")}:${normCode(baseModelCode)}`;
+    const brandKey = normCode(safeNormalized.brandCode || safeNormalized.brandName || supplierCode || "aif");
+    const modelCode = `${brandKey}:${normCode(baseModelCode)}`;
 
     const existing = await client.query(
       `SELECT id FROM aif_product_models WHERE model_code=$1 LIMIT 1`,
@@ -581,10 +631,60 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   }
 
+  async function findBrandIdForNormalized(client, normalized) {
+    const candidates = [
+      emptyToNull(normalized?.brandId),
+      emptyToNull(normalized?.brandCode),
+      emptyToNull(normalized?.brandName),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      const r = await client.query(
+        `SELECT id FROM aif_brands
+         WHERE id::text=$1 OR code=$1 OR lower(name)=lower($1)
+         LIMIT 1`,
+        [candidate]
+      );
+      if (r.rowCount) return r.rows[0].id;
+    }
+    return null;
+  }
+
+  async function applyBrandColorCodeMapping(client, normalized) {
+    if (!normalized || typeof normalized !== "object") return false;
+    const colorCode = emptyToNull(normalized.colorCode || normalized.supplierColorCode);
+    if (!colorCode) return false;
+    const brandId = await findBrandIdForNormalized(client, normalized);
+    if (!brandId) return false;
+    const r = await client.query(
+      `SELECT bcc.id, c.code AS color_type_code, c.name_ro, c.name_hu, c.name_en, c.name_de, c.hex
+       FROM aif_brand_color_codes bcc
+       JOIN aif_color_types c ON c.id=bcc.color_type_id
+       WHERE bcc.brand_id=$1
+         AND bcc.is_active=true
+         AND c.is_active=true
+         AND lower(bcc.color_code)=lower($2)
+       LIMIT 1`,
+      [brandId, colorCode]
+    );
+    const found = r.rows[0];
+    if (!found) return false;
+    normalized.colorName = found.name_ro;
+    normalized.colorCode = colorCode;
+    normalized.supplierColorCode = normalized.supplierColorCode || colorCode;
+    normalized.colorHex = found.hex || normalized.colorHex || null;
+    normalized.brandColorCodeId = found.id;
+    normalized.colorTypeCode = found.color_type_code;
+    return true;
+  }
+
   async function enrichNormalizedRow(client, nr) {
-    if (nr?.normalized?.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
-    if (nr?.normalized) nr.normalized.gender = await normalizeGenderCode(client, nr.normalized.genderRaw || nr.normalized.gender);
-    if (nr?.normalized?.material) nr.normalized.material = await normalizeMaterialText(client, nr.normalized.material);
+    if (nr?.normalized) {
+      applyProductCodeSplit(nr.normalized);
+      const brandColorMapped = await applyBrandColorCodeMapping(client, nr.normalized);
+      if (!brandColorMapped && nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+      nr.normalized.gender = await normalizeGenderCode(client, nr.normalized.genderRaw || nr.normalized.gender);
+      if (nr.normalized.material) nr.normalized.material = await normalizeMaterialText(client, nr.normalized.material);
+    }
     return nr;
   }
 
@@ -1648,6 +1748,176 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  function brandColorCodeSelect() {
+    return `SELECT bcc.id, bcc.brand_id, b.code AS brand_code, b.name AS brand_name,
+                   bcc.color_code, bcc.color_type_id,
+                   c.code AS color_type_code, c.name_ro AS color_name_ro, c.name_hu AS color_name_hu,
+                   c.name_en AS color_name_en, c.name_de AS color_name_de, c.hex AS color_hex,
+                   bcc.notes, bcc.is_active, bcc.created_at, bcc.updated_at
+            FROM aif_brand_color_codes bcc
+            JOIN aif_brands b ON b.id=bcc.brand_id
+            JOIN aif_color_types c ON c.id=bcc.color_type_id`;
+  }
+
+  async function getBrandColorCodeItem(client, id) {
+    const r = await client.query(
+      `${brandColorCodeSelect()}
+       WHERE bcc.id::text=$1
+       LIMIT 1`,
+      [id]
+    );
+    return r.rows[0] || null;
+  }
+
+  router.get("/brand-color-codes", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const brand = text(req.query.brand || req.query.brandId || req.query.brand_id || req.query.brandCode || req.query.brand_code);
+    const args = [];
+    const where = [];
+    if (!includeInactive) where.push(`bcc.is_active=true AND b.is_active=true AND c.is_active=true`);
+    if (brand) {
+      args.push(brand);
+      where.push(`(b.id::text=$${args.length} OR b.code=$${args.length} OR lower(b.name)=lower($${args.length}))`);
+    }
+    try {
+      const r = await pool.query(
+        `${brandColorCodeSelect()}
+         ${where.length ? "WHERE " + where.join(" AND ") : ""}
+         ORDER BY b.name ASC, bcc.color_code ASC`,
+        args
+      );
+      res.json({ items: r.rows });
+    } catch (e) {
+      console.error("AIF list brand color codes failed", e);
+      res.status(500).json({ error: "failed to load brand color codes" });
+    }
+  });
+
+  router.post("/brand-color-codes", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const colorCode = text(body.colorCode || body.color_code).toUpperCase();
+    if (!colorCode) return res.status(400).json({ error: "brand color code required" });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const brand = await findByIdOrCode(client, "aif_brands", body.brandId || body.brand_id || body.brandCode || body.brand_code || body.brand);
+      const color = await findColorTypeByIdOrCode(client, body.colorTypeId || body.color_type_id || body.colorTypeCode || body.color_type_code || body.color);
+      if (!brand || brand.is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "brand required or inactive" });
+      }
+      if (!color || color.is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "color type required or inactive" });
+      }
+      const r = await client.query(
+        `INSERT INTO aif_brand_color_codes (brand_id, color_code, color_type_id, notes, is_active)
+         VALUES ($1,$2,$3,$4,true)
+         ON CONFLICT (brand_id, color_code) DO UPDATE SET
+           color_type_id=EXCLUDED.color_type_id,
+           notes=EXCLUDED.notes,
+           is_active=true,
+           updated_at=now()
+         RETURNING id`,
+        [brand.id, colorCode, color.id, emptyToNull(body.notes)]
+      );
+      const item = await getBrandColorCodeItem(client, r.rows[0].id);
+      await client.query("COMMIT");
+      res.json({ item });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF save brand color code failed", e);
+      res.status(500).json({ error: "failed to save brand color code" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch("/brand-color-codes/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(`SELECT id FROM aif_brand_color_codes WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "brand color code not found" });
+      }
+      const sets = [];
+      const args = [];
+      let i = 1;
+      if (body.brandId !== undefined || body.brand_id !== undefined || body.brandCode !== undefined || body.brand_code !== undefined || body.brand !== undefined) {
+        const brand = await findByIdOrCode(client, "aif_brands", body.brandId || body.brand_id || body.brandCode || body.brand_code || body.brand);
+        if (!brand || brand.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "brand required or inactive" });
+        }
+        sets.push(`brand_id=$${i++}`);
+        args.push(brand.id);
+      }
+      if (body.colorCode !== undefined || body.color_code !== undefined) {
+        const colorCode = text(body.colorCode ?? body.color_code).toUpperCase();
+        if (!colorCode) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "brand color code required" });
+        }
+        sets.push(`color_code=$${i++}`);
+        args.push(colorCode);
+      }
+      if (body.colorTypeId !== undefined || body.color_type_id !== undefined || body.colorTypeCode !== undefined || body.color_type_code !== undefined || body.color !== undefined) {
+        const color = await findColorTypeByIdOrCode(client, body.colorTypeId || body.color_type_id || body.colorTypeCode || body.color_type_code || body.color);
+        if (!color || color.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "color type required or inactive" });
+        }
+        sets.push(`color_type_id=$${i++}`);
+        args.push(color.id);
+      }
+      if (body.notes !== undefined) {
+        sets.push(`notes=$${i++}`);
+        args.push(emptyToNull(body.notes));
+      }
+      if (body.is_active !== undefined || body.isActive !== undefined) {
+        sets.push(`is_active=$${i++}`);
+        args.push(Boolean(body.is_active ?? body.isActive));
+      }
+      if (sets.length) {
+        args.push(current.rows[0].id);
+        await client.query(
+          `UPDATE aif_brand_color_codes SET ${sets.join(", ")}, updated_at=now() WHERE id=$${i}`,
+          args
+        );
+      }
+      const item = await getBrandColorCodeItem(client, current.rows[0].id);
+      await client.query("COMMIT");
+      res.json({ item });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF update brand color code failed", e);
+      if (e?.code === "23505") return res.status(400).json({ error: "A márkához ez a színkód már létezik." });
+      res.status(500).json({ error: "failed to update brand color code" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/brand-color-codes/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    try {
+      const r = await pool.query(
+        `UPDATE aif_brand_color_codes SET is_active=false, updated_at=now() WHERE id::text=$1 RETURNING id`,
+        [id]
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "brand color code not found" });
+      res.json({ ok: true, mode: "deactivated" });
+    } catch (e) {
+      console.error("AIF delete brand color code failed", e);
+      res.status(500).json({ error: "failed to delete brand color code" });
+    }
+  });
+
+
   async function materialUsage(client, materialIdOrCode) {
     const m = await client.query(
       `SELECT id, code, name_ro FROM aif_material_types WHERE id::text=$1 OR code=$1 LIMIT 1`,
@@ -2309,7 +2579,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, materialTypes, supplierBrands, profiles] = await Promise.all([
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, brandColorCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
@@ -2321,6 +2591,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   FROM aif_color_types
                   WHERE is_active=true
                   ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`${brandColorCodeSelect()}
+                  WHERE bcc.is_active=true AND b.is_active=true AND c.is_active=true
+                  ORDER BY b.name ASC, bcc.color_code ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active
                   FROM aif_material_types
                   WHERE is_active=true
@@ -2347,6 +2620,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locationTypes: locationTypes.rows,
       currencies: currencies.rows,
       colorTypes: colorTypes.rows,
+      brandColorCodes: brandColorCodes.rows,
       materialTypes: materialTypes.rows,
       supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
@@ -2945,8 +3219,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     for (const row of rows.rows) {
       try {
         const normalized = { ...(row.normalized || {}) };
+        applyProductCodeSplit(normalized);
         normalized.gender = canonicalGender(normalized.gender);
-        if (normalized.colorName) normalized.colorName = await normalizeColorName(client, normalized.colorName);
+        const brandColorMapped = await applyBrandColorCodeMapping(client, normalized);
+        if (!brandColorMapped && normalized.colorName) normalized.colorName = await normalizeColorName(client, normalized.colorName);
         const qty = Number(row.qty ?? normalized.qty ?? 0);
         if (!Number.isFinite(qty) || qty <= 0) throw new Error("a mennyiség hiányzik vagy nem pozitív");
 
