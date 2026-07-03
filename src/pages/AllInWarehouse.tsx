@@ -659,16 +659,41 @@ export default function AllInWarehouse() {
     setStockEditorRows({});
   }
 
+  function stockEditorReservedQty(location: MetaItem) {
+    if (!stockEditorTarget?.variant_id) return 0;
+    const current = stockForLocation(stockRowsForVariant(stockEditorTarget.variant_id), location);
+    return Math.max(0, Math.floor(n(current?.reserved_qty)));
+  }
+
+  function setStockEditorQty(location: MetaItem, value: number) {
+    const key = locationKey(location);
+    const minQty = stockEditorReservedQty(location);
+    const nextQty = Math.max(minQty, Math.floor(Number.isFinite(value) ? value : 0));
+    setStockEditorRows((current) => ({ ...current, [key]: String(nextQty) }));
+  }
+
+  function adjustStockEditorQty(location: MetaItem, delta: number) {
+    const key = locationKey(location);
+    const currentQty = Math.floor(n(stockEditorRows[key]));
+    setStockEditorQty(location, currentQty + delta);
+  }
+
   async function saveStockEditor() {
     if (!stockEditorTarget?.variant_id) return;
     setStockEditorSaving(true);
     setMessage("");
     try {
-      const rows = stockLocationRows.map((loc) => ({
-        locationId: String(loc.id || ""),
-        locationCode: String(loc.code || ""),
-        qty: stockEditorRows[locationKey(loc)] ?? "0",
-      }));
+      const rows = stockLocationRows.map((loc) => {
+        const key = locationKey(loc);
+        const reservedQty = stockEditorReservedQty(loc);
+        const qty = Math.max(reservedQty, Math.floor(n(stockEditorRows[key])));
+        return {
+          locationId: String(loc.id || ""),
+          locationCode: String(loc.code || ""),
+          qty,
+          reservedQty,
+        };
+      });
       await apiVariantStockUpdate(stockEditorTarget.variant_id, rows);
       await load();
       if (detail?.item?.id && String(detail.item.id) === String(stockEditorTarget.variant_id)) {
@@ -1494,20 +1519,44 @@ export default function AllInWarehouse() {
                 {stockLocationRows.map((loc) => {
                   const key = locationKey(loc);
                   const current = stockForLocation(stockRowsForVariant(stockEditorTarget.variant_id), loc);
+                  const reservedQty = Math.max(0, Math.floor(n(current?.reserved_qty)));
+                  const qtyValue = Math.max(reservedQty, Math.floor(n(stockEditorRows[key])));
+                  const availableDraft = Math.max(0, qtyValue - reservedQty);
                   return (
-                    <div key={key} className="grid grid-cols-[1fr_92px] items-center gap-3 rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2">
+                    <div key={key} className="grid grid-cols-[1fr_136px] items-center gap-3 rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{loc.name || loc.code || "-"}</p>
                         <p className="mt-0.5 text-[11px] text-white/50">
-                          Előző: {n(current?.qty)} • Foglalt: {n(current?.reserved_qty)} • Elérhető: {n(current?.available_qty)}
+                          Előző: {n(current?.qty)} • Foglalt: {reservedQty} • Új elérhető: {availableDraft}
                         </p>
                       </div>
-                      <input
-                        className="h-9 rounded-xl border border-white/18 bg-[#303a4c] px-2 text-right text-sm text-white outline-none focus:border-[#7bd7d4]/70"
-                        inputMode="numeric"
-                        value={stockEditorRows[key] ?? "0"}
-                        onChange={(e) => setStockEditorRows((x) => ({ ...x, [key]: e.target.value.replace(/[^0-9]/g, "") }))}
-                      />
+                      <div className="flex h-9 overflow-hidden rounded-xl border border-white/20 bg-[#303a4c]">
+                        <button
+                          className="flex h-full w-10 items-center justify-center border-r border-white/14 bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35"
+                          onClick={() => adjustStockEditorQty(loc, -1)}
+                          disabled={stockEditorSaving || qtyValue <= reservedQty}
+                          title={reservedQty > 0 ? `Minimum a foglalt mennyiség miatt: ${reservedQty}` : "Készlet csökkentése"}
+                          type="button"
+                        >
+                          −
+                        </button>
+                        <input
+                          className="h-full min-w-0 flex-1 bg-transparent px-2 text-center text-sm tabular-nums text-white outline-none"
+                          inputMode="numeric"
+                          value={qtyValue}
+                          readOnly
+                          aria-label={`${loc.name || loc.code || "Célhely"} készlet`}
+                        />
+                        <button
+                          className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => adjustStockEditorQty(loc, 1)}
+                          disabled={stockEditorSaving}
+                          title="Készlet növelése"
+                          type="button"
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
