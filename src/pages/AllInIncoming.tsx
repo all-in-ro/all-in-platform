@@ -27,6 +27,8 @@ import {
   AifLocationType,
   AifParsedRow,
   AifSupplier,
+  AifBrandColorCode,
+  AifColorType,
   apiAifCommitImportBatch,
   apiAifCreateCurrency,
   apiAifCreateFullImportBatch,
@@ -525,6 +527,22 @@ function rowKey(row: AifParsedRow, index: number) {
   return `${row.rowNo || index + 1}-${index}`;
 }
 
+function splitCodProdus(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { fullCode: "", modelCode: "", colorCode: "" };
+  const match = raw.match(/^(.+)-([A-Za-z0-9]{1,16})$/);
+  if (!match) return { fullCode: raw, modelCode: raw, colorCode: "" };
+  return { fullCode: raw, modelCode: match[1].trim(), colorCode: match[2].trim() };
+}
+
+function sameLoose(a: unknown, b: unknown) {
+  return normMatchKey(a) === normMatchKey(b);
+}
+
+function colorCodeKey(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
 export default function AllInIncoming(_props: Props) {
   const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locations, setLocations] = useState<AifLocation[]>([]);
@@ -534,6 +552,8 @@ export default function AllInIncoming(_props: Props) {
   const [categories, setCategories] = useState<AifCategoryOption[]>([]);
   const [genderTypes, setGenderTypes] = useState<AifGenderOption[]>([]);
   const [supplierBrands, setSupplierBrands] = useState<AifSupplierBrandLink[]>([]);
+  const [brandColorCodes, setBrandColorCodes] = useState<AifBrandColorCode[]>([]);
+  const [colorTypes, setColorTypes] = useState<AifColorType[]>([]);
   const [defaultBrandCode, setDefaultBrandCode] = useState("");
   const [defaultCategoryCode, setDefaultCategoryCode] = useState("");
   const [defaultGender, setDefaultGender] = useState("");
@@ -659,6 +679,65 @@ export default function AllInIncoming(_props: Props) {
     }
   }, [brandOptionsForSupplier, defaultBrandCode]);
 
+  function brandForNormalized(n: Record<string, unknown>) {
+    const raw = String(n.brandCode || n.brandName || "").trim();
+    if (!raw) return null;
+    return activeBrands.find((b) =>
+      sameLoose(b.code, raw) || sameLoose(b.id, raw) || sameLoose(b.name, raw)
+    ) || null;
+  }
+
+  function brandColorCodeForNormalized(n: Record<string, unknown>) {
+    const brand = brandForNormalized(n);
+    const code = colorCodeKey(n.colorCode || (n as any).supplierColorCode);
+    if (!brand || !code) return null;
+    return brandColorCodes.find((item: any) =>
+      item.is_active !== false &&
+      String(item.brand_id) === String(brand.id) &&
+      colorCodeKey(item.color_code) === code
+    ) || null;
+  }
+
+  function applyProductCodeAndBrandColor(row: AifParsedRow) {
+    const normalized = { ...(row.normalized || {}) } as any;
+    const rawProductCode = rawValueByHeader(row, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code"]);
+    const sourceProductCode = normalized.supplierProductCode || normalized.productCode || normalized.modelCode || rawProductCode;
+    const split = splitCodProdus(sourceProductCode);
+    if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
+    if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
+    if (split.colorCode && !normalized.colorCode) normalized.colorCode = split.colorCode;
+    if (split.colorCode && !normalized.supplierColorCode) normalized.supplierColorCode = split.colorCode;
+
+    const brandColor = brandColorCodeForNormalized(normalized) as any;
+    if (brandColor) {
+      normalized.colorName = brandColor.color_name_ro || normalized.colorName || "";
+      normalized.colorHex = brandColor.color_hex || normalized.colorHex || "";
+      normalized.brandColorCodeId = brandColor.id;
+      normalized.colorTypeCode = brandColor.color_type_code || normalized.colorTypeCode || "";
+    } else if (normalized.colorName) {
+      const rawColor = String(normalized.colorName || "").trim();
+      const found = colorTypes.find((c) => {
+        const aliases = Array.isArray(c.aliases) ? c.aliases : [];
+        return [c.code, c.name_ro, c.name_hu, c.name_en, c.name_de, ...aliases].filter(Boolean).some((x) => sameLoose(x, rawColor));
+      });
+      if (found?.name_ro) {
+        normalized.colorName = found.name_ro;
+        normalized.colorHex = found.hex || normalized.colorHex || "";
+        normalized.colorTypeCode = found.code || normalized.colorTypeCode || "";
+      }
+    }
+    return { ...row, normalized };
+  }
+
+  function brandColorMissingHint(row: AifParsedRow) {
+    const n = row.normalized || {};
+    const brand = brandForNormalized(n);
+    const code = String((n as any).colorCode || (n as any).supplierColorCode || "").trim();
+    if (!brand || !code) return "";
+    if (brandColorCodeForNormalized(n)) return "";
+    return `${brand.name || brand.code} / ${code}`;
+  }
+
   function brandValueForRow(n: Record<string, unknown>) {
     const raw = String(n.brandCode || n.brandName || "").trim();
     if (!raw) return "";
@@ -684,8 +763,9 @@ export default function AllInIncoming(_props: Props) {
 
   function normalizeImportedRowsWithMeta(inputRows: AifParsedRow[]) {
     return inputRows.map((row) => {
-      const normalized = { ...(row.normalized || {}) } as any;
-      const match = findCategoryForRow({ ...row, normalized }, activeCategories);
+      const rowWithCode = applyProductCodeAndBrandColor(row);
+      const normalized = { ...(rowWithCode.normalized || {}) } as any;
+      const match = findCategoryForRow({ ...rowWithCode, normalized }, activeCategories);
       if (match) {
         normalized.categoryCode = String(match.code || match.id);
         normalized.categoryName = categoryLabel(match);
@@ -694,7 +774,7 @@ export default function AllInIncoming(_props: Props) {
         normalized.categoryCode = "";
         normalized.categoryName = "";
       }
-      return { ...row, normalized };
+      return { ...rowWithCode, normalized };
     });
   }
 
@@ -786,7 +866,7 @@ export default function AllInIncoming(_props: Props) {
           normalized.categoryName = category ? categoryLabel(category) : "";
         }
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
-        return { ...row, normalized };
+        return applyProductCodeAndBrandColor({ ...row, normalized });
       })
     );
   }
@@ -989,10 +1069,11 @@ export default function AllInIncoming(_props: Props) {
       },
     };
 
-    const errors = aifRowErrors(manualRow);
+    const mappedManualRow = applyProductCodeAndBrandColor(manualRow);
+    const errors = aifRowErrors(mappedManualRow);
     const rowIndex = rows.length;
-    const key = rowKey(manualRow, rowIndex);
-    setRows((current) => [...current, manualRow]);
+    const key = rowKey(mappedManualRow, rowIndex);
+    setRows((current) => [...current, mappedManualRow]);
     setFileName((current) => current || "Manuális bevételezés");
     setWorkbenchOpen(false);
     setPreviewLimit((current) => Math.max(current, rowIndex + 1));
@@ -1019,6 +1100,8 @@ export default function AllInIncoming(_props: Props) {
     setCategories((meta as any).categories || []);
     setGenderTypes((meta as any).genderTypes || []);
     setSupplierBrands((meta as any).supplierBrands || []);
+    setBrandColorCodes((meta as any).brandColorCodes || []);
+    setColorTypes((meta as any).colorTypes || []);
     setNewLocationType((current) => {
       if (current && activeTypes.some((t) => t.code === current)) return current;
       return activeTypes[0]?.code || "warehouse";
@@ -2403,6 +2486,7 @@ export default function AllInIncoming(_props: Props) {
                 const rowState = errors.length ? "Ellenőrizni" : "Rendben";
                 const categoryValue = categoryValueForRow(r);
                 const categoryHint = importedCategoryHint(r);
+                const colorMissingHint = brandColorMissingHint(r);
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
@@ -2464,6 +2548,7 @@ export default function AllInIncoming(_props: Props) {
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Színkód</span>
                           <input className={`${compactInput} w-full`} value={valueString(n.colorCode)} onChange={(e) => updateRowField(globalIndex, "colorCode", e.target.value)} />
+                          {colorMissingHint ? <span className="text-[9px] text-amber-100">Nincs mapping: {colorMissingHint}</span> : null}
                         </label>
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Méret</span>
