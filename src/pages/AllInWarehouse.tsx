@@ -143,6 +143,8 @@ type InventoryItem = {
   model_code?: string | null;
   title_ro?: string | null;
   title_hu?: string | null;
+  description_ro?: string | null;
+  shopify_title?: string | null;
   gender?: string | null;
   product_type?: string | null;
   season?: string | null;
@@ -328,7 +330,7 @@ const WAREHOUSE_LABEL_DEFAULT_CONTENT: Record<WarehouseLabelContentKey, boolean>
   brand: true,
   title: true,
   barcode: true,
-  description: false,
+  description: true,
   category: true,
   sizeColor: true,
   code: true,
@@ -340,7 +342,7 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "brand", label: "Márka", hint: "A terméknév felett vagy alatt jelenik meg." },
   { key: "title", label: "Terméknév", hint: "A fő terméknév, lehet 1-2 sor." },
   { key: "barcode", label: "Vonalkód", hint: "Code128 belső AllIn / Shopify SKU azonosító." },
-  { key: "description", label: "Összetétel", hint: "Anyag vagy rövid leírás a címkén." },
+  { key: "description", label: "Leírás / összetétel", hint: "Román termékleírás, ha van; különben anyag/összetétel." },
   { key: "category", label: "Kategória", hint: "Póló, pantaloni, pantofi, stb." },
   { key: "sizeColor", label: "Méret / szín", hint: "A variáns gyors azonosításához." },
   { key: "code", label: "Termékkód", hint: "Beszállítói / belső cikkszám." },
@@ -933,6 +935,8 @@ export default function AllInWarehouse() {
   const [labelContent, setLabelContent] = useState<Record<WarehouseLabelContentKey, boolean>>(WAREHOUSE_LABEL_DEFAULT_CONTENT);
   const [labelTemplateName, setLabelTemplateName] = useState("Standard 40x46");
   const [labelTemplates, setLabelTemplates] = useState<WarehouseLabelTemplate[]>(() => readWarehouseLabelTemplates());
+  const [labelDetailMap, setLabelDetailMap] = useState<Record<string, DetailResponse>>({});
+  const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -1309,7 +1313,7 @@ export default function AllInWarehouse() {
     ]);
   }
 
-  function openLabelComposer() {
+  async function openLabelComposer() {
     if (!selectedLabelItems.length) {
       setMessage("Nincs termék a Vonalkód / címke listában.");
       return;
@@ -1322,6 +1326,37 @@ export default function AllInWarehouse() {
       }
       return next;
     });
+
+    const missingIds = selectedLabelItems
+      .map((item) => String(item.variant_id || ""))
+      .filter((id) => id && !labelDetailMap[id]);
+
+    if (missingIds.length) {
+      setLabelDetailsBusy(true);
+      try {
+        const loaded = await Promise.all(
+          missingIds.map(async (id) => {
+            try {
+              const detail = await apiVariantDetail(id);
+              return { id, detail };
+            } catch {
+              return { id, detail: null };
+            }
+          })
+        );
+
+        setLabelDetailMap((current) => {
+          const next = { ...current };
+          for (const row of loaded) {
+            if (row.detail) next[row.id] = row.detail;
+          }
+          return next;
+        });
+      } finally {
+        setLabelDetailsBusy(false);
+      }
+    }
+
     setLabelComposerOpen(true);
   }
 
@@ -1348,28 +1383,29 @@ export default function AllInWarehouse() {
   const labelRowsForPrint = useMemo(() => {
     return selectedLabelItems.map((item) => {
       const id = String(item.variant_id || "");
+      const detailItem = labelDetailMap[id]?.item || {};
       const barcode = barcodeForLabelItem(item);
       const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 1, 1, 999), 0, 999);
-      const color = colorDisplay(item.color_name, item.color_code);
+      const color = colorDisplay(item.color_name || detailItem.color_name, item.color_code || detailItem.color_code);
       const price = item.sell_price == null ? "" : String(item.sell_price);
       return {
         item,
         id,
         barcode,
         copies,
-        title: item.title_ro || "-",
-        brand: item.brand_name || "-",
-        category: item.category_name_hu || item.category_name_ro || "-",
-        size: item.size || "-",
+        title: detailItem.title_ro || item.title_ro || "-",
+        brand: detailItem.brand_name || item.brand_name || "-",
+        category: detailItem.category_name_ro || item.category_name_ro || detailItem.category_name_hu || item.category_name_hu || "-",
+        size: detailItem.size || item.size || "-",
         color,
-        description: item.material || item.product_type || "",
+        description: detailItem.description_ro || item.description_ro || detailItem.material || item.material || detailItem.product_type || item.product_type || "",
         productCode: labelProductCodeForItem(item),
         price,
         stockQty: Math.floor(n(item.total_qty)),
         render: labelCode128Svg(barcode, 58),
       };
     });
-  }, [selectedLabelItems, labelCopies, colorTypes]);
+  }, [selectedLabelItems, labelCopies, colorTypes, labelDetailMap]);
 
   const labelPrintItems = useMemo<WarehouseLabelPrintItem[]>(() => {
     const out: WarehouseLabelPrintItem[] = [];
@@ -2421,7 +2457,7 @@ export default function AllInWarehouse() {
 
             <div className="space-y-4 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A beállítások megegyeznek a külön vonalkód/címke központ logikájával, de itt a kiválasztott terméklistán dolgozunk.
+                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A címke a román kategóriát és a termék román leírását használja, ha ezek elérhetők.
               </div>
 
               <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
@@ -2595,8 +2631,8 @@ export default function AllInWarehouse() {
               </div>
               <div className="flex flex-wrap justify-end gap-2">
                 {selectedWorkPanel === "label" && (
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length}>
-                    <Barcode size={15} /> Vonalkódok / címkék generálása
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy}>
+                    <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Vonalkódok / címkék generálása"}
                   </button>
                 )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
