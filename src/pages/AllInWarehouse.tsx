@@ -213,7 +213,7 @@ function MissingDataIndicator({ item, openUp = false }: { item: InventoryItem; o
   if (!labels.length) {
     return (
       <span
-        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-emerald-200/30 bg-emerald-400/18 text-[12px] text-emerald-50 shadow-[0_0_10px_rgba(110,231,183,0.16)]"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] text-[11px] text-white shadow-[0_0_8px_rgba(42,141,139,0.22)]"
         title="Rendben"
         aria-label="Rendben"
       >
@@ -224,7 +224,7 @@ function MissingDataIndicator({ item, openUp = false }: { item: InventoryItem; o
   const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
   return (
     <span
-      className="group relative inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-200/55 bg-amber-300 text-[14px] leading-none text-slate-900 shadow-[0_0_14px_rgba(251,191,36,0.34)]"
+      className="group relative inline-flex h-5 w-5 items-center justify-center rounded-full border border-amber-200/55 bg-amber-300 text-[12px] leading-none text-slate-900 shadow-[0_0_10px_rgba(251,191,36,0.28)]"
       tabIndex={0}
       aria-label={`Hiányzó adatok: ${labels.join(", ")}`}
     >
@@ -1439,7 +1439,7 @@ export default function AllInWarehouse() {
                       <th className="px-3 py-3 text-right font-normal">Elérhető</th>
                       <th className="px-3 py-3 text-right font-normal">Vételár</th>
                       <th className="px-3 py-3 text-right font-normal">Eladási ár</th>
-                      <th className="px-3 py-3 font-normal">Állapot</th>
+                      <th className="px-3 py-3 text-center font-normal">Állapot</th>
                       <th className="px-3 py-3 text-right font-normal">Művelet</th>
                     </tr>
                   </thead>
@@ -1456,7 +1456,7 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5 text-right">{n(it.available_qty)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
-                        <td className="px-3 py-2.5"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></td>
+                        <td className="px-3 py-2.5 text-center"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></span></td>
                         <td className="px-3 py-2.5 text-right">
                           <div className="flex justify-end gap-2">
                             <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
