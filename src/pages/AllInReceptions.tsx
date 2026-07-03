@@ -40,7 +40,7 @@ const label = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-white/86 
 const input = "h-8 rounded-lg border border-white/24 bg-[#303b4e] px-2.5 text-xs text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
 const select = `${input} pr-8`;
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
+const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] text-white hover:bg-[#2d735f]`;
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const tinyBtn = "inline-flex h-6 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[10.5px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -50,9 +50,10 @@ const lightPanel = "rounded-xl border border-slate-200 bg-white p-3 text-slate-9
 const lightLabel = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-slate-600 font-normal";
 const lightInput = "h-8 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-emerald-200/70 focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
 const lightSelect = `${lightInput} pr-8`;
-const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-white/58 font-normal";
-const rowInput = "h-7 w-full rounded-md border border-white/18 bg-[#303b4e] px-2 text-[11px] text-white caret-white outline-none transition placeholder:text-white/45 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/20 disabled:bg-[#3a4556] disabled:text-white/62 font-normal";
-const rowRead = "flex h-7 items-center justify-end rounded-md border border-white/10 bg-black/10 px-2 text-[11px] text-white/82 font-normal";
+const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-slate-500 font-normal";
+const rowInput = "h-7 w-full rounded-md border border-slate-300 bg-white px-2 text-[11px] text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-emerald-200/70 focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
+const rowRead = "flex h-7 items-center justify-end rounded-md border border-slate-200 bg-slate-100 px-2 text-[11px] text-slate-700 font-normal";
+const rowStatusPill = "inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-slate-100 px-2 text-[11px] text-slate-700 font-normal";
 
 function n(v: unknown): number {
   const x = Number(String(v ?? "").replace(",", "."));
@@ -668,6 +669,7 @@ export default function AllInReceptions(_props: Props) {
   const [moveToReceptionId, setMoveToReceptionId] = useState("");
   const [savingHeader, setSavingHeader] = useState(false);
   const [savingRows, setSavingRows] = useState(false);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [committingRows, setCommittingRows] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AifReceptionSummary | null>(null);
   const [busy, setBusy] = useState(false);
@@ -968,6 +970,23 @@ export default function AllInReceptions(_props: Props) {
       setMessage(e?.message || "A terméksorok mentése nem sikerült.");
     } finally {
       setSavingRows(false);
+    }
+  }
+
+  async function saveSingleRow(rowId: string) {
+    if (!detail) return;
+    setSavingRowId(rowId);
+    setMessage("");
+    try {
+      const row = detail.rows.find((x: any) => x.id === rowId);
+      await apiAifUpdateImportRow(rowId, rowDrafts[rowId] || row?.normalized || {});
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("Terméksor mentve.");
+    } catch (e: any) {
+      setMessage(e?.message || "A terméksor mentése nem sikerült.");
+    } finally {
+      setSavingRowId(null);
     }
   }
 
@@ -1281,10 +1300,13 @@ export default function AllInReceptions(_props: Props) {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-white/12 bg-[#303b4e] p-2">
+              <div className="rounded-xl border border-slate-200 bg-white p-2.5 text-slate-900 shadow-lg shadow-slate-950/10">
                 <div className="mb-2 flex items-center justify-between gap-2 px-1">
-                  <p className="text-xs uppercase tracking-[0.08em] text-white/70">Terméksorok</p>
-                  <span className="rounded-full border border-white/14 bg-white/[0.08] px-2 py-0.5 text-[11px] text-white/70">{visibleRows.length} sor</span>
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.08em] text-slate-600">Terméksorok</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">Soronként javítható és menthető. A készletre vett sornál a darab csak korrekcióval módosítható.</p>
+                  </div>
+                  <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{visibleRows.length} sor</span>
                 </div>
                 <div className="max-h-[44vh] space-y-2 overflow-y-auto pr-1 pb-3">
                   {visibleRows.map((r) => {
@@ -1292,48 +1314,47 @@ export default function AllInReceptions(_props: Props) {
                     const editable = rowCanEdit(r);
                     const canCommitOrMove = rowCanWork(r);
                     const checked = canCommitOrMove && selectedRows.has(r.id);
+                    const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
+                    const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
                     const rowClass = r.status === "committed"
-                      ? "border-emerald-300/28 bg-emerald-300/8"
+                      ? "border-emerald-200 bg-emerald-50"
                       : r.status === "ignored"
-                        ? "border-white/8 bg-[#3f4b5d]/60 opacity-60"
+                        ? "border-slate-200 bg-slate-100 opacity-70"
                         : r.status === "error" || (r.error_messages || []).length
-                          ? "border-red-300/30 bg-red-500/10"
+                          ? "border-red-300 bg-red-50"
                           : checked
-                            ? "border-emerald-200/35 bg-emerald-300/10"
-                            : "border-white/12 bg-[#4d5869]";
+                            ? "border-emerald-300 bg-emerald-50"
+                            : "border-slate-200 bg-white";
                     return (
-                      <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm shadow-slate-950/10 ${rowClass}`}>
-                        <div className="grid gap-2 lg:grid-cols-[34px_54px_120px_minmax(180px,1fr)_auto] lg:items-center">
-                          <label className="flex items-center gap-2 text-[11px] text-white/70">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 accent-emerald-300"
-                              checked={checked}
-                              disabled={!canCommitOrMove || r.status === "error"}
-                              onChange={() => toggleRow(r.id)}
-                            />
-                          </label>
-                          <div className="rounded-lg border border-white/10 bg-black/10 px-2 py-1 text-center">
-                            <p className="text-[10px] uppercase text-white/45">Nr.</p>
-                            <p className="text-xs text-white">{r.row_no}</p>
-                          </div>
-                          <span className="inline-flex h-7 items-center justify-center rounded-full border border-white/14 bg-white/[0.08] px-2 text-[11px] text-white/78">
-                            {statusText(r.status)}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm text-white">{cell(draft.titleRo || r.normalized?.titleRo || r.supplier_product_code)}</p>
-                            <p className="mt-0.5 truncate text-[11px] text-white/52">{cell(draft.supplierProductCode || r.supplier_product_code || r.normalized?.modelCode)} • {cell(draft.size || r.supplier_size || r.normalized?.size)} • {cell(draft.colorName || r.normalized?.colorName)}</p>
+                      <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm shadow-slate-200/80 ${rowClass}`}>
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="inline-flex items-center gap-2 text-[11px] text-slate-600">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-emerald-500"
+                                checked={checked}
+                                disabled={!canCommitOrMove || r.status === "error"}
+                                onChange={() => toggleRow(r.id)}
+                              />
+                              Kijelölés
+                            </label>
+                            <span className="inline-flex h-7 items-center rounded-lg border border-slate-200 bg-slate-100 px-2 text-[11px] text-slate-600">Nr. {r.row_no}</span>
+                            <span className={rowStatusPill}>{statusText(r.status)}</span>
                           </div>
                           <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
-                            <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy} type="button">
+                            <button className={primaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button">
+                              <Save size={13} /> {savingRowId === r.id ? "Mentés..." : "Sor mentése"}
+                            </button>
+                            <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button">
                               <MoveRight size={13} /> Áthelyezés
                             </button>
-                            <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy} type="button">
+                            <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button">
                               Kihagy
                             </button>
                           </div>
                         </div>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[1fr_1.55fr_.62fr_.9fr_.72fr_.62fr_.8fr_.85fr]">
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[1fr_1.55fr_.62fr_.9fr_.72fr_.62fr_.8fr_.85fr]">
                           <label className={rowLabel}>Termékkód<input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
                           <label className={rowLabel}>Terméknév<input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} /></label>
                           <label className={rowLabel}>Méret<input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
@@ -1341,12 +1362,12 @@ export default function AllInReceptions(_props: Props) {
                           <label className={rowLabel}>Színkód<input className={rowInput} value={String(draft.colorCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} /></label>
                           <label className={rowLabel}>Darab<input className={`${rowInput} text-right`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
                           <label className={rowLabel}>Vételár<input className={`${rowInput} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /></label>
-                          <label className={rowLabel}>Vételár RON<span className={rowRead}>{money(r.buy_price_ron, "RON")}</span></label>
+                          <label className={rowLabel}>Vételár RON<span className={rowRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span></label>
                         </div>
                       </div>
                     );
                   })}
-                  {!visibleRows.length && <div className="rounded-xl border border-white/12 bg-[#4d5869] px-3 py-6 text-center text-sm text-white/62">Nincs sor ebben a nézetben.</div>}
+                  {!visibleRows.length && <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">Nincs sor ebben a nézetben.</div>}
                 </div>
               </div>
 
