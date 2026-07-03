@@ -470,6 +470,10 @@ async function apiDeleteBrandColorCode(id: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/brand-color-codes/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+async function apiListBrandColorCodes() {
+  return fetchJSON<{ items: BrandColorCode[] }>("/api/aif/brand-color-codes");
+}
+
 async function apiSaveMaterialType(id: string, payload: Record<string, unknown>) {
   const url = id ? `/api/aif/material-types/${encodeURIComponent(id)}` : "/api/aif/material-types";
   return fetchJSON<{ item: MaterialType }>(url, {
@@ -973,6 +977,15 @@ export default function AllInWarehouse() {
     setMessage("");
     try {
       const [inv, meta, stock] = await Promise.all([apiInventory(), apiMeta(), apiStock()]);
+      let brandColorRows = meta.brandColorCodes || [];
+      if (!brandColorRows.length) {
+        try {
+          const extra = await apiListBrandColorCodes();
+          brandColorRows = extra.items || [];
+        } catch {
+          brandColorRows = [];
+        }
+      }
       setItems((inv.items || []).filter((x) => String(x.variant_status || "active") !== "archived" && String(x.model_status || "active") !== "archived"));
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
@@ -980,7 +993,7 @@ export default function AllInWarehouse() {
       setCategories((meta.categories || []).slice().sort((a: MetaItem, b: MetaItem) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })));
       setGenderTypes(meta.genderTypes || []);
       setColorTypes(meta.colorTypes || []);
-      setBrandColorCodes(meta.brandColorCodes || []);
+      setBrandColorCodes(brandColorRows);
       setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
@@ -1584,6 +1597,82 @@ export default function AllInWarehouse() {
                         </div>
                       ))}
                       {!colorTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív szín.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {taxonomyTab === "brandColors" && (
+                <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">{brandColorForm.id ? "Márka színkód módosítása" : "Új márka színkód"}</p>
+                        <p className="text-[11px] text-white/50">Gyártói kód fordítása AllIn színre, márkához kötve. Nem globális alias, mert nem szeretnénk Excel-vuduval átkozni a jövőt.</p>
+                      </div>
+                      {brandColorForm.id && <button className={taxonomySmallBtn} onClick={resetBrandColorForm}>Új színkód</button>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Márka
+                        <select className={taxonomyInput} value={brandColorForm.brandId} onChange={(e) => setBrandColorForm((x) => ({ ...x, brandId: e.target.value }))}>
+                          <option value="">Válassz márkát</option>
+                          {brands.map((b) => <option key={b.id} value={b.id}>{brandLabel(b)}</option>)}
+                        </select>
+                      </label>
+                      <label className={taxonomyField}>Gyártói színkód
+                        <input className={taxonomyInput} value={brandColorForm.colorCode} onChange={(e) => setBrandColorForm((x) => ({ ...x, colorCode: e.target.value.toUpperCase() }))} placeholder="pl. 100 vagy 001" />
+                      </label>
+                      <label className={taxonomyField}>AllIn szín
+                        <select className={taxonomyInput} value={brandColorForm.colorTypeId} onChange={(e) => setBrandColorForm((x) => ({ ...x, colorTypeId: e.target.value }))}>
+                          <option value="">Válassz színt</option>
+                          {colorTypes.map((c) => <option key={c.id} value={c.id}>{colorTypeLabel(c)}{c.name_ro && c.name_hu ? ` • ${c.name_ro}` : ""}</option>)}
+                        </select>
+                      </label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Megjegyzés
+                        <textarea className={taxonomyTextarea} value={brandColorForm.notes} onChange={(e) => setBrandColorForm((x) => ({ ...x, notes: e.target.value }))} placeholder="pl. Under Armour CODPRODUS utolsó része: 100 = fekete/negru" />
+                      </label>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveBrandColorForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                    </div>
+                  </section>
+
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Márka színkód lista</p>
+                        <p className="text-[11px] text-white/50">Importnál például Under Armour + 100 → fekete/negru.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{brandColorCodes.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
+                      {brandColorCodes.map((row, index) => (
+                        <div key={row.id} className={taxonomyRow}>
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/25 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={row.color_hex ? { backgroundColor: row.color_hex } : undefined} />
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm text-white">{row.brand_name || row.brand_code || "-"}</p>
+                                <span className="rounded-full border border-[#67d4d1]/25 bg-[#208d8b]/18 px-2 py-0.5 text-[10px] text-white">{row.color_code}</span>
+                                <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.color_name_hu || row.color_name_ro || row.color_type_code || "-"}</span>
+                              </div>
+                              <p className="mt-0.5 text-[11px] text-white/50">RO: {row.color_name_ro || "-"} • HU: {row.color_name_hu || "-"} • HEX: {row.color_hex || "-"}</p>
+                              {row.notes && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">{row.notes}</p>}
+                            </div>
+                          </div>
+                          {taxonomyActionMenu({
+                            menuId: `brand-color-${row.id}`,
+                            openUp: taxonomyMenuOpensUp(index, brandColorCodes.length),
+                            onEdit: () => editBrandColorRow(row),
+                            onDelete: () => setDeleteTarget({ kind: "brandColor", id: String(row.id), name: `${row.brand_name || row.brand_code || "-"} / ${row.color_code}` }),
+                          })}
+                        </div>
+                      ))}
+                      {!brandColorCodes.length && (
+                        <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/60">
+                          Nincs aktív márka színkód. Ha az SQL már lefutott, akkor az aif.js backend még nincs frissen deployolva.
+                        </div>
+                      )}
                     </div>
                   </section>
                 </div>
