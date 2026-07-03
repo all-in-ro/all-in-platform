@@ -3823,6 +3823,127 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  async function readVariantStockRows(client, variantId) {
+    const stock = await client.query(
+      `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
+              l.location_type, s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
+       FROM aif_stock s
+       JOIN aif_locations l ON l.id=s.location_id
+       WHERE s.variant_id=$1
+       ORDER BY l.name ASC`,
+      [variantId]
+    );
+    return stock.rows;
+  }
+
+  router.patch("/variants/:id/stock", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const rowsInput = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!id) return res.status(400).json({ error: "variant id required" });
+    if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletsor." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const variant = await client.query(
+        `SELECT id FROM aif_product_variants
+         WHERE id::text=$1 OR internal_sku=$1 OR barcode=$1
+         FOR UPDATE`,
+        [id]
+      );
+      if (!variant.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "variant not found" });
+      }
+      const variantId = variant.rows[0].id;
+      const actor = actorFrom(req);
+
+      for (const input of rowsInput) {
+        const locationInput = input.locationId || input.location_id || input.locationCode || input.location_code || input.location || input.code;
+        const location = await findByIdOrCode(client, "aif_locations", locationInput);
+        if (!location || location.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Érvénytelen vagy inaktív célhely: ${locationInput || "-"}` });
+        }
+
+        const qty = toInt(input.qty);
+        if (qty === null || qty < 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Érvénytelen készlet mennyiség: ${input.qty ?? ""}` });
+        }
+
+        const current = await client.query(
+          `SELECT qty, reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+          [location.id, variantId]
+        );
+        const beforeQty = current.rowCount ? Number(current.rows[0].qty || 0) : 0;
+        const beforeReserved = current.rowCount ? Number(current.rows[0].reserved_qty || 0) : 0;
+        const reservedInput = input.reservedQty ?? input.reserved_qty;
+        const reservedQty = reservedInput === undefined || reservedInput === null || reservedInput === ""
+          ? beforeReserved
+          : toInt(reservedInput);
+
+        if (reservedQty === null || reservedQty < 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Érvénytelen foglalt mennyiség: ${reservedInput ?? ""}` });
+        }
+        if (reservedQty > qty) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `${location.name}: a foglalt mennyiség nem lehet nagyobb, mint a készlet.` });
+        }
+
+        await client.query(
+          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (location_id, variant_id)
+           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+          [location.id, variantId, qty, reservedQty]
+        );
+
+        const diff = qty - beforeQty;
+        if (diff !== 0 || reservedQty !== beforeReserved) {
+          await client.query(
+            `INSERT INTO aif_stock_movements (
+               movement_type, source_type, source_id, location_id, variant_id,
+               qty_delta, qty_before, qty_after, actor, raw
+             )
+             VALUES ('adjustment','manual_stock_edit',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+            [
+              `manual_stock_edit:${Date.now()}`,
+              location.id,
+              variantId,
+              diff,
+              beforeQty,
+              qty,
+              actor,
+              JSON.stringify({
+                reason: "manual_location_stock_edit",
+                locationCode: location.code,
+                locationName: location.name,
+                qtyBefore: beforeQty,
+                qtyAfter: qty,
+                reservedBefore: beforeReserved,
+                reservedAfter: reservedQty,
+              }),
+            ]
+          );
+        }
+      }
+
+      const freshStock = await readVariantStockRows(client, variantId);
+      await client.query("COMMIT");
+      res.json({ ok: true, stock: freshStock });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF update variant stock failed", e);
+      res.status(500).json({ error: e?.message || "A készlet módosítása nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/variants/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "variant id required" });
@@ -4199,7 +4320,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       where.push(`(v.id::text=$${args.length} OR v.internal_sku=$${args.length} OR v.barcode=$${args.length})`);
     }
     const r = await pool.query(
-      `SELECT l.code AS location_code, l.name AS location_name,
+      `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
               v.id AS variant_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name,
               m.title_ro, s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
        FROM aif_stock s
