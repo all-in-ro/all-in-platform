@@ -50,10 +50,14 @@ const lightPanel = "rounded-xl border border-slate-200 bg-white p-3 text-slate-9
 const lightLabel = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-slate-600 font-normal";
 const lightInput = "h-8 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-emerald-200/70 focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
 const lightSelect = `${lightInput} pr-8`;
-const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-slate-500 font-normal";
-const rowInput = "h-7 w-full rounded-md border border-slate-300 bg-white px-2 text-[11px] text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-emerald-200/70 focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
-const rowRead = "flex h-7 items-center justify-end rounded-md border border-slate-200 bg-slate-100 px-2 text-[11px] text-slate-700 font-normal";
-const rowStatusPill = "inline-flex h-7 items-center justify-center rounded-full border border-slate-200 bg-slate-100 px-2 text-[11px] text-slate-700 font-normal";
+const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-white/68 font-normal";
+const rowInput = "h-7 w-full rounded-md border border-white/18 bg-[#253146] px-2 text-[11px] text-white caret-white outline-none transition placeholder:text-white/40 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/25 disabled:bg-[#3a4556] disabled:text-white/55 font-normal";
+const rowRead = "flex h-7 items-center justify-end rounded-md border border-white/14 bg-[#253146] px-2 text-[11px] text-white/86 font-normal";
+const rowStatusPill = "inline-flex h-7 min-w-[104px] items-center justify-center rounded-full border border-white/16 bg-white/[0.08] px-2 text-[11px] text-white/82 font-normal";
+const rowActionBtn = "inline-flex h-8 w-[112px] items-center justify-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const rowPrimaryBtn = `${rowActionBtn} border-emerald-300/28 bg-[#276454] text-white hover:bg-[#2d735f]`;
+const rowNeutralBtn = `${rowActionBtn} border-white/18 bg-[#3a4556] text-white hover:bg-[#445267]`;
+const rowDangerBtn = `${rowActionBtn} border-rose-300/26 bg-[#b9182a] text-white hover:bg-[#971423]`;
 
 function n(v: unknown): number {
   const x = Number(String(v ?? "").replace(",", "."));
@@ -1317,19 +1321,19 @@ export default function AllInReceptions(_props: Props) {
                     const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
                     const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
                     const rowClass = r.status === "committed"
-                      ? "border-emerald-200 bg-emerald-50"
+                      ? "border-emerald-300/35 bg-[#303b4e]"
                       : r.status === "ignored"
-                        ? "border-slate-200 bg-slate-100 opacity-70"
+                        ? "border-white/10 bg-[#3a4352] opacity-70"
                         : r.status === "error" || (r.error_messages || []).length
-                          ? "border-red-300 bg-red-50"
+                          ? "border-rose-300/45 bg-[#4b2f3c]"
                           : checked
-                            ? "border-emerald-300 bg-emerald-50"
-                            : "border-slate-200 bg-white";
+                            ? "border-emerald-300/45 bg-[#2f4053]"
+                            : "border-white/14 bg-[#303b4e]";
                     return (
-                      <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm shadow-slate-200/80 ${rowClass}`}>
-                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
+                      <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm shadow-slate-950/20 ${rowClass}`}>
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-white/12 pb-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <label className="inline-flex items-center gap-2 text-[11px] text-slate-600">
+                            <label className="inline-flex items-center gap-2 text-[11px] text-white/72">
                               <input
                                 type="checkbox"
                                 className="h-4 w-4 accent-emerald-500"
@@ -1339,17 +1343,17 @@ export default function AllInReceptions(_props: Props) {
                               />
                               Kijelölés
                             </label>
-                            <span className="inline-flex h-7 items-center rounded-lg border border-slate-200 bg-slate-100 px-2 text-[11px] text-slate-600">Nr. {r.row_no}</span>
+                            <span className="inline-flex h-7 items-center rounded-lg border border-white/14 bg-white/[0.08] px-2 text-[11px] text-white/72">Nr. {r.row_no}</span>
                             <span className={rowStatusPill}>{statusText(r.status)}</span>
                           </div>
                           <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
-                            <button className={primaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button">
+                            <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button">
                               <Save size={13} /> {savingRowId === r.id ? "Mentés..." : "Sor mentése"}
                             </button>
-                            <button className={tinyBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button">
+                            <button className={rowNeutralBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button">
                               <MoveRight size={13} /> Áthelyezés
                             </button>
-                            <button className={tinyDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button">
+                            <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button">
                               Kihagy
                             </button>
                           </div>
