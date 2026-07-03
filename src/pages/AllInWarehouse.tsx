@@ -342,7 +342,7 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "brand", label: "Márka", hint: "A terméknév felett vagy alatt jelenik meg." },
   { key: "title", label: "Terméknév", hint: "A fő terméknév, lehet 1-2 sor." },
   { key: "barcode", label: "Vonalkód", hint: "Code128 belső AllIn / Shopify SKU azonosító." },
-  { key: "description", label: "Leírás / összetétel", hint: "Román termékleírás, ha van; különben anyag/összetétel." },
+  { key: "description", label: "Anyag / összetétel", hint: "Csak az anyagösszetétel kerül a címkére. Ha nincs megadva, üres marad." },
   { key: "category", label: "Kategória", hint: "Póló, pantaloni, pantofi, stb." },
   { key: "sizeColor", label: "Méret / szín", hint: "A variáns gyors azonosításához." },
   { key: "code", label: "Termékkód", hint: "Beszállítói / belső cikkszám." },
@@ -1398,7 +1398,7 @@ export default function AllInWarehouse() {
         category: detailItem.category_name_ro || item.category_name_ro || detailItem.category_name_hu || item.category_name_hu || "-",
         size: detailItem.size || item.size || "-",
         color,
-        description: detailItem.description_ro || item.description_ro || detailItem.material || item.material || detailItem.product_type || item.product_type || "",
+        description: detailItem.material || item.material || "",
         productCode: labelProductCodeForItem(item),
         price,
         stockQty: Math.floor(n(item.total_qty)),
@@ -2457,7 +2457,7 @@ export default function AllInWarehouse() {
 
             <div className="space-y-4 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A címke a román kategóriát és a termék román leírását használja, ha ezek elérhetők.
+                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A címke a román kategóriát és az anyagösszetételt használja. Ha nincs anyagösszetétel, az a rész üres marad.
               </div>
 
               <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
