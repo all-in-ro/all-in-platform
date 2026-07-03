@@ -72,6 +72,7 @@ type EditableImportField =
   | "qty"
   | "buyPrice";
 
+
 type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
 type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifGenderOption = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
