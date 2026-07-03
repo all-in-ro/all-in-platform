@@ -944,6 +944,10 @@ export default function AllInWarehouse() {
   const maxBrandValue = Math.max(1, ...brandChart.map((x) => x.value));
   const maxLocationQty = Math.max(1, ...locationChart.map((x) => x.qty));
 
+  function taxonomyMenuOpensUp(index: number, total: number) {
+    if (total <= 3) return false;
+    return index >= Math.max(2, total - 2);
+  }
 
   function taxonomyActionMenu(args: {
     menuId: string;
@@ -963,7 +967,7 @@ export default function AllInWarehouse() {
           <MoreVertical size={15} />
         </button>
         {isOpen && (
-          <div className={`absolute right-0 z-30 w-40 rounded-xl border border-white/18 bg-[#2f394a] p-1.5 shadow-2xl ${args.openUp ? "bottom-full mb-2" : "top-full mt-2"}`}>
+          <div className={`absolute right-0 z-50 w-40 rounded-xl border border-white/18 bg-[#2f394a] p-1.5 shadow-2xl ${args.openUp ? "bottom-full mb-2" : "top-full mt-2"}`}>
             <button
               className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-white/90 hover:bg-white/10"
               onClick={() => {
@@ -1280,7 +1284,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `category-${c.id}`,
-                            openUp: index >= Math.max(0, categories.length - 5),
+                            openUp: taxonomyMenuOpensUp(index, categories.length),
                             onEdit: () => editCategoryRow(c),
                             onDelete: () => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) }),
                           })}
@@ -1335,7 +1339,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `gender-${g.code}`,
-                            openUp: index >= Math.max(0, genderTypes.length - 5),
+                            openUp: taxonomyMenuOpensUp(index, genderTypes.length),
                             onEdit: () => editGenderRow(g),
                             onDelete: () => setDeleteTarget({ kind: "gender", id: String(g.code), name: g.name }),
                           })}
@@ -1398,7 +1402,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `color-${c.id}`,
-                            openUp: index >= Math.max(0, colorTypes.length - 5),
+                            openUp: taxonomyMenuOpensUp(index, colorTypes.length),
                             onEdit: () => editColorRow(c),
                             onDelete: () => setDeleteTarget({ kind: "color", id: String(c.id), name: c.name_ro }),
                           })}
@@ -1456,7 +1460,7 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `material-${m.id}`,
-                            openUp: index >= Math.max(0, materialTypes.length - 5),
+                            openUp: taxonomyMenuOpensUp(index, materialTypes.length),
                             onEdit: () => editMaterialRow(m),
                             onDelete: () => setDeleteTarget({ kind: "material", id: String(m.id), name: m.name_hu || m.name_ro }),
                           })}
