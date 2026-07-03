@@ -49,9 +49,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   function canonicalGender(v) {
     const code = normCode(v || "unisex") || "unisex";
     const map = {
-      men: "men", man: "men", male: "men", masculin: "men", barbati: "men", barbat: "men", ferfi: "men", ffi: "men",
-      women: "women", woman: "women", female: "women", feminin: "women", femei: "women", dama: "women", dame: "women", noi: "women", no: "women",
-      kids: "kids", kid: "kids", copii: "kids", copil: "kids", gyerek: "kids", junior: "kids", copii_tineri: "kids",
+      men: "men", man: "men", male: "men", masculin: "men", barbati: "men", barbat: "men", bărbat: "men", ferfi: "men", ffi: "men", herren: "men", homme: "men", uomo: "men",
+      women: "women", woman: "women", female: "women", feminin: "women", femei: "women", femeie: "women", dama: "women", damă: "women", dame: "women", noi: "women", no: "women", ladies: "women", lady: "women", damen: "women", femme: "women",
+      kids: "kids", kid: "kids", copii: "kids", copil: "kids", gyerek: "kids", junior: "kids", youth: "kids", child: "kids", children: "kids", copii_tineri: "kids",
       unisex: "unisex", universal: "unisex", mixt: "unisex", mixed: "unisex"
     };
     return map[code] || (['men', 'women', 'kids', 'unisex'].includes(code) ? code : 'unisex');
@@ -83,10 +83,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
       titleHu: emptyToNull(src.titleHu || src.title_hu),
       descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
-      gender: canonicalGender(src.gender || "unisex"),
+      genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name),
+      gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || "unisex"),
       productType: emptyToNull(src.productType || src.product_type),
       season: emptyToNull(src.season),
-      material: emptyToNull(src.material),
+      material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric),
       colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode),
       colorName: emptyToNull(src.colorName || src.color_name),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
@@ -178,7 +179,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   async function upsertModel(client, { supplierCode, normalized }) {
-    const safeNormalized = { ...normalized, gender: canonicalGender(normalized.gender) };
+    const safeNormalized = { ...normalized, gender: normalized.gender ? normCode(normalized.gender) : "unisex" };
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
@@ -507,6 +508,84 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function categoryAliasesFromInput(value) {
     return splitAliasesFromInput(value);
+  }
+
+  function genderAliasesFromInput(value) {
+    return splitAliasesFromInput(value);
+  }
+
+  function materialAliasesFromInput(value) {
+    return splitAliasesFromInput(value);
+  }
+
+  async function normalizeGenderCode(client, value) {
+    const raw = emptyToNull(value);
+    if (!raw) return "unisex";
+    const rawKey = normCode(raw);
+    try {
+      const r = await client.query(
+        `SELECT code, name, aliases
+         FROM aif_gender_types
+         WHERE is_active=true
+         ORDER BY sort_order ASC, name ASC`
+      );
+      const found = r.rows.find((g) => {
+        const aliases = Array.isArray(g.aliases) ? g.aliases : [];
+        return [g.code, g.name, ...aliases].filter(Boolean).some((x) => normCode(x) === rawKey);
+      });
+      if (found?.code) return found.code;
+    } catch (e) {
+      if (e?.code !== "42P01" && e?.code !== "42703") console.error("AIF gender normalize warning", e);
+    }
+    return canonicalGender(raw);
+  }
+
+  function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  async function normalizeMaterialText(client, value) {
+    const raw = emptyToNull(value);
+    if (!raw) return null;
+    try {
+      const r = await client.query(
+        `SELECT code, name_ro, name_hu, name_en, name_de, aliases
+         FROM aif_material_types
+         WHERE is_active=true
+         ORDER BY sort_order ASC, length(name_ro) DESC`
+      );
+      let out = raw
+        .replace(/\bBODY\s+FABRIC\b\s*:?/gi, "Material exterior:")
+        .replace(/\bMAIN\s+FABRIC\b\s*:?/gi, "Material principal:")
+        .replace(/\bADDITIONAL\s+FABRIC\b\s*:?/gi, "Material suplimentar:")
+        .replace(/\bLINING\b\s*:?/gi, "Căptușeală:")
+        .replace(/\bSHELL\b\s*:?/gi, "Exterior:");
+      const replacements = [];
+      for (const item of r.rows) {
+        const aliases = Array.isArray(item.aliases) ? item.aliases : [];
+        for (const v of [item.code, item.name_ro, item.name_hu, item.name_en, item.name_de, ...aliases]) {
+          const candidate = text(v);
+          if (!candidate || normCode(candidate) === normCode(item.name_ro)) continue;
+          replacements.push({ from: candidate, to: item.name_ro });
+        }
+      }
+      replacements.sort((a, b) => b.from.length - a.from.length);
+      for (const rep of replacements) {
+        const pattern = escapeRegex(rep.from).replace(/\\s+/g, "\\s+");
+        out = out.replace(new RegExp(`\\b${pattern}\\b`, "gi"), rep.to);
+      }
+      return out;
+    } catch (e) {
+      if (e?.code !== "42P01" && e?.code !== "42703") console.error("AIF material normalize warning", e);
+      return raw;
+    }
+  }
+
+  async function enrichNormalizedRow(client, nr) {
+    if (nr?.normalized?.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+    if (nr?.normalized) nr.normalized.gender = await normalizeGenderCode(client, nr.normalized.genderRaw || nr.normalized.gender);
+    if (nr?.normalized?.material) nr.normalized.material = await normalizeMaterialText(client, nr.normalized.material);
+    return nr;
   }
 
   async function normalizeColorName(client, value) {
@@ -1569,6 +1648,146 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  async function materialUsage(client, materialIdOrCode) {
+    const m = await client.query(
+      `SELECT id, code, name_ro FROM aif_material_types WHERE id::text=$1 OR code=$1 LIMIT 1`,
+      [text(materialIdOrCode)]
+    );
+    if (!m.rowCount) return { product_models: 0 };
+    const r = await client.query(
+      `SELECT count(*)::int AS product_models
+       FROM aif_product_models
+       WHERE material ILIKE $1`,
+      [`%${m.rows[0].name_ro}%`]
+    );
+    return r.rows[0] || { product_models: 0 };
+  }
+
+  router.get("/material-types", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active, created_at, updated_at
+       FROM aif_material_types
+       ${includeInactive ? "" : "WHERE is_active=true"}
+       ORDER BY is_active DESC, sort_order ASC, name_ro ASC`
+    );
+    res.json({ items: r.rows });
+  });
+
+  router.post("/material-types/normalize", requireAuthed, async (req, res) => {
+    const input = text(req.body?.material || req.body?.name || req.body?.value);
+    if (!input) return res.status(400).json({ error: "material required" });
+    try {
+      const material = await normalizeMaterialText(pool, input);
+      res.json({ input, material });
+    } catch (e) {
+      console.error("AIF normalize material failed", e);
+      res.status(500).json({ error: "failed to normalize material" });
+    }
+  });
+
+  router.post("/material-types", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const nameRo = text(body.nameRo || body.name_ro || body.name || body.nameRoOfficial);
+    const code = normCode(body.code || nameRo);
+    const aliases = materialAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!nameRo) return res.status(400).json({ error: "material Romanian name required" });
+    if (!code) return res.status(400).json({ error: "material code required" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO aif_material_types (code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6::text[],$7,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name_ro=EXCLUDED.name_ro,
+           name_hu=EXCLUDED.name_hu,
+           name_en=EXCLUDED.name_en,
+           name_de=EXCLUDED.name_de,
+           aliases=EXCLUDED.aliases,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active, created_at, updated_at`,
+        [code, nameRo, emptyToNull(body.nameHu || body.name_hu), emptyToNull(body.nameEn || body.name_en), emptyToNull(body.nameDe || body.name_de), aliases, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create material type failed", e);
+      res.status(500).json({ error: "failed to save material" });
+    }
+  });
+
+  router.patch("/material-types/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.nameRo !== undefined || body.name_ro !== undefined || body.name !== undefined) {
+      const nameRo = text(body.nameRo ?? body.name_ro ?? body.name);
+      if (!nameRo) return res.status(400).json({ error: "material Romanian name required" });
+      sets.push(`name_ro=$${i++}`);
+      args.push(nameRo);
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "material code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.nameHu !== undefined || body.name_hu !== undefined) { sets.push(`name_hu=$${i++}`); args.push(emptyToNull(body.nameHu ?? body.name_hu)); }
+    if (body.nameEn !== undefined || body.name_en !== undefined) { sets.push(`name_en=$${i++}`); args.push(emptyToNull(body.nameEn ?? body.name_en)); }
+    if (body.nameDe !== undefined || body.name_de !== undefined) { sets.push(`name_de=$${i++}`); args.push(emptyToNull(body.nameDe ?? body.name_de)); }
+    if (body.aliases !== undefined || body.aliasList !== undefined || body.alias_list !== undefined) { sets.push(`aliases=$${i++}::text[]`); args.push(materialAliasesFromInput(body.aliases ?? body.aliasList ?? body.alias_list)); }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) { sets.push(`sort_order=$${i++}`); args.push(toInt(body.sortOrder ?? body.sort_order) || 100); }
+    if (body.is_active !== undefined || body.isActive !== undefined) { sets.push(`is_active=$${i++}`); args.push(Boolean(body.is_active ?? body.isActive)); }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+    try {
+      const r = await pool.query(
+        `UPDATE aif_material_types
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "material not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update material type failed", e);
+      res.status(500).json({ error: "failed to update material" });
+    }
+  });
+
+  router.delete("/material-types/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const material = await client.query(`SELECT id, code, name_ro FROM aif_material_types WHERE id::text=$1 OR code=$1 FOR UPDATE`, [id]);
+      if (!material.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "material not found" });
+      }
+      const usage = await materialUsage(client, material.rows[0].id);
+      if (Number(usage.product_models || 0) > 0) {
+        await client.query(`UPDATE aif_material_types SET is_active=false, updated_at=now() WHERE id=$1`, [material.rows[0].id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_material_types WHERE id=$1`, [material.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete material type failed", e);
+      res.status(500).json({ error: "failed to delete material" });
+    } finally {
+      client.release();
+    }
+  });
+
+
   router.get("/brands", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
     res.json({ items: r.rows });
@@ -1710,7 +1929,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/gender-types", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const r = await pool.query(
-      `SELECT code, name, sort_order, is_active, created_at, updated_at
+      `SELECT code, name, aliases, sort_order, is_active, created_at, updated_at
        FROM aif_gender_types
        ${includeInactive ? "" : "WHERE is_active=true"}
        ORDER BY is_active DESC, sort_order ASC, name ASC`
@@ -1718,24 +1937,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
-  router.post("/gender-types", requireAdminOrSecret, async (req, res) => {
+  router.post("/gender-types", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const name = text(body.name);
     const code = normCode(body.code || name);
     const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    const aliases = genderAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
     if (!name) return res.status(400).json({ error: "gender name required" });
     if (!code) return res.status(400).json({ error: "gender code required" });
     try {
       const r = await pool.query(
-        `INSERT INTO aif_gender_types (code, name, sort_order, is_active)
-         VALUES ($1,$2,$3,true)
+        `INSERT INTO aif_gender_types (code, name, aliases, sort_order, is_active)
+         VALUES ($1,$2,$3::text[],$4,true)
          ON CONFLICT (code) DO UPDATE SET
            name=EXCLUDED.name,
+           aliases=EXCLUDED.aliases,
            sort_order=EXCLUDED.sort_order,
            is_active=true,
            updated_at=now()
-         RETURNING code, name, sort_order, is_active, created_at, updated_at`,
-        [code, name, sortOrder]
+         RETURNING code, name, aliases, sort_order, is_active, created_at, updated_at`,
+        [code, name, aliases, sortOrder]
       );
       res.json({ item: r.rows[0] });
     } catch (e) {
@@ -1744,7 +1965,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.patch("/gender-types/:code", requireAdminOrSecret, async (req, res) => {
+  router.patch("/gender-types/:code", requireAuthed, async (req, res) => {
     const codeParam = normCode(req.params.code);
     const body = req.body || {};
     const sets = [];
@@ -1756,6 +1977,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!name) return res.status(400).json({ error: "gender name required" });
       sets.push(`name=$${i++}`);
       args.push(name);
+    }
+    if (body.aliases !== undefined || body.aliasList !== undefined || body.alias_list !== undefined) {
+      sets.push(`aliases=$${i++}::text[]`);
+      args.push(genderAliasesFromInput(body.aliases ?? body.aliasList ?? body.alias_list));
     }
     if (body.sortOrder !== undefined || body.sort_order !== undefined) {
       sets.push(`sort_order=$${i++}`);
@@ -1774,7 +1999,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_gender_types
          SET ${sets.join(", ")}, updated_at=now()
          WHERE code=$${i}
-         RETURNING code, name, sort_order, is_active, created_at, updated_at`,
+         RETURNING code, name, aliases, sort_order, is_active, created_at, updated_at`,
         args
       );
       if (!r.rowCount) return res.status(404).json({ error: "gender not found" });
@@ -1785,7 +2010,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.delete("/gender-types/:code", requireAdminOrSecret, async (req, res) => {
+  router.delete("/gender-types/:code", requireAuthed, async (req, res) => {
     const codeParam = normCode(req.params.code);
     const client = await pool.connect();
     try {
@@ -2084,16 +2309,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, supplierBrands, profiles] = await Promise.all([
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, materialTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
-      pool.query(`SELECT code, name, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
+      pool.query(`SELECT code, name, aliases, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT code, name, symbol, sort_order, is_active FROM aif_currencies WHERE is_active=true ORDER BY sort_order ASC, code ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
                   FROM aif_color_types
+                  WHERE is_active=true
+                  ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active
+                  FROM aif_material_types
                   WHERE is_active=true
                   ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT sb.id, sb.supplier_id, sb.brand_id, sb.is_preferred, sb.is_active,
@@ -2118,6 +2347,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locationTypes: locationTypes.rows,
       currencies: currencies.rows,
       colorTypes: colorTypes.rows,
+      materialTypes: materialTypes.rows,
       supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
     });
@@ -2304,7 +2534,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let rowNo = 1;
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
-        if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+        await enrichNormalizedRow(client, nr);
         if (nr.errors.length) {
           return res.status(400).json({
             error: `A(z) ${nr.rowNo}. terméksor hiányos vagy hibás: ${nr.errors.join(" ")}`,
@@ -2590,7 +2820,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       let rowNo = 1;
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
-        if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+        await enrichNormalizedRow(client, nr);
         if (nr.errors.length) errorCount++;
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
@@ -2942,7 +3172,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
-      if (nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
+      await enrichNormalizedRow(client, nr);
       if (isCommitted) {
         nr.status = "committed";
         nr.errors = [];
