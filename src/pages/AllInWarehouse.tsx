@@ -190,7 +190,7 @@ function missingLabels(it: InventoryItem) {
   return out;
 }
 
-function MissingDataIndicator({ item }: { item: InventoryItem }) {
+function MissingDataIndicator({ item, openUp = false }: { item: InventoryItem; openUp?: boolean }) {
   const labels = missingLabels(item);
   if (!labels.length) {
     return (
@@ -203,6 +203,7 @@ function MissingDataIndicator({ item }: { item: InventoryItem }) {
       </span>
     );
   }
+  const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
   return (
     <span
       className="group relative inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-200/55 bg-amber-300 text-[14px] leading-none text-slate-900 shadow-[0_0_14px_rgba(251,191,36,0.34)]"
@@ -210,7 +211,7 @@ function MissingDataIndicator({ item }: { item: InventoryItem }) {
       aria-label={`Hiányzó adatok: ${labels.join(", ")}`}
     >
       !
-      <span className="pointer-events-none absolute right-0 top-full z-40 mt-2 hidden w-56 rounded-xl border border-amber-200/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus:block">
+      <span className={`pointer-events-none absolute right-0 z-40 hidden w-56 rounded-xl border border-amber-200/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus:block ${tooltipPosition}`}>
         <span className="block text-amber-100">Hiányzó adatok</span>
         <span className="mt-1 block text-white/78">{labels.join(", ")}</span>
       </span>
@@ -1192,7 +1193,7 @@ export default function AllInWarehouse() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/12">
-                    {filtered.map((it) => (
+                    {filtered.map((it, index) => (
                       <tr key={it.variant_id} className="odd:bg-[#526071] even:bg-[#4c5869] hover:bg-[#617084]">
                         <td className="px-3 py-2.5">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
                         <td className="px-3 py-2.5"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
@@ -1205,7 +1206,7 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5 text-right">{n(it.available_qty)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
-                        <td className="px-3 py-2.5"><MissingDataIndicator item={it} /></td>
+                        <td className="px-3 py-2.5"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></td>
                         <td className="px-3 py-2.5 text-right"><button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button></td>
                       </tr>
                     ))}
