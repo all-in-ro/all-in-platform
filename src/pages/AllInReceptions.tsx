@@ -410,6 +410,244 @@ function openOfficialReceptionPdf(detail: AifReceptionDetail, drafts: Record<str
   window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+function normPdfKey(v: unknown) {
+  return String(v ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function categoryPdfLabel(value: unknown, categories?: any[]) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const key = normPdfKey(raw);
+  const found = (categories || []).find((c) => {
+    const aliases = Array.isArray(c.aliases) ? c.aliases : [];
+    return [c.id, c.code, c.name_ro, c.name_hu, c.name, ...aliases]
+      .filter(Boolean)
+      .some((x) => normPdfKey(x) === key);
+  });
+  return found ? String(found.name_hu || found.name_ro || found.name || found.code || raw) : raw;
+}
+
+function genderPdfLabel(value: unknown, genderTypes?: any[]) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const key = normPdfKey(raw);
+  const found = (genderTypes || []).find((g) => {
+    const aliases = Array.isArray(g.aliases) ? g.aliases : [];
+    return [g.code, g.name, ...aliases]
+      .filter(Boolean)
+      .some((x) => normPdfKey(x) === key);
+  });
+  return found ? String(found.name || raw) : raw;
+}
+
+function checkRowData(row: any, draft: any, categories?: any[], genderTypes?: any[]) {
+  const rawCategory = draft.categoryName || draft.categoryCode || row?.normalized?.categoryName || row?.normalized?.categoryCode;
+  const rawGender = draft.gender || row?.normalized?.gender;
+  return {
+    code: rowSku(row, draft),
+    title: cell(draft.titleRo || draft.productName || row?.normalized?.titleRo || row?.supplier_product_code),
+    brand: cell(draft.brandName || draft.brandCode || row?.normalized?.brandName || row?.normalized?.brandCode),
+    category: categoryPdfLabel(rawCategory, categories),
+    gender: genderPdfLabel(rawGender, genderTypes),
+    color: cell(draft.colorName || row?.normalized?.colorName),
+    colorCode: cell(row?.supplier_color_code || draft.colorCode || row?.normalized?.colorCode),
+    size: cell(row?.supplier_size || draft.size || row?.normalized?.size),
+    qty: n(draft.qty ?? row?.qty ?? row?.normalized?.qty),
+    status: statusText(row?.status),
+  };
+}
+
+function buildReceptionVerificationHtml(
+  detail: AifReceptionDetail,
+  drafts: Record<string, Record<string, unknown>> = {},
+  categories?: any[],
+  genderTypes?: any[]
+) {
+  const item: any = detail.item || {};
+  const rows = (detail.rows || []).filter((row: any) => row.status !== "ignored");
+  const title = `Fisa verificare marfa ${item.invoice_number || item.id || ""}`;
+  const today = new Date().toLocaleDateString("ro-RO");
+  const lines = rows.map((row: any, index: number) => {
+    const draft = rowDraft(row, drafts);
+    const x = checkRowData(row, draft, categories, genderTypes);
+    return `
+      <tr>
+        <td class="num">${index + 1}</td>
+        <td>${pdfEscape(x.code)}</td>
+        <td>${pdfEscape(x.title)}</td>
+        <td>${pdfEscape(x.brand)}</td>
+        <td>${pdfEscape(x.category)}</td>
+        <td>${pdfEscape(x.gender)}</td>
+        <td>${pdfEscape(x.color)}</td>
+        <td>${pdfEscape(x.colorCode)}</td>
+        <td>${pdfEscape(x.size)}</td>
+        <td class="num">${pdfNumber(x.qty, 0)}</td>
+        <td class="write"></td>
+        <td class="check"></td>
+        <td class="write"></td>
+        <td class="write wide"></td>
+      </tr>`;
+  }).join("");
+  const totalQty = rows.reduce((sum: number, row: any) => {
+    const draft = rowDraft(row, drafts);
+    return sum + n(draft.qty ?? row.qty ?? row.normalized?.qty);
+  }, 0);
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${pdfEscape(title)}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #111827; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 9px; }
+    .doc { width: 100%; }
+    .header { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; border-bottom: 2px solid #111827; padding-bottom: 7px; margin-bottom: 8px; }
+    .company { font-size: 9px; line-height: 1.42; }
+    .company-name { font-size: 14px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 2px; }
+    .title { text-align: right; }
+    .title h1 { margin: 0 0 5px; font-size: 20px; letter-spacing: .05em; text-transform: uppercase; }
+    .title .sub { font-size: 10px; border: 1px solid #111827; display: inline-block; padding: 3px 8px; margin-top: 3px; }
+    .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 8px; }
+    .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 4px 5px; min-height: 30px; }
+    .box .label { color: #6b7280; text-transform: uppercase; font-size: 7px; letter-spacing: .05em; margin-bottom: 2px; }
+    .box .value { font-size: 9px; }
+    .note { border: 1px solid #f59e0b; background: #fffbeb; padding: 5px 7px; margin: 7px 0 8px; line-height: 1.35; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    thead { display: table-header-group; }
+    th { background: #111827; color: #fff; font-weight: 400; text-transform: uppercase; font-size: 7px; letter-spacing: .02em; padding: 4px 3px; border: 1px solid #111827; }
+    td { padding: 3px; border: 1px solid #d1d5db; vertical-align: top; font-size: 8px; line-height: 1.18; overflow-wrap: anywhere; min-height: 18px; }
+    tbody tr:nth-child(even) td { background: #f9fafb; }
+    .num { text-align: right; white-space: nowrap; }
+    .write { min-height: 20px; background: #fff; }
+    .wide { min-width: 56px; }
+    .check::before { content: ''; display: block; width: 12px; height: 12px; border: 1.5px solid #111827; margin: 0 auto; }
+    .totals td { border-top: 2px solid #111827; background: #f3f4f6; font-size: 9px; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-top: 16px; font-size: 9px; }
+    .sig { padding-top: 20px; border-top: 1px solid #111827; }
+    .footer { margin-top: 8px; color: #6b7280; font-size: 7px; display: flex; justify-content: space-between; }
+    .screen-actions { margin: 0 0 8px; display: flex; gap: 8px; }
+    .screen-actions button { border: 1px solid #111827; background: #111827; color: #fff; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    @media print { .screen-actions { display: none; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+  <div class="screen-actions">
+    <button onclick="window.print()">Tiparire / Salvare PDF</button>
+    <button onclick="window.close()">Inchide</button>
+  </div>
+  <div class="doc">
+    <div class="header">
+      <div class="company">
+        <div class="company-name">SC TITAN EURO-COM SRL</div>
+        <div>Cod Fiscal: RO17495362</div>
+        <div>Nr. Reg. Com.: J19/420/2005</div>
+        <div>Miercurea Ciuc, Jud. Harghita, Str. Mihail Sadoveanu 33/c/17</div>
+      </div>
+      <div class="title">
+        <h1>Fisa verificare marfa</h1>
+        <div>Data: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
+        <div class="sub">Document fara preturi</div>
+      </div>
+    </div>
+    <div class="meta">
+      <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
+      <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
+      <div class="box"><div class="label">Total factura</div><div class="value">${pdfNumber(totalQty, 0)} buc.</div></div>
+    </div>
+    <div class="note">Lista pentru verificarea fizica a marfii primite. Nu contine preturi. Completeaza cantitatea receptionata, bifeaza OK sau noteaza problema si observatiile.</div>
+    <table>
+      <colgroup>
+        <col style="width: 3%" />
+        <col style="width: 8%" />
+        <col style="width: 19%" />
+        <col style="width: 9%" />
+        <col style="width: 9%" />
+        <col style="width: 7%" />
+        <col style="width: 8%" />
+        <col style="width: 7%" />
+        <col style="width: 6%" />
+        <col style="width: 6%" />
+        <col style="width: 7%" />
+        <col style="width: 4%" />
+        <col style="width: 8%" />
+        <col style="width: 9%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Nr.</th>
+          <th>Cod produs</th>
+          <th>Denumire produs</th>
+          <th>Brand</th>
+          <th>Categorie</th>
+          <th>Gen</th>
+          <th>Culoare</th>
+          <th>Cod culoare</th>
+          <th>Marime</th>
+          <th>Cant. factura</th>
+          <th>Cant. receptionata</th>
+          <th>OK</th>
+          <th>Lipsa / problema</th>
+          <th>Observatii</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lines || `<tr><td colspan="14" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
+      </tbody>
+      <tfoot>
+        <tr class="totals"><td colspan="9">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="4"></td></tr>
+      </tfoot>
+    </table>
+    <div class="signatures">
+      <div class="sig">Verificat de</div>
+      <div class="sig">Semnatura</div>
+      <div class="sig">Data</div>
+    </div>
+    <div class="footer">
+      <span>SC TITAN EURO-COM SRL - fisa verificare marfa</span>
+      <span>Generat: ${pdfEscape(today)}</span>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function openReceptionVerificationPdf(
+  detail: AifReceptionDetail,
+  drafts: Record<string, Record<string, unknown>> = {},
+  categories?: any[],
+  genderTypes?: any[]
+) {
+  const fileName = `verificare_marfa_${fileSafe((detail.item as any)?.invoice_number || (detail.item as any)?.id)}.pdf`;
+  const html = buildReceptionVerificationHtml(detail, drafts, categories, genderTypes).replace(
+    "</head>",
+    `<script>
+      document.title=${JSON.stringify(fileName)};
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          try { window.focus(); window.print(); } catch (e) {}
+        }, 450);
+      });
+    </script></head>`
+  );
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank", "width=1200,height=850,scrollbars=yes,resizable=yes");
+  if (!w) {
+    URL.revokeObjectURL(url);
+    throw new Error("Browserul a blocat fereastra PDF. Permite ferestre pop-up pentru aceasta pagina.");
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 
 export default function AllInReceptions(_props: Props) {
   const [meta, setMeta] = useState<AifMeta | null>(null);
@@ -514,6 +752,22 @@ export default function AllInReceptions(_props: Props) {
       openOfficialReceptionPdf(data, drafts);
     } catch (e: any) {
       setMessage(e?.message || "A PDF export nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+
+  async function exportReceptionVerificationPdf(id: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = detail?.item?.id === id ? detail : await apiAifGetReception(id);
+      if (!data) throw new Error("A receptió nem tölthető be ellenőrző PDF exporthoz.");
+      const drafts = detail?.item?.id === id ? rowDrafts : buildDrafts(data.rows || []);
+      openReceptionVerificationPdf(data, drafts, (meta?.categories || []) as any[], (meta?.genderTypes || []) as any[]);
+    } catch (e: any) {
+      setMessage(e?.message || "Az ellenőrző PDF export nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -868,6 +1122,7 @@ export default function AllInReceptions(_props: Props) {
                       <td className="px-2 py-1.5">
                         <div className="flex justify-end gap-1.5">
                           <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
+                          <button className={tinyBtn} onClick={() => exportReceptionVerificationPdf(r.id)} disabled={busy} type="button"><CheckCircle size={13} /> Ellenőrző</button>
                           <button className={tinyBtn} onClick={() => exportReceptionPdf(r.id)} disabled={busy} type="button"><FileText size={13} /> PDF</button>
                           <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> CSV</button>
                           <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
@@ -897,6 +1152,7 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
+                    <button className={tinyBtn} onClick={() => exportReceptionVerificationPdf(r.id)} disabled={busy} type="button"><CheckCircle size={13} /> Ellenőrző</button>
                     <button className={tinyBtn} onClick={() => exportReceptionPdf(r.id)} disabled={busy} type="button"><FileText size={13} /> PDF</button>
                           <button className={tinyBtn} onClick={() => exportCsv(r.id)} type="button"><Download size={13} /> CSV</button>
                     <button className={tinyDangerBtn} onClick={() => setDeleteTarget(r)} disabled={busy || !r.can_delete} type="button"><Trash2 size={13} /> Törlés</button>
@@ -918,6 +1174,7 @@ export default function AllInReceptions(_props: Props) {
                 <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
               </div>
               <div className="flex gap-2">
+                <button className={neutralBtn} onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button"><CheckCircle size={15} /> Ellenőrző PDF</button>
                 <button className={neutralBtn} onClick={() => exportReceptionPdf(detail.item.id)} disabled={busy} type="button"><FileText size={15} /> PDF</button>
                 <button className={neutralBtn} onClick={() => exportCsv(detail.item.id)} type="button"><Download size={15} /> CSV</button>
                 <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
