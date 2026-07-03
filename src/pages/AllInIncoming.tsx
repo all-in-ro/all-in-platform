@@ -72,7 +72,6 @@ type EditableImportField =
   | "qty"
   | "buyPrice";
 
-
 type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
 type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifGenderOption = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
@@ -1118,6 +1117,17 @@ export default function AllInIncoming(_props: Props) {
     });
   }
 
+  function receptionHasImportHistory(item: AifReceptionSummary) {
+    const x: any = item || {};
+    return (
+      Number(x.import_batches || 0) > 0 ||
+      Number(x.import_rows || 0) > 0 ||
+      Number(x.committed_rows || 0) > 0 ||
+      Number(x.remaining_rows || 0) > 0 ||
+      Number(x.error_rows || 0) > 0
+    );
+  }
+
   async function loadBatches() {
     const data = await apiAifListImportBatches(25);
     setBatches(data.items || []);
@@ -1125,7 +1135,14 @@ export default function AllInIncoming(_props: Props) {
 
   async function loadReceptions() {
     const data = await apiAifListReceptions({ limit: 25 });
-    setReceptions(data.items || []);
+    const next = (data.items || []).filter(receptionHasImportHistory);
+    setReceptions(next);
+
+    setReceptionPickerId((current) =>
+      current && !next.some((r) => String(r.id) === String(current)) ? "" : current
+    );
+
+    return next;
   }
 
   async function reloadAll() {
@@ -1271,25 +1288,34 @@ export default function AllInIncoming(_props: Props) {
       const result = await apiAifDeleteImportBatchHistory(target.id);
       setDeleteImportBatchTarget(null);
 
-      if (result.deletedReception && target.reception_id && String(selectedReceptionId) === String(target.reception_id)) {
-        startNewEmptyReception(false);
+      const [, nextReceptions] = await Promise.all([loadBatches(), loadReceptions()]);
+      const targetReceptionId = String(target.reception_id || "");
+      const receptionStillVisible = Boolean(
+        targetReceptionId && nextReceptions.some((r) => String(r.id) === targetReceptionId)
+      );
+
+      if (targetReceptionId && !receptionStillVisible) {
+        setReceptions((current) => current.filter((r) => String(r.id) !== targetReceptionId));
+        setReceptionPickerId((current) => (String(current) === targetReceptionId ? "" : current));
       }
 
-      await Promise.all([loadBatches(), loadReceptions()]);
-
-      if (!result.deletedReception && target.reception_id && String(selectedReceptionId) === String(target.reception_id)) {
-        try {
-          const detail = await apiAifGetReception(target.reception_id);
-          fillReceptionHeader(detail);
-        } catch {
+      if (targetReceptionId && String(selectedReceptionId) === targetReceptionId) {
+        if (!receptionStillVisible) {
           startNewEmptyReception(false);
+        } else {
+          try {
+            const detail = await apiAifGetReception(targetReceptionId);
+            fillReceptionHeader(detail);
+          } catch {
+            startNewEmptyReception(false);
+          }
         }
       }
 
       setMessage(
-        result.deletedReception
-          ? `Import előzmény törölve. A kapcsolódó üres receptió is törölve. Termék/készlet nem lett módosítva. Törölt sorok: ${result.deletedRows}.`
-          : `Import előzmény törölve. Termék/készlet nem lett módosítva. Törölt sorok: ${result.deletedRows}.`
+        receptionStillVisible
+          ? `Import előzmény törölve. A kapcsolódó receptióban maradt másik import sor. Termék/készlet nem lett módosítva. Törölt sorok: ${result.deletedRows}.`
+          : `Import előzmény törölve. A kapcsolódó receptió kikerült a kiválasztási listából. Termék/készlet nem lett módosítva. Törölt sorok: ${result.deletedRows}.`
       );
     } catch (e: any) {
       setMessage(e.message || "Az import előzmény törlése nem sikerült.");
@@ -2165,7 +2191,7 @@ export default function AllInIncoming(_props: Props) {
               Receptió kiválasztása listából
               <select className={`${selectInput} w-full`} value={receptionPickerId} onChange={(e) => setReceptionPickerId(e.target.value)}>
                 <option style={mutedOptionStyle} value="">Válassz meglévő receptiót</option>
-                {receptions.map((r) => (
+                {receptions.filter(receptionHasImportHistory).map((r) => (
                   <option style={optionStyle} key={r.id} value={r.id}>
                     {r.invoice_number || "Számlaszám nélkül"} • {r.supplier_name || "-"} • {receptionStatusLabel(r.status)} • {moneyText(toNumber(r.invoice_gross), r.currency_code || "")}
                   </option>
