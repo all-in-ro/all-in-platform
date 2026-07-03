@@ -270,6 +270,144 @@ function money(v: unknown) {
   return x.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+type WarehouseBarcodeRender = {
+  ok: boolean;
+  svg: string;
+  width: number;
+  error?: string;
+};
+
+type WarehouseLabelPrintItem = {
+  key: string;
+  variantId: string;
+  barcode: string;
+  title: string;
+  brand: string;
+  category: string;
+  size: string;
+  color: string;
+  price: string;
+  stockQty: number;
+  copyIndex: number;
+  copyTotal: number;
+  render: WarehouseBarcodeRender;
+};
+
+const WAREHOUSE_CODE128_PATTERNS = [
+  "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
+  "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132",
+  "221231", "213212", "223112", "312131", "311222", "321122", "321221", "312212", "322112", "322211",
+  "212123", "212321", "232121", "111323", "131123", "131321", "112313", "132113", "132311", "211313",
+  "231113", "231311", "112133", "112331", "132131", "113123", "113321", "133121", "313121", "211331",
+  "231131", "213113", "213311", "213131", "311123", "311321", "331121", "312113", "312311", "332111",
+  "314111", "221411", "431111", "111224", "111422", "121124", "121421", "141122", "141221", "112214",
+  "112412", "122114", "122411", "142112", "142211", "241211", "221114", "413111", "241112", "134111",
+  "111242", "121142", "121241", "114212", "124112", "124211", "411212", "421112", "421211", "212141",
+  "214121", "412121", "111143", "111341", "131141", "114113", "114311", "411113", "411311", "113141",
+  "114131", "311141", "411131", "211412", "211214", "211232", "2331112",
+];
+
+function labelCleanInternalCode(input: unknown) {
+  return String(input || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function labelCleanText(input: unknown, max = 120) {
+  return String(input ?? "").replace(/[<>]/g, "").slice(0, max);
+}
+
+function labelShortHashCode(input: string, length = 7) {
+  const source = String(input || `${Date.now()}-${Math.random()}`);
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i += 1) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase().padStart(length, "0").slice(-length);
+}
+
+function labelMakeInternalCode(seed = "", parts: unknown[] = []) {
+  const source = [seed, ...parts]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("|");
+  return labelCleanInternalCode(`AIF${labelShortHashCode(source)}`);
+}
+
+function labelInt(v: unknown, fallback: number, min: number, max: number) {
+  const n = Number.parseInt(String(v ?? "").replace(",", "."), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function labelMm(v: unknown, fallback: number, min: number, max: number) {
+  const n = Number(String(v ?? "").replace(",", "."));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function labelPriceParts(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { major: "", cents: "" };
+  const n = Number(raw.replace(",", "."));
+  if (!Number.isFinite(n)) return { major: raw, cents: "" };
+  const [major, cents] = n.toFixed(2).split(".");
+  return { major, cents };
+}
+
+function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
+  const code = String(value || "").trim();
+  if (!code) return { ok: false, svg: "", width: 0, error: "A vonalkód mező üres." };
+
+  const values: number[] = [];
+  for (const ch of code) {
+    const charCode = ch.charCodeAt(0);
+    if (charCode < 32 || charCode > 127) {
+      return {
+        ok: false,
+        svg: "",
+        width: 0,
+        error: "A Code128 csak latin betűket, számokat és egyszerű jeleket kezel.",
+      };
+    }
+    values.push(charCode - 32);
+  }
+
+  const startB = 104;
+  let checksum = startB;
+  values.forEach((v, index) => {
+    checksum += v * (index + 1);
+  });
+  checksum %= 103;
+
+  const sequence = [startB, ...values, checksum, 106];
+  const patterns = sequence.map((v) => WAREHOUSE_CODE128_PATTERNS[v]).filter(Boolean);
+  const totalModules = patterns.reduce((sum, p) => sum + p.split("").reduce((a, n) => a + Number(n), 0), 0);
+  const quiet = 10;
+  const width = totalModules + quiet * 2;
+  let x = quiet;
+  const bars: string[] = [];
+
+  for (const pattern of patterns) {
+    let black = true;
+    for (const digit of pattern) {
+      const w = Number(digit);
+      if (black) bars.push(`<rect x="${x}" y="0" width="${w}" height="${height}" />`);
+      x += w;
+      black = !black;
+    }
+  }
+
+  const safeText = code.replace(/[<&>]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m] || m));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 18}" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 18}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 13}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5">${safeText}</text></svg>`;
+  return { ok: true, svg, width };
+}
+
 function dateShort(v: unknown) {
   if (!v) return "-";
   const d = new Date(String(v));
@@ -692,6 +830,15 @@ export default function AllInWarehouse() {
   const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
   const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
+  const [labelComposerOpen, setLabelComposerOpen] = useState(false);
+  const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
+  const [labelWidth, setLabelWidth] = useState("40");
+  const [labelHeight, setLabelHeight] = useState("46");
+  const [labelCols, setLabelCols] = useState("5");
+  const [labelRows, setLabelRows] = useState("6");
+  const [labelMarginX, setLabelMarginX] = useState("5");
+  const [labelMarginY, setLabelMarginY] = useState("5");
+  const [labelShowBorder, setLabelShowBorder] = useState(true);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -987,6 +1134,158 @@ export default function AllInWarehouse() {
     if (action === "label") return selectedLabelItems;
     if (action === "order") return selectedOrderItems;
     return selectedMoveItems;
+  }
+
+  function defaultLabelCopiesForItem(item: InventoryItem) {
+    const qty = Math.floor(n(item.total_qty || item.available_qty));
+    return String(Math.max(1, qty || 1));
+  }
+
+  function barcodeForLabelItem(item: InventoryItem) {
+    const existing = labelCleanInternalCode(item.barcode || item.internal_sku || "");
+    if (existing) return existing;
+    return labelMakeInternalCode("", [
+      item.variant_id,
+      item.model_id,
+      item.title_ro,
+      item.brand_name,
+      item.category_name_ro,
+      item.color_name,
+      item.size,
+    ]);
+  }
+
+  function openLabelComposer() {
+    if (!selectedLabelItems.length) {
+      setMessage("Nincs termék a Vonalkód / címke listában.");
+      return;
+    }
+    setLabelCopies((current) => {
+      const next = { ...current };
+      for (const item of selectedLabelItems) {
+        const id = String(item.variant_id || "");
+        if (id && !next[id]) next[id] = defaultLabelCopiesForItem(item);
+      }
+      return next;
+    });
+    setLabelComposerOpen(true);
+  }
+
+  function updateLabelCopies(id: string, value: string) {
+    const qty = labelInt(value, 1, 0, 999);
+    setLabelCopies((current) => ({ ...current, [id]: String(qty) }));
+  }
+
+  function adjustLabelCopies(id: string, delta: number) {
+    setLabelCopies((current) => {
+      const currentQty = labelInt(current[id], 1, 0, 999);
+      return { ...current, [id]: String(Math.max(0, currentQty + delta)) };
+    });
+  }
+
+  const labelW = labelMm(labelWidth, 40, 20, 120);
+  const labelH = labelMm(labelHeight, 46, 15, 100);
+  const labelColCount = labelInt(labelCols, 5, 1, 8);
+  const labelRowCount = labelInt(labelRows, 6, 1, 12);
+  const labelMarginXmm = labelMm(labelMarginX, 5, 0, 25);
+  const labelMarginYmm = labelMm(labelMarginY, 5, 0, 25);
+  const labelsPerPage = Math.max(1, labelColCount * labelRowCount);
+
+  const labelRowsForPrint = useMemo(() => {
+    return selectedLabelItems.map((item) => {
+      const id = String(item.variant_id || "");
+      const barcode = barcodeForLabelItem(item);
+      const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 1, 1, 999), 0, 999);
+      const color = colorDisplay(item.color_name, item.color_code);
+      const price = item.sell_price == null ? "" : String(item.sell_price);
+      return {
+        item,
+        id,
+        barcode,
+        copies,
+        title: item.title_ro || "-",
+        brand: item.brand_name || "-",
+        category: item.category_name_hu || item.category_name_ro || "-",
+        size: item.size || "-",
+        color,
+        price,
+        stockQty: Math.floor(n(item.total_qty)),
+        render: labelCode128Svg(barcode, 58),
+      };
+    });
+  }, [selectedLabelItems, labelCopies, colorTypes]);
+
+  const labelPrintItems = useMemo<WarehouseLabelPrintItem[]>(() => {
+    const out: WarehouseLabelPrintItem[] = [];
+    for (const row of labelRowsForPrint) {
+      for (let i = 0; i < row.copies; i += 1) {
+        out.push({
+          key: `${row.id}-${i}`,
+          variantId: row.id,
+          barcode: row.barcode,
+          title: row.title,
+          brand: row.brand,
+          category: row.category,
+          size: row.size,
+          color: row.color,
+          price: row.price,
+          stockQty: row.stockQty,
+          copyIndex: i + 1,
+          copyTotal: row.copies,
+          render: row.render,
+        });
+      }
+    }
+    return out;
+  }, [labelRowsForPrint]);
+
+  const labelPrintPages = useMemo(() => {
+    const pages: WarehouseLabelPrintItem[][] = [];
+    for (let i = 0; i < labelPrintItems.length; i += labelsPerPage) {
+      pages.push(labelPrintItems.slice(i, i + labelsPerPage));
+    }
+    return pages;
+  }, [labelPrintItems, labelsPerPage]);
+
+  const labelPrintStyle = {
+    "--aif-label-w": `${labelW}mm`,
+    "--aif-label-h": `${labelH}mm`,
+    "--aif-label-cols": String(labelColCount),
+    "--aif-label-margin-x": `${labelMarginXmm}mm`,
+    "--aif-label-margin-y": `${labelMarginYmm}mm`,
+  } as React.CSSProperties & Record<string, string>;
+
+  function printGeneratedLabels() {
+    if (!labelPrintItems.length) {
+      setMessage("Nincs nyomtatható címke. Állíts be legalább egy példányt.");
+      return;
+    }
+    window.print();
+  }
+
+  function WarehouseLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
+    const priceParts = labelPriceParts(label.price);
+    return (
+      <>
+        <div className="aifWhLabelCompany">AllInFashion</div>
+        {label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
+        <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>
+        <div className="aifWhLabelMeta">
+          {label.size && label.size !== "-" && <span>{labelCleanText(label.size, 16)}</span>}
+          {label.color && label.color !== "-" && <span>{labelCleanText(label.color, 24)}</span>}
+        </div>
+        <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />
+        {label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
+        <div className="aifWhLabelCode">Cod: {labelCleanText(label.barcode, 44)}</div>
+        {priceParts.major && (
+          <div className="aifWhLabelPrice">
+            <span className="aifWhPriceMajor">{priceParts.major}</span>
+            {priceParts.cents && <span className="aifWhPriceCents">{priceParts.cents}</span>}
+            <span className="aifWhPriceUnit">RON</span>
+          </div>
+        )}
+      </>
+    );
   }
 
   function toggleVariantSelection(id: string, checked: boolean) {
@@ -1506,6 +1805,87 @@ export default function AllInWarehouse() {
 
   return (
     <main className={page}>
+      <style>{`
+        .aifWarehouseLabelPrintRoot { display:none; }
+        .aifWhLabelScreenGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(142px, 1fr)); gap:8px; }
+        .aifWhLabelScreenCard {
+          min-height: 136px;
+          border: 1px solid rgba(255,255,255,.22);
+          border-radius: 12px;
+          background: #ffffff;
+          color: #111;
+          padding: 8px;
+          overflow: hidden;
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+        .aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
+        .aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
+        .aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
+        .aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
+        .aifWhBarcodeSvgWrap { width:100%; overflow:hidden; }
+        .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:54px; }
+        .aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
+        .aifWhLabelCode { margin-top:3px; font-size:8.5px; color:#444; text-align:center; }
+        .aifWhLabelPrice { margin-top:3px; text-align:center; line-height:1; color:#111; white-space:nowrap; }
+        .aifWhPriceMajor { font-size:22px; letter-spacing:.08em; }
+        .aifWhPriceCents { font-size:12px; vertical-align:top; margin-left:2px; }
+        .aifWhPriceUnit { display:inline-block; font-size:8px; margin-left:3px; vertical-align:baseline; }
+        @media print {
+          @page { size: A4; margin: 0; }
+          body * { visibility:hidden !important; }
+          .aifWarehouseLabelPrintRoot, .aifWarehouseLabelPrintRoot * { visibility:visible !important; }
+          .aifWarehouseLabelPrintRoot {
+            display:block !important;
+            position:absolute;
+            inset:0;
+            background:#ffffff;
+            color:#111111;
+          }
+          .aifWarehouseLabelPrintPage {
+            width:210mm;
+            min-height:297mm;
+            display:grid;
+            grid-template-columns:repeat(var(--aif-label-cols), var(--aif-label-w));
+            grid-auto-rows:var(--aif-label-h);
+            padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
+            box-sizing:border-box;
+            page-break-after:always;
+            align-content:start;
+            justify-content:start;
+            background:#fff;
+          }
+          .aifWarehouseLabelPrintPage:last-child { page-break-after:auto; }
+          .aifWarehousePrintLabel {
+            width:var(--aif-label-w);
+            height:var(--aif-label-h);
+            border:1px solid #ddd;
+            padding:2mm;
+            color:#111;
+            background:#fff;
+            overflow:hidden;
+            box-sizing:border-box;
+            display:flex;
+            flex-direction:column;
+            justify-content:center;
+            font-family:Arial, sans-serif;
+            page-break-inside:avoid;
+          }
+          .aifWarehousePrintLabel.noBorder { border-color:transparent; }
+          .aifWarehousePrintLabel .aifWhLabelCompany { font-size:7.5pt; margin-bottom:.6mm; }
+          .aifWarehousePrintLabel .aifWhLabelBrand { font-size:7pt; margin-bottom:.6mm; }
+          .aifWarehousePrintLabel .aifWhLabelTitle { font-size:9.2pt; margin-bottom:.8mm; }
+          .aifWarehousePrintLabel .aifWhLabelMeta { font-size:7.2pt; margin-bottom:.8mm; }
+          .aifWarehousePrintLabel .aifWhBarcodeSvgWrap svg { max-height:13mm; }
+          .aifWarehousePrintLabel .aifWhLabelCategory { font-size:7.6pt; padding-top:.6mm; margin-top:.6mm; }
+          .aifWarehousePrintLabel .aifWhLabelCode { font-size:6.4pt; }
+          .aifWarehousePrintLabel .aifWhPriceMajor { font-size:20pt; letter-spacing:.1em; }
+          .aifWarehousePrintLabel .aifWhPriceCents { font-size:11pt; }
+          .aifWarehousePrintLabel .aifWhPriceUnit { font-size:7pt; }
+        }
+      `}</style>
       <div className={shell}>
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1861,6 +2241,96 @@ export default function AllInWarehouse() {
         </div>
       )}
 
+      {labelComposerOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-3 py-4 backdrop-blur-sm">
+          <div className="max-h-[92vh] w-full max-w-6xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Vonalkód / címke nyomtatás</p>
+                <h2 className="mt-1 text-lg text-white">{labelRowsForPrint.length} termék • {labelPrintItems.length} címke</h2>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><ArrowLeft size={15} /> Vissza</button>
+                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={printGeneratedLabels} disabled={!labelPrintItems.length} type="button"><Barcode size={15} /> Nyomtatás A4</button>
+                <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><X size={15} /> Bezárás</button>
+              </div>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                A példányszám alapból a készlet mennyisége, de szabadon növelhető. A címkék egy A4-es ívre kerülnek egymás után, több termék együtt is, szükség esetén több oldalra.
+              </div>
+
+              <section className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-white">Címke kiosztás</p>
+                  <span className="rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
+                    {labelColCount} oszlop × {labelRowCount} sor • {labelsPerPage} címke / oldal • {Math.max(1, labelPrintPages.length)} oldal
+                  </span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-6">
+                  <label className={label}>Szélesség mm<input className={input} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} /></label>
+                  <label className={label}>Magasság mm<input className={input} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} /></label>
+                  <label className={label}>Oszlop<input className={input} value={labelCols} onChange={(e) => setLabelCols(e.target.value)} /></label>
+                  <label className={label}>Sor<input className={input} value={labelRows} onChange={(e) => setLabelRows(e.target.value)} /></label>
+                  <label className={label}>Margó X mm<input className={input} value={labelMarginX} onChange={(e) => setLabelMarginX(e.target.value)} /></label>
+                  <label className={label}>Margó Y mm<input className={input} value={labelMarginY} onChange={(e) => setLabelMarginY(e.target.value)} /></label>
+                </div>
+                <label className="mt-3 inline-flex items-center gap-2 text-xs text-white/72">
+                  <input className={selectBox} type="checkbox" checked={labelShowBorder} onChange={(e) => setLabelShowBorder(e.target.checked)} />
+                  Címke keret nyomtatása
+                </label>
+              </section>
+
+              <section className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
+                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm text-white">Termékek és példányszám</p>
+                    <span className="text-xs text-white/55">A készletnél több címke is kérhető</span>
+                  </div>
+                  <div className="grid gap-2">
+                    {labelRowsForPrint.map((row) => (
+                      <div key={row.id} className="grid gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[1fr,148px] md:items-center">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-white">{row.title}</p>
+                          <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • {row.color} • {row.size}</p>
+                          <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode}</p>
+                          {!row.render.ok && <p className="mt-1 text-xs text-rose-100">{row.render.error}</p>}
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[11px] uppercase tracking-[0.05em] text-white/55">Címke darab</p>
+                          <div className="flex h-9 overflow-hidden rounded-xl border border-white/20 bg-[#303a4c]">
+                            <button className="flex h-full w-10 items-center justify-center border-r border-white/14 bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
+                            <input className="h-full min-w-0 flex-1 bg-transparent px-2 text-center text-sm tabular-nums text-white outline-none" value={String(labelInt(labelCopies[row.id], row.copies, 0, 999))} inputMode="numeric" onChange={(e) => updateLabelCopies(row.id, e.target.value)} />
+                            <button className="flex h-full w-10 items-center justify-center border-l border-white/14 bg-[#2a8d8b] text-lg text-white transition hover:bg-[#319c99]" onClick={() => adjustLabelCopies(row.id, 1)} type="button">+</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {!labelRowsForPrint.length && <p className="rounded-xl border border-white/12 bg-[#465163] px-3 py-5 text-center text-sm text-white/60">Nincs termék a Vonalkód / címke listában.</p>}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm text-white">Első oldal előnézet</p>
+                    <span className="text-xs text-white/55">{Math.min(labelPrintItems.length, labelsPerPage)} / {labelPrintItems.length} címke</span>
+                  </div>
+                  <div className="aifWhLabelScreenGrid">
+                    {labelPrintItems.slice(0, Math.min(labelsPerPage, 18)).map((printLabel) => (
+                      <div className="aifWhLabelScreenCard" key={printLabel.key}>
+                        <WarehouseLabelContent label={printLabel} />
+                      </div>
+                    ))}
+                    {!labelPrintItems.length && <div className="rounded-xl border border-white/12 bg-[#465163] px-3 py-8 text-center text-sm text-white/60">Nincs előnézet.</div>}
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedActionTarget && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-3 py-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
@@ -1901,6 +2371,11 @@ export default function AllInWarehouse() {
                 <h2 className="mt-1 text-lg text-white">{selectedItemsForAction(selectedWorkPanel).length} termék a listában</h2>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
+                {selectedWorkPanel === "label" && (
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length}>
+                    <Barcode size={15} /> Vonalkódok / címkék generálása
+                  </button>
+                )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
                 <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); }} type="button"><X size={15} /> Bezárás</button>
               </div>
@@ -2555,6 +3030,18 @@ export default function AllInWarehouse() {
 
       {busy && <div className="fixed bottom-4 right-4 rounded-xl border border-white/15 bg-[#404a5b] px-4 py-3 text-sm text-white/80 shadow-xl"><RefreshCw className="mr-2 inline" size={15} /> Betöltés...</div>}
       {totals.watch > 0 && <div className="fixed bottom-4 left-4 hidden rounded-xl border border-amber-200/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-50 shadow-xl lg:block"><AlertTriangle className="mr-2 inline" size={15} /> {totals.watch} figyelendő készleten lévő variáns</div>}
-    </main>
+    
+      <div className="aifWarehouseLabelPrintRoot" style={labelPrintStyle}>
+        {labelPrintPages.map((page, pageIndex) => (
+          <div className="aifWarehouseLabelPrintPage" key={`label-page-${pageIndex}`}>
+            {page.map((printLabel) => (
+              <div className={`aifWarehousePrintLabel ${labelShowBorder ? "" : "noBorder"}`} key={printLabel.key}>
+                <WarehouseLabelContent label={printLabel} />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+</main>
   );
 }
