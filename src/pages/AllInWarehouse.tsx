@@ -719,7 +719,7 @@ export default function AllInWarehouse() {
       : "Nincs célhelyenkénti készlet";
     return (
       <button
-        className="group inline-flex min-w-[72px] items-center justify-end gap-1.5 rounded-full border border-[#5bd0cc]/45 bg-[#203f49] px-2.5 py-1 text-right text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.10)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+        className="group inline-flex min-w-[72px] items-center justify-center gap-1.5 rounded-full border border-[#2a8d8b]/60 bg-[#203f49] px-2.5 py-1 text-center text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.16)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
         onClick={() => openStockEditor(item)}
         title={`Készlet célhelyenként: ${label}. Kattints a módosításhoz.`}
         type="button"
@@ -1431,11 +1431,11 @@ export default function AllInWarehouse() {
                       <th className="px-3 py-3 font-normal">Kép</th>
                       <th className="px-3 py-3 font-normal">Márka</th>
                       <th className="px-3 py-3 font-normal">Terméknév</th>
-                      <th className="px-3 py-3 font-normal">Kategória</th>
-                      <th className="px-3 py-3 font-normal">Szín</th>
-                      <th className="px-3 py-3 font-normal">Méret</th>
-                      <th className="px-3 py-3 text-right font-normal">Készlet</th>
-                      <th className="px-3 py-3 text-right font-normal">Elérhető</th>
+                      <th className="px-3 py-3 text-center font-normal">Kategória</th>
+                      <th className="px-3 py-3 text-center font-normal">Szín</th>
+                      <th className="px-3 py-3 text-center font-normal">Méret</th>
+                      <th className="px-3 py-3 text-center font-normal">Készlet</th>
+                      <th className="px-3 py-3 text-center font-normal">Elérhető</th>
                       <th className="px-3 py-3 text-right font-normal">Vételár</th>
                       <th className="px-3 py-3 text-right font-normal">Eladási ár</th>
                       <th className="px-3 py-3 text-center font-normal">Állapot</th>
@@ -1445,18 +1445,18 @@ export default function AllInWarehouse() {
                   <tbody className="divide-y divide-white/12">
                     {filtered.map((it, index) => (
                       <tr key={it.variant_id} className="odd:bg-[#526071] even:bg-[#4c5869] hover:bg-[#617084]">
-                        <td className="px-3 py-2.5">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
-                        <td className="px-3 py-2.5">{it.brand_name || "-"}</td>
-                        <td className="px-3 py-2.5"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
-                        <td className="px-3 py-2.5">{it.category_name_hu || it.category_name_ro || "-"}</td>
-                        <td className="px-3 py-2.5">{colorDisplay(it.color_name, it.color_code)}</td>
-                        <td className="px-3 py-2.5">{it.size || "-"}</td>
-                        <td className="px-3 py-2.5 text-right"><StockQtyButton item={it} /></td>
-                        <td className="px-3 py-2.5 text-right">{n(it.available_qty)}</td>
-                        <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
-                        <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
-                        <td className="px-3 py-2.5 text-center"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></span></td>
-                        <td className="px-3 py-2.5 text-right">
+                        <td className="px-3 py-2.5 align-middle">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
+                        <td className="px-3 py-2.5 align-middle">{it.brand_name || "-"}</td>
+                        <td className="px-3 py-2.5 align-middle"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
+                        <td className="px-3 py-2.5 text-center align-middle">{it.category_name_hu || it.category_name_ro || "-"}</td>
+                        <td className="px-3 py-2.5 text-center align-middle">{colorDisplay(it.color_name, it.color_code)}</td>
+                        <td className="px-3 py-2.5 text-center align-middle">{it.size || "-"}</td>
+                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><StockQtyButton item={it} /></span></td>
+                        <td className="px-3 py-2.5 text-center align-middle tabular-nums">{n(it.available_qty)}</td>
+                        <td className="px-3 py-2.5 text-right align-middle tabular-nums">{money(it.buy_price)}</td>
+                        <td className="px-3 py-2.5 text-right align-middle tabular-nums">{money(it.sell_price)}</td>
+                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></span></td>
+                        <td className="px-3 py-2.5 text-right align-middle">
                           <div className="flex justify-end gap-2">
                             <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
                             <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
