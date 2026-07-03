@@ -395,6 +395,10 @@ async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
   });
 }
 
+async function apiVariantDelete(id: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/variants/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 
 async function apiSaveCategory(id: string, payload: Record<string, unknown>) {
   const url = id ? `/api/aif/categories/${encodeURIComponent(id)}` : "/api/aif/categories";
@@ -550,6 +554,7 @@ export default function AllInWarehouse() {
   const [materialForm, setMaterialForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: "10" });
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "material"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
+  const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -879,7 +884,7 @@ export default function AllInWarehouse() {
     setMessage("");
     try {
       const [inv, meta, stock] = await Promise.all([apiInventory(), apiMeta(), apiStock()]);
-      setItems(inv.items || []);
+      setItems((inv.items || []).filter((x) => String(x.variant_status || "active") !== "archived" && String(x.model_status || "active") !== "archived"));
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
       setSupplierBrands(meta.supplierBrands || []);
@@ -946,6 +951,23 @@ export default function AllInWarehouse() {
       setMessage("A termékadatok mentése megtörtént.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a termékadatokat.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmDeleteProduct() {
+    if (!productDeleteTarget?.variant_id) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await apiVariantDelete(productDeleteTarget.variant_id);
+      setProductDeleteTarget(null);
+      if (detail?.item?.id && String(detail.item.id) === String(productDeleteTarget.variant_id)) setDetail(null);
+      await load();
+      setMessage("Termék törölve a raktárlistából.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült törölni a terméket.");
     } finally {
       setSaving(false);
     }
@@ -1137,28 +1159,28 @@ export default function AllInWarehouse() {
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Figyelendő</p><p className="mt-1 text-xl">{totals.watch}</p></div>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                  <p className="mb-3 text-sm text-white/80">Márkák készletérték szerint</p>
+                <div className="rounded-xl border border-white/40 bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
+                  <p className="mb-3 text-sm text-slate-700">Márkák készletérték szerint</p>
                   <div className="space-y-2">
                     {brandChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
-                        <div className="flex justify-between gap-3 text-xs text-white/65"><span>{x.name}</span><span>{money(x.value)}</span></div>
-                        <div className="h-2 rounded-full bg-black/20"><div className="h-2 rounded-full bg-white/45" style={{ width: `${Math.max(4, (x.value / maxBrandValue) * 100)}%` }} /></div>
+                        <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{money(x.value)}</span></div>
+                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: `${Math.max(4, (x.value / maxBrandValue) * 100)}%` }} /></div>
                       </div>
                     ))}
-                    {!brandChart.length && <p className="text-sm text-white/55">Nincs megjeleníthető adat.</p>}
+                    {!brandChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
-                  <p className="mb-3 text-sm text-white/80">Készlet célhelyenként</p>
+                <div className="rounded-xl border border-white/40 bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
+                  <p className="mb-3 text-sm text-slate-700">Készlet célhelyenként</p>
                   <div className="space-y-2">
                     {locationChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
-                        <div className="flex justify-between gap-3 text-xs text-white/65"><span>{x.name}</span><span>{x.qty}</span></div>
-                        <div className="h-2 rounded-full bg-black/20"><div className="h-2 rounded-full bg-white/45" style={{ width: `${Math.max(4, (x.qty / maxLocationQty) * 100)}%` }} /></div>
+                        <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{x.qty}</span></div>
+                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: `${Math.max(4, (x.qty / maxLocationQty) * 100)}%` }} /></div>
                       </div>
                     ))}
-                    {!locationChart.length && <p className="text-sm text-white/55">Nincs megjeleníthető adat.</p>}
+                    {!locationChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
                   </div>
                 </div>
               </div>
@@ -1178,9 +1200,8 @@ export default function AllInWarehouse() {
                   <thead className="bg-[#2f3a4c] text-[11px] uppercase tracking-[0.08em] text-white/72">
                     <tr>
                       <th className="px-3 py-3 font-normal">Kép</th>
-                      <th className="px-3 py-3 font-normal">Termék</th>
-                      <th className="px-3 py-3 font-normal">Beszállító</th>
                       <th className="px-3 py-3 font-normal">Márka</th>
+                      <th className="px-3 py-3 font-normal">Terméknév</th>
                       <th className="px-3 py-3 font-normal">Kategória</th>
                       <th className="px-3 py-3 font-normal">Szín</th>
                       <th className="px-3 py-3 font-normal">Méret</th>
@@ -1196,9 +1217,8 @@ export default function AllInWarehouse() {
                     {filtered.map((it, index) => (
                       <tr key={it.variant_id} className="odd:bg-[#526071] even:bg-[#4c5869] hover:bg-[#617084]">
                         <td className="px-3 py-2.5">{it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
-                        <td className="px-3 py-2.5"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
-                        <td className="px-3 py-2.5">{itemSupplierText(it)}</td>
                         <td className="px-3 py-2.5">{it.brand_name || "-"}</td>
+                        <td className="px-3 py-2.5"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
                         <td className="px-3 py-2.5">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-2.5">{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-3 py-2.5">{it.size || "-"}</td>
@@ -1207,10 +1227,15 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5 text-right">{money(it.buy_price)}</td>
                         <td className="px-3 py-2.5 text-right">{money(it.sell_price)}</td>
                         <td className="px-3 py-2.5"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></td>
-                        <td className="px-3 py-2.5 text-right"><button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button></td>
+                        <td className="px-3 py-2.5 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
+                            <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-300/35 bg-[#d31126] px-3 text-xs text-white hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => setProductDeleteTarget(it)}><Trash2 size={14} /> Törlés</button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
-                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
+                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={12}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1222,7 +1247,7 @@ export default function AllInWarehouse() {
                       {it.image_url ? <img src={it.image_url} alt="" className="h-20 w-20 rounded-xl object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={20} /></div>}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm">{it.title_ro || "-"}</p>
-                        <p className="mt-1 text-xs text-white/55">{itemSupplierText(it)} • {it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <span className={chip}>Készlet: {n(it.total_qty)}</span>
                           <span className={chip}>Elérhető: {n(it.available_qty)}</span>
@@ -1230,7 +1255,10 @@ export default function AllInWarehouse() {
                         </div>
                       </div>
                     </div>
-                    <div className="mt-3 flex justify-end"><button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button></div>
+                    <div className="mt-3 flex justify-end gap-2">
+                      <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
+                      <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-300/35 bg-[#d31126] px-3 text-xs text-white hover:bg-[#b90f21] font-normal" onClick={() => setProductDeleteTarget(it)}><Trash2 size={14} /> Törlés</button>
+                    </div>
                   </article>
                 ))}
                 {!filtered.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/60">Nincs megjeleníthető termék az AIF készletben.</div>}
@@ -1239,6 +1267,31 @@ export default function AllInWarehouse() {
           )}
         </section>
       </div>
+
+      {productDeleteTarget && (
+        <div className={modalWrap}>
+          <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Termék törlése</p>
+                <h2 className="mt-1 text-lg text-white">Biztosan törlöd?</h2>
+              </div>
+              <button className={taxonomySmallBtn} onClick={() => setProductDeleteTarget(null)} type="button"><X size={14} /> Bezárás</button>
+            </div>
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-rose-200/24 bg-rose-500/10 px-3 py-3 text-sm text-white/86">
+                <p className="text-white">{productDeleteTarget.title_ro || "Névtelen termék"}</p>
+                <p className="mt-1 text-xs text-white/62">{productDeleteTarget.brand_name || "Nincs márka"} • {productDeleteTarget.category_name_hu || productDeleteTarget.category_name_ro || "Nincs kategória"} • {productDeleteTarget.size || "nincs méret"}</p>
+              </div>
+              <p className="text-xs leading-relaxed text-white/68">A termék eltűnik a raktárlistából. Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
+              <div className="flex justify-end gap-2 pt-1">
+                <button className={btnSoft} onClick={() => setProductDeleteTarget(null)} disabled={saving} type="button">Mégse</button>
+                <button className={dangerBtn} onClick={confirmDeleteProduct} disabled={saving} type="button"><Trash2 size={15} /> Törlés</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {taxonomyOpen && (
         <div className={modalWrap}>
