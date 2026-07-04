@@ -317,6 +317,7 @@ type WarehouseLabelPreset = {
 };
 
 const WAREHOUSE_LABEL_COMPANY = "TITAN EURO-COM SRL";
+const WAREHOUSE_LABEL_PREVIEW_SCALE = 0.58;
 
 const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
   { id: "40x46", name: "40 × 46 mm, 5 × 6 pe A4", width: "40", height: "46", cols: "5", rows: "6", marginX: "5", marginY: "5" },
@@ -336,6 +337,7 @@ const WAREHOUSE_LABEL_DEFAULT_CONTENT: Record<WarehouseLabelContentKey, boolean>
   code: true,
   price: true,
 };
+
 
 const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: string; hint: string }[] = [
   { key: "company", label: "Cég neve", hint: "A címke tetején jelenik meg." },
@@ -383,6 +385,157 @@ type WarehouseLabelPrintItem = {
   render: WarehouseBarcodeRender;
 };
 
+
+const WAREHOUSE_LABEL_SHEET_CSS = `
+.aifWarehouseLabelPrintPage {
+  width:210mm;
+  min-height:297mm;
+  overflow:hidden;
+  display:flex;
+  flex-wrap:wrap;
+  gap:0;
+  padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
+  box-sizing:border-box;
+  align-content:flex-start;
+  align-items:flex-start;
+  justify-content:flex-start;
+  background:#fff;
+  color:#111;
+  page-break-after:always;
+  break-after:page;
+  print-color-adjust:exact;
+  -webkit-print-color-adjust:exact;
+}
+.aifWarehouseLabelPrintPage:last-child { page-break-after:auto; break-after:auto; }
+.aifWarehousePrintLabel {
+  flex:0 0 var(--aif-label-w);
+  width:var(--aif-label-w);
+  height:var(--aif-label-h);
+  border:1px solid #ddd;
+  border-radius:12px;
+  padding:2mm;
+  color:#111;
+  background:#fff;
+  overflow:hidden;
+  box-sizing:border-box;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  font-family:Arial, sans-serif;
+  page-break-inside:avoid;
+  break-inside:avoid;
+  print-color-adjust:exact;
+  -webkit-print-color-adjust:exact;
+}
+.aifWarehousePrintLabel.noBorder { border-color:transparent; }
+.aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
+.aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
+.aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
+.aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
+.aifWhLabelDescription { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; font-size:9.5px; line-height:1.08; color:#222; }
+.aifWhBarcodeSvgWrap { width:100%; overflow:hidden; }
+.aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:54px; }
+.aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
+.aifWhLabelCode { margin-top:3px; font-size:8.5px; color:#444; text-align:center; }
+.aifWhLabelPrice { margin-top:3px; text-align:center; line-height:1; color:#111; white-space:nowrap; }
+.aifWhPriceMajor { font-size:22px; letter-spacing:.08em; }
+.aifWhPriceCents { font-size:12px; vertical-align:top; margin-left:2px; }
+.aifWhPriceUnit { display:inline-block; font-size:8px; margin-left:3px; vertical-align:baseline; }
+`;
+
+const WAREHOUSE_LABEL_APP_CSS = `
+.aifWarehouseLabelPrintRoot { display:none; }
+.aifWhLabelPreviewFrame {
+  max-height:68vh;
+  overflow:auto;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.14);
+  background:#2f394a;
+  padding:10px;
+}
+.aifWhLabelPreviewPageBox {
+  width:var(--aif-label-preview-w);
+  height:var(--aif-label-preview-h);
+  overflow:hidden;
+  background:#fff;
+  box-shadow:0 14px 34px rgba(0,0,0,.26);
+}
+.aifWhLabelPreviewFrame .aifWarehouseLabelPrintPage {
+  transform:scale(var(--aif-label-preview-scale));
+  transform-origin:top left;
+}
+${WAREHOUSE_LABEL_SHEET_CSS}
+@media print {
+  @page { size:210mm 297mm; margin:0; }
+  html, body {
+    width:210mm !important;
+    margin:0 !important;
+    padding:0 !important;
+    background:#fff !important;
+  }
+  main {
+    width:210mm !important;
+    min-height:0 !important;
+    margin:0 !important;
+    padding:0 !important;
+    background:#fff !important;
+  }
+  .aifWarehouseScreenContent {
+    display:block !important;
+    width:210mm !important;
+    max-width:none !important;
+    margin:0 !important;
+    padding:0 !important;
+    background:#fff !important;
+  }
+  .aifWarehouseScreenContent > :not(.aifWarehouseLabelPrintRoot) {
+    display:none !important;
+  }
+  .aifWarehouseLabelPrintRoot {
+    display:block !important;
+    position:static !important;
+    width:210mm !important;
+    margin:0 !important;
+    padding:0 !important;
+    background:#ffffff !important;
+    color:#111111 !important;
+  }
+  .aifWarehouseLabelPrintPage {
+    height:auto !important;
+    min-height:0 !important;
+    overflow:visible !important;
+    box-shadow:none !important;
+  }
+}
+`;
+
+const WAREHOUSE_LABEL_PRINT_DOCUMENT_CSS = `
+@page { size:210mm 297mm; margin:0; }
+html, body {
+  margin:0;
+  padding:0;
+  background:#fff;
+  color:#111;
+  overflow:visible;
+}
+.aifWarehouseLabelPrintRoot {
+  display:block;
+  width:210mm;
+  margin:0;
+  padding:0;
+  background:#fff;
+  color:#111;
+  overflow:visible;
+}
+${WAREHOUSE_LABEL_SHEET_CSS}
+.aifWarehouseLabelPrintPage {
+  min-height:0 !important;
+  height:auto !important;
+  overflow:visible !important;
+  box-shadow:none !important;
+}
+`;
+
 const WAREHOUSE_CODE128_PATTERNS = [
   "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
   "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132",
@@ -409,6 +562,15 @@ function labelCleanInternalCode(input: unknown) {
 
 function labelCleanText(input: unknown, max = 120) {
   return String(input ?? "").replace(/[<>]/g, "").slice(0, max);
+}
+
+function labelEscapeHtml(input: unknown) {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function labelShortHashCode(input: string, length = 7) {
@@ -448,6 +610,94 @@ function labelPriceParts(value: unknown) {
   if (!Number.isFinite(n)) return { major: raw, cents: "" };
   const [major, cents] = n.toFixed(2).split(".");
   return { major, cents };
+}
+
+type WarehouseLabelPrintDocumentOptions = {
+  labelContent: Record<WarehouseLabelContentKey, boolean>;
+  labelCompanyName: string;
+  labelCurrency: string;
+  labelUnitText: string;
+  labelShowBorder: boolean;
+};
+
+type WarehouseLabelPrintDocumentLayout = {
+  labelW: number;
+  labelH: number;
+  labelColCount: number;
+  labelRowCount: number;
+  labelMarginXmm: number;
+  labelMarginYmm: number;
+};
+
+function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: WarehouseLabelPrintDocumentOptions) {
+  const priceParts = labelPriceParts(label.price);
+  const html: string[] = [];
+
+  if (options.labelContent.company && options.labelCompanyName) {
+    html.push(`<div class="aifWhLabelCompany">${labelEscapeHtml(labelCleanText(options.labelCompanyName, 48))}</div>`);
+  }
+  if (options.labelContent.brand && label.brand && label.brand !== "-") {
+    html.push(`<div class="aifWhLabelBrand">${labelEscapeHtml(labelCleanText(label.brand, 42))}</div>`);
+  }
+  if (options.labelContent.title) {
+    html.push(`<div class="aifWhLabelTitle">${labelEscapeHtml(labelCleanText(label.title || "Produs", 72))}</div>`);
+  }
+  if (options.labelContent.sizeColor && (label.size || label.color)) {
+    const meta: string[] = [];
+    if (label.size && label.size !== "-") meta.push(`<span>${labelEscapeHtml(labelCleanText(label.size, 16))}</span>`);
+    if (label.color && label.color !== "-") meta.push(`<span>${labelEscapeHtml(labelCleanText(label.color, 24))}</span>`);
+    if (meta.length) html.push(`<div class="aifWhLabelMeta">${meta.join("")}</div>`);
+  }
+  if (options.labelContent.barcode) {
+    html.push(`<div class="aifWhBarcodeSvgWrap">${label.render.ok ? label.render.svg : ""}</div>`);
+  }
+  if (options.labelContent.description && label.description) {
+    html.push(`<div class="aifWhLabelDescription">${labelEscapeHtml(labelCleanText(label.description, 90))}</div>`);
+  }
+  if (options.labelContent.category && label.category && label.category !== "-") {
+    html.push(`<div class="aifWhLabelCategory">${labelEscapeHtml(labelCleanText(label.category, 34))}</div>`);
+  }
+  if (options.labelContent.code && (label.productCode || label.barcode)) {
+    html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(label.productCode || label.barcode, 44))}</div>`);
+  }
+  if (options.labelContent.price && priceParts.major) {
+    html.push(
+      `<div class="aifWhLabelPrice"><span class="aifWhPriceMajor">${labelEscapeHtml(priceParts.major)}</span>${
+        priceParts.cents ? `<span class="aifWhPriceCents">${labelEscapeHtml(priceParts.cents)}</span>` : ""
+      }<span class="aifWhPriceUnit">${labelEscapeHtml(labelCleanText(options.labelUnitText || options.labelCurrency, 12))}</span></div>`
+    );
+  }
+
+  return html.join("");
+}
+
+function warehouseLabelPrintStyleString(layout: WarehouseLabelPrintDocumentLayout) {
+  return [
+    `--aif-label-w:${layout.labelW}mm`,
+    `--aif-label-h:${layout.labelH}mm`,
+    `--aif-label-cols:${layout.labelColCount}`,
+    `--aif-label-rows:${layout.labelRowCount}`,
+    `--aif-label-margin-x:${layout.labelMarginXmm}mm`,
+    `--aif-label-margin-y:${layout.labelMarginYmm}mm`,
+  ].join(";");
+}
+
+function warehouseLabelPrintDocumentHtml(
+  pages: WarehouseLabelPrintItem[][],
+  options: WarehouseLabelPrintDocumentOptions,
+  layout: WarehouseLabelPrintDocumentLayout,
+) {
+  const rootStyle = warehouseLabelPrintStyleString(layout);
+  const pagesHtml = pages
+    .map((page) => {
+      const labelsHtml = page
+        .map((label) => `<div class="aifWarehousePrintLabel ${options.labelShowBorder ? "" : "noBorder"}">${warehouseLabelContentHtml(label, options)}</div>`)
+        .join("");
+      return `<div class="aifWarehouseLabelPrintPage">${labelsHtml}</div>`;
+    })
+    .join("");
+
+  return `<!doctype html><html><head><meta charset="utf-8" /><title>${labelEscapeHtml("AllInFashion címke nyomtatás")}</title><style>${WAREHOUSE_LABEL_PRINT_DOCUMENT_CSS}</style></head><body><div class="aifWarehouseLabelPrintRoot" style="${rootStyle}">${pagesHtml}</div></body></html>`;
 }
 
 function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
@@ -1445,8 +1695,14 @@ export default function AllInWarehouse() {
     "--aif-label-w": `${labelW}mm`,
     "--aif-label-h": `${labelH}mm`,
     "--aif-label-cols": String(labelColCount),
+    "--aif-label-rows": String(labelRowCount),
     "--aif-label-margin-x": `${labelMarginXmm}mm`,
     "--aif-label-margin-y": `${labelMarginYmm}mm`,
+    "--aif-label-page-w": "210mm",
+    "--aif-label-page-h": "297mm",
+    "--aif-label-preview-scale": String(WAREHOUSE_LABEL_PREVIEW_SCALE),
+    "--aif-label-preview-w": `${210 * WAREHOUSE_LABEL_PREVIEW_SCALE}mm`,
+    "--aif-label-preview-h": `${297 * WAREHOUSE_LABEL_PREVIEW_SCALE}mm`,
   } as React.CSSProperties & Record<string, string>;
 
   function printGeneratedLabels() {
@@ -1454,7 +1710,56 @@ export default function AllInWarehouse() {
       setMessage("Nincs nyomtatható címke. Állíts be legalább egy példányt.");
       return;
     }
-    window.requestAnimationFrame(() => window.print());
+
+    const printHtml = warehouseLabelPrintDocumentHtml(
+      labelPrintPages,
+      { labelContent, labelCompanyName, labelCurrency, labelUnitText, labelShowBorder },
+      { labelW, labelH, labelColCount, labelRowCount, labelMarginXmm, labelMarginYmm },
+    );
+
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-10000px";
+    iframe.style.top = "0";
+    iframe.style.width = "210mm";
+    iframe.style.height = "297mm";
+    iframe.style.border = "0";
+    iframe.style.opacity = "0";
+    iframe.style.pointerEvents = "none";
+    document.body.appendChild(iframe);
+
+    const printWindow = iframe.contentWindow;
+    const printDocument = printWindow?.document;
+    if (!printWindow || !printDocument) {
+      iframe.remove();
+      setMessage("A böngésző nem engedte megnyitni a nyomtatási keretet.");
+      return;
+    }
+
+    let cleaned = false;
+    let cleanupTimer: number | undefined;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (cleanupTimer) window.clearTimeout(cleanupTimer);
+      iframe.remove();
+    };
+
+    printWindow.addEventListener("afterprint", cleanup, { once: true });
+    printDocument.open();
+    printDocument.write(printHtml);
+    printDocument.close();
+
+    const runPrint = () => {
+      printWindow.focus();
+      printWindow.print();
+      cleanupTimer = window.setTimeout(cleanup, 60000);
+    };
+
+    printWindow.requestAnimationFrame(() => {
+      printWindow.requestAnimationFrame(runPrint);
+    });
   }
 
   function WarehouseLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
@@ -1533,7 +1838,7 @@ export default function AllInWarehouse() {
     });
     setSelectedWorkActions((current) => {
       const next: Record<string, SelectedWorkAction> = {};
-      for (const [id, action] of Object.entries(current)) {
+      for (const [id, action] of Object.entries(current) as Array<[string, SelectedWorkAction]>) {
         if (valid.has(id)) next[id] = action;
       }
       return Object.keys(next).length === Object.keys(current).length ? current : next;
@@ -2002,101 +2307,8 @@ export default function AllInWarehouse() {
 
   return (
     <main className={page}>
-      <style>{`
-        .aifWarehouseLabelPrintRoot { display:none; }
-        .aifWhLabelPreviewFrame {
-          max-height:68vh;
-          overflow:auto;
-          border-radius:14px;
-          border:1px solid rgba(255,255,255,.14);
-          background:#2f394a;
-          padding:10px;
-        }
-        .aifWhLabelPreviewFrame .aifWarehouseLabelPrintPage {
-          zoom:.58;
-          box-shadow:0 14px 34px rgba(0,0,0,.26);
-        }
-        .aifWarehouseLabelPrintPage {
-          width:210mm;
-          min-height:297mm;
-          display:grid;
-          grid-template-columns:repeat(var(--aif-label-cols), var(--aif-label-w));
-          grid-auto-rows:var(--aif-label-h);
-          padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
-          box-sizing:border-box;
-          align-content:start;
-          justify-content:start;
-          background:#fff;
-          color:#111;
-          print-color-adjust:exact;
-          -webkit-print-color-adjust:exact;
-        }
-        .aifWarehousePrintLabel {
-          width:var(--aif-label-w);
-          height:var(--aif-label-h);
-          border:1px solid #ddd;
-          border-radius:12px;
-          padding:2mm;
-          color:#111;
-          background:#fff;
-          overflow:hidden;
-          box-sizing:border-box;
-          display:flex;
-          flex-direction:column;
-          justify-content:center;
-          font-family:Arial, sans-serif;
-          page-break-inside:avoid;
-          break-inside:avoid;
-          print-color-adjust:exact;
-          -webkit-print-color-adjust:exact;
-        }
-        .aifWarehousePrintLabel.noBorder { border-color:transparent; }
-        .aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
-        .aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
-        .aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
-        .aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
-        .aifWhLabelDescription { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; font-size:9.5px; line-height:1.08; color:#222; }
-        .aifWhBarcodeSvgWrap { width:100%; overflow:hidden; }
-        .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:54px; }
-        .aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
-        .aifWhLabelCode { margin-top:3px; font-size:8.5px; color:#444; text-align:center; }
-        .aifWhLabelPrice { margin-top:3px; text-align:center; line-height:1; color:#111; white-space:nowrap; }
-        .aifWhPriceMajor { font-size:22px; letter-spacing:.08em; }
-        .aifWhPriceCents { font-size:12px; vertical-align:top; margin-left:2px; }
-        .aifWhPriceUnit { display:inline-block; font-size:8px; margin-left:3px; vertical-align:baseline; }
-        @media print {
-          @page { size:A4; margin:0; }
-          html, body {
-            width:210mm !important;
-            margin:0 !important;
-            padding:0 !important;
-            background:#fff !important;
-          }
-          body * { visibility:hidden !important; }
-          .aifWarehouseLabelPrintRoot, .aifWarehouseLabelPrintRoot * { visibility:visible !important; }
-          .aifWarehouseLabelPrintRoot {
-            display:block !important;
-            position:absolute;
-            left:0;
-            top:0;
-            width:210mm;
-            margin:0 !important;
-            padding:0 !important;
-            background:#ffffff;
-            color:#111111;
-          }
-          .aifWarehouseLabelPrintPage {
-            page-break-after:always;
-            break-after:page;
-            box-shadow:none !important;
-          }
-          .aifWarehouseLabelPrintPage:last-child {
-            page-break-after:auto;
-            break-after:auto;
-          }
-        }
-      `}</style>
-      <div className={shell}>
+      <style id="aifWarehouseLabelPrintCss">{WAREHOUSE_LABEL_APP_CSS}</style>
+      <div className={`${shell} aifWarehouseScreenContent`}>
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm text-white/60">AllInFashion</p>
@@ -2588,12 +2800,14 @@ export default function AllInWarehouse() {
                   </div>
                   {labelPrintItems.length ? (
                     <div className="aifWhLabelPreviewFrame" style={labelPrintStyle}>
-                      <div className="aifWarehouseLabelPrintPage">
-                        {(labelPrintPages[0] || []).map((printLabel) => (
-                          <div className={`aifWarehousePrintLabel ${labelShowBorder ? "" : "noBorder"}`} key={printLabel.key}>
-                            <WarehouseLabelContent label={printLabel} />
-                          </div>
-                        ))}
+                      <div className="aifWhLabelPreviewPageBox">
+                        <div className="aifWarehouseLabelPrintPage">
+                          {(labelPrintPages[0] || []).map((printLabel) => (
+                            <div className={`aifWarehousePrintLabel ${labelShowBorder ? "" : "noBorder"}`} key={printLabel.key}>
+                              <WarehouseLabelContent label={printLabel} />
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -2765,7 +2979,7 @@ export default function AllInWarehouse() {
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 pt-3">
                 <div className="text-xs text-white/60">
-                  Új összesen: <span className="text-white">{Object.values(stockEditorRows).reduce((sum, x) => sum + n(x), 0)}</span>
+                  Új összesen: <span className="text-white">{Object.values(stockEditorRows).reduce<number>((sum, x) => sum + n(x), 0)}</span>
                 </div>
                 <div className="flex gap-2">
                   <button className={btnSoft} onClick={closeStockEditor} disabled={stockEditorSaving} type="button">Mégse</button>
