@@ -22,8 +22,8 @@ import {
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4 sm:py-7";
 const shell = "mx-auto max-w-7xl space-y-4";
-const panel = "rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
-const panelHead = "flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3";
+const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
+const panelHead = "flex items-center justify-between gap-3 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -270,6 +270,13 @@ function money(v: unknown) {
   const x = Number(v);
   if (!Number.isFinite(x)) return String(v);
   return x.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function chartBarWidth(value: unknown, maxValue: unknown, minPositivePercent = 4) {
+  const current = n(value);
+  const max = n(maxValue);
+  if (current <= 0 || max <= 0) return "0%";
+  return `${Math.min(100, Math.max(minPositivePercent, (current / max) * 100))}%`;
 }
 
 type WarehouseBarcodeRender = {
@@ -2255,6 +2262,13 @@ export default function AllInWarehouse() {
   const maxBrandValue = Math.max(1, ...brandChart.map((x) => x.value));
   const maxLocationQty = Math.max(1, ...locationChart.map((x) => x.qty));
 
+  function chartFillWidth(value: number, maxValue: number) {
+    const cleanValue = Number.isFinite(value) ? value : 0;
+    const cleanMax = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 1;
+    if (cleanValue <= 0) return "0%";
+    return `${Math.min(100, Math.max(4, (cleanValue / cleanMax) * 100))}%`;
+  }
+
   function taxonomyMenuOpensUp(index: number, total: number) {
     if (total <= 3) return false;
     return index >= Math.max(2, total - 2);
@@ -2325,7 +2339,7 @@ export default function AllInWarehouse() {
         {message && <div className="rounded-xl border border-white/20 bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
 
         <section className={panel}>
-          <div className={panelHead}>
+          <div className={`${panelHead} ${filtersOpen ? "border-b border-white/12" : ""}`}>
             <div className="flex items-center gap-2"><Filter size={17} /><span>Szűrés és keresés</span></div>
             <button className={btnSoft} onClick={() => setFiltersOpen((x) => !x)}>{filtersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {filtersOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
@@ -2405,7 +2419,7 @@ export default function AllInWarehouse() {
         </section>
 
         <section className={panel}>
-          <div className={panelHead}>
+          <div className={`${panelHead} ${summaryOpen ? "border-b border-white/12" : ""}`}>
             <div className="flex items-center gap-2"><Boxes size={17} /><span>Áttekintés</span></div>
             <button className={btnSoft} onClick={() => setSummaryOpen((x) => !x)}>{summaryOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {summaryOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
@@ -2426,7 +2440,7 @@ export default function AllInWarehouse() {
                     {brandChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
                         <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{money(x.value)}</span></div>
-                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: `${Math.max(4, (x.value / maxBrandValue) * 100)}%` }} /></div>
+                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: chartFillWidth(x.value, maxBrandValue) }} /></div>
                       </div>
                     ))}
                     {!brandChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
@@ -2438,7 +2452,7 @@ export default function AllInWarehouse() {
                     {locationChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
                         <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{x.qty}</span></div>
-                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: `${Math.max(4, (x.qty / maxLocationQty) * 100)}%` }} /></div>
+                        <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: chartFillWidth(x.qty, maxLocationQty) }} /></div>
                       </div>
                     ))}
                     {!locationChart.length && <p className="text-sm text-slate-500">Nincs megjeleníthető adat.</p>}
@@ -2449,8 +2463,8 @@ export default function AllInWarehouse() {
           )}
         </section>
 
-        <section className="rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/16 bg-[#303a4c] px-4 py-3">
+        <section className="overflow-hidden rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
+          <div className={`flex flex-wrap items-center justify-between gap-3 bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/16" : ""}`}>
             <div className="flex flex-wrap items-center gap-2 text-white/95">
               <Eye size={17} />
               <span>Terméklista</span>
