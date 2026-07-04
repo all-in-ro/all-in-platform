@@ -1454,7 +1454,7 @@ export default function AllInWarehouse() {
       setMessage("Nincs nyomtatható címke. Állíts be legalább egy példányt.");
       return;
     }
-    window.print();
+    window.requestAnimationFrame(() => window.print());
   }
 
   function WarehouseLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
@@ -2004,20 +2004,53 @@ export default function AllInWarehouse() {
     <main className={page}>
       <style>{`
         .aifWarehouseLabelPrintRoot { display:none; }
-        .aifWhLabelScreenGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(142px, 1fr)); gap:8px; }
-        .aifWhLabelScreenCard {
-          min-height: 136px;
-          border: 1px solid rgba(255,255,255,.22);
-          border-radius: 12px;
-          background: #ffffff;
-          color: #111;
-          padding: 8px;
-          overflow: hidden;
-          box-sizing: border-box;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
+        .aifWhLabelPreviewFrame {
+          max-height:68vh;
+          overflow:auto;
+          border-radius:14px;
+          border:1px solid rgba(255,255,255,.14);
+          background:#2f394a;
+          padding:10px;
         }
+        .aifWhLabelPreviewFrame .aifWarehouseLabelPrintPage {
+          zoom:.58;
+          box-shadow:0 14px 34px rgba(0,0,0,.26);
+        }
+        .aifWarehouseLabelPrintPage {
+          width:210mm;
+          min-height:297mm;
+          display:grid;
+          grid-template-columns:repeat(var(--aif-label-cols), var(--aif-label-w));
+          grid-auto-rows:var(--aif-label-h);
+          padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
+          box-sizing:border-box;
+          align-content:start;
+          justify-content:start;
+          background:#fff;
+          color:#111;
+          print-color-adjust:exact;
+          -webkit-print-color-adjust:exact;
+        }
+        .aifWarehousePrintLabel {
+          width:var(--aif-label-w);
+          height:var(--aif-label-h);
+          border:1px solid #ddd;
+          border-radius:12px;
+          padding:2mm;
+          color:#111;
+          background:#fff;
+          overflow:hidden;
+          box-sizing:border-box;
+          display:flex;
+          flex-direction:column;
+          justify-content:center;
+          font-family:Arial, sans-serif;
+          page-break-inside:avoid;
+          break-inside:avoid;
+          print-color-adjust:exact;
+          -webkit-print-color-adjust:exact;
+        }
+        .aifWarehousePrintLabel.noBorder { border-color:transparent; }
         .aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
         .aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
         .aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
@@ -2032,57 +2065,35 @@ export default function AllInWarehouse() {
         .aifWhPriceCents { font-size:12px; vertical-align:top; margin-left:2px; }
         .aifWhPriceUnit { display:inline-block; font-size:8px; margin-left:3px; vertical-align:baseline; }
         @media print {
-          @page { size: A4; margin: 0; }
+          @page { size:A4; margin:0; }
+          html, body {
+            width:210mm !important;
+            margin:0 !important;
+            padding:0 !important;
+            background:#fff !important;
+          }
           body * { visibility:hidden !important; }
           .aifWarehouseLabelPrintRoot, .aifWarehouseLabelPrintRoot * { visibility:visible !important; }
           .aifWarehouseLabelPrintRoot {
             display:block !important;
             position:absolute;
-            inset:0;
+            left:0;
+            top:0;
+            width:210mm;
+            margin:0 !important;
+            padding:0 !important;
             background:#ffffff;
             color:#111111;
           }
           .aifWarehouseLabelPrintPage {
-            width:210mm;
-            min-height:297mm;
-            display:grid;
-            grid-template-columns:repeat(var(--aif-label-cols), var(--aif-label-w));
-            grid-auto-rows:var(--aif-label-h);
-            padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
-            box-sizing:border-box;
             page-break-after:always;
-            align-content:start;
-            justify-content:start;
-            background:#fff;
+            break-after:page;
+            box-shadow:none !important;
           }
-          .aifWarehouseLabelPrintPage:last-child { page-break-after:auto; }
-          .aifWarehousePrintLabel {
-            width:var(--aif-label-w);
-            height:var(--aif-label-h);
-            border:1px solid #ddd;
-            padding:2mm;
-            color:#111;
-            background:#fff;
-            overflow:hidden;
-            box-sizing:border-box;
-            display:flex;
-            flex-direction:column;
-            justify-content:center;
-            font-family:Arial, sans-serif;
-            page-break-inside:avoid;
+          .aifWarehouseLabelPrintPage:last-child {
+            page-break-after:auto;
+            break-after:auto;
           }
-          .aifWarehousePrintLabel.noBorder { border-color:transparent; }
-          .aifWarehousePrintLabel .aifWhLabelCompany { font-size:7.5pt; margin-bottom:.6mm; }
-          .aifWarehousePrintLabel .aifWhLabelBrand { font-size:7pt; margin-bottom:.6mm; }
-          .aifWarehousePrintLabel .aifWhLabelTitle { font-size:9.2pt; margin-bottom:.8mm; }
-          .aifWarehousePrintLabel .aifWhLabelMeta { font-size:7.2pt; margin-bottom:.8mm; }
-          .aifWarehousePrintLabel .aifWhLabelDescription { font-size:6.7pt; padding-top:.7mm; margin-top:.7mm; }
-          .aifWarehousePrintLabel .aifWhBarcodeSvgWrap svg { max-height:13mm; }
-          .aifWarehousePrintLabel .aifWhLabelCategory { font-size:7.6pt; padding-top:.6mm; margin-top:.6mm; }
-          .aifWarehousePrintLabel .aifWhLabelCode { font-size:6.4pt; }
-          .aifWarehousePrintLabel .aifWhPriceMajor { font-size:20pt; letter-spacing:.1em; }
-          .aifWarehousePrintLabel .aifWhPriceCents { font-size:11pt; }
-          .aifWarehousePrintLabel .aifWhPriceUnit { font-size:7pt; }
         }
       `}</style>
       <div className={shell}>
@@ -2575,14 +2586,19 @@ export default function AllInWarehouse() {
                     <p className="text-sm text-white">Első oldal előnézet</p>
                     <span className="text-xs text-white/55">{Math.min(labelPrintItems.length, labelsPerPage)} / {labelPrintItems.length} címke</span>
                   </div>
-                  <div className="aifWhLabelScreenGrid">
-                    {labelPrintItems.slice(0, Math.min(labelsPerPage, 18)).map((printLabel) => (
-                      <div className="aifWhLabelScreenCard" key={printLabel.key}>
-                        <WarehouseLabelContent label={printLabel} />
+                  {labelPrintItems.length ? (
+                    <div className="aifWhLabelPreviewFrame" style={labelPrintStyle}>
+                      <div className="aifWarehouseLabelPrintPage">
+                        {(labelPrintPages[0] || []).map((printLabel) => (
+                          <div className={`aifWarehousePrintLabel ${labelShowBorder ? "" : "noBorder"}`} key={printLabel.key}>
+                            <WarehouseLabelContent label={printLabel} />
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                    {!labelPrintItems.length && <div className="rounded-xl border border-white/12 bg-[#465163] px-3 py-8 text-center text-sm text-white/60">Nincs előnézet.</div>}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-white/12 bg-[#465163] px-3 py-8 text-center text-sm text-white/60">Nincs előnézet.</div>
+                  )}
                 </div>
               </section>
             </div>
