@@ -411,21 +411,6 @@ function labelCleanText(input: unknown, max = 120) {
   return String(input ?? "").replace(/[<>]/g, "").slice(0, max);
 }
 
-function labelTextFitClass(input: unknown) {
-  const len = String(input ?? "").trim().length;
-  if (len > 54) return "aifWhFitXs";
-  if (len > 40) return "aifWhFitSm";
-  if (len > 28) return "aifWhFitMd";
-  return "";
-}
-
-function labelBarcodeFitClass(input: unknown) {
-  const len = String(input ?? "").trim().length;
-  if (len > 18) return "aifWhBarcodeLong";
-  if (len > 12) return "aifWhBarcodeMid";
-  return "aifWhBarcodeShort";
-}
-
 function labelShortHashCode(input: string, length = 7) {
   const source = String(input || `${Date.now()}-${Math.random()}`);
   let hash = 2166136261;
@@ -465,7 +450,7 @@ function labelPriceParts(value: unknown) {
   return { major, cents };
 }
 
-function labelCode128Svg(value: string, height = 78): WarehouseBarcodeRender {
+function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
   const code = String(value || "").trim();
   if (!code) return { ok: false, svg: "", width: 0, error: "A vonalkód mező üres." };
 
@@ -509,7 +494,7 @@ function labelCode128Svg(value: string, height = 78): WarehouseBarcodeRender {
   }
 
   const safeText = code.replace(/[<&>]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m] || m));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 20}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 20}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 15}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5">${safeText}</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 18}" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 18}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 13}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5">${safeText}</text></svg>`;
   return { ok: true, svg, width };
 }
 
@@ -1315,12 +1300,11 @@ export default function AllInWarehouse() {
   }
 
   function barcodeForLabelItem(item: InventoryItem) {
-    const existing = labelCleanInternalCode(item.barcode || "");
+    const existing = labelCleanInternalCode(item.barcode || item.internal_sku || "");
     if (existing) return existing;
     return labelMakeInternalCode("", [
       item.variant_id,
       item.model_id,
-      item.internal_sku,
       item.title_ro,
       item.brand_name,
       item.category_name_ro,
@@ -1418,7 +1402,7 @@ export default function AllInWarehouse() {
         productCode: labelProductCodeForItem(item),
         price,
         stockQty: Math.floor(n(item.total_qty)),
-        render: labelCode128Svg(barcode, 82),
+        render: labelCode128Svg(barcode, 58),
       };
     });
   }, [selectedLabelItems, labelCopies, colorTypes, labelDetailMap]);
@@ -1479,14 +1463,14 @@ export default function AllInWarehouse() {
       <>
         {labelContent.company && labelCompanyName && <div className="aifWhLabelCompany">{labelCleanText(labelCompanyName, 48)}</div>}
         {labelContent.brand && label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
-        {labelContent.title && <div className={`aifWhLabelTitle ${labelTextFitClass(label.title)}`}>{labelCleanText(label.title || "Produs", 120)}</div>}
+        {labelContent.title && <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>}
         {labelContent.sizeColor && (label.size || label.color) && (
           <div className="aifWhLabelMeta">
             {label.size && label.size !== "-" && <span>{labelCleanText(label.size, 16)}</span>}
             {label.color && label.color !== "-" && <span>{labelCleanText(label.color, 24)}</span>}
           </div>
         )}
-        {labelContent.barcode && <div className={`aifWhBarcodeSvgWrap ${labelBarcodeFitClass(label.barcode)}`} dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />}
+        {labelContent.barcode && <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />}
         {labelContent.description && label.description && <div className="aifWhLabelDescription">{labelCleanText(label.description, 90)}</div>}
         {labelContent.category && label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
         {labelContent.code && (label.productCode || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(label.productCode || label.barcode, 44)}</div>}
@@ -2020,9 +2004,9 @@ export default function AllInWarehouse() {
     <main className={page}>
       <style>{`
         .aifWarehouseLabelPrintRoot { display:none; }
-        .aifWhLabelScreenGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(156px, 1fr)); gap:8px; align-items:start; }
+        .aifWhLabelScreenGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(142px, 1fr)); gap:8px; }
         .aifWhLabelScreenCard {
-          min-height: 168px;
+          min-height: 136px;
           border: 1px solid rgba(255,255,255,.22);
           border-radius: 12px;
           background: #ffffff;
@@ -2036,16 +2020,11 @@ export default function AllInWarehouse() {
         }
         .aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
         .aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
-        .aifWhLabelTitle { font-size:13px; line-height:1.08; text-align:center; color:#111; margin-bottom:4px; overflow-wrap:anywhere; word-break:normal; }
-        .aifWhLabelTitle.aifWhFitMd { font-size:12px; line-height:1.05; }
-        .aifWhLabelTitle.aifWhFitSm { font-size:10.8px; line-height:1.02; }
-        .aifWhLabelTitle.aifWhFitXs { font-size:9.6px; line-height:1; }
+        .aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
         .aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
         .aifWhLabelDescription { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; font-size:9.5px; line-height:1.08; color:#222; }
-        .aifWhBarcodeSvgWrap { width:100%; overflow:hidden; display:flex; justify-content:center; margin:2px auto 1px; }
-        .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:72px; }
-        .aifWhBarcodeShort svg { max-width:92%; }
-        .aifWhBarcodeMid svg, .aifWhBarcodeLong svg { max-width:100%; }
+        .aifWhBarcodeSvgWrap { width:100%; overflow:hidden; }
+        .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:54px; }
         .aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
         .aifWhLabelCode { margin-top:3px; font-size:8.5px; color:#444; text-align:center; }
         .aifWhLabelPrice { margin-top:3px; text-align:center; line-height:1; color:#111; white-space:nowrap; }
@@ -2094,18 +2073,12 @@ export default function AllInWarehouse() {
           }
           .aifWarehousePrintLabel.noBorder { border-color:transparent; }
           .aifWarehousePrintLabel .aifWhLabelCompany { font-size:7.5pt; margin-bottom:.6mm; }
-          .aifWarehousePrintLabel .aifWhLabelBrand { font-size:7pt; margin-bottom:.55mm; }
-          .aifWarehousePrintLabel .aifWhLabelTitle { font-size:9.4pt; line-height:1.05; margin-bottom:.7mm; overflow-wrap:anywhere; }
-          .aifWarehousePrintLabel .aifWhLabelTitle.aifWhFitMd { font-size:8.4pt; line-height:1.02; }
-          .aifWarehousePrintLabel .aifWhLabelTitle.aifWhFitSm { font-size:7.4pt; line-height:1; }
-          .aifWarehousePrintLabel .aifWhLabelTitle.aifWhFitXs { font-size:6.5pt; line-height:1; }
-          .aifWarehousePrintLabel .aifWhLabelMeta { font-size:7.2pt; margin-bottom:.55mm; }
-          .aifWarehousePrintLabel .aifWhLabelDescription { font-size:6.7pt; line-height:1.05; padding-top:.55mm; margin-top:.55mm; }
-          .aifWarehousePrintLabel .aifWhBarcodeSvgWrap { margin:.55mm auto .35mm; width:100%; }
-          .aifWarehousePrintLabel .aifWhBarcodeSvgWrap svg { width:100%; height:auto; max-height:17mm; min-height:11mm; }
-          .aifWarehousePrintLabel .aifWhBarcodeShort svg { max-width:94%; }
-          .aifWarehousePrintLabel .aifWhBarcodeMid svg, .aifWarehousePrintLabel .aifWhBarcodeLong svg { max-width:100%; }
-          .aifWarehousePrintLabel .aifWhLabelCategory { font-size:7.6pt; padding-top:.55mm; margin-top:.55mm; }
+          .aifWarehousePrintLabel .aifWhLabelBrand { font-size:7pt; margin-bottom:.6mm; }
+          .aifWarehousePrintLabel .aifWhLabelTitle { font-size:9.2pt; margin-bottom:.8mm; }
+          .aifWarehousePrintLabel .aifWhLabelMeta { font-size:7.2pt; margin-bottom:.8mm; }
+          .aifWarehousePrintLabel .aifWhLabelDescription { font-size:6.7pt; padding-top:.7mm; margin-top:.7mm; }
+          .aifWarehousePrintLabel .aifWhBarcodeSvgWrap svg { max-height:13mm; }
+          .aifWarehousePrintLabel .aifWhLabelCategory { font-size:7.6pt; padding-top:.6mm; margin-top:.6mm; }
           .aifWarehousePrintLabel .aifWhLabelCode { font-size:6.4pt; }
           .aifWarehousePrintLabel .aifWhPriceMajor { font-size:20pt; letter-spacing:.1em; }
           .aifWarehousePrintLabel .aifWhPriceCents { font-size:11pt; }
@@ -2604,7 +2577,7 @@ export default function AllInWarehouse() {
                   </div>
                   <div className="aifWhLabelScreenGrid">
                     {labelPrintItems.slice(0, Math.min(labelsPerPage, 18)).map((printLabel) => (
-                      <div className="aifWhLabelScreenCard" key={printLabel.key} style={{ aspectRatio: `${labelW} / ${labelH}` }}>
+                      <div className="aifWhLabelScreenCard" key={printLabel.key}>
                         <WarehouseLabelContent label={printLabel} />
                       </div>
                     ))}
