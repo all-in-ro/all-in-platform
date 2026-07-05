@@ -3961,6 +3961,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return stock.rows;
   }
 
+  function stockMovementSourceId(prefix, variantId, locationId) {
+    const rand = Math.random().toString(36).slice(2, 10);
+    return `${prefix}:${variantId}:${locationId}:${Date.now()}:${rand}`;
+  }
+
   router.patch("/variants/:id/stock", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const rowsInput = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -4028,39 +4033,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         const diff = qty - beforeQty;
         if (diff !== 0 || reservedQty !== beforeReserved) {
-          try {
-            await client.query("SAVEPOINT aif_stock_movement_log");
-            await client.query(
-              `INSERT INTO aif_stock_movements (
-                 movement_type, source_type, source_id, location_id, variant_id,
-                 qty_delta, qty_before, qty_after, actor, raw
-               )
-               VALUES ('adjustment','manual_stock_edit',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-              [
-                `manual_stock_edit:${Date.now()}`,
-                location.id,
-                variantId,
-                diff,
-                beforeQty,
-                qty,
-                actor,
-                JSON.stringify({
-                  reason: "manual_location_stock_edit",
-                  locationCode: location.code,
-                  locationName: location.name,
-                  qtyBefore: beforeQty,
-                  qtyAfter: qty,
-                  reservedBefore: beforeReserved,
-                  reservedAfter: reservedQty,
-                }),
-              ]
-            );
-            await client.query("RELEASE SAVEPOINT aif_stock_movement_log");
-          } catch (movementError) {
-            try { await client.query("ROLLBACK TO SAVEPOINT aif_stock_movement_log"); } catch {}
-            try { await client.query("RELEASE SAVEPOINT aif_stock_movement_log"); } catch {}
-            console.error("AIF stock movement log warning", movementError);
-          }
+          await client.query(
+            `INSERT INTO aif_stock_movements (
+               movement_type, source_type, source_id, location_id, variant_id,
+               qty_delta, qty_before, qty_after, actor, raw
+             )
+             VALUES ('adjustment','manual_stock_edit',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+            [
+              stockMovementSourceId("manual_stock_edit", variantId, location.id),
+              location.id,
+              variantId,
+              diff,
+              beforeQty,
+              qty,
+              actor,
+              JSON.stringify({
+                reason: "manual_location_stock_edit",
+                direction: diff > 0 ? "in" : diff < 0 ? "out" : "adjust",
+                locationCode: location.code,
+                locationName: location.name,
+                qtyBefore: beforeQty,
+                qtyAfter: qty,
+                reservedBefore: beforeReserved,
+                reservedAfter: reservedQty,
+              }),
+            ]
+          );
         }
       }
 
@@ -4359,6 +4357,50 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [variantId]
       );
 
+      const stockRowsForRemoval = await client.query(
+        `SELECT s.location_id, l.code AS location_code, l.name AS location_name,
+                COALESCE(s.qty,0)::numeric AS qty,
+                COALESCE(s.reserved_qty,0)::numeric AS reserved_qty
+         FROM aif_stock s
+         JOIN aif_locations l ON l.id=s.location_id
+         WHERE s.variant_id=$1
+         FOR UPDATE OF s`,
+        [variantId]
+      );
+
+      let stockMovementsCreated = 0;
+      for (const stockRow of stockRowsForRemoval.rows) {
+        const beforeQty = Number(stockRow.qty || 0);
+        const beforeReserved = Number(stockRow.reserved_qty || 0);
+        if (beforeQty === 0 && beforeReserved === 0) continue;
+        await client.query(
+          `INSERT INTO aif_stock_movements (
+             movement_type, source_type, source_id, location_id, variant_id,
+             qty_delta, qty_before, qty_after, actor, raw
+           )
+           VALUES ('adjustment','variant_archive_stock_clear',$1,$2,$3,$4,$5,0,$6,$7::jsonb)`,
+          [
+            stockMovementSourceId("variant_archive_stock_clear", variantId, stockRow.location_id),
+            stockRow.location_id,
+            variantId,
+            -beforeQty,
+            beforeQty,
+            actorFrom(req),
+            JSON.stringify({
+              reason: "variant_archive_stock_clear",
+              direction: beforeQty > 0 ? "out" : "adjust",
+              locationCode: stockRow.location_code,
+              locationName: stockRow.location_name,
+              qtyBefore: beforeQty,
+              qtyAfter: 0,
+              reservedBefore: beforeReserved,
+              reservedAfter: 0,
+            }),
+          ]
+        );
+        stockMovementsCreated++;
+      }
+
       await client.query(
         `UPDATE aif_product_variants
          SET status='archived', updated_at=now()
@@ -4402,6 +4444,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           qty: Number(stockUsage.rows[0]?.qty || 0),
           reserved_qty: Number(stockUsage.rows[0]?.reserved_qty || 0),
           movements: Number(movementUsage.rows[0]?.movements || 0),
+          stock_movements_created: stockMovementsCreated,
           import_rows: Number(importUsage.rows[0]?.import_rows || 0),
         },
       });
