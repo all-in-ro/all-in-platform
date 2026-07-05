@@ -51,6 +51,23 @@ const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
 const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariantActions:v1";
 const selectedProductCloudMigrationStorageKey = "allinfashion:warehouse:selectedVariantsCloudMigrated:v1";
+const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
+const stockMovesChangedEventName = "aif:stock-moves-changed";
+
+function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
+  if (typeof window === "undefined") return;
+  const payload = { at: new Date().toISOString(), ...detail };
+  try {
+    window.localStorage.setItem(stockMovesChangedStorageKey, JSON.stringify(payload));
+  } catch {
+    // Ha a localStorage megsértődik, legalább az aktuális ablak kapjon jelzést. Webfejlesztés, gyönyörű szakma.
+  }
+  try {
+    window.dispatchEvent(new CustomEvent(stockMovesChangedEventName, { detail: payload }));
+  } catch {
+    // Nem kritikus, a következő betöltés / auto refresh úgyis behozza.
+  }
+}
 
 type SelectedWorkAction = "label" | "order" | "move";
 
@@ -1518,7 +1535,9 @@ export default function AllInWarehouse() {
           reservedQty,
         };
       });
-      await apiVariantStockUpdate(stockEditorTarget.variant_id, rows);
+      const changedVariantId = String(stockEditorTarget.variant_id || "");
+      await apiVariantStockUpdate(changedVariantId, rows);
+      notifyStockMovesChanged({ variantId: changedVariantId, source: "warehouse_stock_editor" });
       await load();
       if (detail?.item?.id && String(detail.item.id) === String(stockEditorTarget.variant_id)) {
         const d = await apiVariantDetail(stockEditorTarget.variant_id);
@@ -2851,7 +2870,9 @@ export default function AllInWarehouse() {
     setSaving(true);
     setMessage("");
     try {
-      await apiVariantDelete(productDeleteTarget.variant_id);
+      const deletedVariantId = String(productDeleteTarget.variant_id || "");
+      await apiVariantDelete(deletedVariantId);
+      notifyStockMovesChanged({ variantId: deletedVariantId, source: "warehouse_variant_delete" });
       setProductDeleteTarget(null);
       if (detail?.item?.id && String(detail.item.id) === String(productDeleteTarget.variant_id)) setDetail(null);
       await load();
