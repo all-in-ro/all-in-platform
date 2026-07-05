@@ -3962,8 +3962,76 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function stockMovementSourceId(prefix, variantId, locationId) {
-    const rand = Math.random().toString(36).slice(2, 10);
-    return `${prefix}:${variantId}:${locationId}:${Date.now()}:${rand}`;
+    // Keep this intentionally short. Some existing databases have source_id as varchar(40/64),
+    // and a huge UUID-packed id makes stock edits fail. Fantastic little trap, obviously.
+    const cleanPrefix = normCode(prefix || "stock").slice(0, 12) || "stock";
+    const timePart = Date.now().toString(36);
+    const rand = Math.random().toString(36).slice(2, 8);
+    return `${cleanPrefix}:${timePart}:${rand}`;
+  }
+
+  async function insertStockMovementSafe(client, {
+    movementType = "manual_adjustment",
+    sourceType = "manual_stock_edit",
+    sourcePrefix = "stock",
+    locationId,
+    variantId,
+    qtyDelta,
+    qtyBefore,
+    qtyAfter,
+    actor = "system",
+    raw = {},
+    fallbackSourceType = "manual_stock_edit",
+  }) {
+    const insertOnce = async (safeSourceType, safeSourcePrefix) => {
+      await client.query(
+        `INSERT INTO aif_stock_movements (
+           movement_type, source_type, source_id, location_id, variant_id,
+           qty_delta, qty_before, qty_after, actor, raw
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+        [
+          movementType,
+          safeSourceType,
+          stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId),
+          locationId,
+          variantId,
+          qtyDelta,
+          qtyBefore,
+          qtyAfter,
+          actor,
+          JSON.stringify(raw || {}),
+        ]
+      );
+    };
+
+    try {
+      await client.query("SAVEPOINT aif_stock_movement_log");
+      await insertOnce(sourceType, sourcePrefix || sourceType);
+      await client.query("RELEASE SAVEPOINT aif_stock_movement_log");
+      return true;
+    } catch (firstError) {
+      try { await client.query("ROLLBACK TO SAVEPOINT aif_stock_movement_log"); } catch {}
+      try { await client.query("RELEASE SAVEPOINT aif_stock_movement_log"); } catch {}
+
+      if (fallbackSourceType && fallbackSourceType !== sourceType) {
+        try {
+          await client.query("SAVEPOINT aif_stock_movement_log_fallback");
+          await insertOnce(fallbackSourceType, fallbackSourceType);
+          await client.query("RELEASE SAVEPOINT aif_stock_movement_log_fallback");
+          console.error("AIF stock movement logged with fallback source_type", { sourceType, fallbackSourceType, error: firstError?.message || firstError });
+          return true;
+        } catch (fallbackError) {
+          try { await client.query("ROLLBACK TO SAVEPOINT aif_stock_movement_log_fallback"); } catch {}
+          try { await client.query("RELEASE SAVEPOINT aif_stock_movement_log_fallback"); } catch {}
+          console.error("AIF stock movement log warning", fallbackError);
+          return false;
+        }
+      }
+
+      console.error("AIF stock movement log warning", firstError);
+      return false;
+    }
   }
 
   router.patch("/variants/:id/stock", requireAuthed, async (req, res) => {
@@ -4033,32 +4101,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         const diff = qty - beforeQty;
         if (diff !== 0 || reservedQty !== beforeReserved) {
-          await client.query(
-            `INSERT INTO aif_stock_movements (
-               movement_type, source_type, source_id, location_id, variant_id,
-               qty_delta, qty_before, qty_after, actor, raw
-             )
-             VALUES ('adjustment','manual_stock_edit',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-            [
-              stockMovementSourceId("manual_stock_edit", variantId, location.id),
-              location.id,
-              variantId,
-              diff,
-              beforeQty,
-              qty,
-              actor,
-              JSON.stringify({
-                reason: "manual_location_stock_edit",
-                direction: diff > 0 ? "in" : diff < 0 ? "out" : "adjust",
-                locationCode: location.code,
-                locationName: location.name,
-                qtyBefore: beforeQty,
-                qtyAfter: qty,
-                reservedBefore: beforeReserved,
-                reservedAfter: reservedQty,
-              }),
-            ]
-          );
+          await insertStockMovementSafe(client, {
+            movementType: "manual_adjustment",
+            sourceType: "manual_stock_edit",
+            sourcePrefix: "manual_stock",
+            locationId: location.id,
+            variantId,
+            qtyDelta: diff,
+            qtyBefore: beforeQty,
+            qtyAfter: qty,
+            actor,
+            raw: {
+              reason: "manual_location_stock_edit",
+              direction: diff > 0 ? "in" : diff < 0 ? "out" : "adjust",
+              locationCode: location.code,
+              locationName: location.name,
+              qtyBefore: beforeQty,
+              qtyAfter: qty,
+              reservedBefore: beforeReserved,
+              reservedAfter: reservedQty,
+            },
+          });
         }
       }
 
@@ -4373,32 +4436,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const beforeQty = Number(stockRow.qty || 0);
         const beforeReserved = Number(stockRow.reserved_qty || 0);
         if (beforeQty === 0 && beforeReserved === 0) continue;
-        await client.query(
-          `INSERT INTO aif_stock_movements (
-             movement_type, source_type, source_id, location_id, variant_id,
-             qty_delta, qty_before, qty_after, actor, raw
-           )
-           VALUES ('adjustment','variant_archive_stock_clear',$1,$2,$3,$4,$5,0,$6,$7::jsonb)`,
-          [
-            stockMovementSourceId("variant_archive_stock_clear", variantId, stockRow.location_id),
-            stockRow.location_id,
-            variantId,
-            -beforeQty,
-            beforeQty,
-            actorFrom(req),
-            JSON.stringify({
-              reason: "variant_archive_stock_clear",
-              direction: beforeQty > 0 ? "out" : "adjust",
-              locationCode: stockRow.location_code,
-              locationName: stockRow.location_name,
-              qtyBefore: beforeQty,
-              qtyAfter: 0,
-              reservedBefore: beforeReserved,
-              reservedAfter: 0,
-            }),
-          ]
-        );
-        stockMovementsCreated++;
+        const logged = await insertStockMovementSafe(client, {
+          movementType: "manual_adjustment",
+          sourceType: "variant_archive_stock_clear",
+          sourcePrefix: "archive_clear",
+          fallbackSourceType: "manual_stock_edit",
+          locationId: stockRow.location_id,
+          variantId,
+          qtyDelta: -beforeQty,
+          qtyBefore: beforeQty,
+          qtyAfter: 0,
+          actor: actorFrom(req),
+          raw: {
+            reason: "variant_archive_stock_clear",
+            direction: beforeQty > 0 ? "out" : "adjust",
+            locationCode: stockRow.location_code,
+            locationName: stockRow.location_name,
+            qtyBefore: beforeQty,
+            qtyAfter: 0,
+            reservedBefore: beforeReserved,
+            reservedAfter: 0,
+          },
+        });
+        if (logged) stockMovementsCreated++;
       }
 
       await client.query(
@@ -4667,7 +4727,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } else if (["out", "outgoing", "ki", "kimeno", "eladas", "levonas"].includes(direction)) {
       where.push(`sm.qty_delta < 0`);
     } else if (["adjust", "adjustment", "korrekcio", "manual"].includes(direction)) {
-      where.push(`(sm.qty_delta = 0 OR sm.movement_type = 'adjustment' OR sm.source_type ILIKE '%manual%')`);
+      where.push(`(sm.qty_delta = 0 OR sm.movement_type IN ('manual_adjustment','adjustment') OR sm.source_type ILIKE '%manual%')`);
     }
     const searchWhere = aifStockProductSearchWhere(search, args);
     if (searchWhere) where.push(searchWhere);
