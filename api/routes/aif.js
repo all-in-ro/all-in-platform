@@ -141,56 +141,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       PRIMARY KEY (owner_key, variant_id),
       CHECK (action IS NULL OR action IN ('label','order','move'))
     )`);
-
-    // Upgrade older installs too. Because naturally the database remembers every past bad decision.
-    await client.query(`DO $$
-    DECLARE constraint_name text;
-    BEGIN
-      IF to_regclass('aif_user_selected_variants') IS NOT NULL THEN
-        FOR constraint_name IN
-          SELECT conname
-          FROM pg_constraint
-          WHERE conrelid = 'aif_user_selected_variants'::regclass
-            AND contype = 'f'
-        LOOP
-          EXECUTE format('ALTER TABLE aif_user_selected_variants DROP CONSTRAINT IF EXISTS %I', constraint_name);
-        END LOOP;
-      END IF;
-    END $$`);
-
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ADD COLUMN IF NOT EXISTS action text NULL`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ADD COLUMN IF NOT EXISTS raw jsonb NOT NULL DEFAULT '{}'::jsonb`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ALTER COLUMN variant_id TYPE text USING variant_id::text`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ALTER COLUMN owner_key TYPE text USING owner_key::text`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ALTER COLUMN sort_order SET DEFAULT 0`);
-    await client.query(`ALTER TABLE aif_user_selected_variants
-      ALTER COLUMN raw SET DEFAULT '{}'::jsonb`);
-
-    await client.query(`DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'aif_user_selected_variants'::regclass
-          AND conname = 'aif_user_selected_variants_action_check'
-      ) THEN
-        ALTER TABLE aif_user_selected_variants
-          ADD CONSTRAINT aif_user_selected_variants_action_check
-          CHECK (action IS NULL OR action IN ('label','order','move'));
-      END IF;
-    END $$`);
-
     await client.query(`CREATE INDEX IF NOT EXISTS aif_user_selected_variants_owner_sort_idx
       ON aif_user_selected_variants (owner_key, sort_order, updated_at)`);
   }
@@ -4573,9 +4523,43 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
+  function aifStockProductJoinSql(baseAlias = "sm") {
+    return `
+       JOIN aif_locations l ON l.id=${baseAlias}.location_id
+       JOIN aif_product_variants v ON v.id=${baseAlias}.variant_id
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_barcode, supplier_sku, supplier_product_code, supplier_variant_code
+         FROM aif_variant_supplier_codes sc
+         WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+         ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true`;
+  }
+
+  function aifStockProductSearchWhere(search, args) {
+    const q = text(search);
+    if (!q) return null;
+    args.push(`%${q}%`);
+    const p = `$${args.length}`;
+    return `(
+      m.title_ro ILIKE ${p}
+      OR COALESCE(m.shopify_title,'') ILIKE ${p}
+      OR COALESCE(b.name,'') ILIKE ${p}
+      OR COALESCE(c.name_ro,'') ILIKE ${p}
+      OR COALESCE(v.color_name,'') ILIKE ${p}
+      OR COALESCE(v.size,'') ILIKE ${p}
+      OR COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku, '') ILIKE ${p}
+      OR COALESCE(v.internal_sku,'') ILIKE ${p}
+    )`;
+  }
+
   router.get("/stock", requireAuthed, async (req, res) => {
     const location = text(req.query.location || req.query.locationCode || req.query.location_id);
     const variant = text(req.query.variant || req.query.variantId || req.query.variant_id);
+    const search = text(req.query.search || req.query.q);
     const args = [];
     const where = [];
     if (location) {
@@ -4584,22 +4568,111 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     if (variant) {
       args.push(variant);
-      where.push(`(v.id::text=$${args.length} OR v.internal_sku=$${args.length} OR v.barcode=$${args.length})`);
+      where.push(`(v.id::text=$${args.length} OR v.internal_sku=$${args.length} OR v.barcode=$${args.length} OR sc.supplier_barcode=$${args.length} OR sc.supplier_sku=$${args.length})`);
     }
+    const searchWhere = aifStockProductSearchWhere(search, args);
+    if (searchWhere) where.push(searchWhere);
     const r = await pool.query(
       `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
-              v.id AS variant_id, v.internal_sku, v.barcode, v.size, v.color_code, v.color_name,
-              m.title_ro, s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
+              v.id AS variant_id, v.internal_sku, v.barcode,
+              COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+              v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
+              m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
+              b.name AS brand_name, b.code AS brand_code,
+              c.name_ro AS category_name_ro, c.code AS category_code,
+              s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
        FROM aif_stock s
-       JOIN aif_locations l ON l.id=s.location_id
-       JOIN aif_product_variants v ON v.id=s.variant_id
-       JOIN aif_product_models m ON m.id=v.model_id
+       ${aifStockProductJoinSql("s")}
        ${where.length ? "WHERE " + where.join(" AND ") : ""}
        ORDER BY l.name ASC, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC`,
       args
     );
     res.json({ items: r.rows });
   });
+
+  async function listStockMovements(req, res) {
+    const location = text(req.query.location || req.query.locationCode || req.query.location_id);
+    const variant = text(req.query.variant || req.query.variantId || req.query.variant_id);
+    const search = text(req.query.search || req.query.q);
+    const direction = normCode(req.query.direction || req.query.type || "all");
+    const from = emptyToNull(req.query.from || req.query.dateFrom || req.query.date_from);
+    const to = emptyToNull(req.query.to || req.query.dateTo || req.query.date_to);
+    const limit = Math.min(800, Math.max(1, Number(req.query.limit || 250)));
+
+    const args = [];
+    const where = [];
+    if (location) {
+      args.push(location);
+      where.push(`(l.code=$${args.length} OR l.id::text=$${args.length})`);
+    }
+    if (variant) {
+      args.push(variant);
+      where.push(`(v.id::text=$${args.length} OR v.internal_sku=$${args.length} OR v.barcode=$${args.length} OR sc.supplier_barcode=$${args.length} OR sc.supplier_sku=$${args.length})`);
+    }
+    if (from) {
+      args.push(from);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(from)) where.push(`sm.created_at >= $${args.length}::date`);
+      else where.push(`sm.created_at >= $${args.length}::timestamptz`);
+    }
+    if (to) {
+      args.push(to);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(to)) where.push(`sm.created_at < ($${args.length}::date + interval '1 day')`);
+      else where.push(`sm.created_at <= $${args.length}::timestamptz`);
+    }
+    if (["in", "incoming", "be", "bejovo", "bevetelezes"].includes(direction)) {
+      where.push(`sm.qty_delta > 0`);
+    } else if (["out", "outgoing", "ki", "kimeno", "eladas", "levonas"].includes(direction)) {
+      where.push(`sm.qty_delta < 0`);
+    } else if (["adjust", "adjustment", "korrekcio", "manual"].includes(direction)) {
+      where.push(`(sm.qty_delta = 0 OR sm.movement_type = 'adjustment' OR sm.source_type ILIKE '%manual%')`);
+    }
+    const searchWhere = aifStockProductSearchWhere(search, args);
+    if (searchWhere) where.push(searchWhere);
+
+    const fromSql = `
+       FROM aif_stock_movements sm
+       ${aifStockProductJoinSql("sm")}
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}`;
+
+    try {
+      const totals = await pool.query(
+        `SELECT
+           count(*)::int AS movement_count,
+           count(DISTINCT sm.variant_id)::int AS distinct_variants,
+           COALESCE(sum(CASE WHEN sm.qty_delta > 0 THEN sm.qty_delta ELSE 0 END),0)::numeric AS incoming_qty,
+           COALESCE(sum(CASE WHEN sm.qty_delta < 0 THEN abs(sm.qty_delta) ELSE 0 END),0)::numeric AS outgoing_qty,
+           COALESCE(sum(sm.qty_delta),0)::numeric AS net_qty
+         ${fromSql}`,
+        args
+      );
+
+      const rowArgs = [...args, limit];
+      const rows = await pool.query(
+        `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
+                sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
+                CASE WHEN sm.qty_delta > 0 THEN 'in' WHEN sm.qty_delta < 0 THEN 'out' ELSE 'adjust' END AS direction,
+                l.id AS location_id, l.code AS location_code, l.name AS location_name,
+                v.id AS variant_id, v.internal_sku, v.barcode,
+                COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+                v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
+                m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
+                b.name AS brand_name, b.code AS brand_code,
+                c.name_ro AS category_name_ro, c.code AS category_code
+         ${fromSql}
+         ORDER BY sm.created_at DESC, sm.id DESC
+         LIMIT $${rowArgs.length}`,
+        rowArgs
+      );
+
+      res.json({ items: rows.rows, totals: totals.rows[0] || {} });
+    } catch (e) {
+      console.error("AIF stock movements failed", e);
+      res.status(500).json({ error: e?.message || "A készletmozgások betöltése nem sikerült.", code: e?.code || null });
+    }
+  }
+
+  router.get("/stock-movements", requireAuthed, listStockMovements);
+  router.get("/stock/movements", requireAuthed, listStockMovements);
 
   router.get("/health", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
