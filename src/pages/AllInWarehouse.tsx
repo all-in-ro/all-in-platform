@@ -26,6 +26,7 @@ const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07
 const panelHead = "flex items-center justify-between gap-3 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
@@ -1267,6 +1268,14 @@ function nextSortOrder(rows: Array<{ sort_order?: number | string | null }>) {
   return String(rows.length + 1);
 }
 
+function overviewOpenByDefault() {
+  if (typeof window === "undefined") return true;
+  if (typeof window.matchMedia === "function") {
+    return !window.matchMedia("(max-width: 767px)").matches;
+  }
+  return window.innerWidth >= 768;
+}
+
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
@@ -1290,7 +1299,7 @@ export default function AllInWarehouse() {
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("name");
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [summaryOpen, setSummaryOpen] = useState(true);
+  const [summaryOpen, setSummaryOpen] = useState(() => overviewOpenByDefault());
   const [listOpen, setListOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -1643,6 +1652,7 @@ export default function AllInWarehouse() {
     order: selectedOrderItems.length,
     move: selectedMoveItems.length,
   };
+  const selectedWorkButtonClass = (action: SelectedWorkAction) => selectedWorkCounts[action] > 0 ? primaryBtn : btnSoft;
   const selectedFilteredCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedFilteredCount === filteredVariantIds.length;
 
@@ -3072,13 +3082,13 @@ export default function AllInWarehouse() {
                 <h2 className="mt-1 text-lg text-white">{selectedCount} termék kijelölve</h2>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <button className={btnSoft} type="button" disabled={!selectedWorkCounts.label} onClick={() => setSelectedWorkPanel("label")} title="Vonalkód / címke listára tett termékek">
+                <button className={selectedWorkButtonClass("label")} type="button" disabled={!selectedWorkCounts.label} onClick={() => setSelectedWorkPanel("label")} title="Vonalkód / címke listára tett termékek">
                   <Barcode size={15} /> Vonalkód / címke {selectedWorkCounts.label > 0 ? `(${selectedWorkCounts.label})` : ""}
                 </button>
-                <button className={btnSoft} type="button" disabled={!selectedWorkCounts.order} onClick={() => setSelectedWorkPanel("order")} title="Rendelés / PDF listára tett termékek">
+                <button className={selectedWorkButtonClass("order")} type="button" disabled={!selectedWorkCounts.order} onClick={() => setSelectedWorkPanel("order")} title="Rendelés / PDF listára tett termékek">
                   <ClipboardList size={15} /> Rendelés / PDF {selectedWorkCounts.order > 0 ? `(${selectedWorkCounts.order})` : ""}
                 </button>
-                <button className={btnSoft} type="button" disabled={!selectedWorkCounts.move} onClick={() => setSelectedWorkPanel("move")} title="Készletmozgatás listára tett termékek">
+                <button className={selectedWorkButtonClass("move")} type="button" disabled={!selectedWorkCounts.move} onClick={() => setSelectedWorkPanel("move")} title="Készletmozgatás listára tett termékek">
                   <PackageCheck size={15} /> Készletmozgatás {selectedWorkCounts.move > 0 ? `(${selectedWorkCounts.move})` : ""}
                 </button>
                 <button className={btnSoft} onClick={() => setSelectedPanelOpen(false)} type="button"><X size={15} /> Bezárás</button>
@@ -3131,7 +3141,7 @@ export default function AllInWarehouse() {
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3">
                 <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli"><X size={15} /> Teljes kijelölés törlése</button>
-                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(false)} type="button">Kész</button>
+                <button className={primaryBtn} onClick={() => setSelectedPanelOpen(false)} type="button">Kész</button>
               </div>
             </div>
           </div>
@@ -3336,7 +3346,7 @@ export default function AllInWarehouse() {
               </div>
               <div className="flex flex-wrap justify-end gap-2">
                 {selectedWorkPanel === "label" && (
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy}>
+                  <button className={primaryBtn} onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy}>
                     <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Vonalkódok / címkék generálása"}
                   </button>
                 )}
