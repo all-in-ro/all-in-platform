@@ -1,4 +1,4 @@
--- Optional performance indexes for the AllInFashion stock movement page.
+4-- Optional performance indexes for the AllInFashion stock movement page.
 -- Safe to run multiple times.
 
 CREATE INDEX IF NOT EXISTS idx_aif_stock_movements_created_at_desc
