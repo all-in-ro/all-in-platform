@@ -34,7 +34,7 @@ WITH movement_totals AS (
     raw
   )
   SELECT
-    'adjustment',
+    'manual_adjustment',
     'stock_movement_gap_backfill',
     'stock_movement_gap_backfill:' || d.variant_id::text || ':' || d.location_id::text || ':' || to_char(now(), 'YYYYMMDDHH24MISS'),
     d.location_id,
