@@ -62,6 +62,180 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return text(req.session?.actor || req.session?.shopId || req.session?.role || "system") || "system";
   }
 
+  function selectionOwnerKey(req) {
+    const session = req.session || {};
+    const user = req.user || {};
+    const sessionUser = session.user && typeof session.user === "object" ? session.user : {};
+    const candidates = [
+      session.userId, session.user_id, session.adminId, session.admin_id,
+      session.employeeId, session.employee_id, session.email, session.username,
+      session.shopId, session.shop_id, session.actor,
+      sessionUser.id, sessionUser.userId, sessionUser.user_id, sessionUser.email, sessionUser.username,
+      user.id, user.userId, user.user_id, user.email, user.username,
+      session.role,
+    ];
+    for (const candidate of candidates) {
+      const value = text(candidate);
+      if (value) return value.slice(0, 200);
+    }
+    return "system";
+  }
+
+  function cleanSelectedWorkAction(value) {
+    const action = normCode(value);
+    return ["label", "order", "move"].includes(action) ? action : null;
+  }
+
+  function selectedRowsFromBody(body) {
+    const sourceItems = Array.isArray(body?.items)
+      ? body.items
+      : Array.isArray(body?.selectedVariantIds)
+        ? body.selectedVariantIds
+        : Array.isArray(body?.selected_variant_ids)
+          ? body.selected_variant_ids
+          : Array.isArray(body?.variantIds)
+            ? body.variantIds
+            : Array.isArray(body?.variant_ids)
+              ? body.variant_ids
+              : [];
+    const actionMap = body?.actions && typeof body.actions === "object" && !Array.isArray(body.actions) ? body.actions : {};
+    const selectedObject = body?.selectedVariants && typeof body.selectedVariants === "object" && !Array.isArray(body.selectedVariants)
+      ? body.selectedVariants
+      : body?.selected_variants && typeof body.selected_variants === "object" && !Array.isArray(body.selected_variants)
+        ? body.selected_variants
+        : null;
+    const rows = [];
+
+    if (sourceItems.length) {
+      for (const item of sourceItems) {
+        const id = text(typeof item === "object" && item !== null ? (item.variantId || item.variant_id || item.id) : item);
+        if (!id) continue;
+        const action = cleanSelectedWorkAction(typeof item === "object" && item !== null ? (item.action || item.selectedAction || item.selected_action || actionMap[id]) : actionMap[id]);
+        rows.push({ variantId: id, action });
+      }
+    } else if (selectedObject) {
+      for (const [idRaw, selected] of Object.entries(selectedObject)) {
+        const id = text(idRaw);
+        if (!id || !selected) continue;
+        rows.push({ variantId: id, action: cleanSelectedWorkAction(actionMap[id]) });
+      }
+    }
+
+    const seen = new Set();
+    return rows.filter((row) => {
+      if (!row.variantId || seen.has(row.variantId)) return false;
+      seen.add(row.variantId);
+      return true;
+    }).slice(0, 1000);
+  }
+
+  async function ensureSelectedVariantsTable(client) {
+    await client.query(`CREATE TABLE IF NOT EXISTS aif_user_selected_variants (
+      owner_key text NOT NULL,
+      variant_id text NOT NULL,
+      action text NULL,
+      sort_order integer NOT NULL DEFAULT 0,
+      raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (owner_key, variant_id),
+      CHECK (action IS NULL OR action IN ('label','order','move'))
+    )`);
+
+    // Upgrade older installs too. Because naturally the database remembers every past bad decision.
+    await client.query(`DO $$
+    DECLARE constraint_name text;
+    BEGIN
+      IF to_regclass('aif_user_selected_variants') IS NOT NULL THEN
+        FOR constraint_name IN
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'aif_user_selected_variants'::regclass
+            AND contype = 'f'
+        LOOP
+          EXECUTE format('ALTER TABLE aif_user_selected_variants DROP CONSTRAINT IF EXISTS %I', constraint_name);
+        END LOOP;
+      END IF;
+    END $$`);
+
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ADD COLUMN IF NOT EXISTS action text NULL`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ADD COLUMN IF NOT EXISTS raw jsonb NOT NULL DEFAULT '{}'::jsonb`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ALTER COLUMN variant_id TYPE text USING variant_id::text`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ALTER COLUMN owner_key TYPE text USING owner_key::text`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ALTER COLUMN sort_order SET DEFAULT 0`);
+    await client.query(`ALTER TABLE aif_user_selected_variants
+      ALTER COLUMN raw SET DEFAULT '{}'::jsonb`);
+
+    await client.query(`DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'aif_user_selected_variants'::regclass
+          AND conname = 'aif_user_selected_variants_action_check'
+      ) THEN
+        ALTER TABLE aif_user_selected_variants
+          ADD CONSTRAINT aif_user_selected_variants_action_check
+          CHECK (action IS NULL OR action IN ('label','order','move'));
+      END IF;
+    END $$`);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_user_selected_variants_owner_sort_idx
+      ON aif_user_selected_variants (owner_key, sort_order, updated_at)`);
+  }
+
+  async function loadSelectedVariantRows(client, ownerKey) {
+    return client.query(
+      `SELECT i.*,
+              s.variant_id AS selected_variant_id,
+              s.action,
+              s.sort_order,
+              s.created_at AS selected_at,
+              s.updated_at AS selected_updated_at
+       FROM aif_user_selected_variants s
+       LEFT JOIN aif_inventory_summary i ON i.variant_id::text=s.variant_id
+       WHERE s.owner_key=$1
+       ORDER BY s.sort_order ASC, s.updated_at ASC`,
+      [ownerKey]
+    );
+  }
+
+  function selectedVariantResponseFromRows(rows) {
+    const selectedVariantIds = [];
+    const actions = {};
+    const items = [];
+    let updatedAt = null;
+    for (const row of rows || []) {
+      const id = text(row?.selected_variant_id || row?.variant_id);
+      if (!id) continue;
+      selectedVariantIds.push(id);
+      const action = cleanSelectedWorkAction(row?.action);
+      if (action) actions[id] = action;
+      items.push({ ...row, variant_id: row?.variant_id || id });
+      const ts = row?.selected_updated_at || row?.selected_at;
+      if (ts && (!updatedAt || new Date(ts).getTime() > new Date(updatedAt).getTime())) updatedAt = ts;
+    }
+    return {
+      ok: true,
+      items,
+      selectedVariantIds,
+      actions,
+      updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+      count: selectedVariantIds.length,
+    };
+  }
+
   async function findByIdOrCode(client, table, idOrCode) {
     const v = text(idOrCode);
     if (!v) return null;
@@ -4290,6 +4464,91 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  async function loadSelectedVariants(req, res) {
+    const ownerKey = selectionOwnerKey(req);
+    try {
+      await ensureSelectedVariantsTable(pool);
+      const r = await loadSelectedVariantRows(pool, ownerKey);
+      res.json(selectedVariantResponseFromRows(r.rows));
+    } catch (e) {
+      console.error("AIF selected variants load failed", e);
+      res.status(500).json({ error: "A kijelölt termékek betöltése nem sikerült." });
+    }
+  }
+
+  router.get("/selection", requireAuthed, loadSelectedVariants);
+  router.get("/selected-variants", requireAuthed, loadSelectedVariants);
+
+  async function saveSelectedVariants(req, res) {
+    const ownerKey = selectionOwnerKey(req);
+    const rows = selectedRowsFromBody(req.body || {});
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSelectedVariantsTable(client);
+
+      const ids = rows.map((row) => row.variantId);
+      let validIds = new Set();
+      if (ids.length) {
+        const valid = await client.query(
+          `SELECT id::text AS id
+           FROM aif_product_variants
+           WHERE id::text = ANY($1::text[]) AND COALESCE(status, 'active') <> 'archived'`,
+          [ids]
+        );
+        validIds = new Set(valid.rows.map((x) => String(x.id)));
+      }
+
+      await client.query(`DELETE FROM aif_user_selected_variants WHERE owner_key=$1`, [ownerKey]);
+      let saved = 0;
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index];
+        if (!validIds.has(row.variantId)) continue;
+        await client.query(
+          `INSERT INTO aif_user_selected_variants (owner_key, variant_id, action, sort_order, raw, updated_at)
+           VALUES ($1,$2,$3,$4,$5::jsonb,now())
+           ON CONFLICT (owner_key, variant_id) DO UPDATE SET
+             action=EXCLUDED.action,
+             sort_order=EXCLUDED.sort_order,
+             raw=EXCLUDED.raw,
+             updated_at=now()`,
+          [ownerKey, row.variantId, row.action, index, JSON.stringify({ source: "warehouse_ui" })]
+        );
+        saved++;
+      }
+
+      await client.query("COMMIT");
+      const fresh = await loadSelectedVariantRows(client, ownerKey);
+      res.json({ ...selectedVariantResponseFromRows(fresh.rows), saved });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF selected variants save failed", e);
+      res.status(500).json({ error: "A kijelölt termékek mentése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post("/selection", requireAuthed, saveSelectedVariants);
+  router.put("/selection", requireAuthed, saveSelectedVariants);
+  router.post("/selected-variants", requireAuthed, saveSelectedVariants);
+  router.put("/selected-variants", requireAuthed, saveSelectedVariants);
+
+  async function clearSelectedVariants(req, res) {
+    const ownerKey = selectionOwnerKey(req);
+    try {
+      await ensureSelectedVariantsTable(pool);
+      await pool.query(`DELETE FROM aif_user_selected_variants WHERE owner_key=$1`, [ownerKey]);
+      res.json({ ok: true, items: [], selectedVariantIds: [], actions: {}, updatedAt: new Date().toISOString(), count: 0 });
+    } catch (e) {
+      console.error("AIF selected variants clear failed", e);
+      res.status(500).json({ error: "A kijelölések törlése nem sikerült." });
+    }
+  }
+
+  router.delete("/selection", requireAuthed, clearSelectedVariants);
+  router.delete("/selected-variants", requireAuthed, clearSelectedVariants);
 
   router.get("/inventory", requireAuthed, async (req, res) => {
     const search = text(req.query.search || req.query.q);
