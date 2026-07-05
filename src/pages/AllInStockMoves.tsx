@@ -99,6 +99,7 @@ type AifStockMoveItem = {
   shopify_title?: string | null;
   brand_name?: string | null;
   category_name_ro?: string | null;
+  raw?: any;
 };
 
 type AifStockMoveTotals = {
@@ -249,14 +250,22 @@ function displayBarcode(item: Pick<AifStockItem, "display_barcode" | "barcode"> 
   return item.display_barcode || item.barcode || "";
 }
 
-function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type">) {
+function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type" | "raw">) {
   const source = String(item.source_type || "").toLowerCase();
   const movement = String(item.movement_type || "").toLowerCase();
-  if (source.includes("archive") || source.includes("removal") || source.includes("stock_clear")) return "Készletről kivétel";
+  const rawReason = String((item.raw as any)?.reason || "").toLowerCase();
+  const rawDirection = String((item.raw as any)?.direction || "").toLowerCase();
+  if (
+    source.includes("archive") ||
+    source.includes("removal") ||
+    source.includes("stock_clear") ||
+    rawReason.includes("archive") ||
+    rawReason.includes("stock_clear")
+  ) return "Készletről kivétel";
   if (source.includes("import_batch") || movement === "incoming") return "Bevételezés";
   if (source.includes("sale") || movement === "sale") return "Eladás";
   if (source.includes("transfer") || movement === "transfer") return "Áthelyezés";
-  if (source.includes("manual_stock_edit") || movement === "adjustment") return "Kézi módosítás";
+  if (source.includes("manual_stock_edit") || movement === "adjustment" || movement === "manual_adjustment") return rawDirection === "out" ? "Kézi kivétel" : "Kézi módosítás";
   return movement || source || "Mozgás";
 }
 
