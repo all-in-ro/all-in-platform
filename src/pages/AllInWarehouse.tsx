@@ -239,9 +239,33 @@ type WarehouseBarcodeDetectorConstructor = {
   getSupportedFormats?: () => Promise<string[]>;
 };
 
+type WarehouseZxingControls = {
+  stop?: () => void;
+};
+
+type WarehouseZxingResult = {
+  getText?: () => string;
+  text?: string;
+  rawValue?: string;
+};
+
+type WarehouseZxingReader = {
+  decodeFromConstraints?: (
+    constraints: MediaStreamConstraints,
+    previewElem: HTMLVideoElement,
+    callbackFn: (result?: WarehouseZxingResult | null, error?: unknown, controls?: WarehouseZxingControls) => void
+  ) => Promise<WarehouseZxingControls> | WarehouseZxingControls;
+};
+
+type WarehouseZxingBrowserGlobal = {
+  BrowserMultiFormatReader?: new () => WarehouseZxingReader;
+  BrowserMultiFormatOneDReader?: new () => WarehouseZxingReader;
+};
+
 declare global {
   interface Window {
     BarcodeDetector?: WarehouseBarcodeDetectorConstructor;
+    ZXingBrowser?: WarehouseZxingBrowserGlobal;
   }
 }
 
@@ -259,8 +283,63 @@ const WAREHOUSE_BARCODE_SCAN_FORMATS = [
   "data_matrix",
 ];
 
+const WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS: MediaStreamConstraints = {
+  video: {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+  },
+  audio: false,
+};
+
+const WAREHOUSE_ZXING_BROWSER_CDN = "https://unpkg.com/@zxing/browser@0.1.5";
+let warehouseZxingBrowserPromise: Promise<WarehouseZxingBrowserGlobal | null> | null = null;
+
 function cleanScannedBarcode(value: unknown) {
   return String(value ?? "").replace(/[\r\n\t]+/g, "").trim();
+}
+
+function zxingResultText(result: unknown) {
+  const r = result as WarehouseZxingResult | null | undefined;
+  if (!r) return "";
+  if (typeof r.getText === "function") return cleanScannedBarcode(r.getText());
+  return cleanScannedBarcode(r.text || r.rawValue || "");
+}
+
+function loadWarehouseZxingBrowser(): Promise<WarehouseZxingBrowserGlobal | null> {
+  if (typeof window === "undefined" || typeof document === "undefined") return Promise.resolve(null);
+  if (window.ZXingBrowser?.BrowserMultiFormatReader || window.ZXingBrowser?.BrowserMultiFormatOneDReader) {
+    return Promise.resolve(window.ZXingBrowser);
+  }
+  if (warehouseZxingBrowserPromise) return warehouseZxingBrowserPromise;
+
+  warehouseZxingBrowserPromise = new Promise((resolve) => {
+    const finish = () => resolve(window.ZXingBrowser || null);
+    const existing = document.querySelector<HTMLScriptElement>('script[data-aif-zxing-browser="true"]');
+    if (existing) {
+      if (existing.dataset.loaded === "true") {
+        finish();
+        return;
+      }
+      existing.addEventListener("load", finish, { once: true });
+      existing.addEventListener("error", () => resolve(null), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = WAREHOUSE_ZXING_BROWSER_CDN;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.dataset.aifZxingBrowser = "true";
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      finish();
+    };
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+
+  return warehouseZxingBrowserPromise;
 }
 
 type DetailResponse = {
@@ -1201,6 +1280,7 @@ export default function AllInWarehouse() {
   const [brandColorCodes, setBrandColorCodes] = useState<BrandColorCode[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
+  const [scannedBarcodeSearch, setScannedBarcodeSearch] = useState("");
   const [supplier, setSupplier] = useState("all");
   const [brand, setBrand] = useState("all");
   const [category, setCategory] = useState("all");
@@ -1259,6 +1339,7 @@ export default function AllInWarehouse() {
   const [barcodeScannerManualValue, setBarcodeScannerManualValue] = useState("");
   const barcodeVideoRef = useRef<HTMLVideoElement | null>(null);
   const barcodeStreamRef = useRef<MediaStream | null>(null);
+  const barcodeZxingControlsRef = useRef<WarehouseZxingControls | null>(null);
   const barcodeScanRafRef = useRef<number | null>(null);
   const barcodeScannerHandlingRef = useRef(false);
 
@@ -1498,7 +1579,13 @@ export default function AllInWarehouse() {
 
   const filtered = useMemo(() => {
     let out = [...items];
-    if (search.trim()) out = out.filter((x) => itemMatchesSearch(x, search));
+    if (search.trim()) {
+      const scannedCode = cleanScannedBarcode(scannedBarcodeSearch);
+      const isActiveBarcodeScan = scannedCode && normalizeSearch(scannedCode) === normalizeSearch(search);
+      out = isActiveBarcodeScan
+        ? out.filter((x) => itemMatchesScannedBarcode(x, scannedCode))
+        : out.filter((x) => itemMatchesSearch(x, search));
+    }
     if (supplier !== "all") out = out.filter((x) => supplierMatches(x, supplier));
     if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
     if (category !== "all") out = out.filter((x) => (x.category_code || x.category_name_ro || "") === category || x.category_name_ro === category);
@@ -1522,7 +1609,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [items, search, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [items, search, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   const filteredVariantIds = useMemo(
     () => filtered.map((x) => String(x.variant_id || "")).filter(Boolean),
@@ -2296,11 +2383,23 @@ export default function AllInWarehouse() {
       window.cancelAnimationFrame(barcodeScanRafRef.current);
       barcodeScanRafRef.current = null;
     }
+    if (barcodeZxingControlsRef.current?.stop) {
+      try {
+        barcodeZxingControlsRef.current.stop();
+      } catch {
+        // Már áll, nincs mit dramatizálni.
+      }
+      barcodeZxingControlsRef.current = null;
+    }
     if (barcodeStreamRef.current) {
       barcodeStreamRef.current.getTracks().forEach((track) => track.stop());
       barcodeStreamRef.current = null;
     }
     if (barcodeVideoRef.current) {
+      const currentSource = barcodeVideoRef.current.srcObject;
+      if (currentSource && typeof (currentSource as MediaStream).getTracks === "function") {
+        (currentSource as MediaStream).getTracks().forEach((track) => track.stop());
+      }
       barcodeVideoRef.current.srcObject = null;
     }
   }
@@ -2315,7 +2414,7 @@ export default function AllInWarehouse() {
       helper:
         mode === "editBarcode"
           ? "Tartsd a ruhán lévő vonalkódot a kamera elé. A beolvasott kód bekerül a termék vonalkód mezőjébe."
-          : "Tartsd a ruhán lévő vonalkódot a kamera elé. Pontos egyezésnél megnyitja a terméket, különben leszűri a listát.",
+          : "Tartsd a ruhán lévő vonalkódot a kamera elé. A beolvasott kód alapján csak a találatot mutatja a listában, nem nyitja meg külön az adatlapot.",
     });
   }
 
@@ -2354,7 +2453,11 @@ export default function AllInWarehouse() {
       return;
     }
 
+    setDetail(null);
+    setSelectedPanelOpen(false);
+    setSelectedWorkPanel(null);
     setFiltersOpen(true);
+    setListOpen(true);
     setSupplier("all");
     setBrand("all");
     setCategory("all");
@@ -2363,16 +2466,16 @@ export default function AllInWarehouse() {
     setStockFilter("all");
     setImageFilter("all");
     setSortMode("name");
+    setScannedBarcodeSearch(code);
     setSearch(code);
 
     const exactMatches = items.filter((item) => itemMatchesScannedBarcode(item, code));
-    if (exactMatches.length === 1 && exactMatches[0]?.variant_id) {
-      await openDetail(exactMatches[0].variant_id);
-      setMessage(`Vonalkód beolvasva: ${code}. A termékadatlap megnyitva.`);
+    if (exactMatches.length === 1) {
+      setMessage(`Vonalkód beolvasva: ${code}. A lista csak ezt a terméket mutatja, adatlapot nem nyitok meg. Na, ezt hívják önuralomnak.`);
       return;
     }
     if (exactMatches.length > 1) {
-      setMessage(`Vonalkód beolvasva: ${code}. Több egyezés van, ezért a lista erre a kódra lett szűrve.`);
+      setMessage(`Vonalkód beolvasva: ${code}. Több egyezés van, ezért csak ezek maradtak a listában.`);
       return;
     }
     setMessage(`Vonalkód beolvasva: ${code}. Pontos egyezés nem volt, a kereső erre a kódra lett állítva.`);
@@ -2383,68 +2486,125 @@ export default function AllInWarehouse() {
 
     let cancelled = false;
 
+    async function attachPreviewStream(status: string) {
+      const stream = await navigator.mediaDevices.getUserMedia(WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS);
+      if (cancelled) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      barcodeStreamRef.current = stream;
+      const video = barcodeVideoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      setBarcodeScannerStatus(status);
+    }
+
+    async function startNativeBarcodeDetectorScanner() {
+      const stream = await navigator.mediaDevices.getUserMedia(WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS);
+      if (cancelled) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      barcodeStreamRef.current = stream;
+      const video = barcodeVideoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+
+      const NativeBarcodeDetector = window.BarcodeDetector;
+      if (!NativeBarcodeDetector) {
+        await startZxingFallbackScanner();
+        return;
+      }
+      const supportedFormats = await NativeBarcodeDetector.getSupportedFormats?.().catch(() => []);
+      const formats = Array.isArray(supportedFormats) && supportedFormats.length
+        ? WAREHOUSE_BARCODE_SCAN_FORMATS.filter((format) => supportedFormats.includes(format))
+        : WAREHOUSE_BARCODE_SCAN_FORMATS;
+      const detector = new NativeBarcodeDetector(formats.length ? { formats } : undefined);
+
+      setBarcodeScannerStatus("Kamera aktív. Beépített olvasó megy. Tartsd a vonalkódot a keretbe, és ne remegj úgy, mint egy CSS layout nyomtatás előtt.");
+
+      const scanFrame = async () => {
+        if (cancelled || barcodeScannerHandlingRef.current) return;
+        const currentVideo = barcodeVideoRef.current;
+        if (currentVideo && currentVideo.readyState >= 2) {
+          try {
+            const detected = await detector.detect(currentVideo);
+            const first = detected.find((item) => cleanScannedBarcode(item.rawValue));
+            if (first?.rawValue) {
+              await applyScannedBarcode(first.rawValue);
+              return;
+            }
+          } catch {
+            // Egy-egy sikertelen képkocka normális, nem kell tőle felgyújtani a modált.
+          }
+        }
+        if (!cancelled && !barcodeScannerHandlingRef.current) {
+          barcodeScanRafRef.current = window.requestAnimationFrame(scanFrame);
+        }
+      };
+
+      barcodeScanRafRef.current = window.requestAnimationFrame(scanFrame);
+    }
+
+    async function startZxingFallbackScanner() {
+      setBarcodeScannerStatus("A beépített vonalkód-olvasó ezen a böngészőn nincs meg, ZXing fallback betöltése...");
+      const zxing = await loadWarehouseZxingBrowser();
+      if (cancelled) return;
+
+      const Reader = zxing?.BrowserMultiFormatReader || zxing?.BrowserMultiFormatOneDReader;
+      const video = barcodeVideoRef.current;
+      if (!Reader || !video) {
+        await attachPreviewStream("Kamera aktív, de automata laptopos dekódoló nincs betöltve. Kézi beírás marad, mert a böngészők imádják a felesleges akadálypályát.");
+        return;
+      }
+
+      const reader = new Reader();
+      if (typeof reader.decodeFromConstraints !== "function") {
+        await attachPreviewStream("Kamera aktív, de ez a ZXing build nem ad folyamatos olvasót. Kézi beírás marad.");
+        return;
+      }
+
+      const controls = await reader.decodeFromConstraints(
+        WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS,
+        video,
+        async (result) => {
+          const code = zxingResultText(result);
+          if (code && !barcodeScannerHandlingRef.current) {
+            await applyScannedBarcode(code);
+          }
+        }
+      );
+
+      if (cancelled) {
+        controls?.stop?.();
+        return;
+      }
+      barcodeZxingControlsRef.current = controls || null;
+      setBarcodeScannerStatus("Kamera aktív. Laptopos ZXing olvasó megy. Tartsd a vonalkódot a keretbe.");
+    }
+
     async function startBarcodeScannerCamera() {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
           setBarcodeScannerStatus("Ez a böngésző nem ad kamerát a weboldalnak. USB-s scanner vagy kézi beírás marad, mert a technika remek.");
           return;
         }
-        if (!window.BarcodeDetector) {
-          setBarcodeScannerStatus("A böngésző nem támogatja a beépített vonalkód-olvasót. Chrome / Edge alatt működik a legbiztosabban.");
+
+        if (window.BarcodeDetector) {
+          await startNativeBarcodeDetectorScanner();
           return;
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        barcodeStreamRef.current = stream;
-        const video = barcodeVideoRef.current;
-        if (!video) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        video.srcObject = stream;
-        await video.play();
-
-        const supportedFormats = await window.BarcodeDetector.getSupportedFormats?.().catch(() => []);
-        const formats = Array.isArray(supportedFormats) && supportedFormats.length
-          ? WAREHOUSE_BARCODE_SCAN_FORMATS.filter((format) => supportedFormats.includes(format))
-          : WAREHOUSE_BARCODE_SCAN_FORMATS;
-        const detector = new window.BarcodeDetector(formats.length ? { formats } : undefined);
-
-        setBarcodeScannerStatus("Kamera aktív. Tartsd a vonalkódot a keretbe, és ne remegj úgy, mint egy CSS layout nyomtatás előtt.");
-
-        const scanFrame = async () => {
-          if (cancelled || barcodeScannerHandlingRef.current) return;
-          const currentVideo = barcodeVideoRef.current;
-          if (currentVideo && currentVideo.readyState >= 2) {
-            try {
-              const detected = await detector.detect(currentVideo);
-              const first = detected.find((item) => cleanScannedBarcode(item.rawValue));
-              if (first?.rawValue) {
-                await applyScannedBarcode(first.rawValue);
-                return;
-              }
-            } catch {
-              // Egy-egy sikertelen képkocka normális, nem kell tőle felgyújtani a modált.
-            }
-          }
-          if (!cancelled && !barcodeScannerHandlingRef.current) {
-            barcodeScanRafRef.current = window.requestAnimationFrame(scanFrame);
-          }
-        };
-
-        barcodeScanRafRef.current = window.requestAnimationFrame(scanFrame);
+        await startZxingFallbackScanner();
       } catch (e: any) {
         const name = String(e?.name || "");
         if (name === "NotAllowedError" || name === "PermissionDeniedError") {
@@ -2453,6 +2613,10 @@ export default function AllInWarehouse() {
         }
         if (name === "NotFoundError" || name === "DevicesNotFoundError") {
           setBarcodeScannerStatus("Nem található kamera ezen az eszközön.");
+          return;
+        }
+        if (name === "NotReadableError" || name === "TrackStartError") {
+          setBarcodeScannerStatus("A kamerát nem tudta megnyitni a böngésző. Lehet, hogy másik app használja, vagy az OS tiltja a hozzáférést.");
           return;
         }
         setBarcodeScannerStatus(e?.message || "Nem sikerült elindítani a kamerát.");
@@ -2637,7 +2801,7 @@ export default function AllInWarehouse() {
                 Keresés
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-2.5 text-white/40" size={18} />
-                  <input className={`${input} w-full pl-10 pr-12`} value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="Név, beszállító, márka, vonalkód, szín, méret" />
+                  <input className={`${input} w-full pl-10 pr-12`} value={search} onChange={(e) => { setScannedBarcodeSearch(""); setSearch(e.target.value); }} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="Név, beszállító, márka, vonalkód, szín, méret" />
                   <button
                     className="absolute right-1.5 top-1.5 inline-flex h-7 w-9 items-center justify-center rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/70 text-white shadow-[0_0_10px_rgba(42,141,139,0.18)] hover:bg-[#2a8d8b] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/45"
                     type="button"
