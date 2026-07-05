@@ -156,10 +156,7 @@ export type AifReceptionSummary = {
   error_rows?: number | null;
   ignored_rows?: number | null;
   committed_batches?: number | null;
-  committed_rows?: number | null;
   pending_rows?: number | null;
-  error_rows?: number | null;
-  ignored_rows?: number | null;
   has_stock_movements?: boolean | null;
   can_delete?: boolean | null;
 };
@@ -267,6 +264,31 @@ export type AifInventoryItem = {
   total_qty: number;
   total_reserved_qty: number;
   available_qty: number;
+};
+
+export type AifSelectedWorkAction = "label" | "order" | "move";
+
+export type AifSelectedWorkItem = AifInventoryItem & {
+  selected_variant_id?: string | null;
+  action?: AifSelectedWorkAction | null;
+  selected_action?: AifSelectedWorkAction | null;
+  sort_order?: number | string | null;
+  selected_at?: string | null;
+  selected_updated_at?: string | null;
+};
+
+export type AifSelectedWorkPayloadItem = {
+  variantId: string;
+  action?: AifSelectedWorkAction | null;
+};
+
+export type AifSelectedWorklistResponse = {
+  ok?: true;
+  count?: number;
+  owner?: string;
+  items?: AifSelectedWorkItem[];
+  variantIds?: string[];
+  actions?: Record<string, AifSelectedWorkAction>;
 };
 
 export type AifStockItem = {
@@ -408,6 +430,23 @@ export function apiAifInventory(search = "", limit = 300) {
   if (search.trim()) q.set("search", search.trim());
   q.set("limit", String(limit));
   return fetchAifJSON<{ items: AifInventoryItem[] }>(`/inventory?${q.toString()}`);
+}
+
+export function apiAifSelectedWorklist() {
+  return fetchAifJSON<AifSelectedWorklistResponse>("/selection");
+}
+
+export function apiAifSaveSelectedWorklist(items: AifSelectedWorkPayloadItem[]) {
+  return fetchAifJSON<AifSelectedWorklistResponse>("/selection", {
+    method: "PUT",
+    body: JSON.stringify({ items }),
+  });
+}
+
+export function apiAifClearSelectedWorklist() {
+  return fetchAifJSON<AifSelectedWorklistResponse>("/selection", {
+    method: "DELETE",
+  });
 }
 
 export function apiAifStock(locationCodeOrId?: string) {
