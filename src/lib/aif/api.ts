@@ -296,16 +296,72 @@ export type AifStockItem = {
   location_code: string;
   location_name: string;
   variant_id: string;
-  internal_sku: string;
+  internal_sku?: string | null;
   barcode?: string | null;
+  display_barcode?: string | null;
   size: string;
   color_code?: string | null;
   color_name?: string | null;
+  color_hex?: string | null;
+  image_url?: string | null;
+  images?: unknown;
+  model_id?: string | null;
+  model_code?: string | null;
   title_ro: string;
+  shopify_title?: string | null;
+  brand_name?: string | null;
+  brand_code?: string | null;
+  category_name_ro?: string | null;
+  category_code?: string | null;
   qty: number;
   reserved_qty: number;
   available_qty: number;
   updated_at?: string;
+};
+
+export type AifStockMovementDirection = "all" | "in" | "out" | "adjust";
+
+export type AifStockMovementItem = {
+  id: string;
+  created_at: string;
+  movement_type?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  qty_delta: number | string;
+  qty_before?: number | string | null;
+  qty_after?: number | string | null;
+  actor?: string | null;
+  raw?: unknown;
+  direction: "in" | "out" | "adjust";
+  location_id?: string | null;
+  location_code?: string | null;
+  location_name?: string | null;
+  variant_id: string;
+  internal_sku?: string | null;
+  barcode?: string | null;
+  display_barcode?: string | null;
+  size?: string | null;
+  color_code?: string | null;
+  color_name?: string | null;
+  color_hex?: string | null;
+  image_url?: string | null;
+  images?: unknown;
+  model_id?: string | null;
+  model_code?: string | null;
+  title_ro: string;
+  shopify_title?: string | null;
+  brand_name?: string | null;
+  brand_code?: string | null;
+  category_name_ro?: string | null;
+  category_code?: string | null;
+};
+
+export type AifStockMovementTotals = {
+  movement_count: number;
+  distinct_variants: number;
+  incoming_qty: number | string;
+  outgoing_qty: number | string;
+  net_qty: number | string;
 };
 
 const AIF_BASE = "/api/aif";
@@ -449,11 +505,33 @@ export function apiAifClearSelectedWorklist() {
   });
 }
 
-export function apiAifStock(locationCodeOrId?: string) {
+export function apiAifStock(locationCodeOrId?: string, options?: { search?: string }) {
   const q = new URLSearchParams();
   if (locationCodeOrId) q.set("location", locationCodeOrId);
+  if (options?.search?.trim()) q.set("search", options.search.trim());
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifStockItem[] }>(`/stock${suffix}`);
+}
+
+export function apiAifStockMovements(options?: {
+  location?: string;
+  variant?: string;
+  search?: string;
+  direction?: AifStockMovementDirection;
+  from?: string;
+  to?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (options?.location) q.set("location", options.location);
+  if (options?.variant) q.set("variant", options.variant);
+  if (options?.search?.trim()) q.set("search", options.search.trim());
+  if (options?.direction && options.direction !== "all") q.set("direction", options.direction);
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
+  if (options?.limit) q.set("limit", String(options.limit));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifStockMovementItem[]; totals: AifStockMovementTotals }>(`/stock-movements${suffix}`);
 }
 
 
