@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownLeft,
@@ -34,6 +34,8 @@ const chipActive = `${chipBase} border-[#2a8d8b]/60 bg-[#2a8d8b] text-white shad
 const chipIdle = `${chipBase} border-white/14 bg-white/[0.06] text-white/72 hover:bg-white/[0.10]`;
 
 const AIF_BASE = "/api/aif";
+const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
+const stockMovesChangedEventName = "aif:stock-moves-changed";
 
 type AifLocation = {
   id: string;
@@ -248,12 +250,13 @@ function displayBarcode(item: Pick<AifStockItem, "display_barcode" | "barcode"> 
 }
 
 function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type">) {
-  const source = String(item.source_type || "");
-  const movement = String(item.movement_type || "");
+  const source = String(item.source_type || "").toLowerCase();
+  const movement = String(item.movement_type || "").toLowerCase();
+  if (source.includes("archive") || source.includes("removal") || source.includes("stock_clear")) return "Készletről kivétel";
   if (source.includes("import_batch") || movement === "incoming") return "Bevételezés";
-  if (source.includes("manual_stock_edit") || movement === "adjustment") return "Kézi korrekció";
   if (source.includes("sale") || movement === "sale") return "Eladás";
   if (source.includes("transfer") || movement === "transfer") return "Áthelyezés";
+  if (source.includes("manual_stock_edit") || movement === "adjustment") return "Kézi módosítás";
   return movement || source || "Mozgás";
 }
 
@@ -359,6 +362,7 @@ export default function AllInStockMoves() {
   const [direction, setDirection] = useState<DirectionFilter>("all");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const refreshInFlightRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -367,7 +371,6 @@ export default function AllInStockMoves() {
         if (!alive) return;
         const activeLocations = (data.locations || []).filter((loc) => loc.is_active !== false);
         setLocations(activeLocations);
-        setLocationId((current) => current || activeLocations[0]?.id || activeLocations[0]?.code || "");
       })
       .catch((e) => setMessage(e.message || "A helyszínek betöltése nem sikerült."));
     return () => {
@@ -380,8 +383,10 @@ export default function AllInStockMoves() {
     [locations, locationId]
   );
 
-  async function refresh() {
-    setLoading(true);
+  const refresh = useCallback(async (options?: { silent?: boolean }) => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    if (!options?.silent) setLoading(true);
     setMessage(null);
     try {
       const stockQ = new URLSearchParams();
@@ -406,15 +411,39 @@ export default function AllInStockMoves() {
     } catch (e: any) {
       setMessage(e.message || "A készletmozgások betöltése nem sikerült.");
     } finally {
-      setLoading(false);
+      refreshInFlightRef.current = false;
+      if (!options?.silent) setLoading(false);
     }
-  }
+  }, [direction, from, locationId, search, to]);
 
   useEffect(() => {
-    if (!locationId && locations.length) return;
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId, direction, from, to]);
+  }, [refresh]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const refreshSilently = () => refresh({ silent: true });
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === stockMovesChangedStorageKey) refreshSilently();
+    };
+    const onVisibility = () => {
+      if (!document.hidden) refreshSilently();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(stockMovesChangedEventName, refreshSilently as EventListener);
+    window.addEventListener("focus", refreshSilently);
+    document.addEventListener("visibilitychange", onVisibility);
+    const intervalId = window.setInterval(() => {
+      if (!document.hidden) refreshSilently();
+    }, 12000);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(stockMovesChangedEventName, refreshSilently as EventListener);
+      window.removeEventListener("focus", refreshSilently);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(intervalId);
+    };
+  }, [refresh]);
 
   const stockTotals = useMemo(() => {
     return stockRows.reduce(
@@ -646,7 +675,7 @@ export default function AllInStockMoves() {
                     );
                   })}
                   {!moveRows.length && (
-                    <tr><td colSpan={7} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban.</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban. Ami meglepően békés, csak raktárnál nem mindig hasznos.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -745,7 +774,7 @@ export default function AllInStockMoves() {
 
         <div className="rounded-2xl border border-[#2a8d8b]/25 bg-[#174c55]/60 px-4 py-3 text-sm text-cyan-50/90">
           <Filter className="mr-2 inline" size={15} />
-          Alapértelmezésben a mai napot mutatja. A „Hónap” az aktuális hónap első napjától számol.
+          Alapértelmezésben a mai napot és minden helyszínt mutatja. Készletmódosítás után automatikusan frissül, mert a raktárnapló nem régészeti leletnek készült.
         </div>
       </div>
     </div>
