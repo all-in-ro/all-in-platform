@@ -50,6 +50,7 @@ const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl
 
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
 const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariantActions:v1";
+const selectedProductCloudMigrationStorageKey = "allinfashion:warehouse:selectedVariantsCloudMigrated:v1";
 
 type SelectedWorkAction = "label" | "order" | "move";
 
@@ -128,6 +129,52 @@ function saveSelectedVariantsToStorage(selected: Record<string, boolean>) {
   window.localStorage.setItem(selectedProductsStorageKey, JSON.stringify(ids));
 }
 
+function selectedCloudMigrationDone() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(selectedProductCloudMigrationStorageKey) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markSelectedCloudMigrationDone() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(selectedProductCloudMigrationStorageKey, "1");
+  } catch {
+    // A localStorage néha úgy viselkedik, mint egy papírfecnire írt adatbázis. Nem állunk meg miatta.
+  }
+}
+
+function normalizeSelectedWorkAction(value: unknown): SelectedWorkAction | null {
+  const raw = String(value || "").trim();
+  return raw === "label" || raw === "order" || raw === "move" ? raw : null;
+}
+
+function selectedVariantIdFromItem(item: Partial<InventoryItem> & { selected_variant_id?: string | null; variantId?: string | null; id?: string | null }) {
+  return String(item.variant_id || item.selected_variant_id || item.variantId || item.id || "").trim();
+}
+
+function selectedPayloadFromState(selected: Record<string, boolean>, actions: Record<string, SelectedWorkAction>) {
+  return Object.keys(selected)
+    .filter((id) => selected[id])
+    .map((id) => ({ variantId: id, action: actions[id] || null }));
+}
+
+function mergeInventoryItems(baseItems: InventoryItem[], extraItems: InventoryItem[]) {
+  const map = new Map<string, InventoryItem>();
+  for (const item of baseItems) {
+    const id = selectedVariantIdFromItem(item);
+    if (id) map.set(id, { ...item, variant_id: id });
+  }
+  for (const item of extraItems) {
+    const id = selectedVariantIdFromItem(item);
+    if (id && !map.has(id)) map.set(id, { ...item, variant_id: id });
+  }
+  return Array.from(map.values());
+}
+
 
 type InventoryItem = {
   variant_id: string;
@@ -167,6 +214,15 @@ type InventoryItem = {
   available_qty?: number | string | null;
   last_stock_movement_at?: string | null;
   last_incoming_at?: string | null;
+};
+
+type PersistedSelectedWorkItem = InventoryItem & {
+  selected_variant_id?: string | null;
+  action?: SelectedWorkAction | null;
+  selected_action?: SelectedWorkAction | null;
+  sort_order?: number | string | null;
+  selected_at?: string | null;
+  selected_updated_at?: string | null;
 };
 
 type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
@@ -1134,6 +1190,22 @@ async function apiVariantStockUpdate(id: string, rows: Array<{ locationId?: stri
   });
 }
 
+async function apiSelectedVariantSelection() {
+  return fetchJSON<{ items: PersistedSelectedWorkItem[] }>("/api/aif/selection");
+}
+
+async function apiSaveSelectedVariantSelection(items: Array<{ variantId: string; action?: SelectedWorkAction | null }>) {
+  return fetchJSON<{ ok: true; count: number; items?: PersistedSelectedWorkItem[]; owner?: string }>("/api/aif/selection", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+}
+
+async function apiClearSelectedVariantSelection() {
+  return fetchJSON<{ ok: true; count?: number; owner?: string }>("/api/aif/selection", { method: "DELETE" });
+}
+
 
 async function apiSaveCategory(id: string, payload: Record<string, unknown>) {
   const url = id ? `/api/aif/categories/${encodeURIComponent(id)}` : "/api/aif/categories";
@@ -1324,6 +1396,7 @@ export default function AllInWarehouse() {
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
   const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
+  const [persistedSelectedItems, setPersistedSelectedItems] = useState<InventoryItem[]>([]);
   const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
@@ -1351,6 +1424,9 @@ export default function AllInWarehouse() {
   const barcodeZxingControlsRef = useRef<WarehouseZxingControls | null>(null);
   const barcodeScanRafRef = useRef<number | null>(null);
   const barcodeScannerHandlingRef = useRef(false);
+  const selectedSyncReadyRef = useRef(false);
+  const selectedSyncTimerRef = useRef<number | null>(null);
+  const selectedSyncSilentRef = useRef(false);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -1625,10 +1701,12 @@ export default function AllInWarehouse() {
     [filtered]
   );
 
+  const selectionSourceItems = useMemo(() => mergeInventoryItems(items, persistedSelectedItems), [items, persistedSelectedItems]);
+
   const selectedItems = useMemo(() => {
     const selected = new Set(Object.keys(selectedVariants).filter((id) => selectedVariants[id]));
-    return items.filter((x) => selected.has(String(x.variant_id || "")));
-  }, [items, selectedVariants]);
+    return selectionSourceItems.filter((x) => selected.has(selectedVariantIdFromItem(x)));
+  }, [selectionSourceItems, selectedVariants]);
 
   const selectedCount = selectedItems.length;
   const selectedUnassignedItems = useMemo(
@@ -1653,6 +1731,31 @@ export default function AllInWarehouse() {
     move: selectedMoveItems.length,
   };
   const selectedWorkButtonClass = (action: SelectedWorkAction) => selectedWorkCounts[action] > 0 ? primaryBtn : btnSoft;
+
+  function applyPersistedSelectedWorklist(rows: PersistedSelectedWorkItem[]) {
+    const nextSelected: Record<string, boolean> = {};
+    const nextActions: Record<string, SelectedWorkAction> = {};
+    const nextItems: InventoryItem[] = [];
+
+    for (const row of rows || []) {
+      const id = selectedVariantIdFromItem(row);
+      if (!id) continue;
+      nextSelected[id] = true;
+      const action = normalizeSelectedWorkAction(row.action || row.selected_action);
+      if (action) nextActions[id] = action;
+      nextItems.push({ ...row, variant_id: id });
+    }
+
+    selectedSyncSilentRef.current = true;
+    setPersistedSelectedItems(nextItems);
+    setSelectedVariants(nextSelected);
+    setSelectedWorkActions(nextActions);
+    window.setTimeout(() => {
+      selectedSyncSilentRef.current = false;
+      selectedSyncReadyRef.current = true;
+    }, 0);
+  }
+
   const selectedFilteredCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedFilteredCount === filteredVariantIds.length;
 
@@ -2026,34 +2129,44 @@ export default function AllInWarehouse() {
       }
       return next;
     });
+    if (!checked) {
+      setSelectedWorkActions((current) => {
+        const next = { ...current };
+        for (const id of filteredVariantIds) delete next[id];
+        return next;
+      });
+    }
   }
 
   function clearSelectedVariants() {
     setSelectedVariants({});
     setSelectedWorkActions({});
+    setPersistedSelectedItems([]);
     setSelectedActionTarget(null);
     setSelectedWorkPanel(null);
     setSelectedPanelOpen(false);
+    apiClearSelectedVariantSelection()
+      .then(() => {
+        selectedSyncReadyRef.current = true;
+        markSelectedCloudMigrationDone();
+      })
+      .catch((err) => {
+        console.error("AIF selected variants clear failed", err);
+      });
   }
 
   useEffect(() => {
-    if (!items.length) return;
-    const valid = new Set(items.map((x) => String(x.variant_id || "")).filter(Boolean));
-    setSelectedVariants((current) => {
-      const next: Record<string, boolean> = {};
-      for (const [id, selected] of Object.entries(current)) {
-        if (selected && valid.has(id)) next[id] = true;
-      }
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
-    });
+    const selected = new Set(Object.keys(selectedVariants).filter((id) => selectedVariants[id]));
     setSelectedWorkActions((current) => {
+      let changed = false;
       const next: Record<string, SelectedWorkAction> = {};
       for (const [id, action] of Object.entries(current) as Array<[string, SelectedWorkAction]>) {
-        if (valid.has(id)) next[id] = action;
+        if (selected.has(id)) next[id] = action;
+        else changed = true;
       }
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
+      return changed ? next : current;
     });
-  }, [items]);
+  }, [selectedVariants]);
 
   useEffect(() => {
     saveSelectedVariantsToStorage(selectedVariants);
@@ -2062,6 +2175,26 @@ export default function AllInWarehouse() {
   useEffect(() => {
     saveSelectedVariantActionsToStorage(selectedWorkActions);
   }, [selectedWorkActions]);
+
+  useEffect(() => {
+    if (!selectedSyncReadyRef.current || selectedSyncSilentRef.current) return;
+    if (selectedSyncTimerRef.current !== null) window.clearTimeout(selectedSyncTimerRef.current);
+    selectedSyncTimerRef.current = window.setTimeout(() => {
+      selectedSyncTimerRef.current = null;
+      const payload = selectedPayloadFromState(selectedVariants, selectedWorkActions);
+      apiSaveSelectedVariantSelection(payload)
+        .then(() => markSelectedCloudMigrationDone())
+        .catch((err) => {
+          console.error("AIF selected variants sync failed", err);
+        });
+    }, 450);
+    return () => {
+      if (selectedSyncTimerRef.current !== null) {
+        window.clearTimeout(selectedSyncTimerRef.current);
+        selectedSyncTimerRef.current = null;
+      }
+    };
+  }, [selectedVariants, selectedWorkActions]);
 
   useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
@@ -2365,6 +2498,34 @@ export default function AllInWarehouse() {
       setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
+
+      try {
+        const savedSelection = await apiSelectedVariantSelection();
+        const savedRows = (savedSelection.items || []).filter((row) => selectedVariantIdFromItem(row));
+        if (savedRows.length) {
+          markSelectedCloudMigrationDone();
+          applyPersistedSelectedWorklist(savedRows);
+        } else {
+          setPersistedSelectedItems([]);
+          selectedSyncReadyRef.current = true;
+          const localPayload = selectedPayloadFromState(selectedVariants, selectedWorkActions);
+          if (localPayload.length && !selectedCloudMigrationDone()) {
+            markSelectedCloudMigrationDone();
+            apiSaveSelectedVariantSelection(localPayload)
+              .then((saved) => {
+                if (saved?.items?.length) applyPersistedSelectedWorklist(saved.items);
+              })
+              .catch((err) => {
+                console.error("AIF selected variants migration failed", err);
+              });
+          } else {
+            markSelectedCloudMigrationDone();
+          }
+        }
+      } catch (selectionError) {
+        console.error("AIF selected variants load skipped", selectionError);
+        selectedSyncReadyRef.current = true;
+      }
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült betölteni a raktár adatait.");
     } finally {
@@ -3097,7 +3258,7 @@ export default function AllInWarehouse() {
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Ez a kijelölt termékek munkalistája. A kijelölés frissítés után és holnap is megmarad ebben a böngészőben, amíg innen el nem távolítod. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez vagy készletmozgatáshoz kerüljön.
+                Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez vagy készletmozgatáshoz kerüljön.
               </div>
 
               <div className="grid gap-2">
