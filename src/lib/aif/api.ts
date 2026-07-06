@@ -192,6 +192,8 @@ export type AifReceptionDetailRow = {
   buy_price_ron?: string | number | null;
   sell_price?: string | number | null;
   sell_price_ron?: string | number | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
   supplier_product_code?: string | null;
   supplier_variant_code?: string | null;
   supplier_color_code?: string | null;
@@ -267,6 +269,8 @@ export type AifInventoryItem = {
   variant_id: string;
   internal_sku: string;
   barcode?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
   brand_name?: string | null;
   model_id: string;
   model_code?: string | null;
@@ -317,6 +321,8 @@ export type AifStockItem = {
   variant_id: string;
   internal_sku?: string | null;
   barcode?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
   display_barcode?: string | null;
   size: string;
   color_code?: string | null;
@@ -395,6 +401,8 @@ export type AifInventoryCountLine = {
   location_name?: string | null;
   internal_sku?: string | null;
   barcode?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
   display_barcode?: string | null;
   size?: string | null;
   color_code?: string | null;
@@ -441,6 +449,8 @@ export type AifStockMovementItem = {
   variant_id: string;
   internal_sku?: string | null;
   barcode?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
   display_barcode?: string | null;
   size?: string | null;
   color_code?: string | null;
@@ -613,9 +623,10 @@ export function apiAifDeleteImportBatchHistory(batchId: string) {
   );
 }
 
-export function apiAifInventory(search = "", limit = 300) {
+export function apiAifInventory(search = "", limit = 300, options?: { snCod?: string }) {
   const q = new URLSearchParams();
   if (search.trim()) q.set("search", search.trim());
+  if (options?.snCod?.trim()) q.set("snCod", options.snCod.trim());
   q.set("limit", String(limit));
   return fetchAifJSON<{ items: AifInventoryItem[] }>(`/inventory?${q.toString()}`);
 }
