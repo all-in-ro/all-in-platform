@@ -1204,6 +1204,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  function isRonCurrencyCode(value) {
+    return currencyCode(value) === "RON";
+  }
+
+  function effectiveReceptionExchangeRateToRon(reception) {
+    const code = currencyCode(reception?.currencyCode || reception?.currency_code);
+    if (code === "RON") return 1;
+    const rate = toMoney(reception?.exchangeRateToRon ?? reception?.exchange_rate_to_ron);
+    return rate && rate > 0 ? rate : null;
+  }
+
   function isSellPriceRon(normalized) {
     const n = normalized && typeof normalized === "object" ? normalized : {};
     const currency = currencyCode(n.sellPriceCurrency || n.salePriceCurrency || n.priceCurrency || "");
@@ -1811,7 +1822,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let receptionId = null;
     try {
       await client.query("BEGIN");
-      const rec = await client.query(`SELECT id FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
+      const rec = await client.query(`SELECT id, currency_code FROM aif_receptions WHERE id::text=$1 FOR UPDATE`, [id]);
       if (!rec.rowCount) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Receptió nem található." });
@@ -1825,6 +1836,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (src.invoiceNumber !== undefined || src.invoice_number !== undefined) add("invoice_number", emptyToNull(src.invoiceNumber ?? src.invoice_number));
       if (src.invoiceDate !== undefined || src.invoice_date !== undefined) add("invoice_date", emptyToNull(src.invoiceDate ?? src.invoice_date));
       if (src.receptionDate !== undefined || src.reception_date !== undefined) add("reception_date", emptyToNull(src.receptionDate ?? src.reception_date));
+      let nextCurrencyCode = rec.rows[0].currency_code;
       if (src.currencyCode !== undefined || src.currency_code !== undefined) {
         const c = currencyCode(src.currencyCode ?? src.currency_code);
         const exists = await client.query(`SELECT 1 FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [c]);
@@ -1832,15 +1844,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "A kiválasztott pénznem nem létezik vagy inaktív." });
         }
+        nextCurrencyCode = c;
         add("currency_code", c);
       }
-      if (src.exchangeRateToRon !== undefined || src.exchange_rate_to_ron !== undefined) {
+      const exchangeRateProvided = src.exchangeRateToRon !== undefined || src.exchange_rate_to_ron !== undefined;
+      if (isRonCurrencyCode(nextCurrencyCode)) {
+        // RON -> RON árfolyamot nem kérünk a felületen. A DB-ben 1 marad technikai számolási alapnak.
+        add("exchange_rate_to_ron", 1);
+      } else if (exchangeRateProvided) {
         const rate = toMoney(src.exchangeRateToRon ?? src.exchange_rate_to_ron);
         if (!rate || rate <= 0) {
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "Pozitív RON árfolyam szükséges." });
         }
         add("exchange_rate_to_ron", rate);
+      } else if (src.currencyCode !== undefined || src.currency_code !== undefined) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Pozitív RON árfolyam szükséges." });
       }
       if (src.tvaMode !== undefined || src.tva_mode !== undefined) {
         const mode = tvaMode(src.tvaMode ?? src.tva_mode);
@@ -3696,7 +3716,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!reception.invoiceDate) return res.status(400).json({ error: "invoice date required" });
       if (!reception.receptionDate) return res.status(400).json({ error: "reception date required" });
       if (!reception.currencyCode) return res.status(400).json({ error: "currency required" });
-      if (!reception.exchangeRateToRon || reception.exchangeRateToRon <= 0) return res.status(400).json({ error: "exchange rate required" });
+      const receptionExchangeRateToRon = effectiveReceptionExchangeRateToRon(reception);
+      if (!receptionExchangeRateToRon || receptionExchangeRateToRon <= 0) return res.status(400).json({ error: "exchange rate required" });
       if (!reception.tvaMode) return res.status(400).json({ error: "TVA mode required" });
       if (reception.tvaMode !== "no_tva" && (reception.tvaRate === null || reception.tvaRate === undefined)) return res.status(400).json({ error: "TVA rate required" });
       if (reception.invoiceGross === null || reception.invoiceGross === undefined) return res.status(400).json({ error: "invoice total required" });
@@ -3722,7 +3743,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           reception.invoiceDate,
           reception.receptionDate,
           reception.currencyCode,
-          reception.exchangeRateToRon,
+          receptionExchangeRateToRon,
           reception.tvaMode,
           reception.tvaRate,
           reception.shippingCost,
@@ -3760,7 +3781,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           emptyToNull(body.note),
           JSON.stringify(body.rawMeta || body.raw_meta || {}),
           reception.currencyCode,
-          reception.exchangeRateToRon,
+          receptionExchangeRateToRon,
           reception.invoiceNumber,
         ]
       );
@@ -3809,7 +3830,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!reception.invoiceDate) return res.status(400).json({ error: "Számla dátuma kötelező." });
       if (!reception.receptionDate) return res.status(400).json({ error: "Receptió dátuma kötelező." });
       if (!reception.currencyCode) return res.status(400).json({ error: "Pénznem kiválasztása kötelező." });
-      if (!reception.exchangeRateToRon || reception.exchangeRateToRon <= 0) return res.status(400).json({ error: "Pozitív RON árfolyam megadása kötelező." });
+      const receptionExchangeRateToRon = effectiveReceptionExchangeRateToRon(reception);
+      if (!receptionExchangeRateToRon || receptionExchangeRateToRon <= 0) return res.status(400).json({ error: "Pozitív RON árfolyam megadása kötelező." });
       if (!reception.tvaMode) return res.status(400).json({ error: "TVA kezelés kiválasztása kötelező." });
       if (reception.tvaMode !== "no_tva" && (reception.tvaRate === null || reception.tvaRate === undefined)) return res.status(400).json({ error: "TVA százalék megadása kötelező." });
       if (reception.invoiceGross === null || reception.invoiceGross === undefined) return res.status(400).json({ error: "Számla végösszeg megadása kötelező." });
@@ -3879,7 +3901,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             reception.invoiceDate,
             reception.receptionDate,
             reception.currencyCode,
-            reception.exchangeRateToRon,
+            receptionExchangeRateToRon,
             reception.tvaMode,
             reception.tvaRate,
             reception.shippingCost,
@@ -3910,7 +3932,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             reception.invoiceDate,
             reception.receptionDate,
             reception.currencyCode,
-            reception.exchangeRateToRon,
+            receptionExchangeRateToRon,
             reception.tvaMode,
             reception.tvaRate,
             reception.shippingCost,
@@ -3950,13 +3972,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           emptyToNull(body.note),
           JSON.stringify(body.rawMeta || body.raw_meta || {}),
           reception.currencyCode,
-          reception.exchangeRateToRon,
+          receptionExchangeRateToRon,
           reception.invoiceNumber,
         ]
       );
 
       const batchId = batchRes.rows[0].id;
-      const exchangeRate = Number(reception.exchangeRateToRon);
+      const exchangeRate = Number(receptionExchangeRateToRon);
       const salesTvaSettings = await readSalesTvaSettings(client);
       let errorCount = 0;
       for (const nr of normalizedRows) {
