@@ -284,6 +284,7 @@ export type AifInventoryItem = {
   buy_price?: string | number | null;
   sell_price?: string | number | null;
   variant_status: string;
+  model_status?: string | null;
   total_qty: number;
   total_reserved_qty: number;
   available_qty: number;
@@ -323,6 +324,9 @@ export type AifStockItem = {
   barcode?: string | null;
   sn_cod?: string | null;
   snCod?: string | null;
+  variant_status?: string | null;
+  status?: string | null;
+  model_status?: string | null;
   display_barcode?: string | null;
   size: string;
   color_code?: string | null;
@@ -764,13 +768,14 @@ export function apiAifDeleteStockMovement(id: string) {
 
 export function apiAifUpdateVariantStock(
   variantId: string,
-  items: { locationId?: string; locationCode?: string; qty: number }[]
+  rows: { locationId?: string; locationCode?: string; qty: number | string; reservedQty?: number | string }[],
+  options?: { mode?: "redistribute" | "correction"; allowTotalChange?: boolean }
 ) {
-  return fetchAifJSON<{ ok: true; changed: number; stock: AifStockItem[] }>(
+  return fetchAifJSON<{ ok: true; changed?: number; mode?: string; beforeTotal?: number; afterTotal?: number; stock: AifStockItem[] }>(
     `/variants/${encodeURIComponent(variantId)}/stock`,
     {
       method: "PATCH",
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ rows, mode: options?.mode || "redistribute", allowTotalChange: Boolean(options?.allowTotalChange) }),
     }
   );
 }
