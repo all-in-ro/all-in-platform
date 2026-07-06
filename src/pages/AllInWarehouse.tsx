@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   Barcode,
   Boxes,
   ClipboardList,
@@ -10,9 +11,13 @@ import {
   ChevronUp,
   Edit3,
   Eye,
+  FileText,
   Filter,
   ImagePlus,
+  Minus,
   MoreVertical,
+  Plus,
+  Printer,
   Trash2,
   RefreshCw,
   Save,
@@ -287,6 +292,38 @@ type MaterialType = {
 };
 type SupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 type StockItem = { variant_id: string; location_id?: string; location_code?: string; location_name?: string; location_type?: string; qty?: number | string; reserved_qty?: number | string; available_qty?: number | string; updated_at?: string };
+type StockTransferDraftRow = {
+  fromLocationId: string;
+  toLocationId: string;
+  qty: string;
+};
+
+type PreparedStockTransferRow = {
+  item: InventoryItem;
+  variantId: string;
+  fromLocationId: string;
+  toLocationId: string;
+  fromLocationName: string;
+  toLocationName: string;
+  qty: number;
+  availableFrom: number;
+  valid: boolean;
+  problem: string;
+};
+
+type StockTransferPrintLine = {
+  index: number;
+  title: string;
+  brand: string;
+  category: string;
+  barcode: string;
+  color: string;
+  size: string;
+  imageUrl?: string | null;
+  fromLocation: string;
+  toLocation: string;
+  qty: number;
+};
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing";
@@ -906,6 +943,112 @@ function warehouseLabelPrintDocumentHtml(
   return `<!doctype html><html><head><meta charset="utf-8" /><title>${labelEscapeHtml("AllInFashion címke nyomtatás")}</title><style>${WAREHOUSE_LABEL_PRINT_DOCUMENT_CSS}</style></head><body><div class="aifWarehouseLabelPrintRoot" style="${rootStyle}">${pagesHtml}</div></body></html>`;
 }
 
+function warehouseTransferDateTime(input: Date | string | number = new Date()) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("hu-HU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function warehouseStockTransferPrintDocumentHtml(options: {
+  title: string;
+  note?: string;
+  createdAt: string;
+  lines: StockTransferPrintLine[];
+}) {
+  const totalQty = options.lines.reduce((sum, line) => sum + line.qty, 0);
+  const rowsHtml = options.lines.map((line) => {
+    const imageHtml = line.imageUrl
+      ? `<img class="aifTransferImg" src="${labelEscapeHtml(line.imageUrl)}" alt="" />`
+      : `<div class="aifTransferImg empty"></div>`;
+    return `
+      <tr>
+        <td class="center">${line.index}</td>
+        <td>
+          <div class="productCell">
+            ${imageHtml}
+            <div>
+              <strong>${labelEscapeHtml(line.title)}</strong>
+              <small>${labelEscapeHtml([line.brand, line.category, line.color, line.size].filter(Boolean).join(" • "))}</small>
+              <small>Vonalkód: ${labelEscapeHtml(line.barcode || "-")}</small>
+            </div>
+          </div>
+        </td>
+        <td>${labelEscapeHtml(line.fromLocation)}</td>
+        <td>${labelEscapeHtml(line.toLocation)}</td>
+        <td class="qty">${line.qty}</td>
+      </tr>`;
+  }).join("");
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${labelEscapeHtml(options.title || "Készlet átadási lista")}</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; color: #111827; background: #fff; }
+    .header { display: flex; justify-content: space-between; gap: 18px; border-bottom: 2px solid #2a8d8b; padding-bottom: 10px; margin-bottom: 14px; }
+    .brand { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #2a8d8b; font-weight: 700; }
+    h1 { margin: 4px 0 0; font-size: 22px; line-height: 1.18; }
+    .meta { text-align: right; font-size: 12px; color: #4b5563; line-height: 1.55; }
+    .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 14px; }
+    .summary div { border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; font-size: 12px; }
+    .summary strong { display: block; margin-top: 3px; font-size: 18px; color: #111827; }
+    .note { border: 1px solid #d1d5db; border-radius: 10px; padding: 9px 10px; margin-bottom: 14px; font-size: 12px; color: #374151; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th { background: #233047; color: white; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 8px 6px; text-align: left; }
+    td { border-bottom: 1px solid #d1d5db; padding: 7px 6px; font-size: 12px; vertical-align: middle; }
+    th:nth-child(1), td:nth-child(1) { width: 9mm; }
+    th:nth-child(3), td:nth-child(3), th:nth-child(4), td:nth-child(4) { width: 35mm; }
+    th:nth-child(5), td:nth-child(5) { width: 15mm; }
+    .center { text-align: center; }
+    .qty { text-align: center; font-weight: 800; font-size: 16px; color: #2a8d8b; }
+    .productCell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .productCell strong { display: block; font-size: 12px; line-height: 1.2; }
+    .productCell small { display: block; margin-top: 2px; color: #4b5563; font-size: 10px; line-height: 1.2; }
+    .aifTransferImg { width: 34px; height: 42px; border: 1px solid #d1d5db; border-radius: 8px; object-fit: cover; background: #f3f4f6; flex: 0 0 auto; }
+    .aifTransferImg.empty { display: inline-block; }
+    .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 20mm; page-break-inside: avoid; }
+    .sig { border-top: 1px solid #111827; padding-top: 6px; text-align: center; font-size: 12px; color: #374151; }
+    .footer { margin-top: 10px; font-size: 10px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div><div class="brand">AllInFashion</div><h1>${labelEscapeHtml(options.title || "Készlet átadási lista")}</h1></div>
+    <div class="meta">
+      <div>Készült: <strong>${labelEscapeHtml(options.createdAt)}</strong></div>
+      <div>Terméksorok: <strong>${options.lines.length}</strong></div>
+      <div>Összes darab: <strong>${totalQty}</strong></div>
+    </div>
+  </div>
+  <div class="summary">
+    <div>Terméksor<strong>${options.lines.length}</strong></div>
+    <div>Összes darab<strong>${totalQty}</strong></div>
+    <div>Bizonylat típusa<strong>Készletmozgatás</strong></div>
+  </div>
+  ${options.note ? `<div class="note"><strong>Megjegyzés:</strong> ${labelEscapeHtml(options.note)}</div>` : ""}
+  <table>
+    <thead><tr><th>#</th><th>Termék</th><th>Honnan</th><th>Hová</th><th>Db</th></tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+  <div class="signatures">
+    <div class="sig">Átadó</div>
+    <div class="sig">Átvevő</div>
+    <div class="sig">Ellenőrizte</div>
+  </div>
+  <div class="footer">A lista az AllInFashion raktármodulból készült.</div>
+</body>
+</html>`;
+}
+
 function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
   const code = String(value || "").trim();
   if (!code) return { ok: false, svg: "", width: 0, error: "A vonalkód mező üres." };
@@ -1207,6 +1350,18 @@ async function apiVariantStockUpdate(id: string, rows: Array<{ locationId?: stri
   });
 }
 
+async function apiStockTransfer(payload: {
+  title?: string;
+  note?: string;
+  lines: Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }>;
+}) {
+  return fetchJSON<{ ok: true; transferId: string; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; items?: any[] }>("/api/aif/stock-transfers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 async function apiSelectedVariantSelection() {
   return fetchJSON<{ items: PersistedSelectedWorkItem[] }>("/api/aif/selection");
 }
@@ -1416,6 +1571,10 @@ export default function AllInWarehouse() {
   const [persistedSelectedItems, setPersistedSelectedItems] = useState<InventoryItem[]>([]);
   const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
+  const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
+  const [stockMoveNote, setStockMoveNote] = useState("");
+  const [stockMoveDocumentTitle, setStockMoveDocumentTitle] = useState("Készlet átadási lista");
+  const [stockMoveSaving, setStockMoveSaving] = useState(false);
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
   const [labelWidth, setLabelWidth] = useState("40");
@@ -1750,6 +1909,274 @@ export default function AllInWarehouse() {
     move: selectedMoveItems.length,
   };
   const selectedWorkButtonClass = (action: SelectedWorkAction) => selectedWorkCounts[action] > 0 ? primaryBtn : btnSoft;
+
+  function locationValue(loc?: MetaItem | null) {
+    return String(loc?.id || loc?.code || loc?.name || "").trim();
+  }
+
+  function locationByValue(value: string) {
+    const key = String(value || "").trim();
+    if (!key) return null;
+    return stockLocationRows.find((loc) => [loc.id, loc.code, loc.name].some((x) => String(x || "") === key)) || null;
+  }
+
+  function locationNameByValue(value: string) {
+    const found = locationByValue(value);
+    return String(found?.name || found?.code || "-");
+  }
+
+  function stockRowForLocationValue(variantId: string, locationId: string) {
+    const loc = locationByValue(locationId);
+    if (!loc) return null;
+    return stockForLocation(stockRowsForVariant(variantId), loc);
+  }
+
+  function qtyAtLocation(variantId: string, locationId: string) {
+    return Math.max(0, Math.floor(n(stockRowForLocationValue(variantId, locationId)?.qty)));
+  }
+
+  function reservedAtLocation(variantId: string, locationId: string) {
+    return Math.max(0, Math.floor(n(stockRowForLocationValue(variantId, locationId)?.reserved_qty)));
+  }
+
+  function availableAtLocation(variantId: string, locationId: string) {
+    const row = stockRowForLocationValue(variantId, locationId);
+    if (!row) return 0;
+    if (row.available_qty !== undefined && row.available_qty !== null) return Math.max(0, Math.floor(n(row.available_qty)));
+    return Math.max(0, Math.floor(n(row.qty) - n(row.reserved_qty)));
+  }
+
+  function firstDifferentLocation(value: string) {
+    return locationValue(stockLocationRows.find((loc) => locationValue(loc) && locationValue(loc) !== value) || stockLocationRows[0] || null);
+  }
+
+  function defaultStockMoveFrom(item: InventoryItem) {
+    const variantId = String(item.variant_id || "");
+    const sorted = stockLocationRows
+      .map((loc) => ({ loc, available: availableAtLocation(variantId, locationValue(loc)), qty: qtyAtLocation(variantId, locationValue(loc)) }))
+      .sort((a, b) => b.available - a.available || b.qty - a.qty || String(a.loc.name || a.loc.code || "").localeCompare(String(b.loc.name || b.loc.code || ""), "hu", { sensitivity: "base" }));
+    return locationValue(sorted.find((row) => row.available > 0)?.loc || stockLocationRows[0] || null);
+  }
+
+  function defaultStockMoveTo(fromLocationId: string) {
+    return firstDifferentLocation(fromLocationId);
+  }
+
+  function clampStockMoveQty(item: InventoryItem, fromLocationId: string, rawQty: unknown) {
+    const variantId = String(item.variant_id || "");
+    const available = availableAtLocation(variantId, fromLocationId);
+    const qty = Math.max(0, Math.floor(n(rawQty)));
+    if (available <= 0) return 0;
+    return Math.min(qty || 1, available);
+  }
+
+  function defaultMoveDraftForItem(item: InventoryItem): StockTransferDraftRow {
+    const fromLocationId = defaultStockMoveFrom(item);
+    const toLocationId = defaultStockMoveTo(fromLocationId);
+    const qty = clampStockMoveQty(item, fromLocationId, "1");
+    return { fromLocationId, toLocationId, qty: String(qty) };
+  }
+
+  function setStockMoveRowField(variantId: string, patch: Partial<StockTransferDraftRow>) {
+    const item = selectedMoveItems.find((x) => String(x.variant_id || "") === variantId);
+    setStockMoveRows((current) => {
+      const previous = current[variantId] || (item ? defaultMoveDraftForItem(item) : { fromLocationId: "", toLocationId: "", qty: "1" });
+      let next: StockTransferDraftRow = { ...previous, ...patch };
+      if (patch.fromLocationId !== undefined && (!next.toLocationId || next.toLocationId === next.fromLocationId)) {
+        next.toLocationId = defaultStockMoveTo(next.fromLocationId);
+      }
+      if (patch.toLocationId !== undefined && next.toLocationId === next.fromLocationId) {
+        next.toLocationId = defaultStockMoveTo(next.fromLocationId);
+      }
+      if (item) next.qty = String(clampStockMoveQty(item, next.fromLocationId, next.qty));
+      return { ...current, [variantId]: next };
+    });
+  }
+
+  function adjustStockMoveQty(variantId: string, delta: number) {
+    const item = selectedMoveItems.find((x) => String(x.variant_id || "") === variantId);
+    if (!item) return;
+    const current = stockMoveRows[variantId] || defaultMoveDraftForItem(item);
+    setStockMoveRowField(variantId, { qty: String(Math.max(0, Math.floor(n(current.qty)) + delta)) });
+  }
+
+  function applyMoveLocationsToAll(fromLocationId: string, toLocationId: string) {
+    if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) return;
+    setStockMoveRows((current) => {
+      const next = { ...current };
+      for (const item of selectedMoveItems) {
+        const variantId = String(item.variant_id || "");
+        if (!variantId) continue;
+        const previous = next[variantId] || defaultMoveDraftForItem(item);
+        next[variantId] = {
+          fromLocationId,
+          toLocationId,
+          qty: String(clampStockMoveQty(item, fromLocationId, previous.qty)),
+        };
+      }
+      return next;
+    });
+  }
+
+  const selectedMoveIdsKey = useMemo(() => selectedMoveItems.map((item) => String(item.variant_id || "")).filter(Boolean).join("|"), [selectedMoveItems]);
+
+  useEffect(() => {
+    if (selectedWorkPanel !== "move") return;
+    setStockMoveRows((current) => {
+      const activeIds = new Set(selectedMoveItems.map((item) => String(item.variant_id || "")).filter(Boolean));
+      const next: Record<string, StockTransferDraftRow> = {};
+      for (const item of selectedMoveItems) {
+        const variantId = String(item.variant_id || "");
+        if (!variantId) continue;
+        const previous = current[variantId] || defaultMoveDraftForItem(item);
+        const fromLocationId = previous.fromLocationId || defaultStockMoveFrom(item);
+        let toLocationId = previous.toLocationId || defaultStockMoveTo(fromLocationId);
+        if (toLocationId === fromLocationId) toLocationId = defaultStockMoveTo(fromLocationId);
+        next[variantId] = {
+          fromLocationId,
+          toLocationId,
+          qty: String(clampStockMoveQty(item, fromLocationId, previous.qty || "1")),
+        };
+      }
+      for (const [variantId, row] of Object.entries(current) as Array<[string, StockTransferDraftRow]>) {
+        if (activeIds.has(variantId) && !next[variantId]) next[variantId] = row;
+      }
+      return next;
+    });
+  }, [selectedWorkPanel, selectedMoveIdsKey, stockLocationRows, stockRows]);
+
+  const preparedMoveRows = useMemo<PreparedStockTransferRow[]>(() => {
+    return selectedMoveItems.map((item) => {
+      const variantId = String(item.variant_id || "");
+      const draft = stockMoveRows[variantId] || defaultMoveDraftForItem(item);
+      const qty = Math.max(0, Math.floor(n(draft.qty)));
+      const availableFrom = availableAtLocation(variantId, draft.fromLocationId);
+      let problem = "";
+      if (!variantId) problem = "Hiányzó termékazonosító.";
+      else if (!draft.fromLocationId) problem = "Válassz forrás helyet.";
+      else if (!draft.toLocationId) problem = "Válassz célhelyet.";
+      else if (draft.fromLocationId === draft.toLocationId) problem = "A forrás és a célhely nem lehet ugyanaz.";
+      else if (qty <= 0) problem = "Adj meg legalább 1 darabot.";
+      else if (qty > availableFrom) problem = `A forrás helyen csak ${availableFrom} db elérhető.`;
+      return {
+        item,
+        variantId,
+        fromLocationId: draft.fromLocationId,
+        toLocationId: draft.toLocationId,
+        fromLocationName: locationNameByValue(draft.fromLocationId),
+        toLocationName: locationNameByValue(draft.toLocationId),
+        qty,
+        availableFrom,
+        valid: !problem,
+        problem,
+      };
+    });
+  }, [selectedMoveItems, stockMoveRows, stockLocationRows, stockRows]);
+
+  const preparedMoveRowsById = useMemo(() => new Map(preparedMoveRows.map((row) => [row.variantId, row])), [preparedMoveRows]);
+  const moveValidRows = useMemo(() => preparedMoveRows.filter((row) => row.valid), [preparedMoveRows]);
+  const moveAllRowsValid = useMemo(() => preparedMoveRows.length > 0 && preparedMoveRows.every((row) => row.valid), [preparedMoveRows]);
+  const moveTotalQty = useMemo(() => moveValidRows.reduce((sum, row) => sum + row.qty, 0), [moveValidRows]);
+  const moveCanSave = selectedWorkPanel === "move" && moveAllRowsValid && !stockMoveSaving;
+
+  function movePrintLines() {
+    return moveValidRows.map((row, index): StockTransferPrintLine => ({
+      index: index + 1,
+      title: row.item.title_ro || "-",
+      brand: row.item.brand_name || "-",
+      category: row.item.category_name_hu || row.item.category_name_ro || "-",
+      barcode: row.item.barcode || row.item.internal_sku || "-",
+      color: colorDisplay(row.item.color_name, row.item.color_code),
+      size: String(row.item.size || "-"),
+      imageUrl: row.item.image_url || null,
+      fromLocation: row.fromLocationName,
+      toLocation: row.toLocationName,
+      qty: row.qty,
+    }));
+  }
+
+  function printStockMoveTransferPdf() {
+    if (!moveAllRowsValid) {
+      setMessage("A PDF előtt javítsd a készletmozgatási sorokat.");
+      return;
+    }
+    const printHtml = warehouseStockTransferPrintDocumentHtml({
+      title: stockMoveDocumentTitle.trim() || "Készlet átadási lista",
+      note: stockMoveNote.trim(),
+      createdAt: warehouseTransferDateTime(),
+      lines: movePrintLines(),
+    });
+
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.position = "fixed";
+    iframe.style.left = "-10000px";
+    iframe.style.top = "0";
+    iframe.style.width = "210mm";
+    iframe.style.height = "297mm";
+    iframe.style.border = "0";
+    iframe.style.opacity = "0";
+    iframe.style.pointerEvents = "none";
+    document.body.appendChild(iframe);
+
+    const printWindow = iframe.contentWindow;
+    const printDocument = printWindow?.document;
+    if (!printWindow || !printDocument) {
+      iframe.remove();
+      setMessage("A böngésző nem engedte megnyitni a nyomtatási keretet.");
+      return;
+    }
+
+    let cleaned = false;
+    let cleanupTimer: number | undefined;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (cleanupTimer) window.clearTimeout(cleanupTimer);
+      iframe.remove();
+    };
+
+    printWindow.addEventListener("afterprint", cleanup, { once: true });
+    printDocument.open();
+    printDocument.write(printHtml);
+    printDocument.close();
+    const runPrint = () => {
+      printWindow.focus();
+      printWindow.print();
+      cleanupTimer = window.setTimeout(cleanup, 60000);
+    };
+    printWindow.requestAnimationFrame(() => printWindow.requestAnimationFrame(runPrint));
+  }
+
+  async function saveSelectedMoveTransfers() {
+    if (!moveCanSave) {
+      setMessage("Javítsd a készletmozgatási sorokat mentés előtt.");
+      return;
+    }
+    setStockMoveSaving(true);
+    setMessage("");
+    try {
+      const result = await apiStockTransfer({
+        title: stockMoveDocumentTitle.trim() || "Készlet átadási lista",
+        note: stockMoveNote.trim(),
+        lines: moveValidRows.map((row) => ({
+          variantId: row.variantId,
+          fromLocationId: row.fromLocationId,
+          toLocationId: row.toLocationId,
+          qty: row.qty,
+        })),
+      });
+      notifyStockMovesChanged({ source: "warehouse_transfer", transferId: result.transferId });
+      await load();
+      const movedLines = Number(result.movedLines ?? result.movedRows ?? result.lineCount ?? moveValidRows.length);
+      const movedQty = Number(result.movedQty ?? result.totalQty ?? moveTotalQty);
+      setMessage(`Készletmozgatás rögzítve: ${movedLines} sor, ${movedQty} db.`);
+    } catch (e: any) {
+      setMessage(e?.message || "A készletmozgatás mentése nem sikerült.");
+    } finally {
+      setStockMoveSaving(false);
+    }
+  }
 
   function applyPersistedSelectedWorklist(rows: PersistedSelectedWorkItem[]) {
     const nextSelected: Record<string, boolean> = {};
@@ -3520,7 +3947,7 @@ export default function AllInWarehouse() {
 
       {selectedWorkPanel && (
         <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/45 px-3 py-4 backdrop-blur-sm">
-          <div className="max-h-[88vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
+          <div className={`max-h-[88vh] w-full overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl ${selectedWorkPanel === "move" ? "max-w-7xl" : "max-w-5xl"}`}>
             <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">{selectedWorkActionLabels[selectedWorkPanel]}</p>
@@ -3532,6 +3959,16 @@ export default function AllInWarehouse() {
                     <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Vonalkódok / címkék generálása"}
                   </button>
                 )}
+                {selectedWorkPanel === "move" && (
+                  <>
+                    <button className={btnSoft} onClick={printStockMoveTransferPdf} type="button" disabled={!moveAllRowsValid}>
+                      <Printer size={15} /> PDF / nyomtatás
+                    </button>
+                    <button className={primaryBtn} onClick={saveSelectedMoveTransfers} type="button" disabled={!moveCanSave}>
+                      <Save size={15} /> {stockMoveSaving ? "Mentés..." : "Mozgatás rögzítése"}
+                    </button>
+                  </>
+                )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
                 <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); }} type="button"><X size={15} /> Bezárás</button>
               </div>
@@ -3540,36 +3977,160 @@ export default function AllInWarehouse() {
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
                 Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad.
               </div>
-              <div className="grid gap-2">
-                {selectedItemsForAction(selectedWorkPanel).map((it) => (
-                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
-                    <div className="flex justify-center">
-                      <input
-                        className={selectBox}
-                        type="checkbox"
-                        checked
-                        onChange={(e) => {
-                          if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
-                        }}
-                        aria-label="Kivétel ebből a feladatlistából"
-                        title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
-                      />
-                    </div>
-                    <div>
-                      {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
-                      <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Elérhető: {n(it.available_qty)} • SKU: {it.barcode || "-"}</p>
-                    </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
-                      <button className={btnSoft} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button"><ArrowLeft size={14} /> Vissza a fő listába</button>
-                      <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={14} /> Törlés minden listából</button>
+
+              {selectedWorkPanel === "move" && (
+                <div className="space-y-3 rounded-2xl border border-white/14 bg-[#3f4959] p-3">
+                  <div className="grid gap-3 lg:grid-cols-[1.1fr,1fr,1fr,1.4fr,auto] lg:items-end">
+                    <label className={label}>
+                      PDF / bizonylat címe
+                      <input className={input} value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Készlet átadási lista" />
+                    </label>
+                    <label className={label}>
+                      Alap forrás
+                      <select className={select} defaultValue="" onChange={(e) => {
+                        const fromId = e.target.value;
+                        const toId = firstDifferentLocation(fromId);
+                        if (fromId && toId) applyMoveLocationsToAll(fromId, toId);
+                      }}>
+                        <option value="">Válassz forrást...</option>
+                        {stockLocationRows.map((loc) => {
+                          const value = locationValue(loc);
+                          return <option key={value} value={value}>{loc.name || loc.code}</option>;
+                        })}
+                      </select>
+                    </label>
+                    <label className={label}>
+                      Alap cél
+                      <select className={select} defaultValue="" onChange={(e) => {
+                        const toId = e.target.value;
+                        const fromId = firstDifferentLocation(toId);
+                        if (fromId && toId) applyMoveLocationsToAll(fromId, toId);
+                      }}>
+                        <option value="">Válassz célt...</option>
+                        {stockLocationRows.map((loc) => {
+                          const value = locationValue(loc);
+                          return <option key={value} value={value}>{loc.name || loc.code}</option>;
+                        })}
+                      </select>
+                    </label>
+                    <label className={label}>
+                      Megjegyzés a PDF-re és a naplóba
+                      <input className={input} value={stockMoveNote} onChange={(e) => setStockMoveNote(e.target.value)} placeholder="Pl. átadás ellenőrzésre, visszahozatal..." />
+                    </label>
+                    <div className="rounded-xl border border-[#2a8d8b]/28 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd]">
+                      <div className="font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db</div>
+                      <div className="mt-1 text-[#d7fffd]/78">mozgatásra előkészítve</div>
                     </div>
                   </div>
-                ))}
+                  <div className="flex flex-wrap gap-2 text-xs text-white/58">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1"><FileText size={13} /> PDF nyomtatható átadási / visszavételi listának</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1"><PackageCheck size={13} /> A mentés ténylegesen módosítja a készletet</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid gap-2">
+                {selectedItemsForAction(selectedWorkPanel).map((it) => {
+                  const variantId = String(it.variant_id || "");
+                  const preparedMove = preparedMoveRowsById.get(variantId);
+
+                  if (selectedWorkPanel === "move") {
+                    const draft = stockMoveRows[variantId] || (preparedMove ? { fromLocationId: preparedMove.fromLocationId, toLocationId: preparedMove.toLocationId, qty: String(preparedMove.qty) } : defaultMoveDraftForItem(it));
+                    const availableFrom = preparedMove?.availableFrom ?? availableAtLocation(variantId, draft.fromLocationId);
+                    const currentQty = qtyAtLocation(variantId, draft.fromLocationId);
+                    const reservedQty = reservedAtLocation(variantId, draft.fromLocationId);
+                    const rowProblem = preparedMove?.problem || "";
+                    return (
+                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 xl:grid-cols-[36px,56px,minmax(220px,1fr),185px,185px,145px,auto] xl:items-center">
+                        <div className="flex justify-center">
+                          <input
+                            className={selectBox}
+                            type="checkbox"
+                            checked
+                            onChange={(e) => {
+                              if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
+                            }}
+                            aria-label="Kivétel ebből a feladatlistából"
+                            title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
+                          />
+                        </div>
+                        <div>
+                          {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
+                          <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          <p className="mt-1 text-xs text-white/45">Vonalkód: {it.barcode || it.internal_sku || "-"} • Összes készlet: {n(it.total_qty)}</p>
+                          {rowProblem ? <p className="mt-1 text-xs text-amber-200">{rowProblem}</p> : <p className="mt-1 text-xs text-[#cffffd]">Forrás: {currentQty} db • foglalt: {reservedQty} • elérhető: {availableFrom}</p>}
+                        </div>
+                        <label className={label}>
+                          Honnan
+                          <select className={select} value={draft.fromLocationId} onChange={(e) => setStockMoveRowField(variantId, { fromLocationId: e.target.value })}>
+                            <option value="">Forrás...</option>
+                            {stockLocationRows.map((loc) => {
+                              const value = locationValue(loc);
+                              const available = availableAtLocation(variantId, value);
+                              return <option key={value} value={value}>{loc.name || loc.code} ({available} db)</option>;
+                            })}
+                          </select>
+                        </label>
+                        <label className={label}>
+                          Hova
+                          <select className={select} value={draft.toLocationId} onChange={(e) => setStockMoveRowField(variantId, { toLocationId: e.target.value })}>
+                            <option value="">Cél...</option>
+                            {stockLocationRows.map((loc) => {
+                              const value = locationValue(loc);
+                              return <option key={value} value={value} disabled={value === draft.fromLocationId}>{loc.name || loc.code}</option>;
+                            })}
+                          </select>
+                        </label>
+                        <label className={label}>
+                          Darab
+                          <div className="flex h-10 overflow-hidden rounded-xl border border-white/18 bg-[#354153]">
+                            <button className="flex w-9 items-center justify-center border-r border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, -1)}><Minus size={14} /></button>
+                            <input className="w-full bg-transparent px-2 text-center text-sm text-white outline-none tabular-nums" type="number" min={0} max={availableFrom || undefined} value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value })} />
+                            <button className="flex w-9 items-center justify-center border-l border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, 1)}><Plus size={14} /></button>
+                          </div>
+                        </label>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
+                          <button className={btnSoft} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button"><ArrowLeft size={14} /> Vissza</button>
+                          <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={14} /> Törlés</button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
+                      <div className="flex justify-center">
+                        <input
+                          className={selectBox}
+                          type="checkbox"
+                          checked
+                          onChange={(e) => {
+                            if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
+                          }}
+                          aria-label="Kivétel ebből a feladatlistából"
+                          title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
+                        />
+                      </div>
+                      <div>
+                        {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
+                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Elérhető: {n(it.available_qty)} • Vonalkód: {it.barcode || "-"}</p>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
+                        <button className={btnSoft} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button"><ArrowLeft size={14} /> Vissza a fő listába</button>
+                        <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={14} /> Törlés minden listából</button>
+                      </div>
+                    </div>
+                  );
+                })}
                 {!selectedItemsForAction(selectedWorkPanel).length && (
                   <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-6 text-center text-sm text-white/60">Nincs termék ebben a listában.</p>
                 )}
