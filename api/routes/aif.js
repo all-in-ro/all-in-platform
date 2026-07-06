@@ -3030,8 +3030,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.get("/brands", requireAuthed, async (_req, res) => {
-    const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
+  router.get("/brands", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const r = await pool.query(
+      `WITH ranked AS (
+         SELECT id, code, name, is_active,
+                row_number() OVER (
+                  PARTITION BY lower(regexp_replace(trim(COALESCE(name, code, '')), '\\s+', ' ', 'g'))
+                  ORDER BY is_active DESC, name ASC, code ASC, id::text ASC
+                ) AS rn
+          FROM aif_brands
+          ${includeInactive ? "" : "WHERE is_active=true"}
+       )
+       SELECT id, code, name, is_active
+       FROM ranked
+       WHERE rn=1
+       ORDER BY is_active DESC, name ASC`
+    );
     res.json({ items: r.rows });
   });
 
@@ -3554,7 +3569,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     await ensureAifSizeTables(pool);
     const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
-      pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
+      pool.query(`WITH ranked AS (
+                    SELECT id, code, name, is_active,
+                           row_number() OVER (
+                             PARTITION BY lower(regexp_replace(trim(COALESCE(name, code, '')), '\s+', ' ', 'g'))
+                             ORDER BY is_active DESC, name ASC, code ASC, id::text ASC
+                           ) AS rn
+                    FROM aif_brands
+                    WHERE is_active=true
+                  )
+                  SELECT id, code, name, is_active
+                  FROM ranked
+                  WHERE rn=1
+                  ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
       pool.query(`SELECT code, name, aliases, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
