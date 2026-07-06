@@ -1543,6 +1543,7 @@ export default function AllInWarehouse() {
   const [brandColorCodes, setBrandColorCodes] = useState<BrandColorCode[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
   const [search, setSearch] = useState("");
+  const [snCodFilter, setSnCodFilter] = useState("");
   const [scannedBarcodeSearch, setScannedBarcodeSearch] = useState("");
   const [supplier, setSupplier] = useState("all");
   const [brand, setBrand] = useState("all");
@@ -1861,6 +1862,10 @@ export default function AllInWarehouse() {
         ? out.filter((x) => itemMatchesScannedBarcode(x, scannedCode))
         : out.filter((x) => itemMatchesSearch(x, search));
     }
+    if (snCodFilter.trim()) {
+      const snNeedle = normalizeSearch(snCodFilter);
+      out = out.filter((x) => normalizeSearch(x.sn_cod || x.snCod || "").includes(snNeedle));
+    }
     if (supplier !== "all") out = out.filter((x) => supplierMatches(x, supplier));
     if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
     if (category !== "all") out = out.filter((x) => (x.category_code || x.category_name_ro || "") === category || x.category_name_ro === category);
@@ -1884,7 +1889,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [items, search, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [items, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   const totalProductPages = Math.max(1, Math.ceil(filtered.length / WAREHOUSE_PRODUCTS_PER_PAGE));
   const safeProductPage = Math.min(productPage, totalProductPages);
@@ -1903,7 +1908,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [search, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode]);
+  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode]);
 
   useEffect(() => {
     if (productPage > totalProductPages) setProductPage(totalProductPages);
@@ -3470,7 +3475,7 @@ export default function AllInWarehouse() {
             <button className={btnSoft} onClick={() => setFiltersOpen((x) => !x)}>{filtersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {filtersOpen ? "Bezárás" : "Megnyitás"}</button>
           </div>
           {filtersOpen && (
-            <div className="grid gap-3 p-4 md:grid-cols-4">
+            <div className="grid gap-3 p-4 md:grid-cols-5">
               <label className={`${label} md:col-span-2`}>
                 Keresés
                 <div className="relative">
@@ -3486,6 +3491,9 @@ export default function AllInWarehouse() {
                     <Barcode size={15} />
                   </button>
                 </div>
+              </label>
+              <label className={label}>S/N/COD
+                <input className={input} value={snCodFilter} onChange={(e) => setSnCodFilter(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="pl. S0626" />
               </label>
               <label className={label}>Beszállító
                 <select className={select} value={supplier} onChange={(e) => setSupplier(e.target.value)}>
@@ -3547,7 +3555,7 @@ export default function AllInWarehouse() {
               </label>
               <div className="flex items-end gap-2">
                 <button className={btn} onClick={load} disabled={busy}><Search size={16} /> Keresés</button>
-                <button className={btnSoft} onClick={() => { setSupplier("all"); setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Alaphelyzet</button>
+                <button className={btnSoft} onClick={() => { setSearch(""); setSnCodFilter(""); setScannedBarcodeSearch(""); setSupplier("all"); setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Alaphelyzet</button>
               </div>
             </div>
           )}
@@ -3630,7 +3638,7 @@ export default function AllInWarehouse() {
               {productPager}
               {filtered.length > 0 && (
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
-                  A raktárlista termékvariánsonként összesít. Az azonos vonalkód / szín / méret sorok egy termékként jelennek meg, a darabszám pedig készletként adódik össze.
+                  A raktárlista termékvariánsonként összesít: külön méret külön sor. Csak az azonos modell + szín + méret sorok adódnak össze készletként.
                 </div>
               )}
               <div className="hidden overflow-auto rounded-xl border border-white/20 bg-[#465163] lg:block">
