@@ -1108,8 +1108,25 @@ function dateShort(v: unknown) {
   return d.toLocaleDateString("ro-RO");
 }
 
+function statusHu(value: unknown) {
+  const raw = String(value ?? "active").trim().toLowerCase();
+  if (raw === "active") return "aktív";
+  if (raw === "draft") return "előkészítés";
+  if (raw === "inactive") return "inaktív";
+  if (raw === "archived") return "archivált";
+  return raw || "ismeretlen";
+}
+
+function itemModelStatus(it: InventoryItem) {
+  return String((it as any).model_status || "active").trim().toLowerCase();
+}
+
+function itemVariantStatus(it: InventoryItem) {
+  return String((it as any).variant_status || (it as any).status || "active").trim().toLowerCase();
+}
+
 function hasMissingData(it: InventoryItem) {
-  return !it.image_url || !it.barcode || !it.sell_price || !it.buy_price || !it.title_ro || !it.size;
+  return !it.image_url || !it.barcode || !it.sell_price || !it.buy_price || !it.title_ro || !it.size || itemModelStatus(it) !== "active" || itemVariantStatus(it) !== "active";
 }
 
 function missingLabels(it: InventoryItem) {
@@ -1120,6 +1137,10 @@ function missingLabels(it: InventoryItem) {
   if (!it.sell_price) out.push("eladási ár");
   if (!it.title_ro) out.push("név");
   if (!it.size) out.push("méret");
+  const modelStatus = itemModelStatus(it);
+  const variantStatus = itemVariantStatus(it);
+  if (modelStatus !== "active") out.push(`modell még nem aktív (${statusHu(modelStatus)})`);
+  if (variantStatus !== "active") out.push(`variáns még nem aktív (${statusHu(variantStatus)})`);
   return out;
 }
 
@@ -1350,11 +1371,15 @@ async function apiVariantDelete(id: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/variants/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-async function apiVariantStockUpdate(id: string, rows: Array<{ locationId?: string; locationCode?: string; qty: number | string; reservedQty?: number | string }>) {
-  return fetchJSON<{ ok: true; stock: StockItem[] }>(`/api/aif/variants/${encodeURIComponent(id)}/stock`, {
+async function apiVariantStockUpdate(
+  id: string,
+  rows: Array<{ locationId?: string; locationCode?: string; qty: number | string; reservedQty?: number | string }>,
+  options?: { mode?: "redistribute" | "correction"; allowTotalChange?: boolean }
+) {
+  return fetchJSON<{ ok: true; changed?: number; beforeTotal?: number; afterTotal?: number; totalDelta?: number; mode?: string; stock: StockItem[] }>(`/api/aif/variants/${encodeURIComponent(id)}/stock`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify({ rows, mode: options?.mode || "redistribute", allowTotalChange: Boolean(options?.allowTotalChange) }),
   });
 }
 
@@ -1474,7 +1499,7 @@ function emptyForm(): EditForm {
     season: "",
     material: "",
     shopifyTitle: "",
-    modelStatus: "draft",
+    modelStatus: "active",
     brandCode: "",
     categoryCode: "",
     barcode: "",
@@ -1501,7 +1526,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     season: x.season || "",
     material: x.material || "",
     shopifyTitle: x.shopify_title || "",
-    modelStatus: x.model_status || "draft",
+    modelStatus: x.model_status || "active",
     brandCode: x.brand_code || "",
     categoryCode: x.category_code || "",
     barcode: x.barcode || "",
@@ -1577,6 +1602,8 @@ export default function AllInWarehouse() {
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
+  const [stockEditorAllowTotalChange, setStockEditorAllowTotalChange] = useState(false);
+  const [stockEditorWarning, setStockEditorWarning] = useState("");
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
   const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
@@ -1664,12 +1691,16 @@ export default function AllInWarehouse() {
     }
     setStockEditorTarget(item);
     setStockEditorRows(next);
+    setStockEditorAllowTotalChange(false);
+    setStockEditorWarning("");
   }
 
   function closeStockEditor() {
     if (stockEditorSaving) return;
     setStockEditorTarget(null);
     setStockEditorRows({});
+    setStockEditorAllowTotalChange(false);
+    setStockEditorWarning("");
   }
 
   function stockEditorReservedQty(location: MetaItem) {
@@ -1678,21 +1709,143 @@ export default function AllInWarehouse() {
     return Math.max(0, Math.floor(n(current?.reserved_qty)));
   }
 
+  function stockEditorOriginalQty(location: MetaItem) {
+    if (!stockEditorTarget?.variant_id) return 0;
+    const current = stockForLocation(stockRowsForVariant(stockEditorTarget.variant_id), location);
+    return Math.max(0, Math.floor(n(current?.qty)));
+  }
+
+  function stockEditorOriginalTotal() {
+    if (!stockEditorTarget?.variant_id) return 0;
+    return stockLocationRows.reduce((sum, loc) => sum + stockEditorOriginalQty(loc), 0);
+  }
+
+  function stockEditorDraftTotal(rows: Record<string, string> = stockEditorRows) {
+    return stockLocationRows.reduce((sum, loc) => {
+      const key = locationKey(loc);
+      const reserved = stockEditorReservedQty(loc);
+      return sum + Math.max(reserved, Math.floor(n(rows[key])));
+    }, 0);
+  }
+
+  function stockEditorTotalDelta() {
+    return stockEditorDraftTotal() - stockEditorOriginalTotal();
+  }
+
+  function stockEditorCanSave() {
+    return stockEditorAllowTotalChange || stockEditorTotalDelta() === 0;
+  }
+
+  function preferredStockReceiverLocation(targetKey: string, rows: Record<string, string>) {
+    const candidates = stockLocationRows.filter((loc) => locationKey(loc) !== targetKey);
+    return candidates.sort((a, b) => {
+      const aq = Math.floor(n(rows[locationKey(a)]));
+      const bq = Math.floor(n(rows[locationKey(b)]));
+      const an = String(a.name || a.code || "").toLowerCase();
+      const bn = String(b.name || b.code || "").toLowerCase();
+      const aMain = /miercurea|ciuc|main|warehouse|depozit|raktar|raktár/.test(an) ? 1 : 0;
+      const bMain = /miercurea|ciuc|main|warehouse|depozit|raktar|raktár/.test(bn) ? 1 : 0;
+      return bMain - aMain || bq - aq;
+    })[0] || null;
+  }
+
   function setStockEditorQty(location: MetaItem, value: number) {
     const key = locationKey(location);
     const minQty = stockEditorReservedQty(location);
     const nextQty = Math.max(minQty, Math.floor(Number.isFinite(value) ? value : 0));
-    setStockEditorRows((current) => ({ ...current, [key]: String(nextQty) }));
+    const next = { ...stockEditorRows, [key]: String(nextQty) };
+    setStockEditorRows(next);
+    const delta = stockEditorDraftTotal(next) - stockEditorOriginalTotal();
+    if (!stockEditorAllowTotalChange && delta !== 0) {
+      setStockEditorWarning("A teljes készlet megváltozna. Mozgatás módban ugyanannyi darabnak kell maradnia, vagy kapcsold be a készletkorrekció módot.");
+    } else if (stockEditorAllowTotalChange && delta !== 0) {
+      setStockEditorWarning(`Készletkorrekció mód: a teljes készlet ${delta > 0 ? "+" : ""}${delta} db-bal változik.`);
+    } else {
+      setStockEditorWarning("");
+    }
   }
 
   function adjustStockEditorQty(location: MetaItem, delta: number) {
     const key = locationKey(location);
-    const currentQty = Math.floor(n(stockEditorRows[key]));
-    setStockEditorQty(location, currentQty + delta);
+    const next = { ...stockEditorRows };
+    const minTarget = stockEditorReservedQty(location);
+    const currentQty = Math.max(minTarget, Math.floor(n(next[key])));
+    const wantedQty = Math.max(minTarget, currentQty + delta);
+    const effectiveDelta = wantedQty - currentQty;
+    if (!effectiveDelta) return;
+
+    if (stockEditorAllowTotalChange) {
+      next[key] = String(wantedQty);
+      setStockEditorRows(next);
+      const totalDelta = stockEditorDraftTotal(next) - stockEditorOriginalTotal();
+      setStockEditorWarning(totalDelta !== 0 ? `Készletkorrekció mód: a teljes készlet ${totalDelta > 0 ? "+" : ""}${totalDelta} db-bal változik.` : "");
+      return;
+    }
+
+    if (effectiveDelta > 0) {
+      let need = effectiveDelta;
+      const donors = stockLocationRows
+        .filter((loc) => locationKey(loc) !== key)
+        .map((loc) => {
+          const locKey = locationKey(loc);
+          const qty = Math.max(stockEditorReservedQty(loc), Math.floor(n(next[locKey])));
+          const reserved = stockEditorReservedQty(loc);
+          return { loc, key: locKey, qty, reserved, movable: Math.max(0, qty - reserved) };
+        })
+        .filter((x) => x.movable > 0)
+        .sort((a, b) => b.movable - a.movable);
+
+      for (const donor of donors) {
+        if (need <= 0) break;
+        const take = Math.min(need, donor.movable);
+        next[donor.key] = String(donor.qty - take);
+        need -= take;
+      }
+
+      const moved = effectiveDelta - need;
+      if (moved <= 0) {
+        setStockEditorWarning("Nincs máshol elérhető készlet, amit át lehetne mozgatni. Új áruhoz kapcsold be a készletkorrekció módot.");
+        return;
+      }
+      next[key] = String(currentQty + moved);
+      setStockEditorRows(next);
+      setStockEditorWarning(need > 0
+        ? `Csak ${moved} db-ot tudtam áttenni, mert máshol nincs több szabad készlet.`
+        : "Átvezettem a darabot másik célhelyről, így a teljes készlet nem változott.");
+      return;
+    }
+
+    next[key] = String(wantedQty);
+    const receiver = preferredStockReceiverLocation(key, next);
+    if (receiver) {
+      const receiverKey = locationKey(receiver);
+      const receiverQty = Math.max(stockEditorReservedQty(receiver), Math.floor(n(next[receiverKey])));
+      next[receiverKey] = String(receiverQty + Math.abs(effectiveDelta));
+      setStockEditorRows(next);
+      setStockEditorWarning("A csökkentett darabot áttettem a fő/legnagyobb készletű célhelyre, így a teljes készlet nem változott.");
+    } else {
+      setStockEditorRows(next);
+      setStockEditorWarning("A teljes készlet csökkenne. Törés/készletkorrekció esetén kapcsold be a készletkorrekció módot.");
+    }
+  }
+
+  function findBrandCodeForName(name?: string | null) {
+    const needle = normalizeSearch(name || "");
+    if (!needle) return "";
+    const found = brands.find((b) => normalizeSearch(b.name || b.code || "") === needle || normalizeSearch(b.code || "") === needle);
+    return found ? String(found.code || found.id || "") : "";
   }
 
   async function saveStockEditor() {
     if (!stockEditorTarget?.variant_id) return;
+    const beforeTotal = stockEditorOriginalTotal();
+    const afterTotal = stockEditorDraftTotal();
+    const totalDelta = afterTotal - beforeTotal;
+    if (!stockEditorAllowTotalChange && totalDelta !== 0) {
+      setStockEditorWarning("Mozgatás módban a teljes készlet nem változhat. A + gombbal automatikusan másik helyről vezetjük át, új áruhoz pedig kapcsold be a készletkorrekció módot.");
+      return;
+    }
+
     setStockEditorSaving(true);
     setMessage("");
     try {
@@ -1708,17 +1861,24 @@ export default function AllInWarehouse() {
         };
       });
       const changedVariantId = String(stockEditorTarget.variant_id || "");
-      await apiVariantStockUpdate(changedVariantId, rows);
-      notifyStockMovesChanged({ variantId: changedVariantId, source: "warehouse_stock_editor" });
+      await apiVariantStockUpdate(changedVariantId, rows, {
+        mode: stockEditorAllowTotalChange ? "correction" : "redistribute",
+        allowTotalChange: stockEditorAllowTotalChange,
+      });
+      notifyStockMovesChanged({ variantId: changedVariantId, source: stockEditorAllowTotalChange ? "warehouse_stock_correction" : "warehouse_stock_redistribution" });
       await load();
       if (detail?.item?.id && String(detail.item.id) === String(stockEditorTarget.variant_id)) {
         const d = await apiVariantDetail(stockEditorTarget.variant_id);
         setDetail(d);
         setEdit(formFromDetail(d));
       }
-      setMessage("Készlet mennyiségek frissítve célhelyenként.");
+      setMessage(stockEditorAllowTotalChange
+        ? `Készletkorrekció mentve. Teljes változás: ${totalDelta > 0 ? "+" : ""}${totalDelta} db.`
+        : "Készlet áthelyezés mentve, a teljes darabszám nem változott.");
       setStockEditorTarget(null);
       setStockEditorRows({});
+      setStockEditorAllowTotalChange(false);
+      setStockEditorWarning("");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült módosítani a készletet.");
     } finally {
@@ -3045,6 +3205,10 @@ export default function AllInWarehouse() {
       const d = await apiVariantDetail(id);
       setDetail(d);
       const nextForm = formFromDetail(d);
+      if (!nextForm.brandCode) {
+        const listItem = items.find((it) => String(it.variant_id || "") === String(id));
+        nextForm.brandCode = findBrandCodeForName(d.item?.brand_name || listItem?.brand_name || "");
+      }
       nextForm.colorName = officialColorFromTypes(nextForm.colorName, colorTypes);
       setEdit(nextForm);
     } catch (e: any) {
@@ -4225,8 +4389,39 @@ export default function AllInWarehouse() {
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#5bd0cc]/30 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd]">
-                A teljes készlet a célhelyek összege. Itt csak a jelenlegi mennyiséget állítjuk, termékadatot nem módosít.
+                Mozgatás módban a teljes készlet nem változik: ha az egyik célhelyre pluszolsz, automatikusan leveszi másik célhelyről. Új áru vagy leltárkorrekció esetén kapcsold be a készletkorrekció módot.
               </div>
+
+              <div className="grid gap-2 rounded-xl border border-white/12 bg-[#3f4959]/70 p-3 text-xs text-white/72 sm:grid-cols-[1fr_auto] sm:items-center">
+                <div>
+                  <p className="text-white/88">{stockEditorAllowTotalChange ? "Készletkorrekció mód" : "Mozgatás célhelyek között"}</p>
+                  <p className="mt-0.5 text-white/52">
+                    Régi összesen: <span className="text-white">{stockEditorOriginalTotal()}</span> db • Új összesen: <span className="text-white">{stockEditorDraftTotal()}</span> db • Eltérés: <span className={stockEditorTotalDelta() === 0 ? "text-[#bff7f4]" : "text-amber-200"}>{stockEditorTotalDelta() > 0 ? "+" : ""}{stockEditorTotalDelta()}</span> db
+                  </p>
+                </div>
+                <button
+                  className={stockEditorAllowTotalChange ? dangerBtn : btnSoft}
+                  type="button"
+                  disabled={stockEditorSaving}
+                  onClick={() => {
+                    const nextMode = !stockEditorAllowTotalChange;
+                    setStockEditorAllowTotalChange(nextMode);
+                    const delta = stockEditorTotalDelta();
+                    setStockEditorWarning(nextMode
+                      ? (delta !== 0 ? `Készletkorrekció mód: a teljes készlet ${delta > 0 ? "+" : ""}${delta} db-bal változik.` : "Készletkorrekció mód bekapcsolva. Itt lehet újonnan kapott darabot vagy leltárkorrekciót menteni.")
+                      : (delta !== 0 ? "Mozgatás módban a teljes készlet nem változhat. Állítsd vissza az eltérést 0-ra, vagy kapcsold vissza a korrekciót." : ""));
+                  }}
+                >
+                  {stockEditorAllowTotalChange ? "Korrekció bekapcsolva" : "Korrekció engedélyezése"}
+                </button>
+              </div>
+
+              {stockEditorWarning && (
+                <div className={`flex gap-2 rounded-xl border px-3 py-2 text-xs ${stockEditorAllowTotalChange ? "border-amber-300/35 bg-amber-400/12 text-amber-100" : "border-[#5bd0cc]/30 bg-[#203f49] text-[#d7fffd]"}`}>
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                  <span>{stockEditorWarning}</span>
+                </div>
+              )}
 
               <div className="space-y-2">
                 {stockLocationRows.map((loc) => {
@@ -4278,12 +4473,13 @@ export default function AllInWarehouse() {
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 pt-3">
                 <div className="text-xs text-white/60">
-                  Új összesen: <span className="text-white">{Object.values(stockEditorRows).reduce<number>((sum, x) => sum + n(x), 0)}</span>
+                  Régi összesen: <span className="text-white">{stockEditorOriginalTotal()}</span> • Új összesen: <span className="text-white">{stockEditorDraftTotal()}</span>
+                  {stockEditorTotalDelta() !== 0 && <span className="ml-2 text-amber-200">({stockEditorTotalDelta() > 0 ? "+" : ""}{stockEditorTotalDelta()} db)</span>}
                 </div>
                 <div className="flex gap-2">
                   <button className={btnSoft} onClick={closeStockEditor} disabled={stockEditorSaving} type="button">Mégse</button>
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={saveStockEditor} disabled={stockEditorSaving || !stockLocationRows.length} type="button">
-                    <Save size={15} /> Készlet mentése
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={saveStockEditor} disabled={stockEditorSaving || !stockLocationRows.length || !stockEditorCanSave()} title={!stockEditorCanSave() ? "Mozgatás módban a teljes készlet nem változhat." : "Készlet mentése"} type="button">
+                    <Save size={15} /> {stockEditorAllowTotalChange ? "Korrekció mentése" : "Mozgatás mentése"}
                   </button>
                 </div>
               </div>
@@ -4814,8 +5010,8 @@ export default function AllInWarehouse() {
                 <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                   <p className="mb-3 text-sm text-white/80">Hiányzó adatok</p>
                   <div className="flex flex-wrap gap-2">
-                    {missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size }).map((x) => <span key={x} className="rounded-full border border-amber-200/25 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-100">{x}</span>)}
-                    {!missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size }).length && <span className="rounded-full border border-emerald-200/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-100">Nincs jelölt hiány</span>}
+                    {missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size, model_status: edit.modelStatus, variant_status: edit.variantStatus }).map((x) => <span key={x} className="rounded-full border border-amber-200/25 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-100">{x}</span>)}
+                    {!missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size, model_status: edit.modelStatus, variant_status: edit.variantStatus }).length && <span className="rounded-full border border-emerald-200/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-100">Nincs jelölt hiány</span>}
                   </div>
                 </section>
               </div>
