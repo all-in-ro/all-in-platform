@@ -1647,11 +1647,8 @@ function nextSortOrder(rows: Array<{ sort_order?: number | string | null }>) {
 }
 
 function overviewOpenByDefault() {
-  if (typeof window === "undefined") return true;
-  if (typeof window.matchMedia === "function") {
-    return !window.matchMedia("(max-width: 767px)").matches;
-  }
-  return window.innerWidth >= 768;
+  // A raktári Áttekintés induljon csukva. Aki reggel grafikonokra vágyik, az majd kinyitja, mi többiek dolgoznánk.
+  return false;
 }
 
 export default function AllInWarehouse() {
@@ -1749,6 +1746,8 @@ export default function AllInWarehouse() {
   const selectedSyncReadyRef = useRef(false);
   const selectedSyncTimerRef = useRef<number | null>(null);
   const selectedSyncSilentRef = useRef(false);
+  const [pendingProductJumpId, setPendingProductJumpId] = useState("");
+  const [highlightProductId, setHighlightProductId] = useState("");
   const productListRef = useRef<HTMLElement | null>(null);
 
   const stockMap = useMemo(() => {
@@ -2167,6 +2166,13 @@ export default function AllInWarehouse() {
     return out;
   }, [items, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
+  const newProductBarcodeMatches = useMemo(() => {
+    if (!newProductOpen) return [] as InventoryItem[];
+    const code = cleanScannedBarcode(newProduct.barcode || newProduct.snCod || "");
+    if (!code) return [] as InventoryItem[];
+    return items.filter((item) => itemMatchesScannedBarcode(item, code)).slice(0, 4);
+  }, [newProductOpen, newProduct.barcode, newProduct.snCod, items]);
+
   const totalProductPages = Math.max(1, Math.ceil(filtered.length / WAREHOUSE_PRODUCTS_PER_PAGE));
   const safeProductPage = Math.min(productPage, totalProductPages);
   const productPageStartIndex = filtered.length ? (safeProductPage - 1) * WAREHOUSE_PRODUCTS_PER_PAGE + 1 : 0;
@@ -2197,6 +2203,82 @@ export default function AllInWarehouse() {
       productListRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
     }, 0);
   }
+
+  function findVisibleProductNode(variantId: string) {
+    const root = productListRef.current;
+    if (!root || !variantId) return null;
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-aif-variant-id]"))
+      .filter((node) => node.dataset.aifVariantId === variantId);
+    return nodes.find((node) => Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || nodes[0] || null;
+  }
+
+  function queueProductRowJump(variantId: unknown) {
+    const id = String(variantId || "").trim();
+    if (!id) return;
+    setSummaryOpen(false);
+    setListOpen(true);
+    setPendingProductJumpId(id);
+    setHighlightProductId(id);
+  }
+
+  function resetListFiltersForProductFocus(searchText: string, scannedCode = "") {
+    setDetail(null);
+    setSelectedPanelOpen(false);
+    setSelectedWorkPanel(null);
+    setFiltersOpen(false);
+    setListOpen(true);
+    setSummaryOpen(false);
+    setSupplier("all");
+    setBrand("all");
+    setCategory("all");
+    setGender("all");
+    setLocation("all");
+    setStockFilter("all");
+    setImageFilter("all");
+    setSortMode("name");
+    setScannedBarcodeSearch(scannedCode);
+    setSearch(searchText);
+    setProductPage(1);
+  }
+
+  function focusProductInList(item: InventoryItem, searchValue?: unknown, messageText?: string) {
+    const variantId = selectedVariantIdFromItem(item);
+    const searchText = String(searchValue || item.barcode || item.sn_cod || item.snCod || item.internal_sku || item.title_ro || "").trim();
+    const scannedCode = cleanScannedBarcode(searchValue || item.barcode || item.sn_cod || item.snCod || item.internal_sku || "");
+    resetListFiltersForProductFocus(searchText, scannedCode && normalizeSearch(scannedCode) === normalizeSearch(searchText) ? scannedCode : "");
+    queueProductRowJump(variantId);
+    if (messageText) setMessage(messageText);
+  }
+
+  useEffect(() => {
+    const targetId = String(pendingProductJumpId || "").trim();
+    if (!targetId) return;
+    if (!listOpen) {
+      setListOpen(true);
+      return;
+    }
+
+    const targetIndex = filtered.findIndex((item) => String(item.variant_id || "") === targetId);
+    if (targetIndex < 0) return;
+
+    const targetPage = Math.max(1, Math.floor(targetIndex / WAREHOUSE_PRODUCTS_PER_PAGE) + 1);
+    if (targetPage !== safeProductPage) {
+      setProductPage(targetPage);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const node = findVisibleProductNode(targetId);
+      if (!node) return;
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      setPendingProductJumpId((current) => current === targetId ? "" : current);
+      window.setTimeout(() => {
+        setHighlightProductId((current) => current === targetId ? "" : current);
+      }, 5200);
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [pendingProductJumpId, filtered, safeProductPage, productPageItems.length, listOpen]);
 
   const productPager = filtered.length > WAREHOUSE_PRODUCTS_PER_PAGE ? (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
@@ -3526,31 +3608,17 @@ export default function AllInWarehouse() {
       return;
     }
 
-    setDetail(null);
-    setSelectedPanelOpen(false);
-    setSelectedWorkPanel(null);
-    setFiltersOpen(true);
-    setListOpen(true);
-    setSupplier("all");
-    setBrand("all");
-    setCategory("all");
-    setGender("all");
-    setLocation("all");
-    setStockFilter("all");
-    setImageFilter("all");
-    setSortMode("name");
-    setScannedBarcodeSearch(code);
-    setSearch(code);
-
     const exactMatches = items.filter((item) => itemMatchesScannedBarcode(item, code));
     if (exactMatches.length === 1) {
-      setMessage(`Vonalkód beolvasva: ${code}. A lista csak ezt a terméket mutatja, adatlapot nem nyitok meg. Na, ezt hívják önuralomnak.`);
+      focusProductInList(exactMatches[0], code, `Vonalkód beolvasva: ${code}. A terméksorra ugrottam, adatlapot nem nyitok meg.`);
       return;
     }
     if (exactMatches.length > 1) {
-      setMessage(`Vonalkód beolvasva: ${code}. Több egyezés van, ezért csak ezek maradtak a listában.`);
+      focusProductInList(exactMatches[0], code, `Vonalkód beolvasva: ${code}. Több egyezés van, az első találatra ugrottam.`);
       return;
     }
+
+    resetListFiltersForProductFocus(code, code);
     setMessage(`Vonalkód beolvasva: ${code}. Pontos egyezés nem volt, a kereső erre a kódra lett állítva.`);
   }
 
@@ -3803,13 +3871,21 @@ export default function AllInWarehouse() {
       };
 
       const created = await apiCreateManualProduct(payload);
+      const createdVariantId = String(created.variantId || "").trim();
+      const createdSearchText = String(newProduct.barcode || newProduct.snCod || newProduct.supplierProductCode || newProduct.titleRo || "").trim();
+      const createdScannedCode = cleanScannedBarcode(newProduct.barcode || newProduct.snCod || "");
       notifyStockMovesChanged({ variantId: created.variantId, source: "warehouse_manual_product_create" });
       await load();
       setNewProductOpen(false);
       setNewProduct(emptyNewProductForm());
       setNewProductStockRows({});
-      setMessage(`Új termék rögzítve ${totalQty} db készlettel.`);
-      if (created.variantId) await openDetail(created.variantId);
+      if (createdVariantId) {
+        resetListFiltersForProductFocus(createdSearchText, createdScannedCode && normalizeSearch(createdScannedCode) === normalizeSearch(createdSearchText) ? createdScannedCode : "");
+        queueProductRowJump(createdVariantId);
+      }
+      setMessage(createdVariantId
+        ? `Új termék rögzítve ${totalQty} db készlettel. A terméksorra ugrottam, nem nyitottam külön adatlapot.`
+        : `Új termék rögzítve ${totalQty} db készlettel.`);
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült létrehozni az új terméket.");
     } finally {
@@ -4183,9 +4259,15 @@ export default function AllInWarehouse() {
                   </thead>
                   <tbody className="divide-y divide-white/12 align-middle">
                     {productPageItems.map((it, index) => {
-                      const isSelected = Boolean(selectedVariants[String(it.variant_id || "")]);
+                      const variantId = String(it.variant_id || "");
+                      const isSelected = Boolean(selectedVariants[variantId]);
+                      const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
                       return (
-                      <tr key={it.variant_id} className={`${isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} align-middle hover:bg-[#617084]`}>
+                      <tr
+                        key={it.variant_id}
+                        data-aif-variant-id={variantId}
+                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} scroll-mt-32 align-middle hover:bg-[#617084]`}
+                      >
                         <td className="px-3 py-2.5 text-center align-middle">
                           <input
                             className={selectBox}
@@ -4222,9 +4304,15 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-3 lg:hidden">
                 {productPageItems.map((it) => {
-                  const isSelected = Boolean(selectedVariants[String(it.variant_id || "")]);
+                  const variantId = String(it.variant_id || "");
+                  const isSelected = Boolean(selectedVariants[variantId]);
+                  const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
                   return (
-                  <article key={it.variant_id} className={`rounded-xl border p-3 ${isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/12 bg-white/[0.05]"}`}>
+                  <article
+                    key={it.variant_id}
+                    data-aif-variant-id={variantId}
+                    className={`scroll-mt-32 rounded-xl border p-3 ${isHighlighted ? "border-amber-200/75 bg-amber-400/14 ring-2 ring-amber-200/60" : isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/12 bg-white/[0.05]"}`}
+                  >
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <label className="inline-flex items-center gap-2 text-xs text-white/76">
                         <input
@@ -4848,6 +4936,61 @@ export default function AllInWarehouse() {
             </div>
 
             <div className="space-y-4 p-4">
+              {newProductBarcodeMatches.length > 0 && (
+                <section className="rounded-2xl border border-amber-200/30 bg-amber-400/10 p-3 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm text-amber-50">Vonalkód találat már létező termékre</p>
+                      <p className="text-xs text-amber-100/70">Nem nyitok adatlapot, a terméksorra tudsz ugrani, vagy rögtön a készletét módosítani. Igen, ez lenne a normális alapból is.</p>
+                    </div>
+                    <span className="rounded-full border border-amber-200/30 bg-black/15 px-2.5 py-1 text-xs text-amber-50">{newProductBarcodeMatches.length} találat</span>
+                  </div>
+                  <div className="grid gap-2">
+                    {newProductBarcodeMatches.map((it) => (
+                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/14 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
+                        <div>
+                          {it.image_url ? <img src={it.image_url} alt="" className="h-14 w-14 rounded-lg object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
+                          <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          <p className="mt-1 text-xs text-white/45">Vonalkód: {it.barcode || it.internal_sku || "-"} • S/N/COD: {it.sn_cod || it.snCod || "-"} • Készlet: {n(it.total_qty)}</p>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button
+                            className={btnSoft}
+                            type="button"
+                            onClick={() => {
+                              const searchText = cleanScannedBarcode(newProduct.barcode || newProduct.snCod || it.barcode || it.sn_cod || it.snCod || "") || String(it.barcode || it.title_ro || "");
+                              setNewProductOpen(false);
+                              setNewProduct(emptyNewProductForm());
+                              setNewProductStockRows({});
+                              focusProductInList(it, searchText, `Meglévő termék találat: ${searchText}. A terméksorra ugrottam.`);
+                            }}
+                          >
+                            <Eye size={14} /> Ugrás a terméksorra
+                          </button>
+                          <button
+                            className={primaryBtn}
+                            type="button"
+                            onClick={() => {
+                              const searchText = cleanScannedBarcode(newProduct.barcode || newProduct.snCod || it.barcode || it.sn_cod || it.snCod || "") || String(it.barcode || it.title_ro || "");
+                              setNewProductOpen(false);
+                              setNewProduct(emptyNewProductForm());
+                              setNewProductStockRows({});
+                              focusProductInList(it, searchText, `Meglévő termék találat: ${searchText}. Készlet módosítása megnyitva.`);
+                              openStockEditor(it);
+                            }}
+                          >
+                            <Boxes size={14} /> Készlet
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
               <div className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
                 <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
                   <div className="mb-3 flex items-center gap-2 text-sm text-white/88"><Edit3 size={15} /> Alapadatok</div>
