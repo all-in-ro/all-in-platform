@@ -173,6 +173,15 @@ type DraftLine = {
   note: string;
 };
 
+type ConfirmDialog = {
+  kind: "commit" | "delete";
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone: "green" | "red";
+  details?: string[];
+};
+
 async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${AIF_BASE}${path}`, {
     credentials: "include",
@@ -339,6 +348,7 @@ export default function AllInInventory() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ tone: MessageTone; text: string } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
 
   const currentLocation = useMemo(() => locations.find((x) => x.id === location || x.code === location) || null, [locations, location]);
 
@@ -404,6 +414,15 @@ export default function AllInInventory() {
     const handle = window.setTimeout(() => void loadStockAndCounts(location, search), 180);
     return () => window.clearTimeout(handle);
   }, [location, search, loadStockAndCounts]);
+
+  useEffect(() => {
+    if (!confirmDialog) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) setConfirmDialog(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmDialog, saving]);
 
   const categories = useMemo(() => {
     const set = new Map<string, string>();
@@ -535,14 +554,35 @@ export default function AllInInventory() {
     }
   }
 
-  async function commitCount() {
+  function commitCount() {
     if (!active) return;
     if (!activeStats.complete) {
       setMessage({ tone: "error", text: "Bevezetés előtt minden sorhoz írj talált darabszámot." });
       return;
     }
-    const ok = window.confirm("Biztosan bevezeted ezt a leltárt? Ez módosítja a készletet és készletmozgást ír a naplóba.");
-    if (!ok) return;
+    setConfirmDialog({
+      kind: "commit",
+      tone: "green",
+      title: "Leltár bevezetése",
+      description: "A bevezetés módosítja a készletet, és készletmozgást ír a naplóba.",
+      confirmLabel: "Bevezetés",
+      details: [
+        `Leltár: ${active.item.title}`,
+        `Helyszín: ${active.item.location_name || currentLocation?.name || "-"}`,
+        `Sorok: ${formatQty(activeStats.lines)} · számolt: ${formatQty(activeStats.countedLines)}`,
+        `Nettó eltérés: ${activeStats.net > 0 ? "+" : ""}${formatQty(activeStats.net)} db`,
+      ],
+    });
+  }
+
+  async function runCommitCount() {
+    if (!active) return;
+    if (!activeStats.complete) {
+      setConfirmDialog(null);
+      setMessage({ tone: "error", text: "Bevezetés előtt minden sorhoz írj talált darabszámot." });
+      return;
+    }
+    setConfirmDialog(null);
     setSaving(true);
     try {
       await saveLines();
@@ -564,10 +604,25 @@ export default function AllInInventory() {
     }
   }
 
-  async function deleteCount() {
+  function deleteCount() {
     if (!active) return;
-    const ok = window.confirm("Törlöd ezt a megkezdett leltárt? Bevezetett leltár nem törölhető innen.");
-    if (!ok) return;
+    setConfirmDialog({
+      kind: "delete",
+      tone: "red",
+      title: "Leltár törlése",
+      description: "A megkezdett leltár törlődik. Bevezetett leltár nem törölhető innen.",
+      confirmLabel: "Törlés",
+      details: [
+        `Leltár: ${active.item.title}`,
+        `Helyszín: ${active.item.location_name || currentLocation?.name || "-"}`,
+        `Állapot: ${statusLabel(active.item.status)}`,
+      ],
+    });
+  }
+
+  async function runDeleteCount() {
+    if (!active) return;
+    setConfirmDialog(null);
     setSaving(true);
     try {
       await fetchAifJSON(`/inventory-counts/${encodeURIComponent(active.item.id)}`, { method: "DELETE" });
@@ -579,6 +634,15 @@ export default function AllInInventory() {
       setMessage({ tone: "error", text: e instanceof Error ? e.message : "A leltár törlése nem sikerült." });
     } finally {
       setSaving(false);
+    }
+  }
+
+  function confirmDialogAction() {
+    if (!confirmDialog || saving) return;
+    if (confirmDialog.kind === "commit") {
+      void runCommitCount();
+    } else {
+      void runDeleteCount();
     }
   }
 
@@ -896,6 +960,56 @@ export default function AllInInventory() {
             <div className="grid gap-3 p-4 lg:hidden">{filteredStockRows.map((row) => <div key={`${row.location_id}-${row.variant_id}`} className="rounded-2xl border border-white/14 bg-white/[0.05] p-3"><div className="font-semibold">{productTitle(row)}</div><div className="mt-1 text-xs text-white/60">{row.brand_name || "-"} · {row.color_name || "-"} · {row.size || "-"}</div><div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Készlet</div><b>{formatQty(row.qty)}</b></div><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Foglalt</div><b>{formatQty(row.reserved_qty)}</b></div><div className="rounded-xl bg-white/[0.06] p-2"><div className="text-white/50">Elérhető</div><b>{formatQty(row.available_qty)}</b></div></div></div>)}</div>
           </section>
         )}
+
+        {confirmDialog ? (
+          <div className="fixed inset-0 z-50 grid place-items-center px-4 py-6">
+            <button
+              type="button"
+              aria-label="Megerősítés bezárása"
+              className="absolute inset-0 bg-black/62 backdrop-blur-sm"
+              onClick={() => !saving && setConfirmDialog(null)}
+            />
+            <div role="dialog" aria-modal="true" className="relative w-full max-w-xl overflow-hidden rounded-3xl border border-white/18 bg-[#404a5b] text-white shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-white/12 bg-[#4b5362] px-5 py-4">
+                <div className="flex items-start gap-3">
+                  <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl border ${confirmDialog.tone === "red" ? "border-red-300/45 bg-red-600 text-white" : "border-[#2a8d8b]/60 bg-[#2a8d8b] text-white"}`}>
+                    {confirmDialog.tone === "red" ? <Trash2 size={20} /> : <CheckCircle2 size={20} />}
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-white/45">Megerősítés</div>
+                    <h2 className="mt-1 text-lg font-semibold text-white">{confirmDialog.title}</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-white/72">{confirmDialog.description}</p>
+                  </div>
+                </div>
+                <button className={btnSoft} type="button" onClick={() => !saving && setConfirmDialog(null)} disabled={saving}>
+                  <X size={15} /> Bezárás
+                </button>
+              </div>
+
+              {confirmDialog.details?.length ? (
+                <div className="m-5 rounded-2xl border border-white/14 bg-[#303a4c] p-4">
+                  <div className="grid gap-2 text-sm text-white/78">
+                    {confirmDialog.details.map((item) => (
+                      <div key={item} className="flex items-start gap-2">
+                        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${confirmDialog.tone === "red" ? "bg-red-400" : "bg-[#2a8d8b]"}`} />
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-col-reverse gap-2 border-t border-white/10 bg-[#354153] px-5 py-4 sm:flex-row sm:justify-end">
+                <button className={btnSoft} type="button" onClick={() => setConfirmDialog(null)} disabled={saving}>
+                  Mégse
+                </button>
+                <button className={confirmDialog.tone === "red" ? redBtn : primaryBtn} type="button" onClick={confirmDialogAction} disabled={saving}>
+                  {confirmDialog.tone === "red" ? <Trash2 size={15} /> : <CheckCircle2 size={15} />} {confirmDialog.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {loading ? <div className="fixed bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-full border border-white/14 bg-[#263247] px-4 py-2 text-xs text-white shadow-lg">Betöltés...</div> : null}
       </div>
