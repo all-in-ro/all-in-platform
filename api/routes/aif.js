@@ -604,19 +604,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const colorCode = normalized.colorCode || "";
     const colorName = normalized.colorName || "";
     const size = normalized.size;
+    const barcode = emptyToNull(normalized.barcode);
+    const snCod = emptyToNull(normalized.snCod ?? normalized.sn_cod);
 
-    const existing = await client.query(
-      `SELECT id FROM aif_product_variants
-       WHERE model_id=$1
-         AND lower(COALESCE(color_code,'')) = lower($2)
-         AND lower(COALESCE(color_name,'')) = lower($3)
-         AND lower(size) = lower($4)
-       LIMIT 1`,
-      [modelId, colorCode, colorName, size]
-    );
-
-    if (existing.rowCount) {
-      const id = existing.rows[0].id;
+    const updateVariantById = async (id) => {
       await client.query(
         `UPDATE aif_product_variants SET
            barcode = COALESCE($2, barcode),
@@ -634,7 +625,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE id=$1`,
         [
           id,
-          normalized.barcode,
+          barcode,
           colorCode,
           colorName,
           normalized.colorHex,
@@ -643,35 +634,70 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.compareAtPrice,
           normalized.weightGrams,
           normalized.imageUrl,
-          normalized.snCod || normalized.sn_cod,
+          snCod,
         ]
       );
       return id;
+    };
+
+    const existing = await client.query(
+      `SELECT id
+       FROM aif_product_variants
+       WHERE model_id=$1
+         AND lower(COALESCE(color_code,'')) = lower($2)
+         AND lower(COALESCE(color_name,'')) = lower($3)
+         AND lower(size) = lower($4)
+       LIMIT 1`,
+      [modelId, colorCode, colorName, size]
+    );
+
+    if (existing.rowCount) return updateVariantById(existing.rows[0].id);
+
+    if (barcode) {
+      const byBarcode = await client.query(
+        `SELECT id
+         FROM aif_product_variants
+         WHERE barcode=$1
+         LIMIT 1`,
+        [barcode]
+      );
+      if (byBarcode.rowCount) return updateVariantById(byBarcode.rows[0].id);
     }
 
-    const inserted = await client.query(
-      `INSERT INTO aif_product_variants (
-         model_id, barcode, color_code, color_name, color_hex, size,
-         buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, status
-       )
-       VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,'active')
-       RETURNING id`,
-      [
-        modelId,
-        normalized.barcode,
-        colorCode,
-        colorName,
-        normalized.colorHex,
-        size,
-        normalized.buyPrice,
-        normalized.sellPrice,
-        normalized.compareAtPrice,
-        normalized.weightGrams,
-        normalized.imageUrl,
-        normalized.snCod || normalized.sn_cod,
-      ]
-    );
-    return inserted.rows[0].id;
+    try {
+      const inserted = await client.query(
+        `INSERT INTO aif_product_variants (
+           model_id, barcode, color_code, color_name, color_hex, size,
+           buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, status
+         )
+         VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,'active')
+         RETURNING id`,
+        [
+          modelId,
+          barcode,
+          colorCode,
+          colorName,
+          normalized.colorHex,
+          size,
+          normalized.buyPrice,
+          normalized.sellPrice,
+          normalized.compareAtPrice,
+          normalized.weightGrams,
+          normalized.imageUrl,
+          snCod,
+        ]
+      );
+      return inserted.rows[0].id;
+    } catch (e) {
+      if (e?.code === "23505" && barcode) {
+        const byBarcode = await client.query(
+          `SELECT id FROM aif_product_variants WHERE barcode=$1 LIMIT 1`,
+          [barcode]
+        );
+        if (byBarcode.rowCount) return updateVariantById(byBarcode.rows[0].id);
+      }
+      throw e;
+    }
   }
 
   async function upsertSupplierCode(client, { variantId, supplierId, normalized }) {
@@ -755,14 +781,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [locationId, variantId, after]
     );
 
-    await client.query(
-      `INSERT INTO aif_stock_movements (
-         movement_type, source_type, source_id, location_id, variant_id,
-         qty_delta, qty_before, qty_after, actor, raw
-       )
-       VALUES ('incoming','import_batch',$1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-      [sourceId, locationId, variantId, qty, before, after, actor, JSON.stringify({ rowId, raw })]
-    );
+    await insertStockMovementSafe(client, {
+      movementType: "incoming",
+      sourceType: "import_batch",
+      sourcePrefix: "import_batch",
+      fallbackSourceType: "manual_stock_edit",
+      sourceId: sourceId ? String(sourceId) : null,
+      locationId,
+      variantId,
+      qtyDelta: qty,
+      qtyBefore: before,
+      qtyAfter: after,
+      actor,
+      raw: {
+        rowId,
+        raw,
+        importBatchId: sourceId ? String(sourceId) : null,
+        reason: "import_batch_commit",
+      },
+    });
   }
 
   function periodWhere(req, startIndex = 1) {
@@ -3710,19 +3747,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const errors = rows.rows.filter((r) => r.status === "error" || (r.error_messages || []).length);
     if (errors.length) {
-      await client.query(
-        `UPDATE aif_import_batches SET status='needs_review', error_count=$2, updated_at=now() WHERE id=$1`,
-        [batchId, errors.length]
-      );
-      const e = new Error(`A készletre vétel nem indítható: ${errors.length} terméksor hibás vagy ellenőrzést igényel.`);
-      e.statusCode = 400;
-      throw e;
+      // Do not block retrying a batch just because a previous commit attempt marked rows as error.
+      // Each row is protected by a SAVEPOINT below; genuinely bad rows will remain error, fixed rows can now commit.
+      console.error("AIF commit retrying rows that were already marked as error", { batchId, rows: errors.length });
     }
 
     const salesTvaSettings = await readSalesTvaSettings(client);
     let committed = 0;
+    const failedRows = [];
+
     for (const row of rows.rows) {
+      const savepointName = `aif_commit_row_${String(row.id || row.row_no || "x").replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 32)}`;
       try {
+        await client.query(`SAVEPOINT ${savepointName}`);
+
         const normalized = { ...(row.normalized || {}) };
         const rowSnCod = emptyToNull(row.sn_cod);
         if (rowSnCod && !emptyToNull(normalized.snCod ?? normalized.sn_cod)) {
@@ -3763,11 +3801,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
           [row.id, variantId]
         );
+
+        await client.query(`RELEASE SAVEPOINT ${savepointName}`);
         committed++;
       } catch (rowError) {
-        const e = new Error(`A(z) ${row.row_no || "?"}. terméksor készletre vétele nem sikerült: ${rowError?.message || rowError}`);
-        e.statusCode = 400;
-        throw e;
+        try { await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`); } catch {}
+        try { await client.query(`RELEASE SAVEPOINT ${savepointName}`); } catch {}
+
+        const rowMessage = `A(z) ${row.row_no || "?"}. terméksor készletre vétele nem sikerült: ${rowError?.message || rowError}`;
+        const rowFailure = {
+          id: String(row.id || ""),
+          rowNo: row.row_no || null,
+          error: rowMessage,
+          code: rowError?.code || null,
+          detail: rowError?.detail || null,
+          constraint: rowError?.constraint || null,
+        };
+        failedRows.push(rowFailure);
+        console.error("AIF commit import row failed", rowFailure);
+
+        await client.query(
+          `UPDATE aif_import_rows
+           SET status='error', error_messages=$2::text[], updated_at=now()
+           WHERE id=$1`,
+          [row.id, [rowMessage]]
+        );
       }
     }
 
@@ -3827,6 +3885,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       committedRows: Number(st.committed_rows || 0),
       remainingRows: Number(st.remaining_rows || 0),
       errorRows: Number(st.error_rows || 0),
+      failedRows,
+      failedCount: failedRows.length,
+      warning: failedRows.length ? `${failedRows.length} terméksor nem került készletre. A hibás sorok ellenőrzendő státuszba kerültek.` : null,
     };
   }
 
@@ -3841,12 +3902,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         actor: actorFrom(req),
       });
       await client.query("COMMIT");
+      if (result.failedRows?.length && Number(result.committed || 0) <= 0) {
+        return res.status(400).json({
+          ok: false,
+          committed: 0,
+          ...result,
+          error: result.failedRows[0]?.error || "A készletre vétel nem sikerült. A sorok ellenőrzendő státuszba kerültek.",
+        });
+      }
       res.json({ ok: true, committed: result.committed, ...result });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF commit import batch failed", e);
       const status = Number(e?.statusCode || 500);
-      res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A készletre vétel nem sikerült." });
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: e?.message || "A készletre vétel nem sikerült.",
+        code: e?.code || null,
+        detail: e?.detail || null,
+        constraint: e?.constraint || null,
+        rowNo: e?.rowNo || null,
+      });
     } finally {
       client.release();
     }
@@ -4261,7 +4336,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     fallbackSourceType = "manual_stock_edit",
     sourceId = null,
   }) {
-    const insertOnce = async (safeSourceType, safeSourcePrefix) => {
+    const insertOnce = async (safeSourceType, safeSourcePrefix, explicitSourceId = sourceId) => {
       await client.query(
         `INSERT INTO aif_stock_movements (
            movement_type, source_type, source_id, location_id, variant_id,
@@ -4271,7 +4346,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [
           movementType,
           safeSourceType,
-          sourceId || stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId),
+          explicitSourceId || stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId),
           locationId,
           variantId,
           qtyDelta,
@@ -4292,10 +4367,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       try { await client.query("ROLLBACK TO SAVEPOINT aif_stock_movement_log"); } catch {}
       try { await client.query("RELEASE SAVEPOINT aif_stock_movement_log"); } catch {}
 
+      try {
+        await client.query("SAVEPOINT aif_stock_movement_log_short_id");
+        await insertOnce(sourceType, sourcePrefix || sourceType, null);
+        await client.query("RELEASE SAVEPOINT aif_stock_movement_log_short_id");
+        console.error("AIF stock movement logged with generated short source_id", { sourceType, error: firstError?.message || firstError });
+        return true;
+      } catch (shortIdError) {
+        try { await client.query("ROLLBACK TO SAVEPOINT aif_stock_movement_log_short_id"); } catch {}
+        try { await client.query("RELEASE SAVEPOINT aif_stock_movement_log_short_id"); } catch {}
+      }
+
       if (fallbackSourceType && fallbackSourceType !== sourceType) {
         try {
           await client.query("SAVEPOINT aif_stock_movement_log_fallback");
-          await insertOnce(fallbackSourceType, fallbackSourceType);
+          await insertOnce(fallbackSourceType, fallbackSourceType, null);
           await client.query("RELEASE SAVEPOINT aif_stock_movement_log_fallback");
           console.error("AIF stock movement logged with fallback source_type", { sourceType, fallbackSourceType, error: firstError?.message || firstError });
           return true;
