@@ -398,6 +398,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const raw = input?.raw && typeof input.raw === "object" ? input.raw : input || {};
 
     const rawProductCode = rawValueByHeaders(raw, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code", "cod produs"]);
+    const rawSize = rawValueByHeaders(raw, ["MARIME", "MĂRIME", "MARIMI", "MĂRIMI", "MERET", "MÉRET", "SIZE", "TALLA", "GRÖSSE", "GROSIME"]);
     const supplierProductCodeRaw = emptyToNull(
       src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.code || input?.product_code || rawProductCode
     );
@@ -407,7 +408,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code || input?.variant_code
     );
     const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code || productSplit.colorCode);
-    const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size);
+    const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size || rawSize);
 
     const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brand);
     const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.categoryId || src.category_id || src.category);
@@ -431,7 +432,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
       colorName: emptyToNull(src.colorName || src.color_name),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
-      size: emptyToNull(src.size || supplierSize),
+      size: emptyToNull(src.size || supplierSize || rawSize),
       barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
       snCod: snCodFromSource(src, raw),
       sn_cod: snCodFromSource(src, raw),
@@ -607,7 +608,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const barcode = emptyToNull(normalized.barcode);
     const snCod = emptyToNull(normalized.snCod ?? normalized.sn_cod);
 
+    const barcodeUsableForVariant = async (candidateBarcode, variantId = null) => {
+      const candidate = emptyToNull(candidateBarcode);
+      if (!candidate) return null;
+      const conflict = await client.query(
+        `SELECT id, model_id, color_code, color_name, size
+         FROM aif_product_variants
+         WHERE barcode=$1
+           AND ($2::text = '' OR id::text <> $2)
+         LIMIT 1`,
+        [candidate, variantId ? String(variantId) : ""]
+      );
+      return conflict.rowCount ? null : candidate;
+    };
+
     const updateVariantById = async (id) => {
+      const safeBarcode = await barcodeUsableForVariant(barcode, id);
       await client.query(
         `UPDATE aif_product_variants SET
            barcode = COALESCE($2, barcode),
@@ -625,7 +641,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE id=$1`,
         [
           id,
-          barcode,
+          safeBarcode,
           colorCode,
           colorName,
           normalized.colorHex,
@@ -640,6 +656,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return id;
     };
 
+    // A ruházati importnál a variáns alapja: modell + szín + méret.
+    // A vonalkód sok beszállítói Excelben modell-szintű vagy csonkolt kód lehet,
+    // ezért nem olvaszthat össze külön méreteket.
     const existing = await client.query(
       `SELECT id
        FROM aif_product_variants
@@ -653,16 +672,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     if (existing.rowCount) return updateVariantById(existing.rows[0].id);
 
-    if (barcode) {
-      const byBarcode = await client.query(
+    // Ha ugyanaz a vonalkód, modell, szín és méret, akkor frissíthetjük a meglévő sort.
+    // Más méretre vagy színre nem állunk rá csak vonalkód alapján.
+    if (barcode && size) {
+      const byBarcodeSameSize = await client.query(
         `SELECT id
          FROM aif_product_variants
-         WHERE barcode=$1
+         WHERE model_id=$1
+           AND barcode=$2
+           AND lower(size)=lower($3)
+           AND lower(COALESCE(color_code,'')) = lower($4)
+           AND lower(COALESCE(color_name,'')) = lower($5)
          LIMIT 1`,
-        [barcode]
+        [modelId, barcode, size, colorCode, colorName]
       );
-      if (byBarcode.rowCount) return updateVariantById(byBarcode.rows[0].id);
+      if (byBarcodeSameSize.rowCount) return updateVariantById(byBarcodeSameSize.rows[0].id);
     }
+
+    const safeInsertBarcode = await barcodeUsableForVariant(barcode, null);
 
     try {
       const inserted = await client.query(
@@ -674,7 +701,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          RETURNING id`,
         [
           modelId,
-          barcode,
+          safeInsertBarcode,
           colorCode,
           colorName,
           normalized.colorHex,
@@ -690,11 +717,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return inserted.rows[0].id;
     } catch (e) {
       if (e?.code === "23505" && barcode) {
-        const byBarcode = await client.query(
-          `SELECT id FROM aif_product_variants WHERE barcode=$1 LIMIT 1`,
-          [barcode]
+        // Ha a barcode egyedi constraint miatt ütközik, akkor is létrehozzuk a méret szerinti variánst.
+        // Az eredeti beszállítói kód a supplier-code táblában megmarad.
+        const insertedWithoutBarcode = await client.query(
+          `INSERT INTO aif_product_variants (
+             model_id, barcode, color_code, color_name, color_hex, size,
+             buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, status
+           )
+           VALUES ($1,NULL,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,'active')
+           RETURNING id`,
+          [
+            modelId,
+            colorCode,
+            colorName,
+            normalized.colorHex,
+            size,
+            normalized.buyPrice,
+            normalized.sellPrice,
+            normalized.compareAtPrice,
+            normalized.weightGrams,
+            normalized.imageUrl,
+            snCod,
+          ]
         );
-        if (byBarcode.rowCount) return updateVariantById(byBarcode.rows[0].id);
+        return insertedWithoutBarcode.rows[0].id;
       }
       throw e;
     }
@@ -4973,7 +5019,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/inventory", requireAuthed, async (req, res) => {
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
+    const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 200)));
     const args = [];
     const where = [];
     if (search) {
@@ -5038,6 +5084,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const location = text(req.query.location || req.query.locationCode || req.query.location_id);
     const variant = text(req.query.variant || req.query.variantId || req.query.variant_id);
     const search = text(req.query.search || req.query.q);
+    const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const args = [];
     const where = [];
     if (location) {
@@ -5050,6 +5097,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     const searchWhere = aifStockProductSearchWhere(search, args);
     if (searchWhere) where.push(searchWhere);
+    if (snCod) {
+      args.push(`%${snCod}%`);
+      where.push(`COALESCE(v.sn_cod,'') ILIKE $${args.length}`);
+    }
     const r = await pool.query(
       `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
               v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
