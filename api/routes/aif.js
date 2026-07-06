@@ -4700,7 +4700,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const direction = normCode(req.query.direction || req.query.type || "all");
     const from = emptyToNull(req.query.from || req.query.dateFrom || req.query.date_from);
     const to = emptyToNull(req.query.to || req.query.dateTo || req.query.date_to);
-    const limit = Math.min(800, Math.max(1, Number(req.query.limit || 250)));
+    const limit = Math.min(3000, Math.max(1, Number(req.query.limit || 250)));
 
     const args = [];
     const where = [];
@@ -4776,6 +4776,59 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.get("/stock-movements", requireAuthed, listStockMovements);
   router.get("/stock/movements", requireAuthed, listStockMovements);
+
+  async function deleteStockMovement(req, res) {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "Naplóbejegyzés azonosító kötelező." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
+                sm.location_id, sm.variant_id, sm.qty_delta, sm.qty_before, sm.qty_after,
+                sm.actor, sm.raw,
+                m.title_ro, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+                l.name AS location_name
+         FROM aif_stock_movements sm
+         JOIN aif_locations l ON l.id=sm.location_id
+         JOIN aif_product_variants v ON v.id=sm.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN LATERAL (
+           SELECT supplier_barcode, supplier_sku
+           FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
+         WHERE sm.id::text=$1
+         FOR UPDATE OF sm`,
+        [id]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Naplóbejegyzés nem található." });
+      }
+
+      await client.query(`DELETE FROM aif_stock_movements WHERE id=$1`, [current.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        mode: "permanently_deleted",
+        item: current.rows[0],
+        note: "A törlés csak a mozgásnaplót érinti, a készlet mennyiségét nem módosítja.",
+      });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete stock movement failed", e);
+      res.status(500).json({ error: e?.message || "A naplóbejegyzés törlése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.delete("/stock-movements/:id", requireAuthed, deleteStockMovement);
+  router.delete("/stock/movements/:id", requireAuthed, deleteStockMovement);
 
   router.get("/health", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
