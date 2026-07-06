@@ -46,6 +46,8 @@ import {
   apiAifUpdateLocationType,
   apiAifListImportBatches,
   apiAifMeta,
+  apiAifGetSalesTvaSettings,
+  apiAifSaveSalesTvaSettings,
   apiAifUpdateCurrency,
 } from "../lib/aif/api";
 import {
@@ -101,7 +103,6 @@ const compactInput = "h-7 rounded-md border border-white/18 bg-[#303b4e] px-2 te
 const compactSelect = `${compactInput} aif-native-select pr-6`;
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
-const SALES_TVA_SETTINGS_KEY = "aifIncomingSalesTvaSettings";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -588,7 +589,10 @@ export default function AllInIncoming(_props: Props) {
   const [salesTvaRate, setSalesTvaRate] = useState("21");
   const [salesPriceIncludesTva, setSalesPriceIncludesTva] = useState(true);
   const [salesTvaModalOpen, setSalesTvaModalOpen] = useState(false);
-  const [persistSalesTvaDefault, setPersistSalesTvaDefault] = useState(true);
+  const [salesTvaSettingsLoading, setSalesTvaSettingsLoading] = useState(false);
+  const [salesTvaSettingsSaving, setSalesTvaSettingsSaving] = useState(false);
+  const [salesTvaUpdatedAt, setSalesTvaUpdatedAt] = useState<string | null>(null);
+  const [salesTvaUpdatedBy, setSalesTvaUpdatedBy] = useState<string | null>(null);
   const [shippingCost, setShippingCost] = useState("");
   const [invoiceGross, setInvoiceGross] = useState("");
   const [newCurrencyCode, setNewCurrencyCode] = useState("");
@@ -688,16 +692,25 @@ export default function AllInIncoming(_props: Props) {
     return locationTypes.find((t) => t.code === code)?.name || locationTypeLabel(code);
   }
 
-  useEffect(() => {
+  async function loadSalesTvaSettings(showMessage = false) {
+    setSalesTvaSettingsLoading(true);
     try {
-      const raw = window.localStorage.getItem(SALES_TVA_SETTINGS_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (saved?.rate !== undefined && String(saved.rate).trim()) setSalesTvaRate(String(saved.rate));
-      if (saved?.includesTva !== undefined) setSalesPriceIncludesTva(Boolean(saved.includesTva));
-    } catch {
-      // localStorage tiltás esetén a 21%-os alapértelmezett marad.
+      const response = await apiAifGetSalesTvaSettings();
+      const item = response.item || response.settings || {};
+      setSalesTvaRate(String(item.salesTvaRate ?? 21));
+      setSalesPriceIncludesTva((item.salesPriceIncludesTva ?? item.sellPriceIncludesTva) !== false);
+      setSalesTvaUpdatedAt(item.updatedAt || item.updated_at || null);
+      setSalesTvaUpdatedBy(item.updatedBy || item.updated_by || null);
+      if (showMessage) setMessage("Központi eladási TVA beállítás betöltve.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Az eladási TVA központi beállítás betöltése nem sikerült.");
+    } finally {
+      setSalesTvaSettingsLoading(false);
     }
+  }
+
+  useEffect(() => {
+    loadSalesTvaSettings(false);
   }, []);
 
   useEffect(() => {
@@ -918,15 +931,34 @@ export default function AllInIncoming(_props: Props) {
     return { ...row, normalized };
   }
 
-  function persistSalesTvaSettings() {
-    if (!persistSalesTvaDefault) return;
+  async function saveSalesTvaSettings() {
+    const parsedRate = Number(String(salesTvaRate || "").replace(",", "."));
+    if (!Number.isFinite(parsedRate) || parsedRate < 0 || parsedRate > 100) {
+      setMessage("Az eladási TVA százalék 0 és 100 közötti szám legyen.");
+      return null;
+    }
+    setSalesTvaSettingsSaving(true);
     try {
-      window.localStorage.setItem(SALES_TVA_SETTINGS_KEY, JSON.stringify({
-        rate: salesTvaRate.trim() || "21",
-        includesTva: salesPriceIncludesTva,
-      }));
-    } catch {
-      // nincs teendő
+      const response = await apiAifSaveSalesTvaSettings({
+        salesTvaRate: parsedRate,
+        salesPriceIncludesTva,
+        sellPriceIncludesTva: salesPriceIncludesTva,
+        sellPriceCurrency: "RON",
+        sellPriceIsRon: true,
+      });
+      const item = response.item || response.settings || {};
+      setSalesTvaRate(String(item.salesTvaRate ?? parsedRate));
+      setSalesPriceIncludesTva((item.salesPriceIncludesTva ?? item.sellPriceIncludesTva) !== false);
+      setSalesTvaUpdatedAt(item.updatedAt || item.updated_at || null);
+      setSalesTvaUpdatedBy(item.updatedBy || item.updated_by || null);
+      setSalesTvaModalOpen(false);
+      setMessage("Eladási TVA központi alapbeállítás mentve. Minden gép és telefon ezt fogja használni.");
+      return item;
+    } catch (e: any) {
+      setMessage(e?.message || "Az eladási TVA központi beállítás mentése nem sikerült.");
+      return null;
+    } finally {
+      setSalesTvaSettingsSaving(false);
     }
   }
 
@@ -1282,7 +1314,6 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      persistSalesTvaSettings();
       const payload: any = {
         supplierId,
         targetLocationId: locationId,
@@ -1659,7 +1690,6 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      persistSalesTvaSettings();
       const res = await fetch(`/api/aif/receptions/${encodeURIComponent(selectedReceptionId)}/update`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1979,7 +2009,7 @@ export default function AllInIncoming(_props: Props) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p id="sales-tva-title" className="text-lg font-normal">Eladási ár / TVA beállítás</p>
-                <p className="mt-1 text-sm text-white/70">Az eladási ár RON-ban mentődik a termékhez. Jelenlegi alap: {salesTvaRate || "0"}%.</p>
+                <p className="mt-1 text-sm text-white/70">Az eladási ár RON-ban mentődik a termékhez. Központi alap minden eszközön: {salesTvaRate || "0"}%.</p>
               </div>
               <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(false)} type="button">
                 <X size={14} /> Bezárás
@@ -1997,19 +2027,19 @@ export default function AllInIncoming(_props: Props) {
               </label>
             </div>
 
-            <label className="mt-3 flex items-center gap-2 rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-sm text-white/82">
-              <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={persistSalesTvaDefault} onChange={(e) => setPersistSalesTvaDefault(e.target.checked)} />
-              Mentés alapértelmezettként ehhez a böngészőhöz
-            </label>
+            <div className="mt-3 rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-sm text-white/82">
+              Központi alapbeállítás. Mentés után minden gépen, telefonon és böngészőben ez lesz az érvényes eladási TVA.
+            </div>
 
             <div className="mt-4 rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/70">
-              A beolvasott és kézi terméksorok eladási ára RON-os, TVA-s végárként kerül tovább a termékadatlapra.
+              A beolvasott és kézi terméksorok eladási ára RON-os végárként kerül tovább a termékadatlapra. A TVA beállítás szerveren tárolódik, ezért minden gépen és telefonon ugyanaz lesz.
+              {salesTvaUpdatedAt && <span className="mt-1 block text-white/45">Utolsó központi mentés: {String(salesTvaUpdatedAt).slice(0, 16).replace("T", " ")}{salesTvaUpdatedBy ? ` • ${salesTvaUpdatedBy}` : ""}</span>}
             </div>
 
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(false)} type="button">Mégse</button>
-              <button className={primaryBtn} onClick={() => { persistSalesTvaSettings(); setSalesTvaModalOpen(false); setMessage("Eladási TVA beállítás mentve."); }} type="button">
-                <Save size={14} /> Beállítás mentése
+              <button className={primaryBtn} onClick={saveSalesTvaSettings} disabled={salesTvaSettingsSaving || salesTvaSettingsLoading} type="button">
+                <Save size={14} /> {salesTvaSettingsSaving ? "Mentés..." : "Központi beállítás mentése"}
               </button>
             </div>
           </div>
