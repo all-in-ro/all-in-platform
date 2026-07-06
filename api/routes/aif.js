@@ -51,6 +51,50 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
   }
 
+
+  let snCodSchemaEnsured = false;
+  let snCodSchemaPromise = null;
+
+  async function ensureSnCodSchema(client = pool) {
+    if (snCodSchemaEnsured) return true;
+
+    const run = async () => {
+      await client.query(`ALTER TABLE IF EXISTS aif_product_variants ADD COLUMN IF NOT EXISTS sn_cod text`);
+      await client.query(`ALTER TABLE IF EXISTS aif_import_rows ADD COLUMN IF NOT EXISTS sn_cod text`);
+      try {
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_aif_product_variants_sn_cod_lower ON aif_product_variants (lower(sn_cod)) WHERE sn_cod IS NOT NULL`);
+      } catch (indexError) {
+        console.error("AIF S/N/COD product variant index warning", indexError);
+      }
+      try {
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_aif_import_rows_sn_cod_lower ON aif_import_rows (lower(sn_cod)) WHERE sn_cod IS NOT NULL`);
+      } catch (indexError) {
+        console.error("AIF S/N/COD import rows index warning", indexError);
+      }
+      snCodSchemaEnsured = true;
+      return true;
+    };
+
+    if (client === pool) {
+      if (!snCodSchemaPromise) {
+        snCodSchemaPromise = run().finally(() => { snCodSchemaPromise = null; });
+      }
+      return snCodSchemaPromise;
+    }
+
+    return run();
+  }
+
+  router.use(async (_req, res, next) => {
+    try {
+      await ensureSnCodSchema(pool);
+      next();
+    } catch (e) {
+      console.error("AIF S/N/COD schema ensure failed", e);
+      res.status(500).json({ error: "A S/N/COD adatbázis mezők előkészítése nem sikerült.", code: e?.code || null });
+    }
+  });
+
   function splitBrandProductCode(value) {
     const raw = text(value);
     if (!raw) return { fullCode: null, modelCode: null, colorCode: null };
@@ -3155,6 +3199,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       await client.query("BEGIN");
+      await ensureSnCodSchema(client);
 
       const existingReceptionId = emptyToNull(body.receptionId || body.reception_id);
       let receptionId = null;
@@ -3523,6 +3568,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await ensureSnCodSchema(client);
       const batch = await client.query(
         `SELECT b.id, b.status, b.currency_code, b.exchange_rate_to_ron,
                 r.exchange_rate_to_ron AS reception_exchange_rate, r.currency_code AS reception_currency_code
@@ -3614,6 +3660,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
 
   async function commitBatchRows(client, { batchId, rowIds = null, actor = "system" }) {
+    await ensureSnCodSchema(client);
     const batchRes = await client.query(
       `SELECT b.*, s.code AS supplier_code
        FROM aif_import_batches b
@@ -3875,6 +3922,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await ensureSnCodSchema(client);
       const current = await client.query(
         `SELECT rw.*, b.exchange_rate_to_ron, b.currency_code, b.status AS batch_status
          FROM aif_import_rows rw
@@ -4372,6 +4420,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!id) return res.status(400).json({ error: "variant id required" });
 
     try {
+      await ensureSnCodSchema(pool);
       const variant = await pool.query(
         `SELECT
            v.id, v.model_id, v.internal_sku, v.barcode, v.sn_cod, v.color_code, v.color_name, v.color_hex,
@@ -4447,6 +4496,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await ensureSnCodSchema(client);
       const current = await client.query(
         `SELECT v.id, v.model_id
          FROM aif_product_variants v
