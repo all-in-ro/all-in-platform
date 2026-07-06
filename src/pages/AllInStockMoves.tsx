@@ -9,6 +9,8 @@ import {
   Boxes,
   CalendarDays,
   Clock3,
+  Download,
+  FileText,
   Filter,
   ImageIcon,
   MapPin,
@@ -16,6 +18,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -26,6 +29,8 @@ const panelHead = "flex flex-col gap-3 border-b border-white/12 bg-[#404a5b] px-
 const btn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-300/35 bg-red-500/18 px-3 text-xs text-red-50 hover:bg-red-500/26 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-300/28 bg-red-500/10 px-3 text-xs text-red-50 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
@@ -113,6 +118,7 @@ type AifStockMoveTotals = {
 type RangePreset = "today" | "yesterday" | "last7" | "month" | "year" | "all" | "custom";
 type DirectionFilter = "all" | "in" | "out" | "adjust";
 type TabKey = "moves" | "stock";
+type MessageTone = "info" | "error";
 
 async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${AIF_BASE}${path}`, {
@@ -250,6 +256,15 @@ function displayBarcode(item: Pick<AifStockItem, "display_barcode" | "barcode"> 
   return item.display_barcode || item.barcode || "";
 }
 
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type" | "raw">) {
   const source = String(item.source_type || "").toLowerCase();
   const movement = String(item.movement_type || "").toLowerCase();
@@ -265,7 +280,9 @@ function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type
   if (source.includes("import_batch") || movement === "incoming") return "Bevételezés";
   if (source.includes("sale") || movement === "sale") return "Eladás";
   if (source.includes("transfer") || movement === "transfer") return "Áthelyezés";
-  if (source.includes("manual_stock_edit") || movement === "adjustment" || movement === "manual_adjustment") return rawDirection === "out" ? "Kézi kivétel" : "Kézi módosítás";
+  if (source.includes("manual_stock_edit") || movement === "manual_adjustment" || movement === "adjustment") {
+    return rawDirection === "out" ? "Kézi kivétel" : rawDirection === "in" ? "Kézi bevétel" : "Kézi módosítás";
+  }
   return movement || source || "Mozgás";
 }
 
@@ -276,8 +293,8 @@ function directionMeta(item: AifStockMoveItem) {
       label: "Bejött",
       sign: "+",
       icon: ArrowDownLeft,
-      cls: "border-emerald-300/30 bg-emerald-500/16 text-emerald-50",
-      dot: "bg-emerald-300",
+      cls: "border-[#2a8d8b]/55 bg-[#2a8d8b]/18 text-cyan-50",
+      dot: "bg-[#2a8d8b]",
     };
   }
   if (item.direction === "out" || delta < 0) {
@@ -285,8 +302,8 @@ function directionMeta(item: AifStockMoveItem) {
       label: "Kiment",
       sign: "−",
       icon: ArrowUpRight,
-      cls: "border-rose-300/30 bg-rose-500/16 text-rose-50",
-      dot: "bg-rose-300",
+      cls: "border-red-300/35 bg-red-500/16 text-red-50",
+      dot: "bg-red-400",
     };
   }
   return {
@@ -296,6 +313,132 @@ function directionMeta(item: AifStockMoveItem) {
     cls: "border-amber-300/30 bg-amber-500/16 text-amber-50",
     dot: "bg-amber-300",
   };
+}
+
+function reportTitle(kind: "in" | "out") {
+  return kind === "in" ? "Bejövő készletmozgások" : "Kimenő készletmozgások";
+}
+
+function writeStockMovementPdfWindow(win: Window, params: {
+  kind: "in" | "out";
+  rows: AifStockMoveItem[];
+  locationName: string;
+  rangeLabel: string;
+  search: string;
+}) {
+  const { kind, rows, locationName, rangeLabel, search } = params;
+  const title = reportTitle(kind);
+  const accent = kind === "in" ? "#2a8d8b" : "#dc2626";
+  const soft = kind === "in" ? "#e8fbfa" : "#fff1f1";
+  const totalQty = rows.reduce((sum, row) => sum + Math.abs(n(row.qty_delta)), 0);
+  const createdAt = new Intl.DateTimeFormat("hu-HU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date());
+
+  const bodyRows = rows.map((row, index) => {
+    const qty = Math.abs(n(row.qty_delta));
+    const barcode = displayBarcode(row) || "-";
+    const product = displayName(row);
+    const variant = [row.brand_name, row.color_name, row.size].filter(Boolean).join(" · ") || "-";
+    const img = imageFor(row);
+    return `
+      <tr>
+        <td class="num">${index + 1}</td>
+        <td>
+          <div class="product">
+            ${img ? `<img class="thumb" src="${escapeHtml(img)}" alt="">` : `<div class="thumb noimg">Kép</div>`}
+            <div>
+              <strong>${escapeHtml(product)}</strong>
+              <div class="muted">Vonalkód: ${escapeHtml(barcode)}</div>
+              <div class="muted">${escapeHtml(variant)}</div>
+            </div>
+          </div>
+        </td>
+        <td>${escapeHtml(row.location_name || "-")}</td>
+        <td>${escapeHtml(formatDateTime(row.created_at))}</td>
+        <td class="num">${escapeHtml(formatQty(row.qty_before ?? 0))}</td>
+        <td class="num delta">${kind === "in" ? "+" : "-"}${escapeHtml(formatQty(qty))}</td>
+        <td class="num">${escapeHtml(formatQty(row.qty_after ?? 0))}</td>
+        <td>${escapeHtml(sourceLabel(row))}</td>
+      </tr>`;
+  }).join("");
+
+  const html = `<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(title)} - AllInFashion</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #172033; background: #fff; }
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; border-bottom: 3px solid ${accent}; padding-bottom: 14px; margin-bottom: 14px; }
+  .brand { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: #607086; }
+  h1 { margin: 4px 0 0; font-size: 24px; line-height: 1.15; color: #111827; }
+  .pill { display: inline-block; border: 1px solid ${accent}; background: ${soft}; color: ${accent}; border-radius: 999px; padding: 7px 12px; font-size: 12px; font-weight: 700; }
+  .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0 16px; }
+  .card { border: 1px solid #d8dee8; border-radius: 12px; padding: 10px; background: #f8fafc; }
+  .label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #6b7280; }
+  .value { margin-top: 4px; font-size: 16px; font-weight: 700; color: #111827; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  thead th { text-align: left; background: #263247; color: #fff; padding: 8px 7px; border: 1px solid #263247; }
+  tbody td { vertical-align: top; padding: 7px; border: 1px solid #d9e0eb; }
+  tbody tr:nth-child(even) td { background: #f7f9fc; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .delta { color: ${accent}; font-weight: 800; }
+  .muted { color: #667085; font-size: 9.5px; margin-top: 2px; }
+  .product { display: flex; align-items: center; gap: 8px; min-width: 260px; }
+  .thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 9px; border: 1px solid #d9e0eb; background: #eef2f8; flex: 0 0 auto; }
+  .noimg { display: flex; align-items: center; justify-content: center; color: #8a95a8; font-size: 8px; }
+  .foot { margin-top: 12px; color: #667085; font-size: 10px; display: flex; justify-content: space-between; gap: 12px; }
+  @media print { .no-print { display: none; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div class="brand">AllInFashion · Raktármozgás</div>
+      <h1>${escapeHtml(title)}</h1>
+    </div>
+    <div class="pill">${kind === "in" ? "BEJÖVŐ" : "KIMENŐ"}</div>
+  </div>
+  <div class="meta">
+    <div class="card"><div class="label">Időszak</div><div class="value">${escapeHtml(rangeLabel)}</div></div>
+    <div class="card"><div class="label">Helyszín</div><div class="value">${escapeHtml(locationName)}</div></div>
+    <div class="card"><div class="label">Sorok</div><div class="value">${escapeHtml(formatQty(rows.length))}</div></div>
+    <div class="card"><div class="label">Összes darab</div><div class="value">${escapeHtml(formatQty(totalQty))}</div></div>
+  </div>
+  ${search.trim() ? `<div class="card" style="margin-bottom:12px"><div class="label">Keresés</div><div class="value">${escapeHtml(search.trim())}</div></div>` : ""}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:34px">#</th>
+        <th>Termék</th>
+        <th>Helyszín</th>
+        <th>Dátum / óra</th>
+        <th>Előtte</th>
+        <th>${kind === "in" ? "Bejött" : "Kiment"}</th>
+        <th>Utána</th>
+        <th>Forrás</th>
+      </tr>
+    </thead>
+    <tbody>${bodyRows || `<tr><td colspan="8" style="text-align:center;padding:24px;color:#667085">Nincs exportálható sor.</td></tr>`}</tbody>
+  </table>
+  <div class="foot">
+    <div>Generálva: ${escapeHtml(createdAt)}</div>
+    <div>AllInFashion raktárnapló</div>
+  </div>
+  <script>window.setTimeout(() => { window.focus(); window.print(); }, 350);</script>
+</body>
+</html>`;
+
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
 }
 
 function ProductThumb({ item }: { item: Pick<AifStockItem, "image_url" | "images" | "title_ro"> | Pick<AifStockMoveItem, "image_url" | "images" | "title_ro"> }) {
@@ -339,7 +482,12 @@ function ProductText({ item }: { item: AifStockItem | AifStockMoveItem }) {
   );
 }
 
-function StatCard({ icon: Icon, label, value, hint }: { icon: ComponentType<{ size?: number; className?: string }>; label: string; value: ReactNode; hint?: string }) {
+function StatCard({ icon: Icon, label, value, hint, tone = "green" }: { icon: ComponentType<{ size?: number; className?: string }>; label: string; value: ReactNode; hint?: string; tone?: "green" | "red" | "neutral" }) {
+  const iconTone = tone === "red"
+    ? "border-red-300/32 bg-red-500/17 text-red-100"
+    : tone === "neutral"
+      ? "border-white/18 bg-white/[0.08] text-white/72"
+      : "border-[#2a8d8b]/32 bg-[#2a8d8b]/18 text-[#a7e7e5]";
   return (
     <div className="rounded-2xl border border-white/12 bg-white/[0.06] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="flex items-start justify-between gap-3">
@@ -348,7 +496,7 @@ function StatCard({ icon: Icon, label, value, hint }: { icon: ComponentType<{ si
           <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{value}</p>
           {hint && <p className="mt-1 text-xs text-white/45">{hint}</p>}
         </div>
-        <div className="rounded-xl border border-[#2a8d8b]/28 bg-[#2a8d8b]/18 p-2 text-[#a7e7e5]">
+        <div className={`rounded-xl border p-2 ${iconTone}`}>
           <Icon size={18} />
         </div>
       </div>
@@ -371,6 +519,10 @@ export default function AllInStockMoves() {
   const [direction, setDirection] = useState<DirectionFilter>("all");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<MessageTone>("info");
+  const [deleteCandidate, setDeleteCandidate] = useState<AifStockMoveItem | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [exportingDirection, setExportingDirection] = useState<"in" | "out" | null>(null);
   const refreshInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -381,7 +533,10 @@ export default function AllInStockMoves() {
         const activeLocations = (data.locations || []).filter((loc) => loc.is_active !== false);
         setLocations(activeLocations);
       })
-      .catch((e) => setMessage(e.message || "A helyszínek betöltése nem sikerült."));
+      .catch((e) => {
+        setMessageTone("error");
+        setMessage(e.message || "A helyszínek betöltése nem sikerült.");
+      });
     return () => {
       alive = false;
     };
@@ -392,24 +547,36 @@ export default function AllInStockMoves() {
     [locations, locationId]
   );
 
+  const selectedLocationName = selectedLocation?.name || "Minden helyszín";
+
+  const buildStockQuery = useCallback(() => {
+    const q = new URLSearchParams();
+    if (locationId) q.set("location", locationId);
+    if (search.trim()) q.set("search", search.trim());
+    return q;
+  }, [locationId, search]);
+
+  const buildMoveQuery = useCallback((override?: { direction?: DirectionFilter | "in" | "out"; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (locationId) q.set("location", locationId);
+    if (search.trim()) q.set("search", search.trim());
+    const nextDirection = override?.direction ?? direction;
+    if (nextDirection !== "all") q.set("direction", nextDirection);
+    if (from) q.set("from", from);
+    if (to) q.set("to", to);
+    q.set("limit", String(override?.limit || 350));
+    return q;
+  }, [direction, from, locationId, search, to]);
+
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     if (!options?.silent) setLoading(true);
     setMessage(null);
+    setMessageTone("info");
     try {
-      const stockQ = new URLSearchParams();
-      if (locationId) stockQ.set("location", locationId);
-      if (search.trim()) stockQ.set("search", search.trim());
-
-      const movesQ = new URLSearchParams();
-      if (locationId) movesQ.set("location", locationId);
-      if (search.trim()) movesQ.set("search", search.trim());
-      if (direction !== "all") movesQ.set("direction", direction);
-      if (from) movesQ.set("from", from);
-      if (to) movesQ.set("to", to);
-      movesQ.set("limit", "350");
-
+      const stockQ = buildStockQuery();
+      const movesQ = buildMoveQuery({ limit: 350 });
       const [stockData, moveData] = await Promise.all([
         fetchAifJSON<{ items: AifStockItem[] }>(`/stock?${stockQ.toString()}`),
         fetchAifJSON<{ items: AifStockMoveItem[]; totals: AifStockMoveTotals }>(`/stock-movements?${movesQ.toString()}`),
@@ -418,12 +585,23 @@ export default function AllInStockMoves() {
       setMoveRows(moveData.items || []);
       setTotals(moveData.totals || {});
     } catch (e: any) {
+      setMessageTone("error");
       setMessage(e.message || "A készletmozgások betöltése nem sikerült.");
     } finally {
       refreshInFlightRef.current = false;
       if (!options?.silent) setLoading(false);
     }
-  }, [direction, from, locationId, search, to]);
+  }, [buildMoveQuery, buildStockQuery]);
+
+  const notifyStockMovesChanged = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(stockMovesChangedStorageKey, String(Date.now()));
+    } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent(stockMovesChangedEventName));
+    } catch {}
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -493,6 +671,63 @@ export default function AllInStockMoves() {
     else if (typeof window !== "undefined") window.location.hash = "#allinwarehouse";
   };
 
+  const confirmDeleteMovement = useCallback(async () => {
+    if (!deleteCandidate?.id) return;
+    const id = deleteCandidate.id;
+    setDeletingId(id);
+    setMessage(null);
+    setMessageTone("info");
+    try {
+      await fetchAifJSON<{ ok: true }>(`/stock-movements/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setDeleteCandidate(null);
+      notifyStockMovesChanged();
+      await refresh({ silent: true });
+      setMessageTone("info");
+      setMessage("A naplóbejegyzés végleg törölve. A készlet mennyisége nem változott, csak a naplóból tűnt el. Különbség, amit sajnos a gépeknek is magyarázni kell.");
+    } catch (e: any) {
+      setMessageTone("error");
+      setMessage(e.message || "A naplóbejegyzés törlése nem sikerült.");
+    } finally {
+      setDeletingId(null);
+    }
+  }, [deleteCandidate, notifyStockMovesChanged, refresh]);
+
+  const exportPdf = useCallback(async (kind: "in" | "out") => {
+    if (typeof window === "undefined") return;
+    const popup = window.open("", "_blank", "width=1200,height=820");
+    if (!popup) {
+      setMessageTone("error");
+      setMessage("A böngésző blokkolta a PDF ablakot. Engedélyezd a felugró ablakot ennél az oldalnál, mert a böngésző természetesen okosabbnak hiszi magát nálad.");
+      return;
+    }
+    const title = reportTitle(kind);
+    popup.document.open();
+    popup.document.write(`<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body style="font-family:Arial,sans-serif;padding:24px;color:#17202f"><h2>${escapeHtml(title)}</h2><p>PDF előkészítése...</p></body></html>`);
+    popup.document.close();
+
+    setExportingDirection(kind);
+    setMessage(null);
+    setMessageTone("info");
+    try {
+      const q = buildMoveQuery({ direction: kind, limit: 2000 });
+      const data = await fetchAifJSON<{ items: AifStockMoveItem[] }>(`/stock-movements?${q.toString()}`);
+      const rows = data.items || [];
+      writeStockMovementPdfWindow(popup, { kind, rows, locationName: selectedLocationName, rangeLabel, search });
+      if (!rows.length) {
+        setMessageTone("info");
+        setMessage(kind === "in" ? "Nincs bejövő mozgás a megadott szűrésre." : "Nincs kimenő mozgás a megadott szűrésre.");
+      }
+    } catch (e: any) {
+      popup.document.open();
+      popup.document.write(`<!doctype html><html lang="hu"><head><meta charset="utf-8"><title>PDF hiba</title></head><body style="font-family:Arial,sans-serif;padding:24px;color:#17202f"><h2>PDF export hiba</h2><p>${escapeHtml(e.message || "A PDF előkészítése nem sikerült.")}</p></body></html>`);
+      popup.document.close();
+      setMessageTone("error");
+      setMessage(e.message || "A PDF export nem sikerült.");
+    } finally {
+      setExportingDirection(null);
+    }
+  }, [buildMoveQuery, rangeLabel, search, selectedLocationName]);
+
   return (
     <div className={page}>
       <div className={shell}>
@@ -501,7 +736,7 @@ export default function AllInStockMoves() {
             <p className="text-sm text-white/58">AllInFashion</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">Raktármozgás / készlet</h1>
             <p className="mt-1 max-w-3xl text-sm text-white/70">
-              Termékes készletnézet képekkel, vonalkóddal, dátummal és bejövő / kimenő mozgásnaplóval.
+              Termékes készletnézet képekkel, vonalkóddal, dátummal, PDF exporttal és törölhető mozgásnaplóval.
             </p>
           </div>
           <button type="button" onClick={handleBack} className={btn}>
@@ -590,7 +825,7 @@ export default function AllInStockMoves() {
                 </select>
               </label>
 
-              <button type="button" onClick={refresh} disabled={loading} className={primaryBtn}>
+              <button type="button" onClick={() => refresh()} disabled={loading} className={primaryBtn}>
                 <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés
               </button>
             </div>
@@ -621,17 +856,17 @@ export default function AllInStockMoves() {
             </div>
 
             {message && (
-              <div className="rounded-xl border border-rose-200/20 bg-rose-500/12 px-3 py-2 text-sm text-rose-50">{message}</div>
+              <div className={messageTone === "error" ? "rounded-xl border border-red-200/20 bg-red-500/12 px-3 py-2 text-sm text-red-50" : "rounded-xl border border-[#2a8d8b]/25 bg-[#174c55]/70 px-3 py-2 text-sm text-cyan-50/90"}>{message}</div>
             )}
           </div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <StatCard icon={MapPin} label="Helyszín" value={selectedLocation?.name || "Minden"} hint="A kiválasztott üzlet / raktár" />
-          <StatCard icon={ArrowDownLeft} label="Bejött" value={formatQty(totals.incoming_qty || 0)} hint="A szűrt időszakban" />
-          <StatCard icon={ArrowUpRight} label="Kiment" value={formatQty(totals.outgoing_qty || 0)} hint="A szűrt időszakban" />
-          <StatCard icon={ArrowRightLeft} label="Nettó mozgás" value={formatQty(totals.net_qty || 0)} hint="Bejött mínusz kiment" />
-          <StatCard icon={Boxes} label="Elérhető most" value={formatQty(stockTotals.available)} hint={`${formatQty(stockTotals.qty)} készlet · ${formatQty(stockTotals.reserved)} foglalt`} />
+          <StatCard icon={MapPin} label="Helyszín" value={selectedLocation?.name || "Minden"} hint="A kiválasztott üzlet / raktár" tone="neutral" />
+          <StatCard icon={ArrowDownLeft} label="Bejött" value={formatQty(totals.incoming_qty || 0)} hint="A szűrt időszakban" tone="green" />
+          <StatCard icon={ArrowUpRight} label="Kiment" value={formatQty(totals.outgoing_qty || 0)} hint="A szűrt időszakban" tone="red" />
+          <StatCard icon={ArrowRightLeft} label="Nettó mozgás" value={formatQty(totals.net_qty || 0)} hint="Bejött mínusz kiment" tone="neutral" />
+          <StatCard icon={Boxes} label="Elérhető most" value={formatQty(stockTotals.available)} hint={`${formatQty(stockTotals.qty)} készlet · ${formatQty(stockTotals.reserved)} foglalt`} tone="green" />
         </div>
 
         {activeTab === "moves" ? (
@@ -641,11 +876,19 @@ export default function AllInStockMoves() {
                 <p className="text-xs uppercase tracking-[0.18em] text-white/40">Mozgásnapló</p>
                 <h2 className="mt-1 flex items-center gap-2 text-base font-semibold"><Clock3 size={17} /> Dátum, óra, termék és irány</h2>
               </div>
-              <div className="text-sm text-white/62">{formatQty(moveRows.length)} sor megjelenítve</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => exportPdf("in")} disabled={exportingDirection !== null} className={primaryBtn}>
+                  <FileText size={15} /> {exportingDirection === "in" ? "Készül..." : "Bejövő PDF"}
+                </button>
+                <button type="button" onClick={() => exportPdf("out")} disabled={exportingDirection !== null} className={redBtn}>
+                  <Download size={15} /> {exportingDirection === "out" ? "Készül..." : "Kimenő PDF"}
+                </button>
+                <div className="text-sm text-white/62">{formatQty(moveRows.length)} sor megjelenítve</div>
+              </div>
             </div>
 
             <div className="hidden overflow-auto lg:block">
-              <table className="w-full min-w-[980px] border-collapse text-sm">
+              <table className="w-full min-w-[1080px] border-collapse text-sm">
                 <thead className="bg-[#293448] text-xs uppercase tracking-[0.08em] text-white/72">
                   <tr>
                     <th className="px-4 py-3 text-left">Termék</th>
@@ -655,6 +898,7 @@ export default function AllInStockMoves() {
                     <th className="px-4 py-3 text-center">Előtte</th>
                     <th className="px-4 py-3 text-center">Utána</th>
                     <th className="px-4 py-3 text-left">Forrás</th>
+                    <th className="px-4 py-3 text-right">Törlés</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -680,11 +924,22 @@ export default function AllInStockMoves() {
                         <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_before ?? 0)}</td>
                         <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
                         <td className="px-4 py-3 text-white/70">{sourceLabel(row)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setDeleteCandidate(row)}
+                            disabled={deletingId === row.id}
+                            className={tinyDangerBtn}
+                            title="Naplóbejegyzés végleges törlése"
+                          >
+                            <Trash2 size={14} /> Törlés
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
                   {!moveRows.length && (
-                    <tr><td colSpan={7} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban. Ami meglepően békés, csak raktárnál nem mindig hasznos.</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban. Ami meglepően békés, csak raktárnál nem mindig hasznos.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -706,6 +961,17 @@ export default function AllInStockMoves() {
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><MapPin className="mr-1 inline" size={13} /> {row.location_name || "-"}</div>
                       <div className={`rounded-xl border px-3 py-2 ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
                       <div className="rounded-xl bg-[#354153] px-3 py-2">{formatQty(row.qty_before ?? 0)} → {formatQty(row.qty_after ?? 0)}</div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/62">
+                      <span>Forrás: {sourceLabel(row)}</span>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteCandidate(row)}
+                        disabled={deletingId === row.id}
+                        className={tinyDangerBtn}
+                      >
+                        <Trash2 size={14} /> Törlés
+                      </button>
                     </div>
                   </div>
                 );
@@ -783,9 +1049,39 @@ export default function AllInStockMoves() {
 
         <div className="rounded-2xl border border-[#2a8d8b]/25 bg-[#174c55]/60 px-4 py-3 text-sm text-cyan-50/90">
           <Filter className="mr-2 inline" size={15} />
-          Alapértelmezésben a mai napot és minden helyszínt mutatja. Készletmódosítás után automatikusan frissül, mert a raktárnapló nem régészeti leletnek készült.
+          A bejövő mozgás a saját zöldünkkel jelenik meg, a kimenő pirossal. A PDF export az aktuális dátum-, helyszín- és keresési szűrést használja, külön bejövőre és kimenőre.
         </div>
       </div>
+
+      {deleteCandidate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
+            <div className="border-b border-white/12 px-5 py-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-white/40">Végleges törlés</p>
+              <h3 className="mt-1 text-lg font-semibold text-white">Naplóbejegyzés törlése</h3>
+            </div>
+            <div className="space-y-3 px-5 py-4 text-sm text-white/75">
+              <p>Ez csak a készletmozgás naplósorát törli. A jelenlegi készletet nem módosítja, mert a múlt átírása csak a naplóban történik, nem a raktárban.</p>
+              <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3">
+                <div className="flex gap-3">
+                  <ProductThumb item={deleteCandidate} />
+                  <div className="min-w-0 flex-1">
+                    <ProductText item={deleteCandidate} />
+                    <p className="mt-2 text-xs text-white/55">{formatDateTime(deleteCandidate.created_at)} · {deleteCandidate.location_name || "-"}</p>
+                    <p className="mt-1 text-xs text-white/65">Mennyiség: {directionMeta(deleteCandidate).label} {formatQty(Math.abs(n(deleteCandidate.qty_delta)))}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-white/12 px-5 py-4 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setDeleteCandidate(null)} disabled={deletingId === deleteCandidate.id} className={btnSoft}>Mégse</button>
+              <button type="button" onClick={confirmDeleteMovement} disabled={deletingId === deleteCandidate.id} className={redBtn}>
+                <Trash2 size={15} /> {deletingId === deleteCandidate.id ? "Törlés..." : "Végleges törlés"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
