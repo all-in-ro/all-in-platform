@@ -636,7 +636,7 @@ export function apiAifDeleteImportBatchHistory(batchId: string) {
   );
 }
 
-export function apiAifInventory(search = "", limit = 300, options?: { snCod?: string }) {
+export function apiAifInventory(search = "", limit = 5000, options?: { snCod?: string }) {
   const q = new URLSearchParams();
   if (search.trim()) q.set("search", search.trim());
   if (options?.snCod?.trim()) q.set("snCod", options.snCod.trim());
@@ -661,10 +661,11 @@ export function apiAifClearSelectedWorklist() {
   });
 }
 
-export function apiAifStock(locationCodeOrId?: string, options?: { search?: string }) {
+export function apiAifStock(locationCodeOrId?: string, options?: { search?: string; snCod?: string }) {
   const q = new URLSearchParams();
   if (locationCodeOrId) q.set("location", locationCodeOrId);
   if (options?.search?.trim()) q.set("search", options.search.trim());
+  if (options?.snCod?.trim()) q.set("snCod", options.snCod.trim());
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifStockItem[] }>(`/stock${suffix}`);
 }
