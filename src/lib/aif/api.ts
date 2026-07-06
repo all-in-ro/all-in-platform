@@ -534,6 +534,17 @@ export function apiAifStockMovements(options?: {
   return fetchAifJSON<{ items: AifStockMovementItem[]; totals: AifStockMovementTotals }>(`/stock-movements${suffix}`);
 }
 
+export function apiAifDeleteStockMovement(id: string) {
+  return fetchAifJSON<{
+    ok: true;
+    mode: "permanently_deleted";
+    item?: AifStockMovementItem;
+    note?: string;
+  }>(`/stock-movements/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 
 export function apiAifUpdateVariantStock(
   variantId: string,
