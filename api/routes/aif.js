@@ -85,13 +85,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return run();
   }
 
+
+  // Kompatibilitási alias a régebbi segédfüggvényekhez; a tényleges méret-séma és alapértékek az ensureAifSizeTables() alatt vannak.
+  async function ensureSizeMasterDataSchema(client = pool) {
+    return ensureAifSizeTables(client);
+  }
   router.use(async (_req, res, next) => {
     try {
       await ensureSnCodSchema(pool);
+      await ensureSizeMasterDataSchema(pool);
       next();
     } catch (e) {
-      console.error("AIF S/N/COD schema ensure failed", e);
-      res.status(500).json({ error: "A S/N/COD adatbázis mezők előkészítése nem sikerült.", code: e?.code || null });
+      console.error("AIF AIF schema ensure failed", e);
+      res.status(500).json({ error: "Az AllInFashion adatbázis mezők előkészítése nem sikerült.", code: e?.code || null });
     }
   });
 
@@ -958,6 +964,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return splitAliasesFromInput(value);
   }
 
+  async function brandSizeCodeUsage(client, id) {
+    await ensureAifSizeTables(client);
+    const r = await client.query(
+      `SELECT count(*)::int AS product_variants
+       FROM aif_brand_size_codes bsc
+       JOIN aif_size_types st ON st.id=bsc.size_type_id
+       JOIN aif_brands b ON b.id=bsc.brand_id
+       JOIN aif_product_models m ON m.brand_id=b.id
+       JOIN aif_product_variants v ON v.model_id=m.id
+       WHERE bsc.id::text=$1
+         AND lower(COALESCE(v.size,'')) IN (lower(st.code), lower(st.name))`,
+      [text(id)]
+    );
+    return r.rows[0] || { product_variants: 0 };
+  }
+
   async function normalizeGenderCode(client, value) {
     const raw = emptyToNull(value);
     if (!raw) return "unisex";
@@ -1073,6 +1095,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const brandColorMapped = await applyBrandColorCodeMapping(client, nr.normalized);
       if (!brandColorMapped && nr.normalized.colorName) nr.normalized.colorName = await normalizeColorName(client, nr.normalized.colorName);
       nr.normalized.gender = await normalizeGenderCode(client, nr.normalized.genderRaw || nr.normalized.gender);
+      const brandSizeMapped = await applyBrandSizeCodeMapping(client, nr.normalized);
+      if (!brandSizeMapped && nr.normalized.size) nr.normalized.size = await normalizeSizeValue(client, nr.normalized.size);
       if (nr.normalized.material) nr.normalized.material = await normalizeMaterialText(client, nr.normalized.material);
     }
     return nr;
@@ -2517,6 +2541,495 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  let sizeSchemaEnsured = false;
+  let sizeSchemaPromise = null;
+
+  async function ensureAifSizeTables(client = pool) {
+    if (sizeSchemaEnsured) return true;
+
+    const run = async () => {
+      await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_size_types (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        code text NOT NULL UNIQUE,
+        name text NOT NULL,
+        aliases text[] NOT NULL DEFAULT '{}'::text[],
+        sort_order integer NOT NULL DEFAULT 100,
+        is_active boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`ALTER TABLE IF EXISTS aif_size_types ADD COLUMN IF NOT EXISTS name_hu text NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_size_types ADD COLUMN IF NOT EXISTS aliases text[] NOT NULL DEFAULT '{}'::text[]`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_size_types_active_sort_idx ON aif_size_types (is_active, sort_order, name)`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_brand_size_codes (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        brand_id uuid NOT NULL REFERENCES aif_brands(id) ON DELETE CASCADE,
+        size_code text NOT NULL,
+        size_type_id uuid NOT NULL REFERENCES aif_size_types(id),
+        notes text NULL,
+        is_active boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (brand_id, size_code)
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_brand_size_codes_brand_active_idx ON aif_brand_size_codes (brand_id, is_active, size_code)`);
+      const defaults = [
+        ["xxs", "XXS", 1, ["XXS", "2XS"]],
+        ["xs", "XS", 2, ["XS"]],
+        ["s", "S", 3, ["S", "SMALL"]],
+        ["m", "M", 4, ["M", "MEDIUM"]],
+        ["l", "L", 5, ["L", "LARGE"]],
+        ["xl", "XL", 6, ["XL", "X-LARGE"]],
+        ["xxl", "XXL", 7, ["XXL", "2XL"]],
+        ["xxxl", "XXXL", 8, ["XXXL", "3XL"]],
+        ["osfm", "OSFM", 9, ["OSFM", "ONE SIZE", "ONESIZE", "ONE-SIZE", "OS", "UNI", "UNIVERSAL"]],
+        ["one_size", "One Size", 10, ["ONE SIZE", "ONESIZE", "ONE-SIZE", "OS"]],
+        ...Array.from({ length: 14 }, (_, index) => {
+          const size = 35 + index;
+          return [`eu_${size}`, `EU ${size}`, 30 + index, [`${size}`, `EU${size}`, `EU ${size}`, `${size} EU`]];
+        }),
+      ];
+      for (const [code, name, sortOrder, aliases] of defaults) {
+        await client.query(
+          `INSERT INTO aif_size_types (code, name, aliases, sort_order, is_active)
+           VALUES ($1,$2,$3::text[],$4,true)
+           ON CONFLICT (code) DO UPDATE SET
+             aliases=CASE
+               WHEN array_length(aif_size_types.aliases, 1) IS NULL THEN EXCLUDED.aliases
+               ELSE aif_size_types.aliases
+             END,
+             is_active=true`,
+          [code, name, Array.isArray(aliases) ? aliases : [name], sortOrder]
+        );
+      }
+      sizeSchemaEnsured = true;
+      return true;
+    };
+
+    if (client === pool) {
+      if (!sizeSchemaPromise) {
+        sizeSchemaPromise = run().finally(() => { sizeSchemaPromise = null; });
+      }
+      return sizeSchemaPromise;
+    }
+
+    return run();
+  }
+
+  function sizeAliasesFromInput(value) {
+    return splitAliasesFromInput(value);
+  }
+
+  async function findSizeTypeByIdOrCode(client, idOrCode) {
+    await ensureAifSizeTables(client);
+    const v = text(idOrCode);
+    if (!v) return null;
+    const key = normCode(v);
+    const r = await client.query(
+      `SELECT id, code, name, aliases, sort_order, is_active
+       FROM aif_size_types
+       WHERE id::text=$1 OR code=$1 OR code=$2 OR lower(name)=lower($1)
+          OR EXISTS (
+            SELECT 1 FROM unnest(COALESCE(aliases, '{}'::text[])) a
+            WHERE lower(a)=lower($1) OR lower(a)=lower($2)
+          )
+       LIMIT 1`,
+      [v, key]
+    );
+    return r.rows[0] || null;
+  }
+
+  async function normalizeSizeValue(client, value) {
+    const raw = emptyToNull(value);
+    if (!raw) return null;
+    try {
+      await ensureAifSizeTables(client);
+      const rawKey = normCode(raw);
+      const r = await client.query(
+        `SELECT id, code, name, aliases
+         FROM aif_size_types
+         WHERE is_active=true
+         ORDER BY sort_order ASC, name ASC`
+      );
+      const found = r.rows.find((size) => {
+        const aliases = Array.isArray(size.aliases) ? size.aliases : [];
+        return [size.code, size.name, ...aliases].filter(Boolean).some((x) => normCode(x) === rawKey);
+      });
+      return found?.name || raw;
+    } catch (e) {
+      if (e?.code !== "42P01" && e?.code !== "42703") console.error("AIF size normalize warning", e);
+      return raw;
+    }
+  }
+
+  async function applyBrandSizeCodeMapping(client, normalized) {
+    if (!normalized || typeof normalized !== "object") return false;
+    const sizeCode = emptyToNull(normalized.supplierSize || normalized.supplier_size || normalized.size);
+    if (!sizeCode) return false;
+    const brandId = await findBrandIdForNormalized(client, normalized);
+    if (!brandId) return false;
+    try {
+      await ensureAifSizeTables(client);
+      const r = await client.query(
+        `SELECT bsc.id, st.code AS size_type_code, st.name AS size_name
+         FROM aif_brand_size_codes bsc
+         JOIN aif_size_types st ON st.id=bsc.size_type_id
+         WHERE bsc.brand_id=$1
+           AND bsc.is_active=true
+           AND st.is_active=true
+           AND lower(bsc.size_code)=lower($2)
+         LIMIT 1`,
+        [brandId, sizeCode]
+      );
+      const found = r.rows[0];
+      if (!found) return false;
+      normalized.supplierSize = normalized.supplierSize || sizeCode;
+      normalized.size = found.size_name || normalized.size;
+      normalized.brandSizeCodeId = found.id;
+      normalized.sizeTypeCode = found.size_type_code;
+      return true;
+    } catch (e) {
+      if (e?.code !== "42P01" && e?.code !== "42703") console.error("AIF brand size code mapping warning", e);
+      return false;
+    }
+  }
+
+  async function sizeUsage(client, sizeIdOrCode) {
+    await ensureAifSizeTables(client);
+    const s = await findSizeTypeByIdOrCode(client, sizeIdOrCode);
+    if (!s) return { product_variants: 0, brand_size_codes: 0 };
+    const r = await client.query(
+      `SELECT
+         (SELECT count(*)::int FROM aif_product_variants WHERE lower(COALESCE(size,''))=lower($1) OR lower(COALESCE(size,''))=lower($2)) AS product_variants,
+         (SELECT count(*)::int FROM aif_brand_size_codes WHERE size_type_id=$3) AS brand_size_codes`,
+      [s.name, s.code, s.id]
+    );
+    return r.rows[0] || { product_variants: 0, brand_size_codes: 0 };
+  }
+
+  function brandSizeCodeSelect() {
+    return `SELECT bsc.id, bsc.brand_id, b.code AS brand_code, b.name AS brand_name,
+                   bsc.size_code, bsc.size_type_id,
+                   st.code AS size_type_code, st.name AS size_name,
+                   bsc.notes, bsc.is_active, bsc.created_at, bsc.updated_at
+            FROM aif_brand_size_codes bsc
+            JOIN aif_brands b ON b.id=bsc.brand_id
+            JOIN aif_size_types st ON st.id=bsc.size_type_id`;
+  }
+
+  async function getBrandSizeCodeItem(client, id) {
+    await ensureAifSizeTables(client);
+    const r = await client.query(
+      `${brandSizeCodeSelect()}
+       WHERE bsc.id::text=$1
+       LIMIT 1`,
+      [id]
+    );
+    return r.rows[0] || null;
+  }
+
+
+
+
+  router.get("/size-types", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    try {
+      await ensureAifSizeTables(pool);
+      const r = await pool.query(
+        `SELECT id, code, name, name_hu, aliases, sort_order, is_active, created_at, updated_at
+         FROM aif_size_types
+         ${includeInactive ? "" : "WHERE is_active=true"}
+         ORDER BY is_active DESC, sort_order ASC, name ASC, code ASC`
+      );
+      res.json({ items: r.rows });
+    } catch (e) {
+      console.error("AIF list size types failed", e);
+      res.status(500).json({ error: "failed to load sizes" });
+    }
+  });
+
+  router.post("/size-types/normalize", requireAuthed, async (req, res) => {
+    const input = text(req.body?.size || req.body?.name || req.body?.value);
+    if (!input) return res.status(400).json({ error: "size required" });
+    try {
+      const size = await normalizeSizeValue(pool, input);
+      const item = await findSizeTypeByIdOrCode(pool, size || input);
+      res.json({ input, size, item });
+    } catch (e) {
+      console.error("AIF normalize size failed", e);
+      res.status(500).json({ error: "failed to normalize size" });
+    }
+  });
+
+  router.post("/size-types", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const name = text(body.name || body.label || body.size || body.code);
+    const code = normCode(body.code || name).toUpperCase();
+    const aliases = sizeAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!name) return res.status(400).json({ error: "size name required" });
+    if (!code) return res.status(400).json({ error: "size code required" });
+    try {
+      await ensureAifSizeTables(pool);
+      const r = await pool.query(
+        `INSERT INTO aif_size_types (code, name, name_hu, aliases, sort_order, is_active)
+         VALUES ($1,$2,$3,$4::text[],$5,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name=EXCLUDED.name,
+           name_hu=EXCLUDED.name_hu,
+           aliases=EXCLUDED.aliases,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name, name_hu, aliases, sort_order, is_active, created_at, updated_at`,
+        [code, name, emptyToNull(body.nameHu || body.name_hu), aliases, sortOrder]
+      );
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF create size type failed", e);
+      res.status(500).json({ error: "failed to save size" });
+    }
+  });
+
+  router.patch("/size-types/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.name !== undefined || body.label !== undefined || body.size !== undefined) {
+      const name = text(body.name ?? body.label ?? body.size);
+      if (!name) return res.status(400).json({ error: "size name required" });
+      sets.push(`name=$${i++}`);
+      args.push(name);
+    }
+    if (body.nameHu !== undefined || body.name_hu !== undefined) {
+      sets.push(`name_hu=$${i++}`);
+      args.push(emptyToNull(body.nameHu ?? body.name_hu));
+    }
+    if (body.code !== undefined) {
+      const code = normCode(body.code).toUpperCase();
+      if (!code) return res.status(400).json({ error: "size code required" });
+      sets.push(`code=$${i++}`);
+      args.push(code);
+    }
+    if (body.aliases !== undefined || body.aliasList !== undefined || body.alias_list !== undefined) {
+      sets.push(`aliases=$${i++}::text[]`);
+      args.push(sizeAliasesFromInput(body.aliases ?? body.aliasList ?? body.alias_list));
+    }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) {
+      sets.push(`sort_order=$${i++}`);
+      args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.is_active !== undefined || body.isActive !== undefined) {
+      sets.push(`is_active=$${i++}`);
+      args.push(Boolean(body.is_active ?? body.isActive));
+    }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+    try {
+      await ensureAifSizeTables(pool);
+      const r = await pool.query(
+        `UPDATE aif_size_types
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name, name_hu, aliases, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!r.rowCount) return res.status(404).json({ error: "size not found" });
+      res.json({ item: r.rows[0] });
+    } catch (e) {
+      console.error("AIF update size type failed", e);
+      res.status(500).json({ error: "failed to update size" });
+    }
+  });
+
+  router.delete("/size-types/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifSizeTables(client);
+      const size = await findSizeTypeByIdOrCode(client, id);
+      if (!size) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "size not found" });
+      }
+      await client.query(`SELECT id FROM aif_size_types WHERE id=$1 FOR UPDATE`, [size.id]);
+      const usage = await sizeUsage(client, size.id);
+      if (Number(usage.product_variants || 0) > 0 || Number(usage.brand_size_codes || 0) > 0) {
+        await client.query(`UPDATE aif_size_types SET is_active=false, updated_at=now() WHERE id=$1`, [size.id]);
+        await client.query("COMMIT");
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      await client.query(`DELETE FROM aif_size_types WHERE id=$1`, [size.id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete size type failed", e);
+      res.status(500).json({ error: "failed to delete size" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/brand-size-codes", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    const brand = text(req.query.brand || req.query.brandId || req.query.brand_id || req.query.brandCode || req.query.brand_code);
+    const args = [];
+    const where = [];
+    if (!includeInactive) where.push(`bsc.is_active=true AND b.is_active=true AND st.is_active=true`);
+    if (brand) {
+      args.push(brand);
+      where.push(`(b.id::text=$${args.length} OR b.code=$${args.length} OR lower(b.name)=lower($${args.length}))`);
+    }
+    try {
+      await ensureAifSizeTables(pool);
+      const r = await pool.query(
+        `${brandSizeCodeSelect()}
+         ${where.length ? "WHERE " + where.join(" AND ") : ""}
+         ORDER BY b.name ASC, bsc.size_code ASC`,
+        args
+      );
+      res.json({ items: r.rows });
+    } catch (e) {
+      console.error("AIF list brand size codes failed", e);
+      res.status(500).json({ error: "failed to load brand size codes" });
+    }
+  });
+
+  router.post("/brand-size-codes", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const sizeCode = text(body.sizeCode || body.size_code).toUpperCase();
+    if (!sizeCode) return res.status(400).json({ error: "brand size code required" });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifSizeTables(client);
+      const brand = await findByIdOrCode(client, "aif_brands", body.brandId || body.brand_id || body.brandCode || body.brand_code || body.brand);
+      const size = await findSizeTypeByIdOrCode(client, body.sizeTypeId || body.size_type_id || body.sizeTypeCode || body.size_type_code || body.size || body.standardSize);
+      if (!brand || brand.is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "brand required or inactive" });
+      }
+      if (!size || size.is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "standard size required or inactive" });
+      }
+      const r = await client.query(
+        `INSERT INTO aif_brand_size_codes (brand_id, size_code, size_type_id, notes, is_active)
+         VALUES ($1,$2,$3,$4,true)
+         ON CONFLICT (brand_id, size_code) DO UPDATE SET
+           size_type_id=EXCLUDED.size_type_id,
+           notes=EXCLUDED.notes,
+           is_active=true,
+           updated_at=now()
+         RETURNING id`,
+        [brand.id, sizeCode, size.id, emptyToNull(body.notes)]
+      );
+      const item = await getBrandSizeCodeItem(client, r.rows[0].id);
+      await client.query("COMMIT");
+      res.json({ item });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF save brand size code failed", e);
+      res.status(500).json({ error: "failed to save brand size code" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch("/brand-size-codes/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifSizeTables(client);
+      const current = await client.query(`SELECT id FROM aif_brand_size_codes WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "brand size code not found" });
+      }
+      const sets = [];
+      const args = [];
+      let i = 1;
+      if (body.brandId !== undefined || body.brand_id !== undefined || body.brandCode !== undefined || body.brand_code !== undefined || body.brand !== undefined) {
+        const brand = await findByIdOrCode(client, "aif_brands", body.brandId || body.brand_id || body.brandCode || body.brand_code || body.brand);
+        if (!brand || brand.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "brand required or inactive" });
+        }
+        sets.push(`brand_id=$${i++}`);
+        args.push(brand.id);
+      }
+      if (body.sizeCode !== undefined || body.size_code !== undefined) {
+        const sizeCode = text(body.sizeCode ?? body.size_code).toUpperCase();
+        if (!sizeCode) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "brand size code required" });
+        }
+        sets.push(`size_code=$${i++}`);
+        args.push(sizeCode);
+      }
+      if (body.sizeTypeId !== undefined || body.size_type_id !== undefined || body.sizeTypeCode !== undefined || body.size_type_code !== undefined || body.size !== undefined || body.standardSize !== undefined) {
+        const size = await findSizeTypeByIdOrCode(client, body.sizeTypeId || body.size_type_id || body.sizeTypeCode || body.size_type_code || body.size || body.standardSize);
+        if (!size || size.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "standard size required or inactive" });
+        }
+        sets.push(`size_type_id=$${i++}`);
+        args.push(size.id);
+      }
+      if (body.notes !== undefined) {
+        sets.push(`notes=$${i++}`);
+        args.push(emptyToNull(body.notes));
+      }
+      if (body.is_active !== undefined || body.isActive !== undefined) {
+        sets.push(`is_active=$${i++}`);
+        args.push(Boolean(body.is_active ?? body.isActive));
+      }
+      if (sets.length) {
+        args.push(current.rows[0].id);
+        await client.query(
+          `UPDATE aif_brand_size_codes SET ${sets.join(", ")}, updated_at=now() WHERE id=$${i}`,
+          args
+        );
+      }
+      const item = await getBrandSizeCodeItem(client, current.rows[0].id);
+      await client.query("COMMIT");
+      res.json({ item });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF update brand size code failed", e);
+      if (e?.code === "23505") return res.status(400).json({ error: "A márkához ez a méretkód már létezik." });
+      res.status(500).json({ error: "failed to update brand size code" });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/brand-size-codes/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    try {
+      await ensureAifSizeTables(pool);
+      const usage = await brandSizeCodeUsage(pool, id);
+      if (Number(usage.product_variants || 0) > 0) {
+        const r = await pool.query(`UPDATE aif_brand_size_codes SET is_active=false, updated_at=now() WHERE id::text=$1 RETURNING id`, [id]);
+        if (!r.rowCount) return res.status(404).json({ error: "brand size code not found" });
+        return res.json({ ok: true, mode: "deactivated", usage });
+      }
+      const r = await pool.query(`DELETE FROM aif_brand_size_codes WHERE id::text=$1`, [id]);
+      if (!r.rowCount) return res.status(404).json({ error: "brand size code not found" });
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      console.error("AIF delete brand size code failed", e);
+      res.status(500).json({ error: "failed to delete brand size code" });
+    }
+  });
+
   router.get("/brands", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY name ASC`);
     res.json({ items: r.rows });
@@ -3038,7 +3551,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
   router.get("/meta", requireAuthed, async (_req, res) => {
-    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, brandColorCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
+    await ensureAifSizeTables(pool);
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, is_active FROM aif_brands WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
@@ -3053,6 +3567,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       pool.query(`${brandColorCodeSelect()}
                   WHERE bcc.is_active=true AND b.is_active=true AND c.is_active=true
                   ORDER BY b.name ASC, bcc.color_code ASC`),
+      pool.query(`SELECT id, code, name, name_hu, aliases, sort_order, is_active
+                  FROM aif_size_types
+                  WHERE is_active=true
+                  ORDER BY sort_order ASC, name ASC, code ASC`),
+      pool.query(`${brandSizeCodeSelect()}
+                  WHERE bsc.is_active=true AND b.is_active=true AND st.is_active=true
+                  ORDER BY b.name ASC, bsc.size_code ASC`),
       pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active
                   FROM aif_material_types
                   WHERE is_active=true
@@ -3081,6 +3602,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       currencies: currencies.rows,
       colorTypes: colorTypes.rows,
       brandColorCodes: brandColorCodes.rows,
+      sizeTypes: sizeTypes.rows,
+      brandSizeCodes: brandSizeCodes.rows,
       materialTypes: materialTypes.rows,
       supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
@@ -3819,6 +4342,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         normalized.gender = canonicalGender(normalized.gender);
         const brandColorMapped = await applyBrandColorCodeMapping(client, normalized);
         if (!brandColorMapped && normalized.colorName) normalized.colorName = await normalizeColorName(client, normalized.colorName);
+        const brandSizeMapped = await applyBrandSizeCodeMapping(client, normalized);
+        if (!brandSizeMapped && normalized.size) normalized.size = await normalizeSizeValue(client, normalized.size);
         const qty = Number(row.qty ?? normalized.qty ?? 0);
         if (!Number.isFinite(qty) || qty <= 0) throw new Error("a mennyiség hiányzik vagy nem pozitív");
 
@@ -4601,6 +5126,220 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+
+  async function addManualProductStock(client, { locationId, variantId, qty, actor, raw }) {
+    const current = await client.query(
+      `SELECT qty, reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+      [locationId, variantId]
+    );
+    const before = current.rowCount ? Number(current.rows[0].qty || 0) : 0;
+    const after = before + qty;
+    if (after < 0) throw new Error("stock cannot go negative");
+
+    await client.query(
+      `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+       VALUES ($1,$2,$3,0,now())
+       ON CONFLICT (location_id, variant_id)
+       DO UPDATE SET qty=$3, updated_at=now()`,
+      [locationId, variantId, after]
+    );
+
+    await insertStockMovementSafe(client, {
+      movementType: "incoming",
+      sourceType: "manual_product_add",
+      sourcePrefix: "manual_prod",
+      fallbackSourceType: "manual_stock_edit",
+      locationId,
+      variantId,
+      qtyDelta: qty,
+      qtyBefore: before,
+      qtyAfter: after,
+      actor,
+      raw: { reason: "manual_product_add", ...raw },
+    });
+  }
+
+  router.post(["/variants", "/variants/manual", "/manual-products"], requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const src = body.normalized && typeof body.normalized === "object" ? body.normalized : body;
+    const stockRowsInput = Array.isArray(body.stockRows)
+      ? body.stockRows
+      : Array.isArray(body.stock_rows)
+        ? body.stock_rows
+        : Array.isArray(body.locations)
+          ? body.locations
+          : Array.isArray(body.stock)
+            ? body.stock
+            : [];
+    const directQty = toInt(src.qty ?? body.qty ?? body.quantity ?? body.stockQty ?? body.stock_qty) || 0;
+    const locationInput = body.targetLocationId || body.target_location_id || body.locationId || body.location_id || body.locationCode || body.location || src.targetLocationId || src.locationId;
+    const supplierInput = body.supplierId || body.supplier_id || body.supplierCode || body.supplier || src.supplierId || src.supplierCode;
+    const stockSourceRows = stockRowsInput.length
+      ? stockRowsInput
+      : directQty > 0
+        ? [{ qty: directQty, locationId: locationInput }]
+        : [];
+    const requestedQty = stockSourceRows.reduce((sum, row) => {
+      const qty = toInt(row?.qty ?? row?.quantity ?? row?.count) || 0;
+      return sum + Math.max(0, Math.floor(qty));
+    }, 0);
+    if (requestedQty <= 0) return res.status(400).json({ error: "Legalább egy célhelyhez pozitív készletmennyiséget kell megadni." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSnCodSchema(client);
+      await ensureAifSizeTables(client);
+
+      let fallbackLocation = null;
+      if (locationInput) fallbackLocation = await findByIdOrCode(client, "aif_locations", locationInput);
+      if (fallbackLocation && fallbackLocation.is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "A kiválasztott célhely inaktív." });
+      }
+      if (!fallbackLocation) {
+        const defaultLocationId = await getDefaultLocationId(client);
+        if (defaultLocationId) fallbackLocation = await findByIdOrCode(client, "aif_locations", defaultLocationId);
+      }
+      if (!fallbackLocation) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Cél hely kiválasztása kötelező." });
+      }
+
+      const preparedStockByLocation = new Map();
+      for (const stockRow of stockSourceRows) {
+        const rowQty = Math.max(0, Math.floor(toInt(stockRow?.qty ?? stockRow?.quantity ?? stockRow?.count) || 0));
+        if (rowQty <= 0) continue;
+        const rowLocationInput = stockRow?.locationId || stockRow?.location_id || stockRow?.locationCode || stockRow?.location_code || stockRow?.location || stockRow?.code || locationInput;
+        let rowLocation = rowLocationInput ? await findByIdOrCode(client, "aif_locations", rowLocationInput) : fallbackLocation;
+        if (!rowLocation) rowLocation = fallbackLocation;
+        if (!rowLocation || rowLocation.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Érvénytelen vagy inaktív célhely: ${rowLocationInput || "-"}` });
+        }
+        const key = String(rowLocation.id);
+        const current = preparedStockByLocation.get(key) || { location: rowLocation, qty: 0 };
+        current.qty += rowQty;
+        preparedStockByLocation.set(key, current);
+      }
+
+      if (!preparedStockByLocation.size) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Nincs pozitív készletmennyiség egyik célhelyhez sem." });
+      }
+
+      let supplier = null;
+      if (supplierInput) {
+        supplier = await findByIdOrCode(client, "aif_suppliers", supplierInput);
+        if (!supplier || supplier.is_active === false) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "A kiválasztott beszállító inaktív vagy nem létezik." });
+        }
+      }
+
+      const normalized = {
+        brandId: emptyToNull(src.brandId || src.brand_id),
+        brandCode: emptyToNull(src.brandCode || src.brand_code || src.brand),
+        brandName: emptyToNull(src.brandName || src.brand_name || src.brand),
+        categoryId: emptyToNull(src.categoryId || src.category_id),
+        categoryCode: emptyToNull(src.categoryCode || src.category_code || src.category),
+        categoryName: emptyToNull(src.categoryName || src.category_name || src.category),
+        modelCode: emptyToNull(src.modelCode || src.model_code || src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.barcode || src.titleRo || src.title_ro || src.name),
+        titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
+        titleHu: emptyToNull(src.titleHu || src.title_hu),
+        descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
+        genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code),
+        gender: canonicalGender(src.gender || src.genderCode || src.gender_code || "unisex"),
+        productType: emptyToNull(src.productType || src.product_type),
+        season: emptyToNull(src.season),
+        material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro),
+        shopifyTitle: emptyToNull(src.shopifyTitle || src.shopify_title || src.titleRo || src.title_ro),
+        colorCode: emptyToNull(src.colorCode || src.color_code || src.supplierColorCode || src.supplier_color_code),
+        colorName: emptyToNull(src.colorName || src.color_name),
+        colorHex: emptyToNull(src.colorHex || src.color_hex),
+        size: emptyToNull(src.size || src.standardSize || src.standard_size || src.supplierSize || src.supplier_size),
+        barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
+        snCod: snCodFromSource(src, body.raw || body),
+        sn_cod: snCodFromSource(src, body.raw || body),
+        buyPrice: toMoney(src.buyPrice ?? src.buy_price),
+        sellPrice: toMoney(src.sellPrice ?? src.sell_price),
+        compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
+        weightGrams: toInt(src.weightGrams ?? src.weight_grams),
+        imageUrl: emptyToNull(src.imageUrl || src.image_url),
+        supplierProductCode: emptyToNull(src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.modelCode || src.model_code),
+        supplierVariantCode: emptyToNull(src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code),
+        supplierColorCode: emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code),
+        supplierSize: emptyToNull(src.supplierSize || src.supplier_size || src.size),
+        modelStatus: emptyToNull(src.modelStatus || src.model_status),
+        variantStatus: emptyToNull(src.variantStatus || src.status),
+        qty: requestedQty,
+      };
+
+      applyProductCodeSplit(normalized);
+      const row = { rowNo: 1, raw: body.raw || body, normalized, status: "parsed", errors: [] };
+      await enrichNormalizedRow(client, row);
+
+      if (!row.normalized.titleRo) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Terméknév románul kötelező." });
+      }
+      if (!row.normalized.size) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Méret megadása kötelező." });
+      }
+
+      const salesTvaSettings = await readSalesTvaSettings(client);
+      applySalesTvaSettingsToNormalized(row.normalized, salesTvaSettings);
+
+      const modelId = await upsertModel(client, { supplierCode: supplier?.code || row.normalized.brandCode || "manual", normalized: row.normalized });
+      const variantId = await upsertVariant(client, { modelId, normalized: row.normalized });
+
+      const modelStatus = text(row.normalized.modelStatus || "active");
+      if (["draft", "active", "archived"].includes(modelStatus)) {
+        await client.query(`UPDATE aif_product_models SET status=$2, updated_at=now() WHERE id=$1`, [modelId, modelStatus]);
+      }
+      const variantStatus = text(row.normalized.variantStatus || "active");
+      if (["active", "inactive", "archived"].includes(variantStatus)) {
+        await client.query(`UPDATE aif_product_variants SET status=$2, updated_at=now() WHERE id=$1`, [variantId, variantStatus]);
+      }
+
+      if (supplier?.id) await upsertSupplierCode(client, { variantId, supplierId: supplier.id, normalized: row.normalized });
+
+      let savedQty = 0;
+      const savedStockRows = [];
+      for (const stockRow of preparedStockByLocation.values()) {
+        await addManualProductStock(client, {
+          locationId: stockRow.location.id,
+          variantId,
+          qty: stockRow.qty,
+          actor: actorFrom(req),
+          raw: {
+            manual: true,
+            supplierId: supplier?.id || null,
+            supplierName: supplier?.name || null,
+            source: "warehouse_manual_product",
+            locationCode: stockRow.location.code,
+            locationName: stockRow.location.name,
+            normalized: row.normalized,
+          },
+        });
+        savedQty += stockRow.qty;
+        savedStockRows.push({ locationId: stockRow.location.id, locationCode: stockRow.location.code, locationName: stockRow.location.name, qty: stockRow.qty });
+      }
+
+      await client.query("COMMIT");
+      res.json({ ok: true, variantId, modelId, qty: savedQty, stockRows: savedStockRows });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF manual product add failed", e);
+      if (e?.code === "23505") return res.status(400).json({ error: "A termék mentése ütközött meglévő vonalkóddal vagy kóddal." });
+      res.status(500).json({ error: e?.message || "Az új termék mentése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/variants/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "variant id required" });
@@ -4722,7 +5461,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           await client.query("ROLLBACK");
           return res.status(400).json({ error: "size required" });
         }
-        addVariant("size", size);
+        addVariant("size", await normalizeSizeValue(client, size));
       }
       if (body.buyPrice !== undefined || body.buy_price !== undefined) addVariant("buy_price", toMoney(body.buyPrice ?? body.buy_price));
       if (body.sellPrice !== undefined || body.sell_price !== undefined) addVariant("sell_price", toMoney(body.sellPrice ?? body.sell_price));
