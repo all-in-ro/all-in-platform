@@ -29,8 +29,8 @@ const panelHead = "flex flex-col gap-3 border-b border-white/12 bg-[#404a5b] px-
 const btn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-300/35 bg-red-500/18 px-3 text-xs text-red-50 hover:bg-red-500/26 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-300/28 bg-red-500/10 px-3 text-xs text-red-50 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
+const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
@@ -293,7 +293,7 @@ function directionMeta(item: AifStockMoveItem) {
       label: "Bejött",
       sign: "+",
       icon: ArrowDownLeft,
-      cls: "border-[#2a8d8b]/55 bg-[#2a8d8b]/18 text-cyan-50",
+      cls: "border-[#2a8d8b] bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(42,141,139,0.28)]",
       dot: "bg-[#2a8d8b]",
     };
   }
@@ -302,7 +302,7 @@ function directionMeta(item: AifStockMoveItem) {
       label: "Kiment",
       sign: "−",
       icon: ArrowUpRight,
-      cls: "border-red-300/35 bg-red-500/16 text-red-50",
+      cls: "border-red-500 bg-red-600 text-white shadow-[0_0_0_1px_rgba(220,38,38,0.28)]",
       dot: "bg-red-400",
     };
   }
@@ -683,7 +683,7 @@ export default function AllInStockMoves() {
       notifyStockMovesChanged();
       await refresh({ silent: true });
       setMessageTone("info");
-      setMessage("A naplóbejegyzés végleg törölve. A készlet mennyisége nem változott, csak a naplóból tűnt el. Különbség, amit sajnos a gépeknek is magyarázni kell.");
+      setMessage("A naplóbejegyzés végleg törölve. A készlet mennyisége nem változott, csak a naplóbejegyzés került eltávolításra.");
     } catch (e: any) {
       setMessageTone("error");
       setMessage(e.message || "A naplóbejegyzés törlése nem sikerült.");
@@ -697,7 +697,7 @@ export default function AllInStockMoves() {
     const popup = window.open("", "_blank", "width=1200,height=820");
     if (!popup) {
       setMessageTone("error");
-      setMessage("A böngésző blokkolta a PDF ablakot. Engedélyezd a felugró ablakot ennél az oldalnál, mert a böngésző természetesen okosabbnak hiszi magát nálad.");
+      setMessage("A böngésző blokkolta a PDF ablakot. Engedélyezd a felugró ablakot ennél az oldalnál.");
       return;
     }
     const title = reportTitle(kind);
@@ -917,7 +917,7 @@ export default function AllInStockMoves() {
                         <td className="px-4 py-3 text-white/78">{formatDateTime(row.created_at)}</td>
                         <td className="px-4 py-3 text-white/78">{row.location_name || "-"}</td>
                         <td className="px-4 py-3 text-center">
-                          <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${meta.cls}`}>
+                          <span className={`inline-flex min-w-[112px] items-center justify-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${meta.cls}`}>
                             <Icon size={14} /> {meta.label} {meta.sign}{formatQty(delta)}
                           </span>
                         </td>
@@ -931,8 +931,9 @@ export default function AllInStockMoves() {
                             disabled={deletingId === row.id}
                             className={tinyDangerBtn}
                             title="Naplóbejegyzés végleges törlése"
+                            aria-label="Naplóbejegyzés végleges törlése"
                           >
-                            <Trash2 size={14} /> Törlés
+                            <Trash2 size={15} className="shrink-0" /> Törlés
                           </button>
                         </td>
                       </tr>
@@ -959,7 +960,7 @@ export default function AllInStockMoves() {
                     <div className="mt-3 grid gap-2 text-xs text-white/68 sm:grid-cols-2">
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><Clock3 className="mr-1 inline" size={13} /> {formatDateTime(row.created_at)}</div>
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><MapPin className="mr-1 inline" size={13} /> {row.location_name || "-"}</div>
-                      <div className={`rounded-xl border px-3 py-2 ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
+                      <div className={`rounded-xl border px-3 py-2 text-center font-semibold ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
                       <div className="rounded-xl bg-[#354153] px-3 py-2">{formatQty(row.qty_before ?? 0)} → {formatQty(row.qty_after ?? 0)}</div>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/62">
@@ -970,7 +971,7 @@ export default function AllInStockMoves() {
                         disabled={deletingId === row.id}
                         className={tinyDangerBtn}
                       >
-                        <Trash2 size={14} /> Törlés
+                        <Trash2 size={15} className="shrink-0" /> Törlés
                       </button>
                     </div>
                   </div>
@@ -1061,7 +1062,7 @@ export default function AllInStockMoves() {
               <h3 className="mt-1 text-lg font-semibold text-white">Naplóbejegyzés törlése</h3>
             </div>
             <div className="space-y-3 px-5 py-4 text-sm text-white/75">
-              <p>Ez csak a készletmozgás naplósorát törli. A jelenlegi készletet nem módosítja, mert a múlt átírása csak a naplóban történik, nem a raktárban.</p>
+              <p>Ez csak a készletmozgás naplósorát törli. A jelenlegi készletet nem módosítja.</p>
               <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3">
                 <div className="flex gap-3">
                   <ProductThumb item={deleteCandidate} />
@@ -1076,7 +1077,7 @@ export default function AllInStockMoves() {
             <div className="flex flex-col-reverse gap-2 border-t border-white/12 px-5 py-4 sm:flex-row sm:justify-end">
               <button type="button" onClick={() => setDeleteCandidate(null)} disabled={deletingId === deleteCandidate.id} className={btnSoft}>Mégse</button>
               <button type="button" onClick={confirmDeleteMovement} disabled={deletingId === deleteCandidate.id} className={redBtn}>
-                <Trash2 size={15} /> {deletingId === deleteCandidate.id ? "Törlés..." : "Végleges törlés"}
+                <Trash2 size={16} className="shrink-0" /> {deletingId === deleteCandidate.id ? "Törlés..." : "Végleges törlés"}
               </button>
             </div>
           </div>
