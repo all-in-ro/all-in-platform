@@ -267,6 +267,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
       buyPrice: toMoney(src.buyPrice ?? src.buy_price),
       sellPrice: toMoney(src.sellPrice ?? src.sell_price),
+      sellPriceCurrency: emptyToNull(src.sellPriceCurrency || src.sell_price_currency || src.salePriceCurrency || src.sale_price_currency || "RON"),
+      sellPriceIsRon: src.sellPriceIsRon !== undefined || src.sell_price_is_ron !== undefined || src.salePriceIsRon !== undefined
+        ? Boolean(src.sellPriceIsRon ?? src.sell_price_is_ron ?? src.salePriceIsRon)
+        : true,
+      sellPriceIncludesTva: src.sellPriceIncludesTva !== undefined || src.sell_price_includes_tva !== undefined || src.salesPriceIncludesTva !== undefined
+        ? Boolean(src.sellPriceIncludesTva ?? src.sell_price_includes_tva ?? src.salesPriceIncludesTva)
+        : true,
+      salesTvaRate: toMoney(src.salesTvaRate ?? src.sales_tva_rate ?? src.saleTvaRate ?? src.sale_tva_rate),
+      sellPriceGrossRon: toMoney(src.sellPriceGrossRon ?? src.sell_price_gross_ron ?? src.sellPrice ?? src.sell_price),
       compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
       weightGrams: toInt(src.weightGrams ?? src.weight_grams),
       imageUrl: emptyToNull(src.imageUrl || src.image_url),
@@ -914,6 +923,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  function isSellPriceRon(normalized) {
+    const n = normalized && typeof normalized === "object" ? normalized : {};
+    const currency = currencyCode(n.sellPriceCurrency || n.salePriceCurrency || n.priceCurrency || "");
+    return currency === "RON" || String(n.sellPriceIsRon ?? n.salePriceIsRon ?? "").toLowerCase() === "true";
+  }
+
+  function calcSellPriceRon(normalized, exchangeRate) {
+    const n = normalized && typeof normalized === "object" ? normalized : {};
+    if (n.sellPrice === null || n.sellPrice === undefined || String(n.sellPrice).trim() === "") return null;
+    const value = Number(String(n.sellPrice).replace(",", "."));
+    if (!Number.isFinite(value)) return null;
+    if (isSellPriceRon(n)) return value;
+    const rate = Number(exchangeRate || 1);
+    return Number.isFinite(rate) ? value * rate : value;
+  }
+
+  function sellPriceRonSql(priceExpr, normalizedExpr, rateExpr) {
+    return `CASE
+      WHEN ${priceExpr} IS NULL THEN NULL
+      WHEN lower(COALESCE(${normalizedExpr}->>'sellPriceCurrency', ${normalizedExpr}->>'salePriceCurrency', '')) = 'ron'
+        OR lower(COALESCE(${normalizedExpr}->>'sellPriceIsRon', ${normalizedExpr}->>'salePriceIsRon', 'false')) = 'true'
+      THEN round(${priceExpr}::numeric, 2)
+      ELSE round(${priceExpr} * ${rateExpr}::numeric, 2)
+    END`;
+  }
+
   router.get("/suppliers", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const withStats = ["1", "true", "yes"].includes(text(req.query.withStats || req.query.with_stats).toLowerCase());
@@ -1417,7 +1452,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
         r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
         r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-        r.note, r.supplier_id, r.target_location_id,
+        r.note, r.raw_meta, r.supplier_id, r.target_location_id,
         s.name AS supplier_name,
         l.name AS location_name,
         count(DISTINCT b.id)::int AS import_batches,
@@ -1504,6 +1539,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (src.invoiceVat !== undefined || src.invoice_vat !== undefined) add("invoice_vat", toMoney(src.invoiceVat ?? src.invoice_vat));
       if (src.invoiceGross !== undefined || src.invoice_gross !== undefined) add("invoice_gross", toMoney(src.invoiceGross ?? src.invoice_gross));
       if (src.note !== undefined) add("note", emptyToNull(src.note));
+      if (src && typeof src === "object") {
+        sets.push(`raw_meta=COALESCE(raw_meta,'{}'::jsonb) || $${i++}::jsonb`);
+        args.push(JSON.stringify(src));
+      }
 
       if (sets.length) {
         args.push(receptionId);
@@ -1519,7 +1558,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(
           `UPDATE aif_import_rows rw
            SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round(rw.buy_price * $2::numeric, 2) END,
-               sell_price_ron = CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $2::numeric, 2) END,
+               sell_price_ron = ${sellPriceRonSql('rw.sell_price', 'rw.normalized', '$2')},
                normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
                updated_at=now()
            FROM aif_import_batches b
@@ -1535,7 +1574,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-                r.note, r.supplier_id, r.target_location_id,
+                r.note, r.raw_meta, r.supplier_id, r.target_location_id,
                 s.name AS supplier_name, l.name AS location_name
          FROM aif_receptions r
          LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
@@ -1643,7 +1682,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-                r.note, r.supplier_id, r.target_location_id,
+                r.note, r.raw_meta, r.supplier_id, r.target_location_id,
                 s.name AS supplier_name, l.name AS location_name,
                 count(DISTINCT b.id)::int AS import_batches,
                 count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
@@ -3072,9 +3111,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
           : Number(nr.normalized.buyPrice) * exchangeRate;
-        const sellPriceRon = nr.normalized.sellPrice == null || !Number.isFinite(exchangeRate)
-          ? null
-          : Number(nr.normalized.sellPrice) * exchangeRate;
+        const sellPriceRon = calcSellPriceRon(nr.normalized, exchangeRate);
         const normalizedForDb = {
           ...nr.normalized,
           currencyCode: reception.currencyCode,
@@ -3343,9 +3380,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
           : Number(nr.normalized.buyPrice) * exchangeRate;
-        const sellPriceRon = nr.normalized.sellPrice == null || !Number.isFinite(exchangeRate)
-          ? null
-          : Number(nr.normalized.sellPrice) * exchangeRate;
+        const sellPriceRon = calcSellPriceRon(nr.normalized, exchangeRate);
         const normalizedForDb = {
           ...nr.normalized,
           currencyCode: currency,
@@ -3703,9 +3738,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
         ? null
         : Number(nr.normalized.buyPrice) * exchangeRate;
-      const sellPriceRon = nr.normalized.sellPrice == null || !Number.isFinite(exchangeRate)
-        ? null
-        : Number(nr.normalized.sellPrice) * exchangeRate;
+      const sellPriceRon = calcSellPriceRon(nr.normalized, exchangeRate);
       const normalizedForDb = {
         ...nr.normalized,
         currencyCode: row.currency_code,
@@ -3916,7 +3949,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_import_rows
          SET batch_id=$2,
              buy_price_ron=CASE WHEN buy_price IS NULL THEN NULL ELSE round(buy_price * $3::numeric, 2) END,
-             sell_price_ron=CASE WHEN sell_price IS NULL THEN NULL ELSE round(sell_price * $3::numeric, 2) END,
+             sell_price_ron=${sellPriceRonSql('sell_price', 'normalized', '$3')},
              normalized=$4::jsonb,
              updated_at=now()
          WHERE id=$1`,
@@ -4694,6 +4727,182 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
     res.json({ items: r.rows });
   });
+
+  async function handleStockTransfer(req, res) {
+    const body = req.body || {};
+    const rowsInput = Array.isArray(body.rows)
+      ? body.rows
+      : Array.isArray(body.lines)
+        ? body.lines
+        : Array.isArray(body.items)
+          ? body.items
+          : [];
+    const note = emptyToNull(body.note);
+    const title = emptyToNull(body.title || body.documentTitle || body.document_title);
+    if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletmozgatási sor." });
+
+    const client = await pool.connect();
+    const transferId = stockMovementSourceId("transfer", "batch", "stock");
+    const actor = actorFrom(req);
+    const movedItems = [];
+    let movedQty = 0;
+    let movementRows = 0;
+
+    try {
+      await client.query("BEGIN");
+      try { await client.query("SELECT set_config('aif.actor', $1, true)", [actor]); } catch {}
+
+      for (let index = 0; index < rowsInput.length; index++) {
+        const input = rowsInput[index] || {};
+        const variantInput = text(input.variantId || input.variant_id || input.variant || input.id);
+        const fromInput = text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id);
+        const toInput = text(input.toLocationId || input.to_location_id || input.toLocationCode || input.to_location_code || input.to || input.targetLocationId || input.target_location_id);
+        const qty = toInt(input.qty ?? input.quantity ?? input.count);
+
+        if (!variantInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a termék.`), { statusCode: 400 });
+        if (!fromInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a forrás helyszín.`), { statusCode: 400 });
+        if (!toInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a cél helyszín.`), { statusCode: 400 });
+        if (qty === null || qty <= 0) throw Object.assign(new Error(`A(z) ${index + 1}. sor mennyisége érvénytelen.`), { statusCode: 400 });
+
+        const variant = await client.query(
+          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status,
+                  m.title_ro, b.name AS brand_name
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
+           FOR UPDATE OF v`,
+          [variantInput]
+        );
+        if (!variant.rowCount) throw Object.assign(new Error(`A(z) ${index + 1}. sor terméke nem található.`), { statusCode: 404 });
+        const variantRow = variant.rows[0];
+        if (String(variantRow.status || "") === "archived") throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: archivált termék nem mozgatható.`), { statusCode: 400 });
+
+        const fromLocation = await findByIdOrCode(client, "aif_locations", fromInput);
+        const toLocation = await findByIdOrCode(client, "aif_locations", toInput);
+        if (!fromLocation || fromLocation.is_active === false) throw Object.assign(new Error(`Érvénytelen vagy inaktív forrás helyszín: ${fromInput}`), { statusCode: 400 });
+        if (!toLocation || toLocation.is_active === false) throw Object.assign(new Error(`Érvénytelen vagy inaktív cél helyszín: ${toInput}`), { statusCode: 400 });
+        if (String(fromLocation.id) === String(toLocation.id)) throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: a forrás és a cél nem lehet ugyanaz.`), { statusCode: 400 });
+
+        const sourceStock = await client.query(
+          `SELECT qty, reserved_qty
+           FROM aif_stock
+           WHERE location_id=$1 AND variant_id=$2
+           FOR UPDATE`,
+          [fromLocation.id, variantRow.id]
+        );
+        if (!sourceStock.rowCount) throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: nincs készlet a forráshelyen.`), { statusCode: 400 });
+        const sourceBefore = Number(sourceStock.rows[0].qty || 0);
+        const sourceReserved = Number(sourceStock.rows[0].reserved_qty || 0);
+        const sourceAvailable = sourceBefore - sourceReserved;
+        if (qty > sourceAvailable) {
+          throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: ${fromLocation.name || fromLocation.code} helyen csak ${Math.max(0, sourceAvailable)} db elérhető.`), { statusCode: 400 });
+        }
+        const sourceAfter = sourceBefore - qty;
+
+        const targetStock = await client.query(
+          `SELECT qty, reserved_qty
+           FROM aif_stock
+           WHERE location_id=$1 AND variant_id=$2
+           FOR UPDATE`,
+          [toLocation.id, variantRow.id]
+        );
+        const targetBefore = targetStock.rowCount ? Number(targetStock.rows[0].qty || 0) : 0;
+        const targetReserved = targetStock.rowCount ? Number(targetStock.rows[0].reserved_qty || 0) : 0;
+        const targetAfter = targetBefore + qty;
+
+        await client.query(
+          `UPDATE aif_stock
+           SET qty=$3, reserved_qty=$4, updated_at=now()
+           WHERE location_id=$1 AND variant_id=$2`,
+          [fromLocation.id, variantRow.id, sourceAfter, sourceReserved]
+        );
+
+        await client.query(
+          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (location_id, variant_id)
+           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+          [toLocation.id, variantRow.id, targetAfter, targetReserved]
+        );
+
+        const rawBase = {
+          reason: "stock_transfer",
+          transferId,
+          lineNo: index + 1,
+          note,
+          title,
+          productTitle: variantRow.title_ro,
+          barcode: variantRow.barcode,
+          fromLocationId: fromLocation.id,
+          fromLocationCode: fromLocation.code,
+          fromLocationName: fromLocation.name,
+          toLocationId: toLocation.id,
+          toLocationCode: toLocation.code,
+          toLocationName: toLocation.name,
+          qty,
+        };
+
+        const outLogged = await insertStockMovementSafe(client, {
+          movementType: "manual_adjustment",
+          sourceType: "stock_transfer",
+          sourcePrefix: "transfer_out",
+          fallbackSourceType: "manual_stock_edit",
+          locationId: fromLocation.id,
+          variantId: variantRow.id,
+          qtyDelta: -qty,
+          qtyBefore: sourceBefore,
+          qtyAfter: sourceAfter,
+          actor,
+          raw: { ...rawBase, direction: "out", side: "source" },
+        });
+        if (outLogged) movementRows++;
+
+        const inLogged = await insertStockMovementSafe(client, {
+          movementType: "incoming",
+          sourceType: "stock_transfer",
+          sourcePrefix: "transfer_in",
+          fallbackSourceType: "manual_stock_edit",
+          locationId: toLocation.id,
+          variantId: variantRow.id,
+          qtyDelta: qty,
+          qtyBefore: targetBefore,
+          qtyAfter: targetAfter,
+          actor,
+          raw: { ...rawBase, direction: "in", side: "target" },
+        });
+        if (inLogged) movementRows++;
+
+        movedQty += qty;
+        movedItems.push({
+          variantId: variantRow.id,
+          title: variantRow.title_ro,
+          barcode: variantRow.barcode,
+          qty,
+          fromLocation: fromLocation.name || fromLocation.code,
+          toLocation: toLocation.name || toLocation.code,
+          sourceBefore,
+          sourceAfter,
+          targetBefore,
+          targetAfter,
+        });
+      }
+
+      await client.query("COMMIT");
+      res.json({ ok: true, transferId, title, lineCount: movedItems.length, movedRows: movedItems.length, movedLines: movedItems.length, movedQty, totalQty: movedQty, movements: movementRows, items: movedItems });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF stock transfer failed", e);
+      const status = Number(e?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A készletmozgatás mentése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post("/stock-transfers", requireAuthed, handleStockTransfer);
+  router.post("/stock/transfers", requireAuthed, handleStockTransfer);
+
 
   async function listStockMovements(req, res) {
     const location = text(req.query.location || req.query.locationCode || req.query.location_id);
