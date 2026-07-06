@@ -54,7 +54,7 @@ import {
   AIF_COLUMN_FIELD_OPTIONS,
   AifColumnField,
   AifWorkbookAnalysis,
-  aifRowErrors,
+  aifRowErrors as baseAifRowErrors,
   applyAifColumnMapping,
   readAifWorkbookWithAnalysis,
 } from "../lib/aif/xls";
@@ -270,7 +270,7 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
         <td>${pdfEscape(genderLabel(rawGender, genderTypes))}</td>
         <td>${pdfEscape(cell(normalized.colorName))}</td>
         <td>${pdfEscape(cell(row.supplier_color_code || normalized.colorCode))}</td>
-        <td>${pdfEscape(cell(row.supplier_size || normalized.size))}</td>
+        <td>${pdfEscape(cell(normalizeAifSizeValue(row.supplier_size || normalized.size)))}</td>
         <td class="num">${pdfNumber(qty, 0)}</td>
         <td class="num">${pdfNumber(row.sell_price_ron ?? normalized.sellPriceGrossRon ?? normalized.sellPrice ?? row.sell_price, 2)}</td>
         <td class="num">${pdfNumber(normalized.salesTvaRate ?? normalized.saleTvaRate ?? item.raw_meta?.salesTvaRate ?? item.tva_rate, 0)}%</td>
@@ -525,6 +525,104 @@ function rawValueByHeader(row: any, headers: string[]) {
   return "";
 }
 
+const AIF_SIZE_OPTIONS = [
+  "XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "6XL",
+  "OSFM", "OSFA", "OS", "ONE SIZE", "UNI",
+  "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48",
+];
+
+const AIF_ACCEPTED_SIZE_CODES = new Set(AIF_SIZE_OPTIONS.map((x) => String(x).toUpperCase()));
+
+function normalizeAifSizeKey(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s._/-]+/g, "");
+}
+
+function normalizeAifSizeValue(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const key = normalizeAifSizeKey(raw);
+  if (["OSFM", "ONESIZEFITSMOST", "ONESIZEFITMOST", "ONESIZEFM"].includes(key)) return "OSFM";
+  if (["OSFA", "ONESIZEFITSALL", "ONESIZEFITALL"].includes(key)) return "OSFA";
+  if (["ONESIZE", "UNIVERSAL", "UNIVERSALA", "UNIVERZALIS", "UNISEXONESIZE"].includes(key)) return "ONE SIZE";
+  if (["UNI", "UNIV", "UNISIZE"].includes(key)) return "UNI";
+  if (/^\d+XL$/.test(key)) return key;
+  if (["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"].includes(key)) return key;
+  if (/^\d+(?:[.,]5)?$/.test(raw)) return raw.replace(",", ".");
+  return raw.toUpperCase();
+}
+
+function sizeValueForRow(row: any) {
+  return (
+    row?.supplier_size ??
+    row?.size ??
+    row?.normalized?.supplierSize ??
+    row?.normalized?.size ??
+    rawValueByHeader(row, ["MARIME", "MĂRIME", "SIZE", "MÉRET", "MERET", "TAILLE", "GRÖSSE"])
+  );
+}
+
+function normalizeAifRowSize<T extends any>(row: T): T {
+  const nextSize = normalizeAifSizeValue(sizeValueForRow(row));
+  if (!nextSize) return row;
+  const source: any = row || {};
+  const normalized = { ...(source.normalized || {}), size: nextSize };
+  const raw = source.raw && typeof source.raw === "object" ? { ...source.raw } : source.raw;
+  if (raw && typeof raw === "object") {
+    for (const [key, value] of Object.entries(raw)) {
+      if (["marime", "size", "meret", "taille", "grosse"].includes(normMatchKey(key))) {
+        (raw as any)[key] = normalizeAifSizeValue(value) || value;
+      }
+    }
+  }
+  return {
+    ...source,
+    raw,
+    supplier_size: source.supplier_size ? normalizeAifSizeValue(source.supplier_size) : source.supplier_size,
+    normalized,
+  };
+}
+
+function isAcceptedAifSize(value: unknown) {
+  const normalized = normalizeAifSizeValue(value);
+  if (!normalized) return false;
+  if (AIF_ACCEPTED_SIZE_CODES.has(String(normalized).toUpperCase())) return true;
+  return /^\d+(?:\.5)?$/.test(String(normalized));
+}
+
+function isSizeValidationError(error: unknown) {
+  const text = String(error ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /\b(size|marime|meret)\b/.test(text);
+}
+
+function aifRowErrors(row: AifParsedRow): string[] {
+  const normalizedRow = normalizeAifRowSize(row) as AifParsedRow;
+  const errors = (baseAifRowErrors(normalizedRow) || []) as string[];
+  if (!isAcceptedAifSize(sizeValueForRow(normalizedRow))) return errors;
+  return errors.filter((error: unknown) => !isSizeValidationError(error));
+}
+
+function firstNonEmptyText(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function savedRowRawObject(row: any) {
+  const raw = row?.raw && typeof row.raw === "object" ? row.raw : {};
+  const rawMeta = row?.raw_meta && typeof row.raw_meta === "object" ? row.raw_meta : {};
+  return { ...rawMeta, ...raw };
+}
+
 function categoryCandidatesForRow(row: any) {
   const normalized = row?.normalized || row || {};
   return [
@@ -535,6 +633,9 @@ function categoryCandidatesForRow(row: any) {
     (normalized as any).subcategoryName,
     (normalized as any).productType,
     (normalized as any).type,
+    (normalized as any).sourceCategory,
+    (normalized as any).sourceCategoryCode,
+    (normalized as any).sourceCategoryName,
     (normalized as any).categoryCode,
     (normalized as any).categoryName,
     rawValueByHeader(row, ["CATEGORIE", "CATEGORY"]),
@@ -727,7 +828,10 @@ export default function AllInIncoming(_props: Props) {
     [receptions, selectedReceptionId, loadedReception]
   );
 
-  const loadedReceptionRows = useMemo(() => loadedReception?.rows || [], [loadedReception]);
+  const loadedReceptionRows = useMemo(
+    () => (loadedReception?.rows || []).map((row: any) => savedReceptionRowWithLatestMeta(row)),
+    [loadedReception, activeBrands, activeCategories, activeGenderTypes, brandColorCodes, colorTypes]
+  );
   const loadedReceptionRowTotals = useMemo(() => {
     return loadedReceptionRows.reduce(
       (acc: { total: number; committed: number; remaining: number; qty: number; value: number }, row: any) => {
@@ -850,6 +954,8 @@ export default function AllInIncoming(_props: Props) {
         normalized.colorTypeCode = found.code || normalized.colorTypeCode || "";
       }
     }
+    const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
+    if (normalizedSize) normalized.size = normalizedSize;
     return { ...row, normalized };
   }
 
@@ -860,6 +966,141 @@ export default function AllInIncoming(_props: Props) {
     if (!brand || !code) return "";
     if (brandColorCodeForNormalized(n)) return "";
     return `${brand.name || brand.code} / ${code}`;
+  }
+
+
+  function loadedRowCategoryText(row: any) {
+    const n = row?.normalized || {};
+    return categoryDisplay(
+      firstNonEmptyText(
+        n.categoryCode,
+        n.categoryName,
+        n.sourceCategory,
+        n.sourceCategoryCode,
+        n.sourceCategoryName,
+        rawValueByHeader({ raw: savedRowRawObject(row) }, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE", "CATEGORIE", "CATEGORY"])
+      ),
+      activeCategories
+    );
+  }
+
+  function loadedRowColorText(row: any) {
+    const n = {
+      ...(row?.normalized || {}),
+      brandCode: firstNonEmptyText(row?.normalized?.brandCode, row?.brand_code, row?.brandCode),
+      brandName: firstNonEmptyText(row?.normalized?.brandName, row?.brand_name, row?.brandName),
+      colorCode: firstNonEmptyText(row?.normalized?.colorCode, row?.normalized?.supplierColorCode, row?.supplier_color_code, row?.color_code, row?.colorCode),
+      colorName: firstNonEmptyText(row?.normalized?.colorName, row?.color_name, row?.colorName),
+    } as Record<string, unknown>;
+
+    const brandColor = brandColorCodeForNormalized(n) as any;
+    if (brandColor) return cell(brandColor.color_name_ro || brandColor.color_name || n.colorName || n.colorCode);
+
+    const rawColor = String(n.colorName || "").trim();
+    if (rawColor) {
+      const found = colorTypes.find((c) => {
+        const aliases = Array.isArray(c.aliases) ? c.aliases : [];
+        return [c.code, c.name_ro, c.name_hu, c.name_en, c.name_de, ...aliases]
+          .filter(Boolean)
+          .some((x) => sameLoose(x, rawColor));
+      });
+      return cell(found?.name_ro || rawColor);
+    }
+
+    return cell(n.colorCode);
+  }
+
+  function savedReceptionRowWithLatestMeta(row: any) {
+    const raw = savedRowRawObject(row);
+    const existing = row?.normalized || {};
+    const normalized = { ...existing } as Record<string, any>;
+
+    const supplierProductCode = firstNonEmptyText(
+      normalized.supplierProductCode,
+      normalized.productCode,
+      normalized.modelCode,
+      row?.supplier_product_code,
+      row?.supplierProductCode,
+      row?.product_code,
+      row?.model_code,
+      rawValueByHeader({ raw }, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "PRODUCT CODE"])
+    );
+    if (supplierProductCode) normalized.supplierProductCode = supplierProductCode;
+
+    const snCod = firstNonEmptyText(normalized.snCod, normalized.sn_cod, row?.sn_cod, row?.snCod, rawValueByHeader({ raw }, ["SNCOD", "SN COD", "SN_COD"]));
+    if (snCod) {
+      normalized.snCod = snCod;
+      normalized.sn_cod = snCod;
+    }
+
+    const brandCode = firstNonEmptyText(normalized.brandCode, row?.brand_code, row?.brandCode);
+    const brandName = firstNonEmptyText(normalized.brandName, row?.brand_name, row?.brandName);
+    if (brandCode) normalized.brandCode = brandCode;
+    if (brandName) normalized.brandName = brandName;
+
+    const sourceCategory = firstNonEmptyText(
+      normalized.sourceCategory,
+      normalized.sourceCategoryCode,
+      normalized.sourceCategoryName,
+      normalized.categoryCode,
+      normalized.categoryName,
+      row?.category_code,
+      row?.categoryCode,
+      row?.category_name,
+      row?.categoryName,
+      rawValueByHeader({ raw }, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE", "CATEGORIE", "CATEGORY"])
+    );
+    if (sourceCategory) normalized.sourceCategory = sourceCategory;
+
+    const gender = firstNonEmptyText(normalized.gender, row?.gender, row?.gender_code, row?.genderCode, rawValueByHeader({ raw }, ["GEN", "GENDER", "NEM", "SEX"]));
+    if (gender) normalized.gender = gender;
+
+    const colorCode = firstNonEmptyText(
+      normalized.colorCode,
+      normalized.supplierColorCode,
+      row?.supplier_color_code,
+      row?.color_code,
+      row?.colorCode,
+      rawValueByHeader({ raw }, ["COD CULOARE", "COLOR CODE", "COLOUR CODE", "SZÍNKÓD", "SZINKOD"])
+    );
+    if (colorCode) {
+      normalized.colorCode = normalized.colorCode || colorCode;
+      normalized.supplierColorCode = normalized.supplierColorCode || colorCode;
+    }
+
+    const colorName = firstNonEmptyText(normalized.colorName, row?.color_name, row?.colorName, rawValueByHeader({ raw }, ["CULOARE", "COLOR", "COLOUR", "SZÍN", "SZIN"]));
+    if (colorName) normalized.colorName = colorName;
+
+    const titleRo = firstNonEmptyText(normalized.titleRo, normalized.title, row?.title_ro, row?.title, row?.name, rawValueByHeader({ raw }, ["DENUMIRE", "DENUMIRE PRODUS", "PRODUCT NAME", "TITLE", "MEGNEVEZÉS", "MEGNEVEZES"]));
+    if (titleRo) normalized.titleRo = titleRo;
+
+    const qty = firstNonEmptyText(normalized.qty, row?.qty, row?.quantity, rawValueByHeader({ raw }, ["QTY", "QUANTITY", "CANTITATE", "DARAB", "DB"]));
+    if (qty) normalized.qty = qty;
+
+    const buyPrice = firstNonEmptyText(normalized.buyPrice, row?.buy_price, row?.buyPrice, rawValueByHeader({ raw }, ["PRET ACHIZITIE", "PURCHASE PRICE", "BUY PRICE", "VÉTELÁR", "VETELAR"]));
+    if (buyPrice) normalized.buyPrice = buyPrice;
+
+    const sellPrice = firstNonEmptyText(normalized.sellPrice, normalized.sellPriceGrossRon, row?.sell_price_ron, row?.sell_price, row?.sellPrice, rawValueByHeader({ raw }, ["ELADASI AR", "ELADÁSI ÁR", "PRET VANZARE", "SELL PRICE", "PRICE RON"]));
+    if (sellPrice) normalized.sellPrice = sellPrice;
+
+    const size = normalizeAifSizeValue(firstNonEmptyText(
+      normalized.size,
+      normalized.supplierSize,
+      row?.supplier_size,
+      row?.size,
+      rawValueByHeader({ raw }, ["MARIME", "MĂRIME", "SIZE", "MÉRET", "MERET", "TAILLE", "GRÖSSE"])
+    ));
+    if (size) normalized.size = size;
+
+    const rowForMeta = normalizeAifRowSize({
+      ...row,
+      raw,
+      supplier_size: size || row?.supplier_size,
+      normalized,
+    }) as AifParsedRow;
+
+    const mapped = normalizeImportedRowsWithMeta([rowForMeta])[0] || rowForMeta;
+    return { ...row, ...mapped };
   }
 
   function brandValueForRow(n: Record<string, unknown>) {
@@ -887,8 +1128,11 @@ export default function AllInIncoming(_props: Props) {
 
   function normalizeImportedRowsWithMeta(inputRows: AifParsedRow[]) {
     return inputRows.map((row) => {
-      const rowWithCode = applyProductCodeAndBrandColor(row);
+      const rowWithSize = normalizeAifRowSize(row) as AifParsedRow;
+      const rowWithCode = applyProductCodeAndBrandColor(rowWithSize);
       const normalized = { ...(rowWithCode.normalized || {}) } as any;
+      const nextSize = normalizeAifSizeValue(normalized.size || (rowWithCode as any).supplier_size);
+      if (nextSize) normalized.size = nextSize;
       const match = findCategoryForRow({ ...rowWithCode, normalized }, activeCategories);
       if (match) {
         normalized.categoryCode = String(match.code || match.id);
@@ -898,9 +1142,14 @@ export default function AllInIncoming(_props: Props) {
         normalized.categoryCode = "";
         normalized.categoryName = "";
       }
-      return { ...rowWithCode, normalized };
+      return normalizeAifRowSize({ ...rowWithCode, normalized }) as AifParsedRow;
     });
   }
+
+  useEffect(() => {
+    if (!rows.length) return;
+    setRows((current) => normalizeImportedRowsWithMeta(current));
+  }, [activeBrands, activeCategories, activeGenderTypes, brandColorCodes, colorTypes]);
 
   const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
   const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r).length > 0).length, [rows]);
@@ -983,6 +1232,7 @@ export default function AllInIncoming(_props: Props) {
         const normalized = { ...(row.normalized || {}) };
         if (field === "qty") normalized[field] = value === "" ? null : Number(value);
         else if (field === "buyPrice" || field === "sellPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
+        else if (field === "size") normalized[field] = normalizeAifSizeValue(value);
         else normalized[field] = value;
         if (field === "brandCode") {
           const brand = activeBrands.find((b) => (b.code || b.id) === value);
@@ -1008,7 +1258,9 @@ export default function AllInIncoming(_props: Props) {
     if (normalized.sellPrice !== undefined && normalized.sellPrice !== null && normalized.sellPrice !== "") {
       normalized.sellPriceGrossRon = toNumber(normalized.sellPrice);
     }
-    return { ...row, normalized };
+    const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
+    if (normalizedSize) normalized.size = normalizedSize;
+    return normalizeAifRowSize({ ...row, normalized }) as AifParsedRow;
   }
 
   async function saveSalesTvaSettings() {
@@ -1091,13 +1343,38 @@ export default function AllInIncoming(_props: Props) {
     setApprovedRows((current) => ({ ...current, [key]: checked }));
   }
 
+  function selectAllRows() {
+    if (!rows.length) {
+      setMessage("Nincs beolvasott sor kijelöléshez.");
+      return;
+    }
+    const next: Record<string, boolean> = {};
+    let problemCount = 0;
+    rows.forEach((row, index) => {
+      next[rowKey(row, index)] = true;
+      if (aifRowErrors(row).length > 0) problemCount += 1;
+    });
+    setApprovedRows(next);
+    setPreviewLimit((current) => Math.max(current, rows.length));
+    setMessage(
+      problemCount
+        ? `Az összes ${rows.length} sor kijelölve. ${problemCount} sor még javítandó, ezeket mentés előtt rendezni kell.`
+        : `Az összes ${rows.length} sor kijelölve mentésre.`
+    );
+  }
+
   function selectCleanRows() {
+    if (!rows.length) {
+      setMessage("Nincs beolvasott sor kijelöléshez.");
+      return;
+    }
     const next: Record<string, boolean> = {};
     rows.forEach((row, index) => {
       if (aifRowErrors(row).length === 0) next[rowKey(row, index)] = true;
     });
     setApprovedRows(next);
-    setMessage("A hibátlan sorok ki lettek jelölve. Mentés előtt ellenőrizd az előnézetet.");
+    setPreviewLimit((current) => Math.max(current, rows.length));
+    setMessage(`A hibátlan sorok ki lettek jelölve: ${Object.keys(next).length} / ${rows.length}. Mentés előtt ellenőrizd az előnézetet.`);
   }
 
   function clearApprovedRows() {
@@ -1155,11 +1432,13 @@ export default function AllInIncoming(_props: Props) {
     if (showMessage) setMessage("Új üres bevételezés indítva. Előbb válassz beszállítót és töltsd ki a receptiót, majd jöhet kézi sor vagy XLS.");
   }
 
-  function fillReceptionHeader(detail: AifReceptionDetail) {
+  function fillReceptionHeader(detail: AifReceptionDetail, options: { clearDraftRows?: boolean } = {}) {
+    const clearDraftRows = options.clearDraftRows !== false;
     const item = detail.item;
+    const rowsWithSize = (detail.rows || []).map((row: any) => normalizeAifRowSize(row));
     setSelectedReceptionId(item.id);
     setReceptionPickerId(item.id);
-    setLoadedReception(detail);
+    setLoadedReception({ ...detail, rows: rowsWithSize });
     setSupplierId(String(item.supplier_id || ""));
     setLocationId(String(item.target_location_id || ""));
     setInvoiceNumber(String(item.invoice_number || ""));
@@ -1176,11 +1455,13 @@ export default function AllInIncoming(_props: Props) {
     const rawMeta = (item as any).raw_meta || {};
     if (rawMeta.salesTvaRate !== undefined || rawMeta.saleTvaRate !== undefined) setSalesTvaRate(String(rawMeta.salesTvaRate ?? rawMeta.saleTvaRate ?? "21"));
     if (rawMeta.salesPriceIncludesTva !== undefined || rawMeta.sellPriceIncludesTva !== undefined) setSalesPriceIncludesTva(Boolean(rawMeta.salesPriceIncludesTva ?? rawMeta.sellPriceIncludesTva));
-    clearImportedRows();
-    resetManualRowForm();
-    setManualRowsOpen(true);
+    if (clearDraftRows) {
+      clearImportedRows();
+      resetManualRowForm();
+      setManualRowsOpen(true);
+      setWorkbenchOpen(false);
+    }
     setReceptionOpen(true);
-    setWorkbenchOpen(false);
   }
 
   async function loadReceptionIntoWorkspace(id?: string) {
@@ -1192,12 +1473,44 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const detail = await apiAifGetReception(rid);
+      await loadMeta();
+      const [detail] = await Promise.all([
+        apiAifGetReception(rid),
+        loadBatches(),
+        loadReceptions(),
+      ]);
       fillReceptionHeader(detail);
       const remaining = Number((detail.item as any).remaining_rows || 0);
-      setMessage(`Receptió betöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Új sorokat is hozzáadhatsz ehhez a receptióhoz."}`);
+      setMessage(`Receptió és törzsadatok betöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Új sorokat is hozzáadhatsz ehhez a receptióhoz."}`);
     } catch (e: any) {
       setMessage(e?.message || "A receptió betöltése nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+
+  async function reloadOpenedReceptionAndMeta() {
+    const rid = selectedReceptionId || receptionPickerId;
+    if (!rid) {
+      setMessage("Nincs megnyitott receptió az újratöltéshez.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await loadMeta();
+      const [detail] = await Promise.all([
+        apiAifGetReception(rid),
+        loadBatches(),
+        loadReceptions(),
+      ]);
+      fillReceptionHeader(detail, { clearDraftRows: false });
+      setRows((current) => (current.length ? normalizeImportedRowsWithMeta(current) : current));
+      const remaining = Number((detail.item as any).remaining_rows || 0);
+      setMessage(`Receptió lista és törzsadatok újratöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Az újonnan felvett színek, kategóriák és az OSFM méret is frissült a listában."}`);
+    } catch (e: any) {
+      setMessage(e?.message || "A receptió és a törzsadatok újratöltése nem sikerült.");
     } finally {
       setBusy(false);
     }
@@ -1213,6 +1526,7 @@ export default function AllInIncoming(_props: Props) {
     const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
     const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
     const sellPrice = manualSellPrice.trim() ? Number(String(manualSellPrice).replace(",", ".")) : null;
+    const normalizedManualSize = normalizeAifSizeValue(manualSize);
 
     const manualRow: AifParsedRow = {
       rowNo: nextRowNo,
@@ -1227,7 +1541,7 @@ export default function AllInIncoming(_props: Props) {
         gender,
         colorName: manualColorName,
         colorCode: manualColorCode,
-        size: manualSize,
+        size: normalizedManualSize,
         qty,
         buyPrice,
         sellPrice,
@@ -1249,7 +1563,7 @@ export default function AllInIncoming(_props: Props) {
         gender,
         colorName: manualColorName.trim(),
         colorCode: manualColorCode.trim(),
-        size: manualSize.trim(),
+        size: normalizedManualSize,
         qty,
         buyPrice,
         sellPrice,
@@ -1336,8 +1650,23 @@ export default function AllInIncoming(_props: Props) {
   }
 
   async function reloadAll() {
-    await loadMeta();
-    await Promise.all([loadBatches(), loadReceptions()]);
+    setBusy(true);
+    setMessage("");
+    try {
+      await loadMeta();
+      const [, nextReceptions] = await Promise.all([loadBatches(), loadReceptions()]);
+      setRows((current) => (current.length ? normalizeImportedRowsWithMeta(current) : current));
+      const rid = selectedReceptionId || receptionPickerId;
+      if (rid && nextReceptions.some((r) => String(r.id) === String(rid))) {
+        const detail = await apiAifGetReception(rid);
+        fillReceptionHeader(detail, { clearDraftRows: false });
+      }
+      setMessage("Lista és törzsadatok frissítve. Az újonnan felvett színek, kategóriák és az OSFM méret is újraellenőrizve.");
+    } catch (e: any) {
+      setMessage(e?.message || "Az újratöltés nem sikerült.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -1437,9 +1766,7 @@ export default function AllInIncoming(_props: Props) {
       const savedReceptionId = selectedReceptionId || saved.receptionId;
       if (savedReceptionId) {
         const detail = await apiAifGetReception(savedReceptionId);
-        setSelectedReceptionId(savedReceptionId);
-        setReceptionPickerId(savedReceptionId);
-        setLoadedReception(detail);
+        fillReceptionHeader(detail, { clearDraftRows: false });
       }
       setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
     } catch (e: any) {
@@ -2064,10 +2391,10 @@ export default function AllInIncoming(_props: Props) {
                   <td className="px-3 py-2.5 text-white/82">{cell((row as any).sn_cod || row.normalized?.snCod || row.normalized?.sn_cod)}</td>
                   <td className="px-3 py-2.5 text-white">{normValue(row, "titleRo")}</td>
                   <td className="px-3 py-2.5 text-white/82">{normValue(row, "brandName", row.normalized?.brandCode)}</td>
-                  <td className="px-3 py-2.5 text-white/82">{categoryDisplay(row.normalized?.categoryCode || row.normalized?.categoryName, activeCategories)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{loadedRowCategoryText(row)}</td>
                   <td className="px-3 py-2.5 text-white/82">{genderLabel(row.normalized?.gender, activeGenderTypes)}</td>
-                  <td className="px-3 py-2.5 text-white/82">{normValue(row, "colorName")}</td>
-                  <td className="px-3 py-2.5 text-white/82">{cell(row.supplier_size || row.normalized?.size)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{loadedRowColorText(row)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{cell(normalizeAifSizeValue(row.supplier_size || row.normalized?.size))}</td>
                   <td className="px-3 py-2.5 text-right text-white/88">{cell(row.qty || row.normalized?.qty)}</td>
                   <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.buy_price || row.normalized?.buyPrice), loadedReception.item?.currency_code || currencyCode)}</td>
                   <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.sell_price_ron || row.normalized?.sellPriceGrossRon || row.normalized?.sellPrice || row.sell_price), "RON")}</td>
@@ -2084,7 +2411,7 @@ export default function AllInIncoming(_props: Props) {
         <div className="mt-3 flex flex-wrap justify-end gap-2">
           <button className={neutralBtn} onClick={exportOpenedReceptionCheckPdf} disabled={busy || !selectedReceptionId} type="button"><FileText size={14} /> Ellenőrző PDF</button>
           <button className={neutralBtn} onClick={() => (window.location.hash = "#allinreceptions")} type="button">Receptió részletei</button>
-          <button className={neutralBtn} onClick={() => loadReceptionIntoWorkspace(selectedReceptionId)} disabled={busy || !selectedReceptionId} type="button"><RefreshCw size={14} /> Újratöltés</button>
+          <button className={neutralBtn} onClick={reloadOpenedReceptionAndMeta} disabled={busy || !(selectedReceptionId || receptionPickerId)} title="Receptió lista, mentett sorok és törzsadatok frissítése" type="button"><RefreshCw size={14} /> Újratöltés</button>
         </div>
       </section>
     );
@@ -2109,6 +2436,9 @@ export default function AllInIncoming(_props: Props) {
           color: #ffffff !important;
         }
       `}</style>
+      <datalist id="aif-size-options">
+        {AIF_SIZE_OPTIONS.map((size) => <option key={size} value={size} />)}
+      </datalist>
       {salesTvaModalOpen && (
         <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
           <div className={modalCard}>
@@ -2496,6 +2826,9 @@ export default function AllInIncoming(_props: Props) {
               <FileSpreadsheet size={15} /> XLS / XLSX kiválasztás
               <input className="hidden" type="file" accept=".xls,.xlsx,.csv" onChange={onFileChange} />
             </label>
+            <button className={neutralBtn} onClick={selectAllRows} disabled={busy || !rows.length || approvedCount === rows.length} type="button">
+              <CheckCircle size={14} /> Összes sor kijelölése
+            </button>
             <button className={neutralBtn} onClick={selectCleanRows} disabled={busy || !rows.length} type="button">
               <CheckCircle size={14} /> Hibátlan sorok kijelölése
             </button>
@@ -2643,7 +2976,7 @@ export default function AllInIncoming(_props: Props) {
                   <input className={`${input} w-full`} value={manualColorCode} onChange={(e) => setManualColorCode(e.target.value)} placeholder="pl. 001" />
                 </label>
                 <label className={label}>Méret
-                  <input className={`${input} w-full`} value={manualSize} onChange={(e) => setManualSize(e.target.value)} placeholder="pl. M vagy 42" />
+                  <input className={`${input} w-full`} list="aif-size-options" value={manualSize} onChange={(e) => setManualSize(e.target.value)} placeholder="pl. M, 42 vagy OSFM" />
                 </label>
                 <label className={label}>Darab
                   <input className={`${input} w-full`} value={manualQty} onChange={(e) => setManualQty(e.target.value)} placeholder="pl. 1" />
@@ -2798,6 +3131,15 @@ export default function AllInIncoming(_props: Props) {
             title="Soronkénti előnézet"
             right={
               <div className="flex flex-wrap items-center justify-end gap-2">
+                <label className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/16 bg-[#354153] px-2 text-[11px] text-white/82">
+                  <input
+                    className="h-3.5 w-3.5 accent-[#208d8b]"
+                    type="checkbox"
+                    checked={rows.length > 0 && approvedCount === rows.length}
+                    onChange={(e) => (e.target.checked ? selectAllRows() : clearApprovedRows())}
+                  />
+                  Összes sor
+                </label>
                 <span className="text-xs text-white/60">Kompakt, oldalirányú görgetés nélkül</span>
                 {approvedCount > 0 && (
                   <button
@@ -2915,7 +3257,7 @@ export default function AllInIncoming(_props: Props) {
                         </label>
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Méret</span>
-                          <input className={`${compactInput} w-full`} value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} />
+                          <input className={`${compactInput} w-full`} list="aif-size-options" value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} placeholder="OSFM" />
                         </label>
                       </div>
 
