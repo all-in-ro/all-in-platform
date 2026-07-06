@@ -70,7 +70,8 @@ type EditableImportField =
   | "colorCode"
   | "size"
   | "qty"
-  | "buyPrice";
+  | "buyPrice"
+  | "sellPrice";
 
 type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
 type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
@@ -100,6 +101,7 @@ const compactInput = "h-7 rounded-md border border-white/18 bg-[#303b4e] px-2 te
 const compactSelect = `${compactInput} aif-native-select pr-6`;
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
+const SALES_TVA_SETTINGS_KEY = "aifIncomingSalesTvaSettings";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -207,6 +209,8 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
         <td>${pdfEscape(cell(row.supplier_color_code || normalized.colorCode))}</td>
         <td>${pdfEscape(cell(row.supplier_size || normalized.size))}</td>
         <td class="num">${pdfNumber(qty, 0)}</td>
+        <td class="num">${pdfNumber(row.sell_price_ron ?? normalized.sellPriceGrossRon ?? normalized.sellPrice ?? row.sell_price, 2)}</td>
+        <td class="num">${pdfNumber(normalized.salesTvaRate ?? normalized.saleTvaRate ?? item.raw_meta?.salesTvaRate ?? item.tva_rate, 0)}%</td>
         <td class="write"></td>
         <td class="check"></td>
         <td class="write"></td>
@@ -270,7 +274,7 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
       <div class="title">
         <h1>Fisa verificare marfa</h1>
         <div>Data: ${pdfEscape(pdfDate(item.reception_date) || today)}</div>
-        <div class="sub">Document fara preturi</div>
+        <div class="sub">Document cu pret vanzare</div>
       </div>
     </div>
     <div class="meta">
@@ -280,23 +284,25 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
       <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
       <div class="box"><div class="label">Total factura</div><div class="value">${pdfNumber(totalQty, 0)} buc.</div></div>
     </div>
-    <div class="note">Lista pentru verificarea fizica a marfii primite. Nu contine preturi. Completeaza cantitatea receptionata, bifeaza OK sau noteaza problema si observatiile.</div>
+    <div class="note">Lista pentru verificarea fizica a marfii primite. Pretul de vanzare este TVA inclus, in RON. Completeaza cantitatea receptionata, bifeaza OK sau noteaza problema si observatiile.</div>
     <table>
       <colgroup>
         <col style="width: 3%" />
-        <col style="width: 8%" />
-        <col style="width: 19%" />
-        <col style="width: 9%" />
-        <col style="width: 9%" />
         <col style="width: 7%" />
+        <col style="width: 17%" />
         <col style="width: 8%" />
+        <col style="width: 8%" />
+        <col style="width: 5%" />
         <col style="width: 7%" />
         <col style="width: 6%" />
-        <col style="width: 6%" />
+        <col style="width: 5%" />
+        <col style="width: 5%" />
         <col style="width: 7%" />
         <col style="width: 4%" />
-        <col style="width: 8%" />
-        <col style="width: 9%" />
+        <col style="width: 6%" />
+        <col style="width: 4%" />
+        <col style="width: 6%" />
+        <col style="width: 7%" />
       </colgroup>
       <thead>
         <tr>
@@ -310,6 +316,8 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
           <th>Cod culoare</th>
           <th>Marime</th>
           <th>Cant. factura</th>
+          <th>Pret vanzare RON</th>
+          <th>TVA vanz.</th>
           <th>Cant. receptionata</th>
           <th>OK</th>
           <th>Lipsa / problema</th>
@@ -317,10 +325,10 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
         </tr>
       </thead>
       <tbody>
-        ${lines || `<tr><td colspan="14" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
+        ${lines || `<tr><td colspan="16" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
       </tbody>
       <tfoot>
-        <tr class="totals"><td colspan="9">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="4"></td></tr>
+        <tr class="totals"><td colspan="9">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="6"></td></tr>
       </tfoot>
     </table>
     <div class="signatures">
@@ -577,6 +585,10 @@ export default function AllInIncoming(_props: Props) {
   const [exchangeRateToRon, setExchangeRateToRon] = useState("");
   const [tvaMode, setTvaMode] = useState<"" | "without_tva" | "with_tva" | "no_tva">("");
   const [tvaRate, setTvaRate] = useState("");
+  const [salesTvaRate, setSalesTvaRate] = useState("21");
+  const [salesPriceIncludesTva, setSalesPriceIncludesTva] = useState(true);
+  const [salesTvaModalOpen, setSalesTvaModalOpen] = useState(false);
+  const [persistSalesTvaDefault, setPersistSalesTvaDefault] = useState(true);
   const [shippingCost, setShippingCost] = useState("");
   const [invoiceGross, setInvoiceGross] = useState("");
   const [newCurrencyCode, setNewCurrencyCode] = useState("");
@@ -602,6 +614,7 @@ export default function AllInIncoming(_props: Props) {
   const [manualSize, setManualSize] = useState("");
   const [manualQty, setManualQty] = useState("");
   const [manualBuyPrice, setManualBuyPrice] = useState("");
+  const [manualSellPrice, setManualSellPrice] = useState("");
   const [manualRowsOpen, setManualRowsOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -676,6 +689,18 @@ export default function AllInIncoming(_props: Props) {
   }
 
   useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SALES_TVA_SETTINGS_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved?.rate !== undefined && String(saved.rate).trim()) setSalesTvaRate(String(saved.rate));
+      if (saved?.includesTva !== undefined) setSalesPriceIncludesTva(Boolean(saved.includesTva));
+    } catch {
+      // localStorage tiltás esetén a 21%-os alapértelmezett marad.
+    }
+  }, []);
+
+  useEffect(() => {
     if (defaultBrandCode && !brandOptionsForSupplier.some((b) => (b.code || b.id) === defaultBrandCode)) {
       setDefaultBrandCode("");
     }
@@ -703,6 +728,13 @@ export default function AllInIncoming(_props: Props) {
   function applyProductCodeAndBrandColor(row: AifParsedRow) {
     const normalized = { ...(row.normalized || {}) } as any;
     const rawProductCode = rawValueByHeader(row, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code"]);
+    const rawSellPrice = rawValueByHeader(row, [
+      "ELADASI AR", "ELADÁSI ÁR", "PRET VANZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA",
+      "SELL PRICE", "SALE PRICE", "SHOPIFY PRICE", "PRICE RON", "PRET RON"
+    ]);
+    if ((normalized.sellPrice === null || normalized.sellPrice === undefined || normalized.sellPrice === "") && String(rawSellPrice ?? "").trim()) {
+      normalized.sellPrice = toNumber(rawSellPrice);
+    }
     const sourceProductCode = normalized.supplierProductCode || normalized.productCode || normalized.modelCode || rawProductCode;
     const split = splitCodProdus(sourceProductCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
@@ -857,7 +889,7 @@ export default function AllInIncoming(_props: Props) {
         if (rowIndex !== index) return row;
         const normalized = { ...(row.normalized || {}) };
         if (field === "qty") normalized[field] = value === "" ? null : Number(value);
-        else if (field === "buyPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
+        else if (field === "buyPrice" || field === "sellPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
         else normalized[field] = value;
         if (field === "brandCode") {
           const brand = activeBrands.find((b) => (b.code || b.id) === value);
@@ -871,6 +903,31 @@ export default function AllInIncoming(_props: Props) {
         return applyProductCodeAndBrandColor({ ...row, normalized });
       })
     );
+  }
+
+  function rowWithSalesMeta(row: AifParsedRow): AifParsedRow {
+    const normalized = { ...(row.normalized || {}) } as any;
+    const rate = salesTvaRate.trim() ? toNumber(salesTvaRate) : 0;
+    normalized.sellPriceCurrency = "RON";
+    normalized.sellPriceIsRon = true;
+    normalized.sellPriceIncludesTva = salesPriceIncludesTva;
+    normalized.salesTvaRate = rate;
+    if (normalized.sellPrice !== undefined && normalized.sellPrice !== null && normalized.sellPrice !== "") {
+      normalized.sellPriceGrossRon = toNumber(normalized.sellPrice);
+    }
+    return { ...row, normalized };
+  }
+
+  function persistSalesTvaSettings() {
+    if (!persistSalesTvaDefault) return;
+    try {
+      window.localStorage.setItem(SALES_TVA_SETTINGS_KEY, JSON.stringify({
+        rate: salesTvaRate.trim() || "21",
+        includesTva: salesPriceIncludesTva,
+      }));
+    } catch {
+      // nincs teendő
+    }
   }
 
   function applyImportDefaults(scope: "missing" | "approved" | "all") {
@@ -947,6 +1004,7 @@ export default function AllInIncoming(_props: Props) {
     setManualSize("");
     setManualQty("");
     setManualBuyPrice("");
+    setManualSellPrice("");
   }
 
   function clearImportedRows() {
@@ -1001,6 +1059,9 @@ export default function AllInIncoming(_props: Props) {
     setShippingCost(String(item.shipping_cost ?? ""));
     setInvoiceGross(String(item.invoice_gross ?? ""));
     setNote(String((item as any).note || ""));
+    const rawMeta = (item as any).raw_meta || {};
+    if (rawMeta.salesTvaRate !== undefined || rawMeta.saleTvaRate !== undefined) setSalesTvaRate(String(rawMeta.salesTvaRate ?? rawMeta.saleTvaRate ?? "21"));
+    if (rawMeta.salesPriceIncludesTva !== undefined || rawMeta.sellPriceIncludesTva !== undefined) setSalesPriceIncludesTva(Boolean(rawMeta.salesPriceIncludesTva ?? rawMeta.sellPriceIncludesTva));
     clearImportedRows();
     resetManualRowForm();
     setManualRowsOpen(true);
@@ -1037,6 +1098,7 @@ export default function AllInIncoming(_props: Props) {
     const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
     const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
     const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
+    const sellPrice = manualSellPrice.trim() ? Number(String(manualSellPrice).replace(",", ".")) : null;
 
     const manualRow: AifParsedRow = {
       rowNo: nextRowNo,
@@ -1052,6 +1114,11 @@ export default function AllInIncoming(_props: Props) {
         size: manualSize,
         qty,
         buyPrice,
+        sellPrice,
+        sellPriceCurrency: "RON",
+        sellPriceIsRon: true,
+        sellPriceIncludesTva: salesPriceIncludesTva,
+        salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
       },
       normalized: {
         supplierProductCode: manualProductCode.trim(),
@@ -1067,11 +1134,16 @@ export default function AllInIncoming(_props: Props) {
         size: manualSize.trim(),
         qty,
         buyPrice,
+        sellPrice,
+        sellPriceCurrency: "RON",
+        sellPriceIsRon: true,
+        sellPriceIncludesTva: salesPriceIncludesTva,
+        salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
         source: "manual",
       },
     };
 
-    const mappedManualRow = applyProductCodeAndBrandColor(manualRow);
+    const mappedManualRow = rowWithSalesMeta(applyProductCodeAndBrandColor(manualRow));
     const errors = aifRowErrors(mappedManualRow);
     const rowIndex = rows.length;
     const key = rowKey(mappedManualRow, rowIndex);
@@ -1210,6 +1282,7 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
+      persistSalesTvaSettings();
       const payload: any = {
         supplierId,
         targetLocationId: locationId,
@@ -1232,8 +1305,11 @@ export default function AllInIncoming(_props: Props) {
           lineCount: approvedCount,
           totalQty: approvedQty,
           note,
+          salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
+          salesPriceIncludesTva,
+          sellPriceCurrency: "RON",
         },
-        rows: approvedRowList,
+        rows: approvedRowList.map(rowWithSalesMeta),
       };
       if (selectedReceptionId) payload.receptionId = selectedReceptionId;
       const saved = await apiAifCreateFullImportBatch(payload);
@@ -1583,6 +1659,7 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
+      persistSalesTvaSettings();
       const res = await fetch(`/api/aif/receptions/${encodeURIComponent(selectedReceptionId)}/update`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1599,6 +1676,9 @@ export default function AllInIncoming(_props: Props) {
             shippingCost: shippingValue,
             invoiceGross: invoiceGrossValue,
             note,
+            salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
+            salesPriceIncludesTva,
+            sellPriceCurrency: "RON",
           },
         }),
       });
@@ -1639,6 +1719,9 @@ export default function AllInIncoming(_props: Props) {
           title={selectedReceptionId ? "Megnyitott receptió adatai" : "Új receptió adatai"}
           right={
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} type="button">
+                Eladási ár / TVA • {salesTvaRate || "0"}%
+              </button>
               {selectedReceptionId ? (
                 <>
                   <button className={neutralBtn} onClick={exportOpenedReceptionCheckPdf} disabled={busy} type="button">
@@ -1758,6 +1841,16 @@ export default function AllInIncoming(_props: Props) {
             </label>
           </div>
 
+          <div className="rounded-xl border border-[#67d4d1]/28 bg-[#208d8b]/10 px-3 py-2.5 text-sm text-white/82">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eladási ár kezelése</p>
+                <p className="mt-1 text-white">Az eladási ár RON-ban kerül mentésre, {salesPriceIncludesTva ? `TVA-val együtt (${salesTvaRate || "0"}%)` : `TVA nélkül (${salesTvaRate || "0"}%)`}.</p>
+              </div>
+              <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} type="button">Beállítás</button>
+            </div>
+          </div>
+
           <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Mentett sorok</p>
@@ -1812,7 +1905,7 @@ export default function AllInIncoming(_props: Props) {
           <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/58">Darab / érték</p><p className="mt-1 text-sm text-white">{loadedReceptionRowTotals.qty} db • {moneyText(loadedReceptionRowTotals.value, loadedReception.item?.currency_code || currencyCode)}</p></div>
         </div>
         <div className="mt-3 overflow-auto rounded-xl border border-white/14">
-          <table className="min-w-[980px] w-full text-left text-sm">
+          <table className="min-w-[1080px] w-full text-left text-sm">
             <thead className="bg-[#303b4e] text-xs uppercase tracking-[0.07em] text-white/76">
               <tr>
                 <th className="px-3 py-2 font-normal">Állapot</th>
@@ -1825,6 +1918,7 @@ export default function AllInIncoming(_props: Props) {
                 <th className="px-3 py-2 font-normal">Méret</th>
                 <th className="px-3 py-2 text-right font-normal">Darab</th>
                 <th className="px-3 py-2 text-right font-normal">Vételár</th>
+                <th className="px-3 py-2 text-right font-normal">Eladási ár</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
@@ -1840,11 +1934,12 @@ export default function AllInIncoming(_props: Props) {
                   <td className="px-3 py-2.5 text-white/82">{cell(row.supplier_size || row.normalized?.size)}</td>
                   <td className="px-3 py-2.5 text-right text-white/88">{cell(row.qty || row.normalized?.qty)}</td>
                   <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.buy_price || row.normalized?.buyPrice), loadedReception.item?.currency_code || currencyCode)}</td>
+                  <td className="px-3 py-2.5 text-right text-white/88">{moneyText(toNumber(row.sell_price_ron || row.normalized?.sellPriceGrossRon || row.normalized?.sellPrice || row.sell_price), "RON")}</td>
                 </tr>
               ))}
               {!loadedReceptionRows.length && (
                 <tr>
-                  <td className="px-3 py-6 text-center text-white/60" colSpan={10}>Ebben a receptióban még nincs mentett terméksor.</td>
+                  <td className="px-3 py-6 text-center text-white/60" colSpan={11}>Ebben a receptióban még nincs mentett terméksor.</td>
                 </tr>
               )}
             </tbody>
@@ -1878,6 +1973,48 @@ export default function AllInIncoming(_props: Props) {
           color: #ffffff !important;
         }
       `}</style>
+      {salesTvaModalOpen && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
+          <div className={modalCard}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p id="sales-tva-title" className="text-lg font-normal">Eladási ár / TVA beállítás</p>
+                <p className="mt-1 text-sm text-white/70">Az eladási ár RON-ban mentődik a termékhez. Jelenlegi alap: {salesTvaRate || "0"}%.</p>
+              </div>
+              <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(false)} type="button">
+                <X size={14} /> Bezárás
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className={label}>
+                Eladási TVA %
+                <input className={`${input} w-full`} value={salesTvaRate} onChange={(e) => setSalesTvaRate(e.target.value)} placeholder="pl. 21" />
+              </label>
+              <label className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/82">
+                <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={salesPriceIncludesTva} onChange={(e) => setSalesPriceIncludesTva(e.target.checked)} />
+                Az eladási ár TVA-val együtt értendő
+              </label>
+            </div>
+
+            <label className="mt-3 flex items-center gap-2 rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-sm text-white/82">
+              <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={persistSalesTvaDefault} onChange={(e) => setPersistSalesTvaDefault(e.target.checked)} />
+              Mentés alapértelmezettként ehhez a böngészőhöz
+            </label>
+
+            <div className="mt-4 rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/70">
+              A beolvasott és kézi terméksorok eladási ára RON-os, TVA-s végárként kerül tovább a termékadatlapra.
+            </div>
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(false)} type="button">Mégse</button>
+              <button className={primaryBtn} onClick={() => { persistSalesTvaSettings(); setSalesTvaModalOpen(false); setMessage("Eladási TVA beállítás mentve."); }} type="button">
+                <Save size={14} /> Beállítás mentése
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {locationModalOpen && (
         <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="locations-title">
           <div className={modalCard}>
@@ -2353,7 +2490,7 @@ export default function AllInIncoming(_props: Props) {
                   </select>
                 </label>
               </div>
-              <div className="grid gap-3 lg:grid-cols-6">
+              <div className="grid gap-3 lg:grid-cols-7">
                 <label className={label}>Nem
                   <select className={`${selectInput} w-full`} value={manualGender || defaultGender} onChange={(e) => setManualGender(e.target.value)}>
                     <option style={mutedOptionStyle} value="">Nincs</option>
@@ -2374,6 +2511,9 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>Vételár
                   <input className={`${input} w-full`} value={manualBuyPrice} onChange={(e) => setManualBuyPrice(e.target.value)} placeholder="pénznemben" />
+                </label>
+                <label className={label}>Eladási ár RON
+                  <input className={`${input} w-full`} value={manualSellPrice} onChange={(e) => setManualSellPrice(e.target.value)} placeholder="TVA-s ár" />
                 </label>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
@@ -2535,12 +2675,12 @@ export default function AllInIncoming(_props: Props) {
             }
           />
           <div className="mt-3 overflow-hidden rounded-xl border border-white/14">
-            <div className="hidden grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(135px,0.65fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
+            <div className="hidden grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(205px,0.85fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
               <div>Import</div>
               <div>Termék</div>
               <div>Besorolás</div>
               <div>Variáns</div>
-              <div className="text-right">Darab / ár</div>
+              <div className="text-right">Darab / árak</div>
             </div>
             <div className="divide-y divide-white/10">
               {preview.map((r, idx) => {
@@ -2558,7 +2698,7 @@ export default function AllInIncoming(_props: Props) {
                     key={`${r.rowNo || idx}-${idx}`}
                     className={errors.length ? "bg-red-500/10 px-2 py-2 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-2 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-2 hover:bg-[#4b596f]"}
                   >
-                    <div className="grid gap-2 lg:grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(135px,0.65fr)] lg:items-start">
+                    <div className="grid gap-2 lg:grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(205px,0.85fr)] lg:items-start">
                       <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 lg:block lg:bg-transparent lg:border-0 lg:px-0 lg:py-0">
                         <div className="flex items-center gap-2">
                           <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
@@ -2637,7 +2777,7 @@ export default function AllInIncoming(_props: Props) {
                       </div>
 
                       <div className="grid grid-cols-[0.75fr,1fr] gap-1.5 lg:grid-cols-1">
-                        <div className="grid grid-cols-2 gap-1.5">
+                        <div className="grid grid-cols-3 gap-1.5">
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Darab</span>
                             <input className={`${compactInput} w-full text-right`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} />
@@ -2645,6 +2785,10 @@ export default function AllInIncoming(_props: Props) {
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Vételár</span>
                             <input className={`${compactInput} w-full text-right`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} />
+                          </label>
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Eladás RON</span>
+                            <input className={`${compactInput} w-full text-right`} value={valueString(n.sellPrice)} onChange={(e) => updateRowField(globalIndex, "sellPrice", e.target.value)} />
                           </label>
                         </div>
                         <div className="grid gap-1.5">
