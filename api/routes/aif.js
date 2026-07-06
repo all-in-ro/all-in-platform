@@ -36,6 +36,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return null;
   }
 
+
+  const SN_COD_HEADER_ALIASES = [
+    "S/N/COD", "S/N COD", "SN/COD", "SN COD", "S N COD", "S.N.COD", "S.N. COD",
+    "S/N", "SN", "S/N EV HONAP", "S/N ÉV HÓNAP", "SN EV HONAP", "SN ÉV HÓNAP", "SERIE COD", "SERIE/COD", "SERIAL COD", "SERIAL CODE",
+    "COD SERIAL", "COD SERIE", "COD INTERN", "INTERNAL CODE", "INTERNAL ID", "CLIENT CODE"
+  ];
+
+  function snCodFromSource(src = {}, raw = {}) {
+    return emptyToNull(
+      src.snCod || src.sn_cod || src.snCode || src.sn_code || src.serialCode || src.serial_code ||
+      src.internalCode || src.internal_code || src.internalIdentifier || src.internal_identifier ||
+      rawValueByHeaders(raw, SN_COD_HEADER_ALIASES)
+    );
+  }
+
   function splitBrandProductCode(value) {
     const raw = text(value);
     if (!raw) return { fullCode: null, modelCode: null, colorCode: null };
@@ -147,7 +162,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   async function loadSelectedVariantRows(client, ownerKey) {
     return client.query(
-      `SELECT i.*,
+      `SELECT i.*, v.sn_cod,
               s.variant_id AS selected_variant_id,
               s.action,
               s.sort_order,
@@ -155,6 +170,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               s.updated_at AS selected_updated_at
        FROM aif_user_selected_variants s
        LEFT JOIN aif_inventory_summary i ON i.variant_id::text=s.variant_id
+       LEFT JOIN aif_product_variants v ON v.id::text=s.variant_id
        WHERE s.owner_key=$1
        ORDER BY s.sort_order ASC, s.updated_at ASC`,
       [ownerKey]
@@ -373,6 +389,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       colorHex: emptyToNull(src.colorHex || src.color_hex),
       size: emptyToNull(src.size || supplierSize),
       barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
+      snCod: snCodFromSource(src, raw),
+      sn_cod: snCodFromSource(src, raw),
       buyPrice: toMoney(src.buyPrice ?? src.buy_price),
       sellPrice: toMoney(src.sellPrice ?? src.sell_price),
       sellPriceCurrency: emptyToNull(src.sellPriceCurrency || src.sell_price_currency || src.salePriceCurrency || src.sale_price_currency || "RON"),
@@ -558,6 +576,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(
         `UPDATE aif_product_variants SET
            barcode = COALESCE($2, barcode),
+           sn_cod = COALESCE($11, sn_cod),
            color_code = NULLIF($3, ''),
            color_name = NULLIF($4, ''),
            color_hex = COALESCE($5, color_hex),
@@ -580,6 +599,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.compareAtPrice,
           normalized.weightGrams,
           normalized.imageUrl,
+          normalized.snCod || normalized.sn_cod,
         ]
       );
       return id;
@@ -588,9 +608,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const inserted = await client.query(
       `INSERT INTO aif_product_variants (
          model_id, barcode, color_code, color_name, color_hex, size,
-         buy_price, sell_price, compare_at_price, weight_grams, image_url, status
+         buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, status
        )
-       VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,'active')
+       VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,'active')
        RETURNING id`,
       [
         modelId,
@@ -604,6 +624,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         normalized.compareAtPrice,
         normalized.weightGrams,
         normalized.imageUrl,
+        normalized.snCod || normalized.sn_cod,
       ]
     );
     return inserted.rows[0].id;
@@ -1763,7 +1784,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT
            b.id AS batch_id, b.status AS batch_status, b.source_file_name,
            rw.row_no, rw.status AS row_status, rw.qty, rw.buy_price, rw.buy_price_ron,
-           rw.sell_price, rw.sell_price_ron, rw.supplier_product_code, rw.supplier_variant_code,
+           rw.sell_price, rw.sell_price_ron, rw.sn_cod, rw.supplier_product_code, rw.supplier_variant_code,
            rw.supplier_color_code, rw.supplier_size, rw.normalized
          FROM aif_import_batches b
          LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
@@ -1785,7 +1806,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       lines.push("");
       lines.push(csvLine([
         "Sor", "Allapot", "Termekkod", "Variant kod", "Nev", "Marka", "Kategoria", "Nem",
-        "Szin", "Szinkod", "Meret", "Darab", "Vetelar", "Vetelar RON", "Eladasi ar", "Eladasi ar RON", "Forras fajl"
+        "Szin", "Szinkod", "Meret", "S/N/COD", "Darab", "Vetelar", "Vetelar RON", "Eladasi ar", "Eladasi ar RON", "Forras fajl"
       ]));
       for (const x of rows.rows) {
         const n = x.normalized || {};
@@ -1801,6 +1822,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           n.colorName || "",
           x.supplier_color_code || n.colorCode || "",
           x.supplier_size || n.size || "",
+          x.sn_cod || n.snCod || n.sn_cod || "",
           x.qty || n.qty || "",
           x.buy_price || "",
           x.buy_price_ron || "",
@@ -1868,7 +1890,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const rows = await pool.query(
         `SELECT rw.id, rw.batch_id, rw.row_no, rw.raw, rw.normalized, rw.status, rw.error_messages,
                 rw.variant_id, rw.supplier_product_code, rw.supplier_variant_code, rw.supplier_color_code,
-                rw.supplier_size, rw.qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron
+                rw.supplier_size, rw.qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron, rw.sn_cod
          FROM aif_import_batches b
          JOIN aif_import_rows rw ON rw.batch_id=b.id
          WHERE b.reception_id=$1
@@ -3276,9 +3298,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `INSERT INTO aif_import_rows (
              batch_id, row_no, raw, normalized, status, error_messages,
              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-             qty, buy_price, buy_price_ron, sell_price, sell_price_ron
+             qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
            )
-           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             batchId,
             nr.rowNo,
@@ -3295,6 +3317,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             buyPriceRon,
             nr.normalized.sellPrice,
             sellPriceRon,
+            nr.normalized.snCod || nr.normalized.sn_cod,
           ]
         );
       }
@@ -3482,7 +3505,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rows = await pool.query(
       `SELECT id, row_no, raw, normalized, status, error_messages, variant_id,
               supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-              qty, buy_price, buy_price_ron, sell_price, sell_price_ron
+              qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
        FROM aif_import_rows
        WHERE batch_id=$1
        ORDER BY row_no ASC`,
@@ -3547,9 +3570,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `INSERT INTO aif_import_rows (
              batch_id, row_no, raw, normalized, status, error_messages,
              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-             qty, buy_price, buy_price_ron, sell_price, sell_price_ron
+             qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
            )
-           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             batchId,
             nr.rowNo,
@@ -3566,6 +3589,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             buyPriceRon,
             nr.normalized.sellPrice,
             sellPriceRon,
+            nr.normalized.snCod || nr.normalized.sn_cod,
           ]
         );
       }
@@ -3914,6 +3938,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            supplier_variant_code=$6,
            supplier_color_code=$7,
            supplier_size=$8,
+           sn_cod=$14,
            qty=$9,
            buy_price=$10,
            buy_price_ron=$11,
@@ -3935,6 +3960,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           buyPriceRon,
           nr.normalized.sellPrice,
           sellPriceRon,
+          nr.normalized.snCod || nr.normalized.sn_cod,
         ]
       );
 
@@ -3942,6 +3968,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query(
           `UPDATE aif_product_variants SET
              barcode=COALESCE($2, barcode),
+             sn_cod=COALESCE($9, sn_cod),
              color_code=COALESCE($3, color_code),
              color_name=COALESCE($4, color_name),
              size=COALESCE($5, size),
@@ -3959,6 +3986,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.buyPrice,
             nr.normalized.sellPrice,
             nr.normalized.compareAtPrice,
+            nr.normalized.snCod || nr.normalized.sn_cod,
           ]
         );
         if (nr.normalized.titleRo) {
@@ -4336,7 +4364,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       const variant = await pool.query(
         `SELECT
-           v.id, v.model_id, v.internal_sku, v.barcode, v.color_code, v.color_name, v.color_hex,
+           v.id, v.model_id, v.internal_sku, v.barcode, v.sn_cod, v.color_code, v.color_name, v.color_hex,
            v.size, v.buy_price, v.sell_price, v.compare_at_price, v.weight_grams, v.image_url,
            v.images, v.attributes, v.status, v.created_at, v.updated_at,
            m.model_code, m.title_ro, m.title_hu, m.description_ro, m.gender, m.product_type,
@@ -4435,6 +4463,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       };
 
       if (body.barcode !== undefined) addVariant("barcode", emptyToNull(body.barcode));
+      if (body.snCod !== undefined || body.sn_cod !== undefined) addVariant("sn_cod", emptyToNull(body.snCod ?? body.sn_cod));
       if (body.colorCode !== undefined || body.color_code !== undefined) addVariant("color_code", emptyToNull(body.colorCode ?? body.color_code));
       if (body.colorName !== undefined || body.color_name !== undefined) {
         const normalizedColor = await normalizeColorName(client, body.colorName ?? body.color_name);
@@ -4797,21 +4826,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.get("/inventory", requireAuthed, async (req, res) => {
     const search = text(req.query.search || req.query.q);
+    const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
     const args = [];
     const where = [];
     if (search) {
       args.push(`%${search}%`);
       where.push(`(
-        title_ro ILIKE $1 OR internal_sku ILIKE $1 OR barcode ILIKE $1 OR
-        model_code ILIKE $1 OR brand_name ILIKE $1 OR color_name ILIKE $1 OR size ILIKE $1
+        i.title_ro ILIKE $1 OR i.internal_sku ILIKE $1 OR i.barcode ILIKE $1 OR COALESCE(v.sn_cod,'') ILIKE $1 OR
+        i.model_code ILIKE $1 OR i.brand_name ILIKE $1 OR i.color_name ILIKE $1 OR i.size ILIKE $1
       )`);
+    }
+    if (snCod) {
+      args.push(`%${snCod}%`);
+      where.push(`COALESCE(v.sn_cod,'') ILIKE $${args.length}`);
     }
     args.push(limit);
     const r = await pool.query(
-      `SELECT * FROM aif_inventory_summary
+      `SELECT i.*, v.sn_cod
+       FROM aif_inventory_summary i
+       LEFT JOIN aif_product_variants v ON v.id=i.variant_id
        ${where.length ? "WHERE " + where.join(" AND ") : ""}
-       ORDER BY brand_name ASC NULLS LAST, title_ro ASC, color_name ASC NULLS LAST, size ASC
+       ORDER BY i.brand_name ASC NULLS LAST, i.title_ro ASC, i.color_name ASC NULLS LAST, i.size ASC
        LIMIT $${args.length}`,
       args
     );
@@ -4847,6 +4883,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       OR COALESCE(v.color_name,'') ILIKE ${p}
       OR COALESCE(v.size,'') ILIKE ${p}
       OR COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku, '') ILIKE ${p}
+      OR COALESCE(v.sn_cod,'') ILIKE ${p}
       OR COALESCE(v.internal_sku,'') ILIKE ${p}
     )`;
   }
@@ -4869,7 +4906,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (searchWhere) where.push(searchWhere);
     const r = await pool.query(
       `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
-              v.id AS variant_id, v.internal_sku, v.barcode,
+              v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
               COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
               v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
               v.buy_price, v.sell_price,
@@ -5292,7 +5329,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          ((icl.counted_qty - icl.expected_qty) * COALESCE(icl.sell_price,0))::numeric(14,2) AS diff_sell_value,
          icl.note, icl.raw, icl.created_at, icl.updated_at,
          l.id AS location_id, l.code AS location_code, l.name AS location_name,
-         v.internal_sku, v.barcode, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+         v.internal_sku, v.barcode, v.sn_cod, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
          v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
          m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
          b.name AS brand_name, b.code AS brand_code,
@@ -5541,7 +5578,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const lines = await client.query(
-        `SELECT icl.*, m.title_ro, v.size, v.color_name, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+        `SELECT icl.*, m.title_ro, v.size, v.color_name, v.sn_cod, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
                 COALESCE(s.qty,0) AS current_qty, COALESCE(s.reserved_qty,0) AS current_reserved_qty
          FROM aif_inventory_count_lines icl
          JOIN aif_product_variants v ON v.id=icl.variant_id
@@ -5604,6 +5641,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               inventoryCountLineId: line.id,
               title: line.title_ro,
               barcode: line.display_barcode,
+              snCod: line.sn_cod,
               colorName: line.color_name,
               size: line.size,
               locationCode: item.location_code,
