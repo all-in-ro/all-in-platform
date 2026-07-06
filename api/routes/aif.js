@@ -3982,6 +3982,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     actor = "system",
     raw = {},
     fallbackSourceType = "manual_stock_edit",
+    sourceId = null,
   }) {
     const insertOnce = async (safeSourceType, safeSourcePrefix) => {
       await client.query(
@@ -3993,7 +3994,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [
           movementType,
           safeSourceType,
-          stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId),
+          sourceId || stockMovementSourceId(safeSourcePrefix || safeSourceType || "stock", variantId, locationId),
           locationId,
           variantId,
           qtyDelta,
@@ -4680,6 +4681,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               v.id AS variant_id, v.internal_sku, v.barcode,
               COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
               v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
+              v.buy_price, v.sell_price,
               m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
               b.name AS brand_name, b.code AS brand_code,
               c.name_ro AS category_name_ro, c.code AS category_code,
@@ -4692,181 +4694,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
     res.json({ items: r.rows });
   });
-
-  async function handleStockTransfer(req, res) {
-    const body = req.body || {};
-    const rowsInput = Array.isArray(body.rows)
-      ? body.rows
-      : Array.isArray(body.lines)
-        ? body.lines
-        : Array.isArray(body.items)
-          ? body.items
-          : [];
-    const note = emptyToNull(body.note);
-    const title = emptyToNull(body.title || body.documentTitle || body.document_title);
-    if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletmozgatási sor." });
-
-    const client = await pool.connect();
-    const transferId = stockMovementSourceId("transfer", "batch", "stock");
-    const actor = actorFrom(req);
-    const movedItems = [];
-    let movedQty = 0;
-    let movementRows = 0;
-
-    try {
-      await client.query("BEGIN");
-      try { await client.query("SELECT set_config('aif.actor', $1, true)", [actor]); } catch {}
-
-      for (let index = 0; index < rowsInput.length; index++) {
-        const input = rowsInput[index] || {};
-        const variantInput = text(input.variantId || input.variant_id || input.variant || input.id);
-        const fromInput = text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id);
-        const toInput = text(input.toLocationId || input.to_location_id || input.toLocationCode || input.to_location_code || input.to || input.targetLocationId || input.target_location_id);
-        const qty = toInt(input.qty ?? input.quantity ?? input.count);
-
-        if (!variantInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a termék.`), { statusCode: 400 });
-        if (!fromInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a forrás helyszín.`), { statusCode: 400 });
-        if (!toInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a cél helyszín.`), { statusCode: 400 });
-        if (qty === null || qty <= 0) throw Object.assign(new Error(`A(z) ${index + 1}. sor mennyisége érvénytelen.`), { statusCode: 400 });
-
-        const variant = await client.query(
-          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status,
-                  m.title_ro, b.name AS brand_name
-           FROM aif_product_variants v
-           JOIN aif_product_models m ON m.id=v.model_id
-           LEFT JOIN aif_brands b ON b.id=m.brand_id
-           WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
-           FOR UPDATE OF v`,
-          [variantInput]
-        );
-        if (!variant.rowCount) throw Object.assign(new Error(`A(z) ${index + 1}. sor terméke nem található.`), { statusCode: 404 });
-        const variantRow = variant.rows[0];
-        if (String(variantRow.status || "") === "archived") throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: archivált termék nem mozgatható.`), { statusCode: 400 });
-
-        const fromLocation = await findByIdOrCode(client, "aif_locations", fromInput);
-        const toLocation = await findByIdOrCode(client, "aif_locations", toInput);
-        if (!fromLocation || fromLocation.is_active === false) throw Object.assign(new Error(`Érvénytelen vagy inaktív forrás helyszín: ${fromInput}`), { statusCode: 400 });
-        if (!toLocation || toLocation.is_active === false) throw Object.assign(new Error(`Érvénytelen vagy inaktív cél helyszín: ${toInput}`), { statusCode: 400 });
-        if (String(fromLocation.id) === String(toLocation.id)) throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: a forrás és a cél nem lehet ugyanaz.`), { statusCode: 400 });
-
-        const sourceStock = await client.query(
-          `SELECT qty, reserved_qty
-           FROM aif_stock
-           WHERE location_id=$1 AND variant_id=$2
-           FOR UPDATE`,
-          [fromLocation.id, variantRow.id]
-        );
-        if (!sourceStock.rowCount) throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: nincs készlet a forráshelyen.`), { statusCode: 400 });
-        const sourceBefore = Number(sourceStock.rows[0].qty || 0);
-        const sourceReserved = Number(sourceStock.rows[0].reserved_qty || 0);
-        const sourceAvailable = sourceBefore - sourceReserved;
-        if (qty > sourceAvailable) {
-          throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: ${fromLocation.name || fromLocation.code} helyen csak ${Math.max(0, sourceAvailable)} db elérhető.`), { statusCode: 400 });
-        }
-        const sourceAfter = sourceBefore - qty;
-
-        const targetStock = await client.query(
-          `SELECT qty, reserved_qty
-           FROM aif_stock
-           WHERE location_id=$1 AND variant_id=$2
-           FOR UPDATE`,
-          [toLocation.id, variantRow.id]
-        );
-        const targetBefore = targetStock.rowCount ? Number(targetStock.rows[0].qty || 0) : 0;
-        const targetReserved = targetStock.rowCount ? Number(targetStock.rows[0].reserved_qty || 0) : 0;
-        const targetAfter = targetBefore + qty;
-
-        await client.query(
-          `UPDATE aif_stock
-           SET qty=$3, reserved_qty=$4, updated_at=now()
-           WHERE location_id=$1 AND variant_id=$2`,
-          [fromLocation.id, variantRow.id, sourceAfter, sourceReserved]
-        );
-
-        await client.query(
-          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
-           VALUES ($1,$2,$3,$4,now())
-           ON CONFLICT (location_id, variant_id)
-           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
-          [toLocation.id, variantRow.id, targetAfter, targetReserved]
-        );
-
-        const rawBase = {
-          reason: "stock_transfer",
-          transferId,
-          lineNo: index + 1,
-          note,
-          title,
-          productTitle: variantRow.title_ro,
-          barcode: variantRow.barcode,
-          fromLocationId: fromLocation.id,
-          fromLocationCode: fromLocation.code,
-          fromLocationName: fromLocation.name,
-          toLocationId: toLocation.id,
-          toLocationCode: toLocation.code,
-          toLocationName: toLocation.name,
-          qty,
-        };
-
-        const outLogged = await insertStockMovementSafe(client, {
-          movementType: "manual_adjustment",
-          sourceType: "stock_transfer",
-          sourcePrefix: "transfer_out",
-          fallbackSourceType: "manual_stock_edit",
-          locationId: fromLocation.id,
-          variantId: variantRow.id,
-          qtyDelta: -qty,
-          qtyBefore: sourceBefore,
-          qtyAfter: sourceAfter,
-          actor,
-          raw: { ...rawBase, direction: "out", side: "source" },
-        });
-        if (outLogged) movementRows++;
-
-        const inLogged = await insertStockMovementSafe(client, {
-          movementType: "incoming",
-          sourceType: "stock_transfer",
-          sourcePrefix: "transfer_in",
-          fallbackSourceType: "manual_stock_edit",
-          locationId: toLocation.id,
-          variantId: variantRow.id,
-          qtyDelta: qty,
-          qtyBefore: targetBefore,
-          qtyAfter: targetAfter,
-          actor,
-          raw: { ...rawBase, direction: "in", side: "target" },
-        });
-        if (inLogged) movementRows++;
-
-        movedQty += qty;
-        movedItems.push({
-          variantId: variantRow.id,
-          title: variantRow.title_ro,
-          barcode: variantRow.barcode,
-          qty,
-          fromLocation: fromLocation.name || fromLocation.code,
-          toLocation: toLocation.name || toLocation.code,
-          sourceBefore,
-          sourceAfter,
-          targetBefore,
-          targetAfter,
-        });
-      }
-
-      await client.query("COMMIT");
-      res.json({ ok: true, transferId, title, lineCount: movedItems.length, movedRows: movedItems.length, movedLines: movedItems.length, movedQty, totalQty: movedQty, movements: movementRows, items: movedItems });
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF stock transfer failed", e);
-      const status = Number(e?.statusCode || 500);
-      res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A készletmozgatás mentése nem sikerült.", code: e?.code || null });
-    } finally {
-      client.release();
-    }
-  }
-
-  router.post("/stock-transfers", requireAuthed, handleStockTransfer);
-  router.post("/stock/transfers", requireAuthed, handleStockTransfer);
 
   async function listStockMovements(req, res) {
     const location = text(req.query.location || req.query.locationCode || req.query.location_id);
@@ -5004,6 +4831,478 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.delete("/stock-movements/:id", requireAuthed, deleteStockMovement);
   router.delete("/stock/movements/:id", requireAuthed, deleteStockMovement);
+
+
+  function inventoryCountStatus(value) {
+    const status = normCode(value || "");
+    return ["draft", "counting", "review", "committed", "cancelled"].includes(status) ? status : null;
+  }
+
+  function inventoryCountCode() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `INV-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  }
+
+  async function ensureInventoryCountTables(client) {
+    await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+    await client.query(`CREATE TABLE IF NOT EXISTS aif_inventory_counts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      code text NOT NULL UNIQUE,
+      title text NOT NULL,
+      location_id uuid NOT NULL REFERENCES aif_locations(id),
+      status text NOT NULL DEFAULT 'draft',
+      started_at timestamptz NOT NULL DEFAULT now(),
+      counted_at timestamptz NULL,
+      committed_at timestamptz NULL,
+      actor text NULL,
+      note text NULL,
+      raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (status IN ('draft','counting','review','committed','cancelled'))
+    )`);
+    await client.query(`CREATE TABLE IF NOT EXISTS aif_inventory_count_lines (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      count_id uuid NOT NULL REFERENCES aif_inventory_counts(id) ON DELETE CASCADE,
+      variant_id uuid NOT NULL REFERENCES aif_product_variants(id),
+      expected_qty numeric NOT NULL DEFAULT 0,
+      expected_reserved_qty numeric NOT NULL DEFAULT 0,
+      counted_qty numeric NULL,
+      buy_price numeric NULL,
+      sell_price numeric NULL,
+      note text NULL,
+      raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (count_id, variant_id)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_inventory_counts_location_status_idx ON aif_inventory_counts (location_id, status, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_inventory_counts_created_idx ON aif_inventory_counts (created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_inventory_count_lines_count_idx ON aif_inventory_count_lines (count_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_inventory_count_lines_variant_idx ON aif_inventory_count_lines (variant_id)`);
+  }
+
+  function inventoryCountSummarySql(whereSql = "") {
+    return `SELECT
+       ic.id, ic.code, ic.title, ic.location_id, ic.status, ic.started_at, ic.counted_at,
+       ic.committed_at, ic.actor, ic.note, ic.raw, ic.created_at, ic.updated_at,
+       l.code AS location_code, l.name AS location_name, l.location_type,
+       count(icl.id)::int AS line_count,
+       count(icl.id) FILTER (WHERE icl.counted_qty IS NOT NULL)::int AS counted_lines,
+       COALESCE(sum(icl.expected_qty),0)::numeric AS expected_qty,
+       COALESCE(sum(icl.counted_qty) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS counted_qty,
+       COALESCE(sum((icl.counted_qty - icl.expected_qty)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS diff_qty,
+       COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS missing_qty,
+       COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric AS extra_qty,
+       COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0) * COALESCE(icl.sell_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS missing_sell_value,
+       COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0) * COALESCE(icl.sell_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS extra_sell_value,
+       COALESCE(sum((icl.counted_qty - icl.expected_qty) * COALESCE(icl.sell_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS diff_sell_value,
+       COALESCE(sum(GREATEST(icl.expected_qty - icl.counted_qty, 0) * COALESCE(icl.buy_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS missing_buy_value,
+       COALESCE(sum(GREATEST(icl.counted_qty - icl.expected_qty, 0) * COALESCE(icl.buy_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS extra_buy_value,
+       COALESCE(sum((icl.counted_qty - icl.expected_qty) * COALESCE(icl.buy_price,0)) FILTER (WHERE icl.counted_qty IS NOT NULL),0)::numeric(14,2) AS diff_buy_value
+     FROM aif_inventory_counts ic
+     JOIN aif_locations l ON l.id=ic.location_id
+     LEFT JOIN aif_inventory_count_lines icl ON icl.count_id=ic.id
+     ${whereSql}
+     GROUP BY ic.id, l.id`;
+  }
+
+  async function loadInventoryCountSummary(client, id) {
+    const r = await client.query(`${inventoryCountSummarySql("WHERE ic.id::text=$1")} LIMIT 1`, [text(id)]);
+    return r.rows[0] || null;
+  }
+
+  async function loadInventoryCountLines(client, countId) {
+    const r = await client.query(
+      `SELECT
+         icl.id, icl.count_id, icl.variant_id, icl.expected_qty, icl.expected_reserved_qty,
+         icl.counted_qty, (icl.counted_qty - icl.expected_qty) AS diff_qty,
+         GREATEST(icl.expected_qty - icl.counted_qty, 0) AS missing_qty,
+         GREATEST(icl.counted_qty - icl.expected_qty, 0) AS extra_qty,
+         icl.buy_price, icl.sell_price,
+         ((icl.counted_qty - icl.expected_qty) * COALESCE(icl.buy_price,0))::numeric(14,2) AS diff_buy_value,
+         ((icl.counted_qty - icl.expected_qty) * COALESCE(icl.sell_price,0))::numeric(14,2) AS diff_sell_value,
+         icl.note, icl.raw, icl.created_at, icl.updated_at,
+         l.id AS location_id, l.code AS location_code, l.name AS location_name,
+         v.internal_sku, v.barcode, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+         v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
+         m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
+         b.name AS brand_name, b.code AS brand_code,
+         cat.name_ro AS category_name_ro, cat.code AS category_code,
+         COALESCE(s.qty,0) AS current_qty,
+         COALESCE(s.reserved_qty,0) AS current_reserved_qty,
+         COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) AS current_available_qty
+       FROM aif_inventory_count_lines icl
+       JOIN aif_inventory_counts ic ON ic.id=icl.count_id
+       JOIN aif_locations l ON l.id=ic.location_id
+       JOIN aif_product_variants v ON v.id=icl.variant_id
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories cat ON cat.id=m.category_id
+       LEFT JOIN aif_stock s ON s.location_id=ic.location_id AND s.variant_id=icl.variant_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_barcode, supplier_sku
+         FROM aif_variant_supplier_codes sc
+         WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+         ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE icl.count_id=$1
+       ORDER BY b.name ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC`,
+      [countId]
+    );
+    return r.rows;
+  }
+
+  async function sendInventoryCountDetail(client, res, id) {
+    const item = await loadInventoryCountSummary(client, id);
+    if (!item) return res.status(404).json({ error: "Leltár nem található." });
+    const lines = await loadInventoryCountLines(client, item.id);
+    res.json({ item, lines, totals: item });
+  }
+
+  router.get("/inventory-counts", requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureInventoryCountTables(client);
+      const location = text(req.query.location || req.query.locationId || req.query.location_id);
+      const status = inventoryCountStatus(req.query.status);
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit || 30)));
+      const args = [];
+      const where = [];
+      if (location) {
+        args.push(location);
+        where.push(`(ic.location_id::text=$${args.length} OR l.code=$${args.length})`);
+      }
+      if (status) {
+        args.push(status);
+        where.push(`ic.status=$${args.length}`);
+      }
+      args.push(limit);
+      const r = await client.query(
+        `${inventoryCountSummarySql(where.length ? "WHERE " + where.join(" AND ") : "")}
+         ORDER BY ic.created_at DESC
+         LIMIT $${args.length}`,
+        args
+      );
+      res.json({ items: r.rows });
+    } catch (e) {
+      console.error("AIF inventory counts list failed", e);
+      res.status(500).json({ error: e?.message || "A leltárak betöltése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/inventory-counts", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const locationInput = body.locationId || body.location_id || body.locationCode || body.location_code || body.location;
+    const title = text(body.title || `Leltár ${new Date().toLocaleDateString("hu-HU")}`);
+    const note = emptyToNull(body.note);
+    const search = text(body.search || body.q);
+    const includeZero = ["1", "true", "yes"].includes(text(body.includeZero || body.include_zero).toLowerCase());
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureInventoryCountTables(client);
+      const location = await findByIdOrCode(client, "aif_locations", locationInput);
+      if (!location || location.is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Érvénytelen vagy inaktív üzlet / helyszín." });
+      }
+
+      const countRes = await client.query(
+        `INSERT INTO aif_inventory_counts (code, title, location_id, status, actor, note, raw)
+         VALUES ($1,$2,$3,'draft',$4,$5,$6::jsonb)
+         RETURNING id`,
+        [inventoryCountCode(), title || "Leltár", location.id, actorFrom(req), note, JSON.stringify({ search: search || null, includeZero })]
+      );
+      const countId = countRes.rows[0].id;
+
+      const args = [location.id];
+      const where = [`s.location_id=$1`, `COALESCE(v.status,'active') <> 'archived'`];
+      if (!includeZero) where.push(`(COALESCE(s.qty,0) <> 0 OR COALESCE(s.reserved_qty,0) <> 0)`);
+      const searchWhere = aifStockProductSearchWhere(search, args);
+      if (searchWhere) where.push(searchWhere);
+
+      const stockRows = await client.query(
+        `SELECT s.variant_id, COALESCE(s.qty,0) AS qty, COALESCE(s.reserved_qty,0) AS reserved_qty,
+                v.buy_price, v.sell_price
+         FROM aif_stock s
+         ${aifStockProductJoinSql("s")}
+         WHERE ${where.join(" AND ")}
+         ORDER BY b.name ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC`,
+        args
+      );
+
+      if (!stockRows.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "A kiválasztott helyszínen nincs leltározható készlet a szűrőkkel." });
+      }
+
+      for (const row of stockRows.rows) {
+        await client.query(
+          `INSERT INTO aif_inventory_count_lines (count_id, variant_id, expected_qty, expected_reserved_qty, buy_price, sell_price, raw)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+           ON CONFLICT (count_id, variant_id) DO NOTHING`,
+          [countId, row.variant_id, row.qty, row.reserved_qty, row.buy_price, row.sell_price, JSON.stringify({ snapshot: true })]
+        );
+      }
+
+      await client.query("COMMIT");
+      return sendInventoryCountDetail(client, res, countId);
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF inventory count create failed", e);
+      res.status(500).json({ error: e?.message || "A leltár indítása nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/inventory-counts/:id", requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureInventoryCountTables(client);
+      return sendInventoryCountDetail(client, res, req.params.id);
+    } catch (e) {
+      console.error("AIF inventory count detail failed", e);
+      res.status(500).json({ error: e?.message || "A leltár betöltése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch("/inventory-counts/:id/lines", requireAuthed, async (req, res) => {
+    const countId = text(req.params.id);
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+    if (!lines.length) return res.status(400).json({ error: "Nincs menthető leltársor." });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureInventoryCountTables(client);
+      const count = await client.query(`SELECT id, status FROM aif_inventory_counts WHERE id::text=$1 FOR UPDATE`, [countId]);
+      if (!count.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Leltár nem található." });
+      }
+      if (["committed", "cancelled"].includes(count.rows[0].status)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Lezárt vagy törölt leltár nem módosítható." });
+      }
+
+      let saved = 0;
+      for (const input of lines) {
+        const lineId = text(input.lineId || input.line_id || input.id);
+        const variantId = text(input.variantId || input.variant_id);
+        const rawQty = input.countedQty ?? input.counted_qty;
+        const countedQty = rawQty === null || rawQty === undefined || String(rawQty).trim() === "" ? null : toInt(rawQty);
+        const note = emptyToNull(input.note);
+        if (countedQty !== null && countedQty < 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "A talált darabszám nem lehet negatív." });
+        }
+        const args = [count.rows[0].id, countedQty, note];
+        let where = "count_id=$1";
+        if (lineId) {
+          args.push(lineId);
+          where += ` AND id::text=$${args.length}`;
+        } else if (variantId) {
+          args.push(variantId);
+          where += ` AND variant_id::text=$${args.length}`;
+        } else {
+          continue;
+        }
+        const r = await client.query(
+          `UPDATE aif_inventory_count_lines
+           SET counted_qty=$2, note=$3, updated_at=now()
+           WHERE ${where}`,
+          args
+        );
+        saved += r.rowCount || 0;
+      }
+
+      await client.query(
+        `UPDATE aif_inventory_counts
+         SET status=CASE WHEN status='draft' THEN 'counting' ELSE status END,
+             counted_at=now(), updated_at=now()
+         WHERE id=$1`,
+        [count.rows[0].id]
+      );
+      await client.query("COMMIT");
+      const detail = await loadInventoryCountSummary(client, count.rows[0].id);
+      const detailLines = await loadInventoryCountLines(client, count.rows[0].id);
+      res.json({ ok: true, saved, item: detail, lines: detailLines, totals: detail });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF inventory count lines save failed", e);
+      res.status(500).json({ error: e?.message || "A leltársorok mentése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/inventory-counts/:id/commit", requireAuthed, async (req, res) => {
+    const countId = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureInventoryCountTables(client);
+      const count = await client.query(
+        `SELECT ic.*, l.code AS location_code, l.name AS location_name
+         FROM aif_inventory_counts ic
+         JOIN aif_locations l ON l.id=ic.location_id
+         WHERE ic.id::text=$1
+         FOR UPDATE OF ic`,
+        [countId]
+      );
+      if (!count.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Leltár nem található." });
+      }
+      const item = count.rows[0];
+      if (["committed", "cancelled"].includes(item.status)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Ez a leltár már lezárt vagy törölt." });
+      }
+
+      const missing = await client.query(`SELECT count(*)::int AS c FROM aif_inventory_count_lines WHERE count_id=$1 AND counted_qty IS NULL`, [item.id]);
+      if (Number(missing.rows[0]?.c || 0) > 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: `Még ${missing.rows[0].c} sor nincs megszámolva. Bevezetés előtt minden sorhoz kell talált darabszám.` });
+      }
+
+      const lines = await client.query(
+        `SELECT icl.*, m.title_ro, v.size, v.color_name, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+                COALESCE(s.qty,0) AS current_qty, COALESCE(s.reserved_qty,0) AS current_reserved_qty
+         FROM aif_inventory_count_lines icl
+         JOIN aif_product_variants v ON v.id=icl.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_stock s ON s.location_id=$2 AND s.variant_id=icl.variant_id
+         LEFT JOIN LATERAL (
+           SELECT supplier_barcode, supplier_sku
+           FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
+         WHERE icl.count_id=$1
+         ORDER BY m.title_ro ASC
+         FOR UPDATE OF icl`,
+        [item.id, item.location_id]
+      );
+
+      let changed = 0;
+      let netDiff = 0;
+      for (const line of lines.rows) {
+        const currentStock = await client.query(
+          `SELECT qty, reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+          [item.location_id, line.variant_id]
+        );
+        const beforeQty = currentStock.rowCount ? Number(currentStock.rows[0].qty || 0) : 0;
+        const beforeReserved = currentStock.rowCount ? Number(currentStock.rows[0].reserved_qty || 0) : 0;
+        const afterQty = Number(line.counted_qty || 0);
+        const afterReserved = Math.min(beforeReserved, afterQty);
+        if (!Number.isFinite(afterQty) || afterQty < 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Érvénytelen darabszám: ${line.title_ro}` });
+        }
+
+        await client.query(
+          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (location_id, variant_id)
+           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+          [item.location_id, line.variant_id, afterQty, afterReserved]
+        );
+
+        const diff = afterQty - beforeQty;
+        if (diff !== 0 || afterReserved !== beforeReserved) {
+          await insertStockMovementSafe(client, {
+            movementType: "manual_adjustment",
+            sourceType: "inventory_count",
+            sourcePrefix: "inventory",
+            sourceId: String(item.id),
+            locationId: item.location_id,
+            variantId: line.variant_id,
+            qtyDelta: diff,
+            qtyBefore: beforeQty,
+            qtyAfter: afterQty,
+            actor: actorFrom(req),
+            raw: {
+              reason: "inventory_count_commit",
+              inventoryCountId: item.id,
+              inventoryCountCode: item.code,
+              inventoryCountLineId: line.id,
+              title: line.title_ro,
+              barcode: line.display_barcode,
+              colorName: line.color_name,
+              size: line.size,
+              locationCode: item.location_code,
+              locationName: item.location_name,
+              expectedQty: Number(line.expected_qty || 0),
+              countedQty: afterQty,
+              qtyBefore: beforeQty,
+              qtyAfter: afterQty,
+              reservedBefore: beforeReserved,
+              reservedAfter: afterReserved,
+              note: line.note || null,
+            },
+          });
+          changed++;
+          netDiff += diff;
+        }
+      }
+
+      await client.query(
+        `UPDATE aif_inventory_counts
+         SET status='committed', committed_at=now(), updated_at=now(),
+             raw=COALESCE(raw,'{}'::jsonb) || $2::jsonb
+         WHERE id=$1`,
+        [item.id, JSON.stringify({ committedBy: actorFrom(req), changed, netDiff })]
+      );
+
+      await client.query("COMMIT");
+      const detail = await loadInventoryCountSummary(client, item.id);
+      const detailLines = await loadInventoryCountLines(client, item.id);
+      res.json({ ok: true, changed, netDiff, item: detail, lines: detailLines, totals: detail });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF inventory count commit failed", e);
+      res.status(500).json({ error: e?.message || "A leltár bevezetése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/inventory-counts/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureInventoryCountTables(client);
+      const current = await client.query(`SELECT id, status FROM aif_inventory_counts WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Leltár nem található." });
+      }
+      if (current.rows[0].status === "committed") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Bevezetett leltár nem törölhető innen." });
+      }
+      await client.query(`DELETE FROM aif_inventory_counts WHERE id=$1`, [current.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted" });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF inventory count delete failed", e);
+      res.status(500).json({ error: e?.message || "A leltár törlése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
 
   router.get("/health", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
