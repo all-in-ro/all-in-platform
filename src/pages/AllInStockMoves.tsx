@@ -939,7 +939,7 @@ export default function AllInStockMoves() {
                     );
                   })}
                   {!moveRows.length && (
-                    <tr><td colSpan={8} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban. Ami meglepően békés, csak raktárnál nem mindig hasznos.</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1049,7 +1049,7 @@ export default function AllInStockMoves() {
 
         <div className="rounded-2xl border border-[#2a8d8b]/25 bg-[#174c55]/60 px-4 py-3 text-sm text-cyan-50/90">
           <Filter className="mr-2 inline" size={15} />
-          A bejövő mozgás a saját zöldünkkel jelenik meg, a kimenő pirossal. A PDF export az aktuális dátum-, helyszín- és keresési szűrést használja, külön bejövőre és kimenőre.
+          A PDF export az aktuális dátum-, helyszín- és keresési szűrést használja, külön bejövőre és kimenőre.
         </div>
       </div>
 
