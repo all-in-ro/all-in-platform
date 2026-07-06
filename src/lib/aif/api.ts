@@ -597,8 +597,21 @@ export function apiAifGetImportBatch(batchId: string) {
   return fetchAifJSON<{ batch: AifImportBatchSummary; rows: any[] }>(`/import-batches/${encodeURIComponent(batchId)}`);
 }
 
+export type AifCommitImportBatchResult = {
+  ok: boolean;
+  committed: number;
+  already?: boolean;
+  totalRows?: number;
+  committedRows?: number;
+  remainingRows?: number;
+  errorRows?: number;
+  failedCount?: number;
+  warning?: string | null;
+  failedRows?: Array<{ id?: string; rowNo?: number | string | null; error?: string; code?: string | null; detail?: string | null; constraint?: string | null }>;
+};
+
 export function apiAifCommitImportBatch(batchId: string) {
-  return fetchAifJSON<{ ok: true; committed: number; already?: boolean }>(
+  return fetchAifJSON<AifCommitImportBatchResult>(
     `/import-batches/${encodeURIComponent(batchId)}/commit`,
     {
       method: "POST",
