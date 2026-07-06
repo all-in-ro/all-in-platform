@@ -1443,8 +1443,15 @@ export default function AllInIncoming(_props: Props) {
     try {
       const result = await apiAifCommitImportBatch(batch.id);
       await Promise.all([loadBatches(), loadReceptions()]);
-      setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.`);
+      const failedCount = Number((result as any).failedCount || (result as any).failedRows?.length || 0);
+      if (failedCount > 0) {
+        const firstError = (result as any).failedRows?.[0]?.error || (result as any).warning || "Néhány sor nem került készletre.";
+        setMessage(`Készletre vétel részben kész. Sikeres: ${result.committed ?? 0}, hibás: ${failedCount}. ${firstError}`);
+      } else {
+        setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.`);
+      }
     } catch (e: any) {
+      await Promise.all([loadBatches(), loadReceptions()]).catch(() => undefined);
       setMessage(e.message || "A készletre vétel nem sikerült. Ellenőrizd az import sorokat.");
     } finally {
       setBusy(false);
