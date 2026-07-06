@@ -38,6 +38,7 @@ const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm
 const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
 const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
+const WAREHOUSE_PRODUCTS_PER_PAGE = 50;
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
 const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
 const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
@@ -1321,7 +1322,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 
 async function apiInventory() {
   const qs = new URLSearchParams();
-  qs.set("limit", "500");
+  qs.set("limit", "5000");
   return fetchJSON<{ items: InventoryItem[] }>(`/api/aif/inventory?${qs.toString()}`);
 }
 
@@ -1554,6 +1555,7 @@ export default function AllInWarehouse() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(() => overviewOpenByDefault());
   const [listOpen, setListOpen] = useState(true);
+  const [productPage, setProductPage] = useState(1);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<DetailResponse | null>(null);
@@ -1612,6 +1614,7 @@ export default function AllInWarehouse() {
   const selectedSyncReadyRef = useRef(false);
   const selectedSyncTimerRef = useRef<number | null>(null);
   const selectedSyncSilentRef = useRef(false);
+  const productListRef = useRef<HTMLElement | null>(null);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -1883,10 +1886,52 @@ export default function AllInWarehouse() {
     return out;
   }, [items, search, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
+  const totalProductPages = Math.max(1, Math.ceil(filtered.length / WAREHOUSE_PRODUCTS_PER_PAGE));
+  const safeProductPage = Math.min(productPage, totalProductPages);
+  const productPageStartIndex = filtered.length ? (safeProductPage - 1) * WAREHOUSE_PRODUCTS_PER_PAGE + 1 : 0;
+  const productPageEndIndex = Math.min(safeProductPage * WAREHOUSE_PRODUCTS_PER_PAGE, filtered.length);
+
+  const productPageItems = useMemo(() => {
+    const start = (safeProductPage - 1) * WAREHOUSE_PRODUCTS_PER_PAGE;
+    return filtered.slice(start, start + WAREHOUSE_PRODUCTS_PER_PAGE);
+  }, [filtered, safeProductPage]);
+
   const filteredVariantIds = useMemo(
-    () => filtered.map((x) => String(x.variant_id || "")).filter(Boolean),
-    [filtered]
+    () => productPageItems.map((x) => String(x.variant_id || "")).filter(Boolean),
+    [productPageItems]
   );
+
+  useEffect(() => {
+    setProductPage(1);
+  }, [search, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode]);
+
+  useEffect(() => {
+    if (productPage > totalProductPages) setProductPage(totalProductPages);
+  }, [productPage, totalProductPages]);
+
+  function goToProductPage(pageNumber: number) {
+    const nextPage = Math.min(totalProductPages, Math.max(1, pageNumber));
+    setProductPage(nextPage);
+    window.setTimeout(() => {
+      productListRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+    }, 0);
+  }
+
+  const productPager = filtered.length > WAREHOUSE_PRODUCTS_PER_PAGE ? (
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
+      <div>
+        {productPageStartIndex}-{productPageEndIndex} / {filtered.length} termék
+        <span className="ml-2 text-white/45">• oldal {safeProductPage} / {totalProductPages}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(1)}>Első</button>
+        <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(safeProductPage - 1)}><ArrowLeft size={14} /> Előző 50</button>
+        <span className="rounded-full border border-white/12 bg-white/[0.08] px-3 py-2 text-white">{safeProductPage} / {totalProductPages}</span>
+        <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(safeProductPage + 1)}>Következő 50 <ArrowRight size={14} /></button>
+        <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(totalProductPages)}>Utolsó</button>
+      </div>
+    </div>
+  ) : null;
 
   const selectionSourceItems = useMemo(() => mergeInventoryItems(items, persistedSelectedItems), [items, persistedSelectedItems]);
 
@@ -2211,8 +2256,8 @@ export default function AllInWarehouse() {
     }, 0);
   }
 
-  const selectedFilteredCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
-  const allFilteredSelected = filteredVariantIds.length > 0 && selectedFilteredCount === filteredVariantIds.length;
+  const selectedVisibleCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
+  const allFilteredSelected = filteredVariantIds.length > 0 && selectedVisibleCount === filteredVariantIds.length;
 
   function assignSelectedItemToAction(item: InventoryItem, action: SelectedWorkAction) {
     const id = String(item.variant_id || "");
@@ -3553,12 +3598,13 @@ export default function AllInWarehouse() {
           )}
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
+        <section ref={productListRef} className="overflow-hidden rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
           <div className={`flex flex-wrap items-center justify-between gap-3 bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/16" : ""}`}>
             <div className="flex flex-wrap items-center gap-2 text-white/95">
               <Eye size={17} />
               <span>Terméklista</span>
               <span className={chip}>{filtered.length} találat</span>
+              {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
               {selectedCount > 0 && (
                 <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2.5 py-1 text-xs text-white">
                   {selectedCount} kijelölve
@@ -3581,6 +3627,12 @@ export default function AllInWarehouse() {
           </div>
           {listOpen && (
             <div className="p-4">
+              {productPager}
+              {filtered.length > 0 && (
+                <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
+                  A raktárlista termékvariánsonként összesít. Az azonos vonalkód / szín / méret sorok egy termékként jelennek meg, a darabszám pedig készletként adódik össze.
+                </div>
+              )}
               <div className="hidden overflow-auto rounded-xl border border-white/20 bg-[#465163] lg:block">
                 <table className="min-w-full text-left text-[13px]">
                   <thead className="bg-[#2f3a4c] text-[11px] uppercase tracking-[0.08em] text-white/72">
@@ -3592,8 +3644,8 @@ export default function AllInWarehouse() {
                           checked={allFilteredSelected}
                           onChange={(e) => toggleAllFilteredSelection(e.target.checked)}
                           disabled={!filteredVariantIds.length}
-                          aria-label="Minden látható termék kijelölése"
-                          title="Minden látható termék kijelölése"
+                          aria-label="Az aktuális oldal termékeinek kijelölése"
+                          title="Az aktuális oldal termékeinek kijelölése"
                         />
                       </th>
                       <th className="px-3 py-3 text-center align-middle font-normal">Kép</th>
@@ -3611,7 +3663,7 @@ export default function AllInWarehouse() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/12 align-middle">
-                    {filtered.map((it, index) => {
+                    {productPageItems.map((it, index) => {
                       const isSelected = Boolean(selectedVariants[String(it.variant_id || "")]);
                       return (
                       <tr key={it.variant_id} className={`${isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} align-middle hover:bg-[#617084]`}>
@@ -3630,11 +3682,11 @@ export default function AllInWarehouse() {
                         <td className="px-3 py-2.5 text-center align-middle">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-2.5 text-center align-middle">{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.size || "-"}</td>
-                        <td className="px-3 py-2.5 text-center align-middle"><StockQtyButton item={it} openUp={index >= Math.max(0, filtered.length - 3)} /></td>
+                        <td className="px-3 py-2.5 text-center align-middle"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-3 py-2.5 text-center align-middle tabular-nums">{n(it.available_qty)}</td>
                         <td className="px-3 py-2.5 text-center align-middle tabular-nums">{money(it.buy_price)}</td>
                         <td className="px-3 py-2.5 text-center align-middle tabular-nums">{money(it.sell_price)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, filtered.length - 2)} /></span></td>
+                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
                         <td className="px-3 py-2.5 text-center align-middle">
                           <div className="flex justify-center gap-2">
                             <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
@@ -3644,13 +3696,13 @@ export default function AllInWarehouse() {
                       </tr>
                       );
                     })}
-                    {!filtered.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
+                    {!productPageItems.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
                   </tbody>
                 </table>
               </div>
 
               <div className="grid gap-3 lg:hidden">
-                {filtered.map((it) => {
+                {productPageItems.map((it) => {
                   const isSelected = Boolean(selectedVariants[String(it.variant_id || "")]);
                   return (
                   <article key={it.variant_id} className={`rounded-xl border p-3 ${isSelected ? "border-[#2a8d8b]/65 bg-[#2a8d8b]/14" : "border-white/12 bg-white/[0.05]"}`}>
@@ -3685,7 +3737,8 @@ export default function AllInWarehouse() {
                   </article>
                   );
                 })}
-                {!filtered.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/60">Nincs megjeleníthető termék az AIF készletben.</div>}
+                {!productPageItems.length && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-sm text-white/60">Nincs megjeleníthető termék az AIF készletben.</div>}
+                {productPager}
               </div>
             </div>
           )}
