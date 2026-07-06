@@ -116,6 +116,11 @@ export type AifReceptionInput = {
   exchangeRateToRon?: number | string;
   tvaMode?: "without_tva" | "with_tva" | "no_tva" | string;
   tvaRate?: number | string;
+  salesTvaRate?: number | string;
+  saleTvaRate?: number | string;
+  salesPriceIncludesTva?: boolean;
+  sellPriceIncludesTva?: boolean;
+  sellPriceCurrency?: string;
   shippingCost?: number | string;
   goodsValue?: number | string;
   invoiceNet?: number | string;
@@ -147,6 +152,7 @@ export type AifReceptionSummary = {
   invoice_vat?: string | number | null;
   invoice_gross?: string | number | null;
   shipping_cost?: string | number | null;
+  raw_meta?: Record<string, unknown> | null;
   total_qty?: number | null;
   line_count?: number | null;
   import_batches?: number | null;
