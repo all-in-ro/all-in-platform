@@ -64,6 +64,7 @@ type Props = { onLogout?: () => void };
 type LocationType = string;
 type EditableImportField =
   | "supplierProductCode"
+  | "snCod"
   | "titleRo"
   | "brandCode"
   | "categoryCode"
@@ -79,6 +80,62 @@ type AifBrandOption = { id: string; code?: string; name?: string; is_active?: bo
 type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifGenderOption = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifSupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
+
+const SN_COD_FIELD = "snCod" as AifColumnField;
+const SN_COD_HEADER_KEYS = new Set([
+  "s_n_cod", "sn_cod", "s_n", "sn", "s_n_ev_honap", "sn_ev_honap", "s_n_ev_hónap",
+  "s_n_c_o_d", "serial_code", "cod_serial", "cod_serie", "cod_intern", "internal_code", "internal_id", "client_code"
+]);
+const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
+  const base = AIF_COLUMN_FIELD_OPTIONS as Array<{ value: AifColumnField; label: string }>;
+  return base.some((opt) => String(opt.value) === String(SN_COD_FIELD))
+    ? base
+    : [...base, { value: SN_COD_FIELD, label: "S/N/COD" }];
+})();
+function snCodHeaderKey(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+function isSnCodHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  if (!key) return false;
+  return SN_COD_HEADER_KEYS.has(key) || (key.includes("sn") && key.includes("cod"));
+}
+function rawValueByExactHeader(raw: Record<string, unknown> | undefined | null, header: unknown) {
+  if (!raw || typeof raw !== "object") return "";
+  const wanted = snCodHeaderKey(header);
+  for (const [key, value] of Object.entries(raw)) {
+    if (snCodHeaderKey(key) === wanted) return String(value ?? "").trim();
+  }
+  return "";
+}
+function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAnalysis {
+  return {
+    ...analysis,
+    columns: (analysis.columns || []).map((col) => {
+      if (String(col.field || "") !== "ignore" && !isSnCodHeader(col.header)) return col;
+      if (!isSnCodHeader(col.header)) return col;
+      return { ...col, field: SN_COD_FIELD, label: "S/N/COD", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+    }),
+  };
+}
+function applySnCodColumnMapping(rows: AifParsedRow[], analysis: AifWorkbookAnalysis | null): AifParsedRow[] {
+  const snColumn = (analysis?.columns || []).find((col) => String(col.field) === String(SN_COD_FIELD));
+  if (!snColumn) return rows;
+  return rows.map((row) => {
+    const raw = (row.raw || {}) as Record<string, unknown>;
+    const value = rawValueByExactHeader(raw, snColumn.header);
+    if (!value) return row;
+    return { ...row, normalized: { ...(row.normalized || {}), snCod: value, sn_cod: value } };
+  });
+}
+function applyAifColumnMappingWithSnCod(rows: AifParsedRow[], analysis: AifWorkbookAnalysis, supplier?: AifSupplier | null) {
+  return applySnCodColumnMapping(applyAifColumnMapping(rows, analysis, supplier || undefined), analysis);
+}
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
 const wrap = "mx-auto max-w-7xl space-y-4";
@@ -202,6 +259,7 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
       <tr>
         <td class="num">${index + 1}</td>
         <td>${pdfEscape(rowCheckSku(row))}</td>
+        <td>${pdfEscape(cell(row.sn_cod || normalized.snCod || normalized.sn_cod))}</td>
         <td>${pdfEscape(cell(normalized.titleRo || normalized.productName || row.supplier_product_code))}</td>
         <td>${pdfEscape(cell(normalized.brandName || normalized.brandCode))}</td>
         <td>${pdfEscape(categoryDisplay(rawCategory, categories))}</td>
@@ -609,6 +667,7 @@ export default function AllInIncoming(_props: Props) {
   const [previewLimit, setPreviewLimit] = useState(25);
   const [approvedRows, setApprovedRows] = useState<Record<string, boolean>>({});
   const [manualProductCode, setManualProductCode] = useState("");
+  const [manualSnCod, setManualSnCod] = useState("");
   const [manualTitle, setManualTitle] = useState("");
   const [manualBrandCode, setManualBrandCode] = useState("");
   const [manualCategoryCode, setManualCategoryCode] = useState("");
@@ -890,10 +949,10 @@ export default function AllInIncoming(_props: Props) {
     if (!workbench) return;
     const next: AifWorkbookAnalysis = {
       ...workbench,
-      columns: workbench.columns.map((col) => (col.index === index ? { ...col, field, label: AIF_COLUMN_FIELD_OPTIONS.find((x) => x.value === field)?.label || col.label } : col)),
+      columns: workbench.columns.map((col) => (col.index === index ? { ...col, field, label: AIF_COLUMN_FIELD_OPTIONS_WITH_SN.find((x) => x.value === field)?.label || col.label } : col)),
     };
     setWorkbench(next);
-    setRows((current) => normalizeImportedRowsWithMeta(applyAifColumnMapping(current, next, selectedSupplier)));
+    setRows((current) => normalizeImportedRowsWithMeta(applyAifColumnMappingWithSnCod(current, next, selectedSupplier)));
   }
 
   function updateRowField(index: number, field: EditableImportField, value: string) {
@@ -1027,6 +1086,7 @@ export default function AllInIncoming(_props: Props) {
 
   function resetManualRowForm() {
     setManualProductCode("");
+    setManualSnCod("");
     setManualTitle("");
     setManualBrandCode(defaultBrandCode);
     setManualCategoryCode(defaultCategoryCode);
@@ -1137,6 +1197,8 @@ export default function AllInIncoming(_props: Props) {
       raw: {
         source: "manual",
         productCode: manualProductCode,
+        snCod: manualSnCod,
+        sn_cod: manualSnCod,
         title: manualTitle,
         brandCode,
         categoryCode,
@@ -1155,6 +1217,8 @@ export default function AllInIncoming(_props: Props) {
       normalized: {
         supplierProductCode: manualProductCode.trim(),
         modelCode: manualProductCode.trim(),
+        snCod: manualSnCod.trim(),
+        sn_cod: manualSnCod.trim(),
         titleRo: manualTitle.trim(),
         brandCode,
         brandName: brand?.name || "",
@@ -1279,10 +1343,11 @@ export default function AllInIncoming(_props: Props) {
     setMessage("");
     try {
       const parsed = await readAifWorkbookWithAnalysis(file, selectedSupplier);
-      const normalizedRows = normalizeImportedRowsWithMeta(parsed.rows);
+      const analysisWithSnCod = withSnCodWorkbookAnalysis(parsed.analysis);
+      const normalizedRows = normalizeImportedRowsWithMeta(applyAifColumnMappingWithSnCod(parsed.rows, analysisWithSnCod, selectedSupplier));
       setFileName(file.name);
       setRows(normalizedRows);
-      setWorkbench(parsed.analysis);
+      setWorkbench(analysisWithSnCod);
       setWorkbenchOpen(true);
       setPreviewLimit(25);
       setApprovedRows({});
@@ -1940,6 +2005,7 @@ export default function AllInIncoming(_props: Props) {
               <tr>
                 <th className="px-3 py-2 font-normal">Állapot</th>
                 <th className="px-3 py-2 font-normal">Termékkód</th>
+                <th className="px-3 py-2 font-normal">S/N/COD</th>
                 <th className="px-3 py-2 font-normal">Név</th>
                 <th className="px-3 py-2 font-normal">Márka</th>
                 <th className="px-3 py-2 font-normal">Kategória</th>
@@ -1956,6 +2022,7 @@ export default function AllInIncoming(_props: Props) {
                 <tr key={row.id || `${row.batch_id}-${row.row_no}`} className={row.status === "committed" ? "bg-emerald-400/10" : row.status === "error" ? "bg-red-500/10" : "bg-[#445064]"}>
                   <td className="px-3 py-2.5 text-xs text-white/80">{rowStatusText(row.status)}</td>
                   <td className="px-3 py-2.5 text-white/88">{cell(row.supplier_product_code || row.normalized?.supplierProductCode || row.normalized?.modelCode)}</td>
+                  <td className="px-3 py-2.5 text-white/82">{cell((row as any).sn_cod || row.normalized?.snCod || row.normalized?.sn_cod)}</td>
                   <td className="px-3 py-2.5 text-white">{normValue(row, "titleRo")}</td>
                   <td className="px-3 py-2.5 text-white/82">{normValue(row, "brandName", row.normalized?.brandCode)}</td>
                   <td className="px-3 py-2.5 text-white/82">{categoryDisplay(row.normalized?.categoryCode || row.normalized?.categoryName, activeCategories)}</td>
@@ -1969,7 +2036,7 @@ export default function AllInIncoming(_props: Props) {
               ))}
               {!loadedReceptionRows.length && (
                 <tr>
-                  <td className="px-3 py-6 text-center text-white/60" colSpan={11}>Ebben a receptióban még nincs mentett terméksor.</td>
+                  <td className="px-3 py-6 text-center text-white/60" colSpan={12}>Ebben a receptióban még nincs mentett terméksor.</td>
                 </tr>
               )}
             </tbody>
@@ -2500,9 +2567,12 @@ export default function AllInIncoming(_props: Props) {
               <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/74">
                 Manuális bevételezéshez tölts ki egy terméksort, majd add hozzá az előnézethez. Mentés előtt ugyanúgy ellenőrizhető és kijelölhető, mint az importált sor.
               </div>
-              <div className="grid gap-3 lg:grid-cols-4">
+              <div className="grid gap-3 lg:grid-cols-5">
                 <label className={label}>Termékkód
                   <input className={`${input} w-full`} value={manualProductCode} onChange={(e) => setManualProductCode(e.target.value)} placeholder="pl. UA-123" />
+                </label>
+                <label className={label}>S/N/COD
+                  <input className={`${input} w-full`} value={manualSnCod} onChange={(e) => setManualSnCod(e.target.value)} placeholder="belső azonosító" />
                 </label>
                 <label className={label}>Terméknév
                   <input className={`${input} w-full`} value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Termék megnevezése" />
@@ -2658,7 +2728,7 @@ export default function AllInIncoming(_props: Props) {
                         <td className="px-3 py-2.5 text-white/90">{c.header}</td>
                         <td className="px-3 py-2.5">
                           <select className={`${selectInput} h-8 w-[190px]`} value={c.field} onChange={(e) => updateColumnField(c.index, e.target.value as AifColumnField)}>
-                            {AIF_COLUMN_FIELD_OPTIONS.map((opt) => (
+                            {AIF_COLUMN_FIELD_OPTIONS_WITH_SN.map((opt) => (
                               <option style={optionStyle} key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
                           </select>
@@ -2738,10 +2808,14 @@ export default function AllInIncoming(_props: Props) {
                       </div>
 
                       <div className="grid gap-1.5">
-                        <div className="grid grid-cols-[0.45fr,1fr] gap-1.5">
+                        <div className="grid grid-cols-[0.45fr,0.55fr,1fr] gap-1.5">
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Kód</span>
                             <input className={`${compactInput} w-full`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} />
+                          </label>
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>S/N/COD</span>
+                            <input className={`${compactInput} w-full`} value={valueString((n as any).snCod || (n as any).sn_cod)} onChange={(e) => updateRowField(globalIndex, "snCod", e.target.value)} />
                           </label>
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Név</span>
