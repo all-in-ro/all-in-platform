@@ -186,6 +186,114 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+
+  const SALES_TVA_SETTING_KEY = "incoming_sales_tva";
+  const DEFAULT_SALES_TVA_SETTINGS = Object.freeze({
+    salesTvaRate: 21,
+    sellPriceIncludesTva: true,
+    salesPriceIncludesTva: true,
+    sellPriceCurrency: "RON",
+  });
+
+  function boolFrom(value, fallback = false) {
+    if (value === undefined || value === null || value === "") return fallback;
+    if (typeof value === "boolean") return value;
+    const raw = text(value).toLowerCase();
+    if (["1", "true", "yes", "da", "igen", "on"].includes(raw)) return true;
+    if (["0", "false", "no", "nu", "nem", "off"].includes(raw)) return false;
+    return fallback;
+  }
+
+  function normalizeSalesTvaSettings(input = {}, fallback = DEFAULT_SALES_TVA_SETTINGS) {
+    const src = input && typeof input === "object" ? input : {};
+    const rateRaw = toMoney(src.salesTvaRate ?? src.sales_tva_rate ?? src.saleTvaRate ?? src.sale_tva_rate ?? src.rate ?? fallback.salesTvaRate);
+    const salesTvaRate = rateRaw !== null && rateRaw >= 0 && rateRaw <= 100 ? Number(rateRaw) : Number(fallback.salesTvaRate || 21);
+    const sellPriceIncludesTva = boolFrom(
+      src.sellPriceIncludesTva ?? src.sell_price_includes_tva ?? src.salesPriceIncludesTva ?? src.sales_price_includes_tva ?? src.priceIncludesTva ?? src.price_includes_tva,
+      fallback.sellPriceIncludesTva !== false
+    );
+    const sellPriceCurrency = currencyCode(src.sellPriceCurrency ?? src.sell_price_currency ?? fallback.sellPriceCurrency ?? "RON") || "RON";
+    return {
+      salesTvaRate,
+      sellPriceIncludesTva,
+      salesPriceIncludesTva: sellPriceIncludesTva,
+      sellPriceCurrency,
+    };
+  }
+
+  async function ensureAifSettingsTable(client = pool) {
+    await client.query(`CREATE TABLE IF NOT EXISTS aif_app_settings (
+      key text PRIMARY KEY,
+      value jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NULL
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS aif_app_settings_updated_idx ON aif_app_settings (updated_at DESC)`);
+    await client.query(
+      `INSERT INTO aif_app_settings (key, value, updated_by)
+       VALUES ($1, $2::jsonb, 'system')
+       ON CONFLICT (key) DO NOTHING`,
+      [SALES_TVA_SETTING_KEY, JSON.stringify(DEFAULT_SALES_TVA_SETTINGS)]
+    );
+  }
+
+  async function readSalesTvaSettings(client = pool) {
+    await ensureAifSettingsTable(client);
+    const r = await client.query(
+      `SELECT value, updated_at, updated_by FROM aif_app_settings WHERE key=$1 LIMIT 1`,
+      [SALES_TVA_SETTING_KEY]
+    );
+    const row = r.rows[0] || {};
+    return {
+      ...normalizeSalesTvaSettings(row.value || DEFAULT_SALES_TVA_SETTINGS),
+      updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updated_by: row.updated_by || null,
+      updatedBy: row.updated_by || null,
+    };
+  }
+
+  async function saveSalesTvaSettings(client, input, actor = "system") {
+    await ensureAifSettingsTable(client);
+    const current = await readSalesTvaSettings(client);
+    const settings = normalizeSalesTvaSettings(input || {}, current);
+    const r = await client.query(
+      `INSERT INTO aif_app_settings (key, value, updated_by, created_at, updated_at)
+       VALUES ($1, $2::jsonb, $3, now(), now())
+       ON CONFLICT (key) DO UPDATE SET
+         value=EXCLUDED.value,
+         updated_by=EXCLUDED.updated_by,
+         updated_at=now()
+       RETURNING value, updated_at, updated_by`,
+      [SALES_TVA_SETTING_KEY, JSON.stringify(settings), actor]
+    );
+    const row = r.rows[0] || {};
+    return {
+      ...normalizeSalesTvaSettings(row.value || settings),
+      updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updated_by: row.updated_by || actor,
+      updatedBy: row.updated_by || actor,
+    };
+  }
+
+  function applySalesTvaSettingsToNormalized(normalized, settings) {
+    if (!normalized || typeof normalized !== "object") return normalized;
+    const cfg = normalizeSalesTvaSettings(settings || DEFAULT_SALES_TVA_SETTINGS);
+    if (normalized.sellPriceCurrency === undefined || normalized.sellPriceCurrency === null || String(normalized.sellPriceCurrency).trim() === "") normalized.sellPriceCurrency = cfg.sellPriceCurrency || "RON";
+    if (normalized.salePriceCurrency === undefined || normalized.salePriceCurrency === null || String(normalized.salePriceCurrency).trim() === "") normalized.salePriceCurrency = cfg.sellPriceCurrency || "RON";
+    if (normalized.sellPriceIsRon === undefined && normalized.salePriceIsRon === undefined) normalized.sellPriceIsRon = String(normalized.sellPriceCurrency || "RON").toUpperCase() === "RON";
+    if (normalized.sellPriceIncludesTva === undefined && normalized.salesPriceIncludesTva === undefined) normalized.sellPriceIncludesTva = cfg.sellPriceIncludesTva;
+    if (normalized.salesPriceIncludesTva === undefined) normalized.salesPriceIncludesTva = Boolean(normalized.sellPriceIncludesTva);
+    if (normalized.salesTvaRate === undefined || normalized.salesTvaRate === null || String(normalized.salesTvaRate).trim() === "") normalized.salesTvaRate = cfg.salesTvaRate;
+    if (normalized.saleTvaRate === undefined || normalized.saleTvaRate === null || String(normalized.saleTvaRate).trim() === "") normalized.saleTvaRate = cfg.salesTvaRate;
+    if ((normalized.sellPriceGrossRon === undefined || normalized.sellPriceGrossRon === null || String(normalized.sellPriceGrossRon).trim() === "") && normalized.sellPrice !== undefined && normalized.sellPrice !== null && String(normalized.sellPrice).trim() !== "") {
+      normalized.sellPriceGrossRon = toMoney(normalized.sellPrice);
+    }
+    return normalized;
+  }
+
   async function findByIdOrCode(client, table, idOrCode) {
     const v = text(idOrCode);
     if (!v) return null;
@@ -948,6 +1056,44 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       ELSE round(${priceExpr} * ${rateExpr}::numeric, 2)
     END`;
   }
+
+  router.get("/settings/sales-tva", requireAuthed, async (_req, res) => {
+    try {
+      const settings = await readSalesTvaSettings(pool);
+      res.json({ ok: true, settings, item: settings });
+    } catch (e) {
+      console.error("AIF sales TVA settings load failed", e);
+      res.status(500).json({ error: "Az eladási TVA beállítás betöltése nem sikerült." });
+    }
+  });
+
+  router.get("/settings/incoming-sales-tva", requireAuthed, async (_req, res) => {
+    try {
+      const settings = await readSalesTvaSettings(pool);
+      res.json({ ok: true, settings, item: settings });
+    } catch (e) {
+      console.error("AIF incoming sales TVA settings load failed", e);
+      res.status(500).json({ error: "Az eladási TVA beállítás betöltése nem sikerült." });
+    }
+  });
+
+  async function handleSalesTvaSettingsSave(req, res) {
+    try {
+      const source = req.body?.settings && typeof req.body.settings === "object" ? req.body.settings : req.body || {};
+      const settings = await saveSalesTvaSettings(pool, source, actorFrom(req));
+      res.json({ ok: true, settings, item: settings });
+    } catch (e) {
+      console.error("AIF sales TVA settings save failed", e);
+      res.status(500).json({ error: "Az eladási TVA beállítás mentése nem sikerült." });
+    }
+  }
+
+  router.put("/settings/sales-tva", requireAuthed, handleSalesTvaSettingsSave);
+  router.patch("/settings/sales-tva", requireAuthed, handleSalesTvaSettingsSave);
+  router.post("/settings/sales-tva", requireAuthed, handleSalesTvaSettingsSave);
+  router.put("/settings/incoming-sales-tva", requireAuthed, handleSalesTvaSettingsSave);
+  router.patch("/settings/incoming-sales-tva", requireAuthed, handleSalesTvaSettingsSave);
+  router.post("/settings/incoming-sales-tva", requireAuthed, handleSalesTvaSettingsSave);
 
   router.get("/suppliers", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
@@ -2774,6 +2920,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   WHERE s.is_active=true AND p.is_active=true
                   ORDER BY s.name ASC, p.name ASC, p.version DESC`),
     ]);
+    const salesTvaSettings = await readSalesTvaSettings(pool);
     res.json({
       suppliers: suppliers.rows,
       brands: brands.rows,
@@ -2787,6 +2934,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       materialTypes: materialTypes.rows,
       supplierBrands: supplierBrands.rows,
       profiles: profiles.rows,
+      salesTvaSettings,
+      settings: { incomingSales: salesTvaSettings },
+      appSettings: { incomingSales: salesTvaSettings },
     });
   });
 
@@ -3106,8 +3256,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const batchId = batchRes.rows[0].id;
       const exchangeRate = Number(reception.exchangeRateToRon);
+      const salesTvaSettings = await readSalesTvaSettings(client);
       let errorCount = 0;
       for (const nr of normalizedRows) {
+        applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
           : Number(nr.normalized.buyPrice) * exchangeRate;
@@ -3368,6 +3520,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const exchangeRate = Number(batch.rows[0].exchange_rate_to_ron || batch.rows[0].reception_exchange_rate || 1);
       const currency = currencyCode(batch.rows[0].currency_code || batch.rows[0].reception_currency_code || "RON") || "RON";
+      const salesTvaSettings = await readSalesTvaSettings(client);
 
       await client.query(`DELETE FROM aif_import_rows WHERE batch_id=$1`, [batchId]);
 
@@ -3376,6 +3529,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
         await enrichNormalizedRow(client, nr);
+        applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
         if (nr.errors.length) errorCount++;
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
@@ -3494,10 +3648,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       throw e;
     }
 
+    const salesTvaSettings = await readSalesTvaSettings(client);
     let committed = 0;
     for (const row of rows.rows) {
       try {
         const normalized = { ...(row.normalized || {}) };
+        applySalesTvaSettingsToNormalized(normalized, salesTvaSettings);
         applyProductCodeSplit(normalized);
         normalized.gender = canonicalGender(normalized.gender);
         const brandColorMapped = await applyBrandColorCodeMapping(client, normalized);
@@ -3728,6 +3884,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
       await enrichNormalizedRow(client, nr);
+      const salesTvaSettings = await readSalesTvaSettings(client);
+      applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
       if (isCommitted) {
         nr.status = "committed";
         nr.errors = [];
