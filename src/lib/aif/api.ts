@@ -131,6 +131,19 @@ export type AifReceptionInput = {
   note?: string;
 };
 
+export type AifSalesTvaSettings = {
+  key?: string;
+  salesTvaRate: number | string;
+  salesPriceIncludesTva: boolean;
+  sellPriceIncludesTva?: boolean;
+  sellPriceCurrency?: string;
+  sellPriceIsRon?: boolean;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+  updatedBy?: string | null;
+  updated_by?: string | null;
+};
+
 export type AifReceptionSummary = {
   id: string;
   created_at: string;
@@ -483,6 +496,36 @@ async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function apiAifHealth() {
   return fetchAifJSON<{ ok: boolean; suppliers: number }>("/health");
+}
+
+export function apiAifGetSalesTvaSettings() {
+  return fetchAifJSON<{ ok: true; item: AifSalesTvaSettings; settings?: AifSalesTvaSettings }>("/settings/sales-tva");
+}
+
+export function apiAifSaveSalesTvaSettings(settings: Partial<AifSalesTvaSettings>) {
+  return fetchAifJSON<{ ok: true; item: AifSalesTvaSettings; settings?: AifSalesTvaSettings }>("/settings/sales-tva", {
+    method: "PATCH",
+    body: JSON.stringify({ settings }),
+  });
+}
+
+export function apiAifGetIncomingSalesTvaSettings() {
+  return fetchAifJSON<{ ok: true; item: AifSalesTvaSettings; settings?: AifSalesTvaSettings }>("/settings/incoming-sales-tva");
+}
+
+export function apiAifSaveIncomingSalesTvaSettings(settings: Partial<AifSalesTvaSettings>) {
+  return fetchAifJSON<{ ok: true; item: AifSalesTvaSettings; settings?: AifSalesTvaSettings }>("/settings/incoming-sales-tva", {
+    method: "PUT",
+    body: JSON.stringify({ settings }),
+  });
+}
+
+export function apiAifGetIncomingSalesSettings() {
+  return apiAifGetIncomingSalesTvaSettings();
+}
+
+export function apiAifSaveIncomingSalesSettings(settings: Partial<AifSalesTvaSettings>) {
+  return apiAifSaveIncomingSalesTvaSettings(settings);
 }
 
 export function apiAifMeta() {
