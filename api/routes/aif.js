@@ -3677,6 +3677,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     for (const row of rows.rows) {
       try {
         const normalized = { ...(row.normalized || {}) };
+        const rowSnCod = emptyToNull(row.sn_cod);
+        if (rowSnCod && !emptyToNull(normalized.snCod ?? normalized.sn_cod)) {
+          normalized.snCod = rowSnCod;
+          normalized.sn_cod = rowSnCod;
+        }
         applySalesTvaSettingsToNormalized(normalized, salesTvaSettings);
         applyProductCodeSplit(normalized);
         normalized.gender = canonicalGender(normalized.gender);
@@ -3902,6 +3907,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ...(row.normalized || {}),
         ...(body.normalized && typeof body.normalized === "object" ? body.normalized : {}),
       };
+      const existingSnCod = emptyToNull(row.sn_cod);
+      if (existingSnCod && !emptyToNull(nextNormalized.snCod ?? nextNormalized.sn_cod)) {
+        nextNormalized.snCod = existingSnCod;
+        nextNormalized.sn_cod = existingSnCod;
+      }
       if (isCommitted) {
         nextNormalized.qty = row.qty ?? nextNormalized.qty;
       }
@@ -5161,7 +5171,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
                 CASE WHEN sm.qty_delta > 0 THEN 'in' WHEN sm.qty_delta < 0 THEN 'out' ELSE 'adjust' END AS direction,
                 l.id AS location_id, l.code AS location_code, l.name AS location_name,
-                v.id AS variant_id, v.internal_sku, v.barcode,
+                v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
                 COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
                 v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
                 m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
@@ -5194,7 +5204,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
                 sm.location_id, sm.variant_id, sm.qty_delta, sm.qty_before, sm.qty_after,
                 sm.actor, sm.raw,
-                m.title_ro, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+                m.title_ro, v.sn_cod, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
                 l.name AS location_name
          FROM aif_stock_movements sm
          JOIN aif_locations l ON l.id=sm.location_id
