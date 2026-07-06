@@ -108,6 +108,33 @@ export type AifMaterialType = {
   updated_at?: string;
 };
 
+export type AifSizeType = {
+  id: string;
+  code: string;
+  name: string;
+  name_hu?: string | null;
+  aliases?: string[] | null;
+  sort_order?: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AifBrandSizeCode = {
+  id: string;
+  brand_id: string;
+  brand_code?: string | null;
+  brand_name?: string | null;
+  size_code: string;
+  size_type_id: string;
+  size_type_code?: string | null;
+  size_name?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type AifReceptionInput = {
   invoiceNumber?: string;
   invoiceDate?: string;
@@ -232,6 +259,8 @@ export type AifMeta = {
   currencies?: AifCurrency[];
   colorTypes?: AifColorType[];
   brandColorCodes?: AifBrandColorCode[];
+  sizeTypes?: AifSizeType[];
+  brandSizeCodes?: AifBrandSizeCode[];
   materialTypes?: AifMaterialType[];
   profiles: AifImportProfile[];
 };
@@ -780,6 +809,57 @@ export function apiAifUpdateVariantStock(
   );
 }
 
+
+export type AifManualProductInput = {
+  titleRo: string;
+  titleHu?: string | null;
+  descriptionRo?: string | null;
+  brandId?: string | null;
+  brandCode?: string | null;
+  brandName?: string | null;
+  categoryId?: string | null;
+  categoryCode?: string | null;
+  categoryName?: string | null;
+  gender?: string | null;
+  productType?: string | null;
+  season?: string | null;
+  material?: string | null;
+  shopifyTitle?: string | null;
+  modelCode?: string | null;
+  barcode?: string | null;
+  snCod?: string | null;
+  colorCode?: string | null;
+  colorName?: string | null;
+  colorHex?: string | null;
+  size: string;
+  standardSize?: string | null;
+  buyPrice?: string | number | null;
+  sellPrice?: string | number | null;
+  compareAtPrice?: string | number | null;
+  imageUrl?: string | null;
+  supplierId?: string | null;
+  supplierCode?: string | null;
+  supplierProductCode?: string | null;
+  supplierVariantCode?: string | null;
+  supplierColorCode?: string | null;
+  supplierSize?: string | null;
+  modelStatus?: string | null;
+  status?: string | null;
+  qty?: number | string;
+  stockRows?: Array<{ locationId?: string; locationCode?: string; location?: string; qty: number | string }>;
+};
+
+export function apiAifCreateManualProduct(input: AifManualProductInput) {
+  return fetchAifJSON<{ ok: true; variantId: string; modelId?: string; qty?: number; stockRows?: Array<Record<string, unknown>> }>("/manual-products", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifCreateManualVariant(input: AifManualProductInput) {
+  return apiAifCreateManualProduct(input);
+}
+
 export type AifSupplierDetail = AifSupplier & {
   notes?: string | null;
   created_at?: string;
@@ -1020,6 +1100,75 @@ export function apiAifNormalizeColor(color: string) {
   return fetchAifJSON<{ input: string; color: string; item?: AifColorType | null }>("/color-types/normalize", {
     method: "POST",
     body: JSON.stringify({ color }),
+  });
+}
+
+
+export function apiAifListSizeTypes(options?: { includeInactive?: boolean }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifSizeType[] }>(`/size-types${suffix}`);
+}
+
+export function apiAifSaveSizeType(id: string, input: {
+  name?: string;
+  code?: string;
+  nameHu?: string | null;
+  name_hu?: string | null;
+  aliases?: string[] | string;
+  sortOrder?: number | string;
+  is_active?: boolean;
+}) {
+  const url = id ? `/size-types/${encodeURIComponent(id)}` : "/size-types";
+  return fetchAifJSON<{ item: AifSizeType }>(url, {
+    method: id ? "PATCH" : "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteSizeType(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" | "deactivated"; usage?: Record<string, number> }>(`/size-types/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifNormalizeSize(size: string) {
+  return fetchAifJSON<{ input: string; size: string; item?: AifSizeType | null }>("/size-types/normalize", {
+    method: "POST",
+    body: JSON.stringify({ size }),
+  });
+}
+
+export function apiAifListBrandSizeCodes(options?: { includeInactive?: boolean; brand?: string }) {
+  const q = new URLSearchParams();
+  if (options?.includeInactive) q.set("includeInactive", "1");
+  if (options?.brand) q.set("brand", options.brand);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifBrandSizeCode[] }>(`/brand-size-codes${suffix}`);
+}
+
+export function apiAifSaveBrandSizeCode(id: string, input: {
+  brandId?: string;
+  brandCode?: string;
+  brand?: string;
+  sizeCode?: string;
+  sizeTypeId?: string;
+  sizeTypeCode?: string;
+  size?: string;
+  notes?: string | null;
+  is_active?: boolean;
+}) {
+  const url = id ? `/brand-size-codes/${encodeURIComponent(id)}` : "/brand-size-codes";
+  return fetchAifJSON<{ item: AifBrandSizeCode }>(url, {
+    method: id ? "PATCH" : "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifDeleteBrandSizeCode(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deactivated"; usage?: Record<string, number> }>(`/brand-size-codes/${encodeURIComponent(id)}`, {
+    method: "DELETE",
   });
 }
 
