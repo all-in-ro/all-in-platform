@@ -33,8 +33,8 @@ const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const input = "h-10 w-full min-w-0 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
-const select = "h-10 w-full min-w-0 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
+const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
+const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
 const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
@@ -202,6 +202,8 @@ type InventoryItem = {
   variant_id: string;
   internal_sku?: string | null;
   barcode?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
   image_url?: string | null;
   brand_name?: string | null;
   brand_code?: string | null;
@@ -473,6 +475,7 @@ type EditForm = {
   brandCode: string;
   categoryCode: string;
   barcode: string;
+  snCod: string;
   colorCode: string;
   colorName: string;
   size: string;
@@ -1168,6 +1171,8 @@ function itemMatchesScannedBarcode(it: InventoryItem, scannedBarcode: unknown) {
   if (!q) return false;
   const values = [
     it.barcode,
+    it.sn_cod,
+    it.snCod,
     it.internal_sku,
     it.model_code,
     it.supplier_codes,
@@ -1293,6 +1298,8 @@ function itemMatchesSearch(it: InventoryItem, query: string) {
     it.supplier_codes,
     it.internal_sku,
     it.barcode,
+    it.sn_cod,
+    it.snCod,
     it.model_code,
     it.category_name_ro,
     it.category_name_hu,
@@ -1470,6 +1477,7 @@ function emptyForm(): EditForm {
     brandCode: "",
     categoryCode: "",
     barcode: "",
+    snCod: "",
     colorCode: "",
     colorName: "",
     size: "",
@@ -1496,6 +1504,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     brandCode: x.brand_code || "",
     categoryCode: x.category_code || "",
     barcode: x.barcode || "",
+    snCod: x.sn_cod || x.snCod || "",
     colorCode: x.color_code || "",
     colorName: officialColorRo(x.color_name || ""),
     size: x.size || "",
@@ -3272,6 +3281,7 @@ export default function AllInWarehouse() {
         brandCode: edit.brandCode || null,
         categoryCode: edit.categoryCode || null,
         barcode: edit.barcode,
+        snCod: edit.snCod,
         colorCode: edit.colorCode,
         colorName: normalizeColor(edit.colorName),
         size: edit.size,
@@ -3420,7 +3430,7 @@ export default function AllInWarehouse() {
                 Keresés
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-2.5 text-white/40" size={18} />
-                  <input className={`${input} w-full pl-10 pr-12`} value={search} onChange={(e) => { setScannedBarcodeSearch(""); setSearch(e.target.value); }} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="Név, beszállító, márka, vonalkód, szín, méret" />
+                  <input className={`${input} w-full pl-10 pr-12`} value={search} onChange={(e) => { setScannedBarcodeSearch(""); setSearch(e.target.value); }} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="Név, beszállító, márka, vonalkód, S/N/COD, szín, méret" />
                   <button
                     className="absolute right-1.5 top-1.5 inline-flex h-7 w-9 items-center justify-center rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/70 text-white shadow-[0_0_10px_rgba(42,141,139,0.18)] hover:bg-[#2a8d8b] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/45"
                     type="button"
@@ -3616,7 +3626,7 @@ export default function AllInWarehouse() {
                         </td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-12 w-12 rounded-lg object-cover" /> : <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
                         <td className="px-3 py-2.5 text-left align-middle">{it.brand_name || "-"}</td>
-                        <td className="px-3 py-2.5 text-left align-middle"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div></td>
+                        <td className="px-3 py-2.5 text-left align-middle"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div><div className="mt-0.5 text-xs text-white/45">{it.sn_cod || it.snCod ? `S/N/COD: ${it.sn_cod || it.snCod}` : "S/N/COD: -"}</div></td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-2.5 text-center align-middle">{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.size || "-"}</td>
@@ -3704,14 +3714,14 @@ export default function AllInWarehouse() {
               </div>
             </div>
 
-            <div className="space-y-4 p-4 sm:p-5">
+            <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
                 Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez vagy készletmozgatáshoz kerüljön.
               </div>
 
-              <div className="grid gap-3">
+              <div className="grid gap-2">
                 {selectedUnassignedItems.map((it) => (
-                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px_56px_1fr_auto] md:items-center">
+                  <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
                     <div className="flex justify-center">
                       <input
                         className={selectBox}
@@ -3725,7 +3735,7 @@ export default function AllInWarehouse() {
                       />
                     </div>
                     <div>
-                      {it.image_url ? <img src={it.image_url} alt="" className="h-14 w-14 rounded-xl object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                      {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
                     </div>
                     <div className="min-w-0">
                       <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
@@ -3947,7 +3957,7 @@ export default function AllInWarehouse() {
 
       {selectedWorkPanel && (
         <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/45 px-3 py-4 backdrop-blur-sm">
-          <div className={`max-h-[92vh] w-full overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl ${selectedWorkPanel === "move" ? "max-w-[1480px]" : "max-w-5xl"}`}>
+          <div className={`max-h-[88vh] w-full overflow-auto rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl ${selectedWorkPanel === "move" ? "max-w-7xl" : "max-w-5xl"}`}>
             <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">{selectedWorkActionLabels[selectedWorkPanel]}</p>
@@ -3973,73 +3983,63 @@ export default function AllInWarehouse() {
                 <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); }} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
-            <div className="space-y-4 p-4 sm:p-5">
-              <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2.5 text-xs leading-relaxed text-[#d7fffd]">
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
                 Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad.
               </div>
 
               {selectedWorkPanel === "move" && (
-                <div className="space-y-4 rounded-2xl border border-white/14 bg-[#3f4959] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_230px] xl:items-stretch">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,0.9fr)_minmax(250px,1fr)_minmax(250px,1fr)]">
-                      <label className={`${label} min-w-0`}>
-                        PDF / bizonylat címe
-                        <input className={`${input} w-full min-w-0`} value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Készlet átadási lista" />
-                      </label>
-                      <label className={`${label} min-w-0`}>
-                        Alap forrás
-                        <select className={`${select} w-full min-w-0`} defaultValue="" onChange={(e) => {
-                          const fromId = e.target.value;
-                          const toId = firstDifferentLocation(fromId);
-                          if (fromId && toId) applyMoveLocationsToAll(fromId, toId);
-                        }}>
-                          <option value="">Válassz forrást...</option>
-                          {stockLocationRows.map((loc) => {
-                            const value = locationValue(loc);
-                            return <option key={value} value={value}>{loc.name || loc.code}</option>;
-                          })}
-                        </select>
-                      </label>
-                      <label className={`${label} min-w-0`}>
-                        Alap cél
-                        <select className={`${select} w-full min-w-0`} defaultValue="" onChange={(e) => {
-                          const toId = e.target.value;
-                          const fromId = firstDifferentLocation(toId);
-                          if (fromId && toId) applyMoveLocationsToAll(fromId, toId);
-                        }}>
-                          <option value="">Válassz célt...</option>
-                          {stockLocationRows.map((loc) => {
-                            const value = locationValue(loc);
-                            return <option key={value} value={value}>{loc.name || loc.code}</option>;
-                          })}
-                        </select>
-                      </label>
-                      <label className={`${label} min-w-0 md:col-span-2 xl:col-span-3`}>
-                        Megjegyzés a PDF-re és a naplóba
-                        <input className={`${input} w-full min-w-0`} value={stockMoveNote} onChange={(e) => setStockMoveNote(e.target.value)} placeholder="Pl. átadás ellenőrzésre, visszahozatal..." />
-                      </label>
-                    </div>
-
-                    <div className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-[#2a8d8b]/30 bg-[#203f49] p-3 text-xs text-[#d7fffd]">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.16em] text-[#d7fffd]/60">Összesítés</div>
-                        <div className="mt-2 text-lg font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db</div>
-                        <div className="mt-1 text-[#d7fffd]/78">mozgatásra előkészítve</div>
-                      </div>
-                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-                        <div className="h-full rounded-full bg-[#2a8d8b]" style={{ width: moveValidRows.length ? "100%" : "0%" }} />
-                      </div>
+                <div className="space-y-3 rounded-2xl border border-white/14 bg-[#3f4959] p-3">
+                  <div className="grid gap-3 lg:grid-cols-[1.1fr,1fr,1fr,1.4fr,auto] lg:items-end">
+                    <label className={label}>
+                      PDF / bizonylat címe
+                      <input className={input} value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Készlet átadási lista" />
+                    </label>
+                    <label className={label}>
+                      Alap forrás
+                      <select className={select} defaultValue="" onChange={(e) => {
+                        const fromId = e.target.value;
+                        const toId = firstDifferentLocation(fromId);
+                        if (fromId && toId) applyMoveLocationsToAll(fromId, toId);
+                      }}>
+                        <option value="">Válassz forrást...</option>
+                        {stockLocationRows.map((loc) => {
+                          const value = locationValue(loc);
+                          return <option key={value} value={value}>{loc.name || loc.code}</option>;
+                        })}
+                      </select>
+                    </label>
+                    <label className={label}>
+                      Alap cél
+                      <select className={select} defaultValue="" onChange={(e) => {
+                        const toId = e.target.value;
+                        const fromId = firstDifferentLocation(toId);
+                        if (fromId && toId) applyMoveLocationsToAll(fromId, toId);
+                      }}>
+                        <option value="">Válassz célt...</option>
+                        {stockLocationRows.map((loc) => {
+                          const value = locationValue(loc);
+                          return <option key={value} value={value}>{loc.name || loc.code}</option>;
+                        })}
+                      </select>
+                    </label>
+                    <label className={label}>
+                      Megjegyzés a PDF-re és a naplóba
+                      <input className={input} value={stockMoveNote} onChange={(e) => setStockMoveNote(e.target.value)} placeholder="Pl. átadás ellenőrzésre, visszahozatal..." />
+                    </label>
+                    <div className="rounded-xl border border-[#2a8d8b]/28 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd]">
+                      <div className="font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db</div>
+                      <div className="mt-1 text-[#d7fffd]/78">mozgatásra előkészítve</div>
                     </div>
                   </div>
-
-                  <div className="flex flex-wrap gap-2 text-xs text-white/64">
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.06] px-3 py-1.5"><FileText size={13} /> PDF nyomtatható átadási / visszavételi listának</span>
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.06] px-3 py-1.5"><PackageCheck size={13} /> A mentés ténylegesen módosítja a készletet</span>
+                  <div className="flex flex-wrap gap-2 text-xs text-white/58">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1"><FileText size={13} /> PDF nyomtatható átadási / visszavételi listának</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1"><PackageCheck size={13} /> A mentés ténylegesen módosítja a készletet</span>
                   </div>
                 </div>
               )}
 
-              <div className="grid gap-4">
+              <div className="grid gap-2">
                 {selectedItemsForAction(selectedWorkPanel).map((it) => {
                   const variantId = String(it.variant_id || "");
                   const preparedMove = preparedMoveRowsById.get(variantId);
@@ -4051,73 +4051,58 @@ export default function AllInWarehouse() {
                     const reservedQty = reservedAtLocation(variantId, draft.fromLocationId);
                     const rowProblem = preparedMove?.problem || "";
                     return (
-                      <div key={it.variant_id} className={`rounded-2xl border bg-[#3f4959] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] ${rowProblem ? "border-amber-300/35" : "border-white/12"}`}>
-                        <div className="grid gap-3 lg:grid-cols-[36px_64px_minmax(0,1fr)_260px] lg:items-start">
-                          <div className="flex justify-center pt-1 lg:pt-3">
-                            <input
-                              className={selectBox}
-                              type="checkbox"
-                              checked
-                              onChange={(e) => {
-                                if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
-                              }}
-                              aria-label="Kivétel ebből a feladatlistából"
-                              title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
-                            />
-                          </div>
-                          <div>
-                            {it.image_url ? <img src={it.image_url} alt="" className="h-14 w-14 rounded-xl object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-white">{it.title_ro || "-"}</p>
-                            <p className="mt-1 text-xs text-white/60">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                            <p className="mt-1 text-xs text-white/45">Vonalkód: {it.barcode || it.internal_sku || "-"} • Összes készlet: {n(it.total_qty)}</p>
-                          </div>
-                          <div className="rounded-xl border border-[#2a8d8b]/25 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd] lg:min-w-[240px]">
-                            {rowProblem ? (
-                              <p className="text-amber-200">{rowProblem}</p>
-                            ) : (
-                              <>
-                                <p className="font-semibold text-white">Forrás készlet</p>
-                                <p className="mt-1">{currentQty} db • foglalt: {reservedQty} • elérhető: {availableFrom}</p>
-                              </>
-                            )}
-                          </div>
+                      <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 xl:grid-cols-[36px,56px,minmax(220px,1fr),185px,185px,145px,auto] xl:items-center">
+                        <div className="flex justify-center">
+                          <input
+                            className={selectBox}
+                            type="checkbox"
+                            checked
+                            onChange={(e) => {
+                              if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
+                            }}
+                            aria-label="Kivétel ebből a feladatlistából"
+                            title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
+                          />
                         </div>
-
-                        <div className="mt-4 grid gap-3 border-t border-white/10 pt-4 md:grid-cols-2 xl:grid-cols-[minmax(330px,1fr)_minmax(330px,1fr)_180px] xl:items-end">
-                          <label className={`${label} min-w-0`}>
-                            Honnan
-                            <select className={`${select} w-full min-w-0`} value={draft.fromLocationId} onChange={(e) => setStockMoveRowField(variantId, { fromLocationId: e.target.value })}>
-                              <option value="">Forrás...</option>
-                              {stockLocationRows.map((loc) => {
-                                const value = locationValue(loc);
-                                const available = availableAtLocation(variantId, value);
-                                return <option key={value} value={value}>{loc.name || loc.code} ({available} db)</option>;
-                              })}
-                            </select>
-                          </label>
-                          <label className={`${label} min-w-0`}>
-                            Hova
-                            <select className={`${select} w-full min-w-0`} value={draft.toLocationId} onChange={(e) => setStockMoveRowField(variantId, { toLocationId: e.target.value })}>
-                              <option value="">Cél...</option>
-                              {stockLocationRows.map((loc) => {
-                                const value = locationValue(loc);
-                                return <option key={value} value={value} disabled={value === draft.fromLocationId}>{loc.name || loc.code}</option>;
-                              })}
-                            </select>
-                          </label>
-                          <label className={`${label} min-w-0 md:col-span-2 xl:col-span-1`}>
-                            Darab
-                            <div className="flex h-10 overflow-hidden rounded-xl border border-white/18 bg-[#354153]">
-                              <button className="flex w-10 shrink-0 items-center justify-center border-r border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, -1)}><Minus size={14} /></button>
-                              <input className="min-w-0 flex-1 bg-transparent px-3 text-center text-sm text-white outline-none tabular-nums" type="number" min={0} max={availableFrom || undefined} value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value })} />
-                              <button className="flex w-10 shrink-0 items-center justify-center border-l border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, 1)}><Plus size={14} /></button>
-                            </div>
-                          </label>
+                        <div>
+                          {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
                         </div>
-
-                        <div className="mt-3 flex flex-wrap gap-2 border-t border-white/10 pt-3 lg:justify-end">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
+                          <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          <p className="mt-1 text-xs text-white/45">Vonalkód: {it.barcode || it.internal_sku || "-"} • Összes készlet: {n(it.total_qty)}</p>
+                          {rowProblem ? <p className="mt-1 text-xs text-amber-200">{rowProblem}</p> : <p className="mt-1 text-xs text-[#cffffd]">Forrás: {currentQty} db • foglalt: {reservedQty} • elérhető: {availableFrom}</p>}
+                        </div>
+                        <label className={label}>
+                          Honnan
+                          <select className={select} value={draft.fromLocationId} onChange={(e) => setStockMoveRowField(variantId, { fromLocationId: e.target.value })}>
+                            <option value="">Forrás...</option>
+                            {stockLocationRows.map((loc) => {
+                              const value = locationValue(loc);
+                              const available = availableAtLocation(variantId, value);
+                              return <option key={value} value={value}>{loc.name || loc.code} ({available} db)</option>;
+                            })}
+                          </select>
+                        </label>
+                        <label className={label}>
+                          Hova
+                          <select className={select} value={draft.toLocationId} onChange={(e) => setStockMoveRowField(variantId, { toLocationId: e.target.value })}>
+                            <option value="">Cél...</option>
+                            {stockLocationRows.map((loc) => {
+                              const value = locationValue(loc);
+                              return <option key={value} value={value} disabled={value === draft.fromLocationId}>{loc.name || loc.code}</option>;
+                            })}
+                          </select>
+                        </label>
+                        <label className={label}>
+                          Darab
+                          <div className="flex h-10 overflow-hidden rounded-xl border border-white/18 bg-[#354153]">
+                            <button className="flex w-9 items-center justify-center border-r border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, -1)}><Minus size={14} /></button>
+                            <input className="w-full bg-transparent px-2 text-center text-sm text-white outline-none tabular-nums" type="number" min={0} max={availableFrom || undefined} value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value })} />
+                            <button className="flex w-9 items-center justify-center border-l border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, 1)}><Plus size={14} /></button>
+                          </div>
+                        </label>
+                        <div className="flex flex-wrap justify-end gap-2">
                           <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
                           <button className={btnSoft} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button"><ArrowLeft size={14} /> Vissza</button>
                           <button className={btnSoft} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={14} /> Törlés</button>
@@ -4127,7 +4112,7 @@ export default function AllInWarehouse() {
                   }
 
                   return (
-                    <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px_56px_1fr_auto] md:items-center">
+                    <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/12 bg-[#3f4959] p-3 md:grid-cols-[36px,56px,1fr,auto] md:items-center">
                       <div className="flex justify-center">
                         <input
                           className={selectBox}
@@ -4141,7 +4126,7 @@ export default function AllInWarehouse() {
                         />
                       </div>
                       <div>
-                        {it.image_url ? <img src={it.image_url} alt="" className="h-14 w-14 rounded-xl object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                        {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
@@ -4675,6 +4660,7 @@ export default function AllInWarehouse() {
                   <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
                     <p>Belső azonosító: {detail.item?.internal_sku || "-"}</p>
                     <p className="mt-1">Vonalkód / SKU alap: {edit.barcode || "nincs megadva"}</p>
+                    <p className="mt-1">S/N/COD: {edit.snCod || "nincs megadva"}</p>
                     <p className="mt-1">Utolsó módosítás: {dateShort(detail.item?.updated_at)}</p>
                   </div>
                 </div>
@@ -4735,6 +4721,7 @@ export default function AllInWarehouse() {
                           </button>
                         </div>
                       </label>
+                      <label className={label}>S/N/COD<input className={input} value={edit.snCod} onChange={(e) => setEdit((x) => ({ ...x, snCod: e.target.value }))} placeholder="belső azonosító" /></label>
                       <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, colorName: normalizeColor(x.colorName) }))} placeholder="pl. negru" /></label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
                       <label className={label}>Méret<input className={input} value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} /></label>
