@@ -305,6 +305,8 @@ export type AifStockItem = {
   color_hex?: string | null;
   image_url?: string | null;
   images?: unknown;
+  buy_price?: string | number | null;
+  sell_price?: string | number | null;
   model_id?: string | null;
   model_code?: string | null;
   title_ro: string;
@@ -317,6 +319,87 @@ export type AifStockItem = {
   reserved_qty: number;
   available_qty: number;
   updated_at?: string;
+};
+
+export type AifInventoryCountStatus = "draft" | "counting" | "review" | "committed" | "cancelled";
+
+export type AifInventoryCountSummary = {
+  id: string;
+  code: string;
+  title: string;
+  location_id: string;
+  location_code?: string | null;
+  location_name?: string | null;
+  location_type?: string | null;
+  status: AifInventoryCountStatus;
+  started_at?: string | null;
+  counted_at?: string | null;
+  committed_at?: string | null;
+  actor?: string | null;
+  note?: string | null;
+  raw?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+  line_count?: number | string | null;
+  counted_lines?: number | string | null;
+  expected_qty?: number | string | null;
+  counted_qty?: number | string | null;
+  diff_qty?: number | string | null;
+  missing_qty?: number | string | null;
+  extra_qty?: number | string | null;
+  missing_sell_value?: number | string | null;
+  extra_sell_value?: number | string | null;
+  diff_sell_value?: number | string | null;
+  missing_buy_value?: number | string | null;
+  extra_buy_value?: number | string | null;
+  diff_buy_value?: number | string | null;
+};
+
+export type AifInventoryCountLine = {
+  id: string;
+  count_id: string;
+  variant_id: string;
+  expected_qty: number | string;
+  expected_reserved_qty?: number | string | null;
+  counted_qty?: number | string | null;
+  diff_qty?: number | string | null;
+  missing_qty?: number | string | null;
+  extra_qty?: number | string | null;
+  buy_price?: number | string | null;
+  sell_price?: number | string | null;
+  diff_buy_value?: number | string | null;
+  diff_sell_value?: number | string | null;
+  note?: string | null;
+  raw?: unknown;
+  location_id?: string | null;
+  location_code?: string | null;
+  location_name?: string | null;
+  internal_sku?: string | null;
+  barcode?: string | null;
+  display_barcode?: string | null;
+  size?: string | null;
+  color_code?: string | null;
+  color_name?: string | null;
+  color_hex?: string | null;
+  image_url?: string | null;
+  images?: unknown;
+  model_id?: string | null;
+  model_code?: string | null;
+  title_ro: string;
+  shopify_title?: string | null;
+  brand_name?: string | null;
+  brand_code?: string | null;
+  category_name_ro?: string | null;
+  category_code?: string | null;
+  current_qty?: number | string | null;
+  current_reserved_qty?: number | string | null;
+  current_available_qty?: number | string | null;
+};
+
+export type AifInventoryCountDetail = {
+  item: AifInventoryCountSummary;
+  lines: AifInventoryCountLine[];
+  totals?: AifInventoryCountSummary;
 };
 
 export type AifStockMovementDirection = "all" | "in" | "out" | "adjust";
@@ -513,6 +596,65 @@ export function apiAifStock(locationCodeOrId?: string, options?: { search?: stri
   return fetchAifJSON<{ items: AifStockItem[] }>(`/stock${suffix}`);
 }
 
+export function apiAifListInventoryCounts(options?: {
+  location?: string;
+  status?: AifInventoryCountStatus;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (options?.location) q.set("location", options.location);
+  if (options?.status) q.set("status", options.status);
+  if (options?.limit) q.set("limit", String(options.limit));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<{ items: AifInventoryCountSummary[] }>(`/inventory-counts${suffix}`);
+}
+
+export function apiAifCreateInventoryCount(input: {
+  location: string;
+  title?: string;
+  note?: string;
+  search?: string;
+  includeZero?: boolean;
+}) {
+  return fetchAifJSON<AifInventoryCountDetail>("/inventory-counts", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifGetInventoryCount(id: string) {
+  return fetchAifJSON<AifInventoryCountDetail>(`/inventory-counts/${encodeURIComponent(id)}`);
+}
+
+export function apiAifSaveInventoryCountLines(
+  id: string,
+  lines: { lineId?: string; variantId?: string; countedQty?: number | string | null; note?: string | null }[]
+) {
+  return fetchAifJSON<AifInventoryCountDetail & { ok: true; saved: number }>(
+    `/inventory-counts/${encodeURIComponent(id)}/lines`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ lines }),
+    }
+  );
+}
+
+export function apiAifCommitInventoryCount(id: string) {
+  return fetchAifJSON<AifInventoryCountDetail & { ok: true; changed: number; netDiff: number }>(
+    `/inventory-counts/${encodeURIComponent(id)}/commit`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    }
+  );
+}
+
+export function apiAifDeleteInventoryCount(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" }>(`/inventory-counts/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 export function apiAifStockMovements(options?: {
   location?: string;
   variant?: string;
@@ -554,40 +696,7 @@ export function apiAifUpdateVariantStock(
     `/variants/${encodeURIComponent(variantId)}/stock`,
     {
       method: "PATCH",
-      body: JSON.stringify({ rows: items, items }),
-    }
-  );
-}
-
-export type AifStockTransferLineInput = {
-  variantId: string;
-  fromLocationId?: string;
-  fromLocationCode?: string;
-  toLocationId?: string;
-  toLocationCode?: string;
-  qty: number | string;
-};
-
-export type AifStockTransferResponse = {
-  ok: true;
-  transferId: string;
-  lineCount: number;
-  movedRows?: number;
-  movedLines?: number;
-  movedQty: number;
-  title?: string | null;
-  totalQty?: number;
-  movements?: number;
-  items: any[];
-};
-
-export function apiAifCreateStockTransfer(payload: { title?: string; note?: string; rows?: AifStockTransferLineInput[]; lines?: AifStockTransferLineInput[] }) {
-  const rows = payload.rows || payload.lines || [];
-  return fetchAifJSON<AifStockTransferResponse>(
-    "/stock-transfers",
-    {
-      method: "POST",
-      body: JSON.stringify({ ...payload, rows, lines: payload.lines || rows }),
+      body: JSON.stringify({ items }),
     }
   );
 }
