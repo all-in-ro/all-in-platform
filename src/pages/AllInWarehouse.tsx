@@ -293,6 +293,31 @@ type MaterialType = {
   sort_order?: number | string | null;
   is_active?: boolean;
 };
+type SizeType = {
+  id: string;
+  code: string;
+  name: string;
+  name_hu?: string | null;
+  aliases?: string[] | null;
+  sort_order?: number | string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+type BrandSizeCode = {
+  id: string;
+  brand_id: string;
+  brand_code?: string | null;
+  brand_name?: string | null;
+  size_code: string;
+  size_type_id: string;
+  size_type_code?: string | null;
+  size_name?: string | null;
+  notes?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
 type SupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 type StockItem = { variant_id: string; location_id?: string; location_code?: string; location_name?: string; location_type?: string; qty?: number | string; reserved_qty?: number | string; available_qty?: number | string; updated_at?: string };
 type StockTransferDraftRow = {
@@ -485,6 +510,13 @@ type EditForm = {
   compareAtPrice: string;
   imageUrl: string;
   variantStatus: string;
+};
+type NewProductForm = EditForm & {
+  supplierId: string;
+  supplierProductCode: string;
+  supplierVariantCode: string;
+  supplierColorCode: string;
+  supplierSize: string;
 };
 
 function goHome() {
@@ -1281,6 +1313,24 @@ function displayColorName(value: unknown, fallback?: unknown) {
   return officialColorRo(value) || String(fallback || "").trim() || "-";
 }
 
+function officialSizeFromTypes(value: unknown, sizes: SizeType[]) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const key = colorKey(raw);
+  const found = (sizes || []).find((s) => {
+    const aliases = Array.isArray(s.aliases) ? s.aliases : [];
+    return [s.code, s.name, s.name_hu, ...aliases]
+      .filter(Boolean)
+      .some((x) => colorKey(x) === key);
+  });
+  return found?.name || raw.toUpperCase();
+}
+
+function sizeTypeLabel(s?: SizeType | null) {
+  if (!s) return "-";
+  return s.name_hu || s.name || s.code || "-";
+}
+
 function categoryLabel(c: MetaItem) {
   return c.name_hu || c.name_ro || c.name || c.code || "-";
 }
@@ -1348,7 +1398,7 @@ async function apiInventory() {
 }
 
 async function apiMeta() {
-  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; colorTypes?: ColorType[]; brandColorCodes?: BrandColorCode[]; materialTypes?: MaterialType[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
+  return fetchJSON<{ suppliers: MetaItem[]; brands: MetaItem[]; categories: MetaItem[]; genderTypes?: GenderType[]; colorTypes?: ColorType[]; brandColorCodes?: BrandColorCode[]; materialTypes?: MaterialType[]; sizeTypes?: SizeType[]; brandSizeCodes?: BrandSizeCode[]; locations: MetaItem[]; supplierBrands?: SupplierBrandLink[] }>("/api/aif/meta");
 }
 
 async function apiStock() {
@@ -1362,6 +1412,14 @@ async function apiVariantDetail(id: string) {
 async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
   return fetchJSON<{ ok: true }>(`/api/aif/variants/${encodeURIComponent(id)}`, {
     method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiCreateManualProduct(payload: Record<string, unknown>) {
+  return fetchJSON<{ ok: true; variantId: string; modelId?: string | null; qty?: number; stockRows?: Array<Record<string, unknown>>; stock?: StockItem[] }>("/api/aif/manual-products", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -1481,6 +1539,36 @@ async function apiDeleteMaterialType(id: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/material-types/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+async function apiSaveSizeType(id: string, payload: Record<string, unknown>) {
+  const url = id ? `/api/aif/size-types/${encodeURIComponent(id)}` : "/api/aif/size-types";
+  return fetchJSON<{ item: SizeType }>(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteSizeType(id: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/size-types/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function apiSaveBrandSizeCode(id: string, payload: Record<string, unknown>) {
+  const url = id ? `/api/aif/brand-size-codes/${encodeURIComponent(id)}` : "/api/aif/brand-size-codes";
+  return fetchJSON<{ item: BrandSizeCode }>(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteBrandSizeCode(id: string) {
+  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/brand-size-codes/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function apiListBrandSizeCodes() {
+  return fetchJSON<{ items: BrandSizeCode[] }>("/api/aif/brand-size-codes");
+}
+
 async function uploadImage(file: File, variantId: string) {
   const fd = new FormData();
   fd.append("file", file);
@@ -1512,6 +1600,17 @@ function emptyForm(): EditForm {
     compareAtPrice: "",
     imageUrl: "",
     variantStatus: "active",
+  };
+}
+
+function emptyNewProductForm(): NewProductForm {
+  return {
+    ...emptyForm(),
+    supplierId: "",
+    supplierProductCode: "",
+    supplierVariantCode: "",
+    supplierColorCode: "",
+    supplierSize: "",
   };
 }
 
@@ -1564,6 +1663,8 @@ export default function AllInWarehouse() {
   const [categories, setCategories] = useState<MetaItem[]>([]);
   const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
   const [materialTypes, setMaterialTypes] = useState<MaterialType[]>([]);
+  const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
+  const [brandSizeCodes, setBrandSizeCodes] = useState<BrandSizeCode[]>([]);
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
   const [brandColorCodes, setBrandColorCodes] = useState<BrandColorCode[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
@@ -1588,15 +1689,21 @@ export default function AllInWarehouse() {
   const [edit, setEdit] = useState<EditForm>(emptyForm());
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [newProductOpen, setNewProductOpen] = useState(false);
+  const [newProduct, setNewProduct] = useState<NewProductForm>(() => emptyNewProductForm());
+  const [newProductStockRows, setNewProductStockRows] = useState<Record<string, string>>({});
+  const [newProductSaving, setNewProductSaving] = useState(false);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
-  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors" | "brandColors" | "materials">("categories");
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
   const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [genderForm, setGenderForm] = useState({ code: "", name: "", aliases: "", sortOrder: "10" });
   const [colorForm, setColorForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
   const [brandColorForm, setBrandColorForm] = useState({ id: "", brandId: "", colorCode: "", colorTypeId: "", notes: "" });
   const [materialForm, setMaterialForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: "10" });
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "brandColor" | "material"; id: string; name: string } | null>(null);
+  const [sizeForm, setSizeForm] = useState({ id: "", code: "", name: "", nameHu: "", aliases: "", sortOrder: "10" });
+  const [brandSizeForm, setBrandSizeForm] = useState({ id: "", brandId: "", sizeCode: "", sizeTypeId: "", notes: "" });
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
@@ -1950,6 +2057,7 @@ export default function AllInWarehouse() {
   const nextGenderSortOrder = useMemo(() => nextSortOrder(genderTypes), [genderTypes]);
   const nextColorSortOrder = useMemo(() => nextSortOrder(colorTypes), [colorTypes]);
   const nextMaterialSortOrder = useMemo(() => nextSortOrder(materialTypes), [materialTypes]);
+  const nextSizeSortOrder = useMemo(() => nextSortOrder(sizeTypes), [sizeTypes]);
 
   useEffect(() => {
     if (!taxonomyOpen) return;
@@ -1965,6 +2073,9 @@ export default function AllInWarehouse() {
     if (taxonomyTab === "materials" && !materialForm.id && !materialForm.nameRo.trim()) {
       setMaterialForm((x) => x.sortOrder === nextMaterialSortOrder ? x : { ...x, sortOrder: nextMaterialSortOrder });
     }
+    if (taxonomyTab === "sizes" && !sizeForm.id && !sizeForm.name.trim() && !sizeForm.nameHu.trim()) {
+      setSizeForm((x) => x.sortOrder === nextSizeSortOrder ? x : { ...x, sortOrder: nextSizeSortOrder });
+    }
   }, [
     taxonomyOpen,
     taxonomyTab,
@@ -1972,6 +2083,7 @@ export default function AllInWarehouse() {
     nextGenderSortOrder,
     nextColorSortOrder,
     nextMaterialSortOrder,
+    nextSizeSortOrder,
     categoryForm.id,
     categoryForm.nameRo,
     categoryForm.nameHu,
@@ -1982,6 +2094,9 @@ export default function AllInWarehouse() {
     colorForm.nameRo,
     materialForm.id,
     materialForm.nameRo,
+    sizeForm.id,
+    sizeForm.name,
+    sizeForm.nameHu,
   ]);
 
   const selectedSupplier = useMemo(() => {
@@ -2012,6 +2127,7 @@ export default function AllInWarehouse() {
   };
 
   const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
+  const normalizeSize = (value: unknown) => officialSizeFromTypes(value, sizeTypes);
 
   const filtered = useMemo(() => {
     let out = [...items];
@@ -2959,6 +3075,24 @@ export default function AllInWarehouse() {
     return b?.name || b?.code || "-";
   }
 
+  function metaItemByValue<T extends MetaItem>(rows: T[], value: unknown) {
+    const key = normalizeSearch(value);
+    if (!key) return null;
+    return rows.find((row) => [row.id, row.code, row.name, row.name_ro, row.name_hu].map(normalizeSearch).some((x) => x === key)) || null;
+  }
+
+  function standardSizeForBrandSize(brandValue: unknown, supplierSize: unknown) {
+    const brandRow = metaItemByValue(brands, brandValue);
+    const brandKeys = new Set([brandRow?.id, brandRow?.code, brandRow?.name, brandValue].map(normalizeSearch).filter(Boolean));
+    const sizeKey = normalizeSearch(supplierSize);
+    if (!brandKeys.size || !sizeKey) return "";
+    const found = brandSizeCodes.find((row) => {
+      const rowBrandKeys = [row.brand_id, row.brand_code, row.brand_name].map(normalizeSearch).filter(Boolean);
+      return rowBrandKeys.some((key) => brandKeys.has(key)) && normalizeSearch(row.size_code || "") === sizeKey;
+    });
+    return found?.size_name || sizeTypes.find((size) => normalizeSearch(size.id) === normalizeSearch(found?.size_type_id))?.name || "";
+  }
+
   function resetBrandColorForm() {
     setBrandColorForm({ id: "", brandId: brands[0]?.id || "", colorCode: "", colorTypeId: colorTypes[0]?.id || "", notes: "" });
   }
@@ -3020,6 +3154,68 @@ export default function AllInWarehouse() {
       aliases: (Array.isArray(m.aliases) ? m.aliases : []).join(", "),
       sortOrder: m.sort_order == null ? nextMaterialSortOrder : String(m.sort_order),
     });
+  }
+
+  function resetSizeForm() {
+    setSizeForm({ id: "", code: "", name: "", nameHu: "", aliases: "", sortOrder: nextSizeSortOrder });
+  }
+
+  function editSizeRow(row: SizeType) {
+    setTaxonomyTab("sizes");
+    setSizeForm({
+      id: String(row.id || ""),
+      code: String(row.code || ""),
+      name: String(row.name || ""),
+      nameHu: String(row.name_hu || ""),
+      aliases: (Array.isArray(row.aliases) ? row.aliases : []).join(", "),
+      sortOrder: row.sort_order == null ? nextSizeSortOrder : String(row.sort_order),
+    });
+  }
+
+  function resetBrandSizeForm() {
+    setBrandSizeForm({ id: "", brandId: brands[0]?.id || "", sizeCode: "", sizeTypeId: sizeTypes[0]?.id || "", notes: "" });
+  }
+
+  function editBrandSizeRow(row: BrandSizeCode) {
+    setTaxonomyTab("brandSizes");
+    setBrandSizeForm({
+      id: String(row.id || ""),
+      brandId: String(row.brand_id || ""),
+      sizeCode: String(row.size_code || ""),
+      sizeTypeId: String(row.size_type_id || ""),
+      notes: String(row.notes || ""),
+    });
+  }
+
+  async function saveBrandSizeForm() {
+    if (!brandSizeForm.brandId) {
+      setMessage("A márka kiválasztása kötelező.");
+      return;
+    }
+    if (!brandSizeForm.sizeCode.trim()) {
+      setMessage("A gyártói méret / méretkód kötelező.");
+      return;
+    }
+    if (!brandSizeForm.sizeTypeId) {
+      setMessage("A standard AllIn méret kiválasztása kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveBrandSizeCode(brandSizeForm.id, {
+        brandId: brandSizeForm.brandId,
+        sizeCode: brandSizeForm.sizeCode.trim().toUpperCase(),
+        sizeTypeId: brandSizeForm.sizeTypeId,
+        notes: brandSizeForm.notes,
+      });
+      resetBrandSizeForm();
+      await load();
+      setMessage("Márkaméret mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a márkaméretet.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
   }
 
   async function saveCategoryForm() {
@@ -3118,6 +3314,30 @@ export default function AllInWarehouse() {
     }
   }
 
+  async function saveSizeForm() {
+    if (!sizeForm.name.trim()) {
+      setMessage("A standard méret megnevezése kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveSizeType(sizeForm.id, {
+        code: sizeForm.code,
+        name: sizeForm.name.trim().toUpperCase(),
+        nameHu: sizeForm.nameHu,
+        aliases: sizeForm.aliases,
+        sortOrder: sizeForm.sortOrder,
+      });
+      resetSizeForm();
+      await load();
+      setMessage("Standard méret mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a standard méretet.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
   async function confirmDeleteTaxonomy() {
     if (!deleteTarget) return;
     setTaxonomyBusy(true);
@@ -3127,6 +3347,8 @@ export default function AllInWarehouse() {
       if (deleteTarget.kind === "color") await apiDeleteColorType(deleteTarget.id);
       if (deleteTarget.kind === "brandColor") await apiDeleteBrandColorCode(deleteTarget.id);
       if (deleteTarget.kind === "material") await apiDeleteMaterialType(deleteTarget.id);
+      if (deleteTarget.kind === "size") await apiDeleteSizeType(deleteTarget.id);
+      if (deleteTarget.kind === "brandSize") await apiDeleteBrandSizeCode(deleteTarget.id);
       setDeleteTarget(null);
       setOpenTaxonomyMenu(null);
       await load();
@@ -3152,6 +3374,15 @@ export default function AllInWarehouse() {
           brandColorRows = [];
         }
       }
+      let brandSizeRows = meta.brandSizeCodes || [];
+      if (!brandSizeRows.length) {
+        try {
+          const extra = await apiListBrandSizeCodes();
+          brandSizeRows = extra.items || [];
+        } catch {
+          brandSizeRows = [];
+        }
+      }
       setItems((inv.items || []).filter((x) => String(x.variant_status || "active") !== "archived" && String(x.model_status || "active") !== "archived"));
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
@@ -3161,6 +3392,8 @@ export default function AllInWarehouse() {
       setColorTypes(meta.colorTypes || []);
       setBrandColorCodes(brandColorRows);
       setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
+      setSizeTypes((meta.sizeTypes || []).slice().sort((a: SizeType, b: SizeType) => sizeTypeLabel(a).localeCompare(sizeTypeLabel(b), "hu", { sensitivity: "base" })));
+      setBrandSizeCodes(brandSizeRows);
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
 
@@ -3477,6 +3710,113 @@ export default function AllInWarehouse() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function emptyStockRowsByLocation(defaultValue = "0") {
+    return stockLocationRows.reduce<Record<string, string>>((acc, loc) => {
+      acc[locationKey(loc)] = defaultValue;
+      return acc;
+    }, {});
+  }
+
+  function openNewProductModal() {
+    const next = emptyNewProductForm();
+    if (brand !== "all") next.brandCode = brand;
+    if (category !== "all") next.categoryCode = category;
+    if (gender !== "all") next.gender = gender;
+    next.supplierId = supplier !== "all" ? String(selectedSupplier?.id || "") : "";
+    setNewProduct(next);
+    setNewProductStockRows(emptyStockRowsByLocation("0"));
+    setNewProductOpen(true);
+    setMessage("");
+  }
+
+  function closeNewProductModal() {
+    if (newProductSaving) return;
+    setNewProductOpen(false);
+    setNewProduct(emptyNewProductForm());
+    setNewProductStockRows({});
+  }
+
+  function newProductTotalQty(rows: Record<string, string> = newProductStockRows) {
+    return stockLocationRows.reduce((sum, loc) => sum + Math.max(0, Math.floor(n(rows[locationKey(loc)]))), 0);
+  }
+
+  function setNewProductLocationQty(location: MetaItem, value: string) {
+    const cleaned = String(value || "").replace(/[^0-9]/g, "");
+    setNewProductStockRows((rows) => ({ ...rows, [locationKey(location)]: cleaned }));
+  }
+
+  async function saveNewProduct() {
+    if (!newProduct.titleRo.trim()) {
+      setMessage("A terméknév románul kötelező.");
+      return;
+    }
+    if (!newProduct.size.trim()) {
+      setMessage("A méret kötelező. One size esetén használd az OSFM-et.");
+      return;
+    }
+    const totalQty = newProductTotalQty();
+    if (totalQty <= 0) {
+      setMessage("Legalább egy célhelyre adj meg készletet.");
+      return;
+    }
+    setNewProductSaving(true);
+    setMessage("");
+    try {
+      const stockRowsPayload = stockLocationRows
+        .map((loc) => ({
+          locationId: String(loc.id || ""),
+          locationCode: String(loc.code || ""),
+          qty: Math.max(0, Math.floor(n(newProductStockRows[locationKey(loc)]))),
+        }))
+        .filter((row) => row.qty > 0);
+
+      const payload = {
+        titleRo: newProduct.titleRo,
+        titleHu: newProduct.titleHu,
+        descriptionRo: newProduct.descriptionRo,
+        brandCode: newProduct.brandCode || null,
+        categoryCode: newProduct.categoryCode || null,
+        gender: newProduct.gender || "unisex",
+        productType: newProduct.productType,
+        season: newProduct.season,
+        material: newProduct.material,
+        shopifyTitle: newProduct.shopifyTitle || newProduct.titleRo,
+        modelStatus: newProduct.modelStatus || "active",
+        barcode: newProduct.barcode,
+        snCod: newProduct.snCod,
+        colorCode: newProduct.colorCode,
+        colorName: normalizeColor(newProduct.colorName),
+        size: normalizeSize(newProduct.size),
+        buyPrice: newProduct.buyPrice,
+        sellPrice: newProduct.sellPrice,
+        compareAtPrice: newProduct.compareAtPrice,
+        imageUrl: newProduct.imageUrl,
+        status: newProduct.variantStatus || "active",
+        supplierId: newProduct.supplierId || null,
+        supplierProductCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
+        supplierVariantCode: newProduct.supplierVariantCode,
+        supplierColorCode: newProduct.supplierColorCode || newProduct.colorCode,
+        supplierSize: newProduct.supplierSize || newProduct.size,
+        modelCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
+        qty: totalQty,
+        stockRows: stockRowsPayload,
+      };
+
+      const created = await apiCreateManualProduct(payload);
+      notifyStockMovesChanged({ variantId: created.variantId, source: "warehouse_manual_product_create" });
+      await load();
+      setNewProductOpen(false);
+      setNewProduct(emptyNewProductForm());
+      setNewProductStockRows({});
+      setMessage(`Új termék rögzítve ${totalQty} db készlettel.`);
+      if (created.variantId) await openDetail(created.variantId);
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült létrehozni az új terméket.");
+    } finally {
+      setNewProductSaving(false);
+    }
+  }
+
   async function saveDetail() {
     if (!detail?.item?.id) return;
     setSaving(true);
@@ -3498,7 +3838,7 @@ export default function AllInWarehouse() {
         snCod: edit.snCod,
         colorCode: edit.colorCode,
         colorName: normalizeColor(edit.colorName),
-        size: edit.size,
+        size: normalizeSize(edit.size),
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         imageUrl: edit.imageUrl,
@@ -3625,6 +3965,7 @@ export default function AllInWarehouse() {
             <p className="mt-1 max-w-3xl text-sm text-white/70">Termék- és készletközpont kereséssel, szűréssel, képekkel, készletértékkel és termékadat-szerkesztéssel.</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button className={primaryBtn} onClick={openNewProductModal} type="button"><Plus size={16} /> Új termék hozzáadása</button>
             <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
             <button className={btnSoft} onClick={load} disabled={busy}><RefreshCw size={16} /> Frissítés</button>
             <button className={btn} onClick={goHome}><ArrowLeft size={16} /> Vissza</button>
@@ -3632,6 +3973,12 @@ export default function AllInWarehouse() {
         </header>
 
         {message && <div className="rounded-xl border border-white/20 bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
+        <datalist id="warehouse-standard-size-options">
+          {sizeTypes.map((st) => <option key={st.id} value={st.name || st.code}>{st.name_hu || st.code}</option>)}
+        </datalist>
+        <datalist id="warehouse-color-options">
+          {colorTypes.map((c) => <option key={c.id} value={c.name_ro}>{c.name_hu || c.code}</option>)}
+        </datalist>
 
         <section className={panel}>
           <div className={`${panelHead} ${filtersOpen ? "border-b border-white/12" : ""}`}>
@@ -4488,6 +4835,118 @@ export default function AllInWarehouse() {
         </div>
       )}
 
+      {newProductOpen && (
+        <div className={modalWrap}>
+          <div className={modal}>
+            <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Új termék kézi felvétele</p>
+                <h2 className="mt-1 text-xl text-white">Új termék hozzáadása raktárba</h2>
+                <p className="mt-1 max-w-3xl text-sm text-white/60">Ugyanazokat a fő termék-, variáns-, ár- és készletadatokat tudod megadni, mint import után, csak receptió nélkül.</p>
+              </div>
+              <button className={btnSoft} onClick={closeNewProductModal} disabled={newProductSaving} type="button"><X size={15} /> Bezárás</button>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <div className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
+                <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
+                  <div className="mb-3 flex items-center gap-2 text-sm text-white/88"><Edit3 size={15} /> Alapadatok</div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className={label}>Terméknév románul<input className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
+                    <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
+                    <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[86px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
+                    <label className={label}>Beszállító / forrás
+                      <select className={select} value={newProduct.supplierId} onChange={(e) => setNewProduct((x) => ({ ...x, supplierId: e.target.value }))}>
+                        <option value="">Nincs megadva</option>
+                        {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </label>
+                    <label className={label}>Márka
+                      <select className={select} value={newProduct.brandCode} onChange={(e) => {
+                        const nextBrand = e.target.value;
+                        const mapped = standardSizeForBrandSize(nextBrand, newProduct.supplierSize);
+                        setNewProduct((x) => ({ ...x, brandCode: nextBrand, size: mapped || x.size }));
+                      }}>
+                        <option value="">Nincs megadva</option>
+                        {brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}
+                      </select>
+                    </label>
+                    <label className={label}>Kategória
+                      <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value }))}>
+                        <option value="">Nincs megadva</option>
+                        {categories.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                      </select>
+                    </label>
+                    <label className={label}>Nem
+                      <select className={select} value={newProduct.gender} onChange={(e) => setNewProduct((x) => ({ ...x, gender: e.target.value }))}>
+                        {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
+                        {!genderTypes.length && <option value="unisex">Unisex</option>}
+                      </select>
+                    </label>
+                    <label className={label}>Terméktípus<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
+                    <label className={label}>Szezon<input className={input} value={newProduct.season} onChange={(e) => setNewProduct((x) => ({ ...x, season: e.target.value }))} /></label>
+                    <label className={`${label} md:col-span-2`}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} placeholder="pl. piele, textil, bumbac" /></label>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
+                  <div className="mb-3 flex items-center gap-2 text-sm text-white/88"><Barcode size={15} /> Import-azonosítók és variáns</div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className={label}>Termékkód / modellkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
+                    <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
+                    <label className={label}>Vonalkód / SKU<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label>
+                    <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
+                    <label className={label}>Gyártói színkód<input className={input} value={newProduct.supplierColorCode || newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierColorCode: e.target.value, colorCode: e.target.value }))} placeholder="pl. 001" /></label>
+                    <label className={label}>Szín<input className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
+                    <label className={label}>Gyártói méret<input className={input} value={newProduct.supplierSize} onChange={(e) => {
+                      const supplierSizeValue = e.target.value;
+                      const mapped = standardSizeForBrandSize(newProduct.brandCode, supplierSizeValue);
+                      setNewProduct((x) => ({ ...x, supplierSize: supplierSizeValue, size: mapped || x.size || supplierSizeValue }));
+                    }} placeholder="pl. US 8.5 vagy OSFM" /></label>
+                    <label className={label}>Standard méret<input className={input} list="warehouse-standard-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
+                    <label className={label}>Vételár<input className={input} value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} inputMode="decimal" /></label>
+                    <label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label>
+                    <label className={label}>Akció előtti ár<input className={input} value={newProduct.compareAtPrice} onChange={(e) => setNewProduct((x) => ({ ...x, compareAtPrice: e.target.value }))} inputMode="decimal" /></label>
+                    <label className={label}>Kép URL<input className={input} value={newProduct.imageUrl} onChange={(e) => setNewProduct((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." /></label>
+                    <label className={`${label} md:col-span-2`}>Shopify cím<input className={input} value={newProduct.shopifyTitle} onChange={(e) => setNewProduct((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
+                  </div>
+                </section>
+              </div>
+
+              <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm text-white/88">Kezdő készlet célhelyenként</p>
+                    <p className="text-xs text-white/55">Csak a pozitív mennyiségek kerülnek mentésre. Összesen: <span className="text-white">{newProductTotalQty()}</span> db</p>
+                  </div>
+                  <button className={btnSoft} type="button" onClick={() => setNewProductStockRows(emptyStockRowsByLocation("0"))}>Nullázás</button>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                  {stockLocationRows.map((loc) => {
+                    const key = locationKey(loc);
+                    return (
+                      <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2 text-sm text-white/78">
+                        <span className="min-w-0 truncate">{loc.name || loc.code}</span>
+                        <input className="h-9 w-24 rounded-lg border border-white/16 bg-[#303a4c] px-2 text-right text-white outline-none focus:border-white/45" value={newProductStockRows[key] || ""} onChange={(e) => setNewProductLocationQty(loc, e.target.value)} inputMode="numeric" placeholder="0" />
+                      </label>
+                    );
+                  })}
+                  {!stockLocationRows.length && <p className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-3 py-3 text-sm text-amber-100">Nincs aktív célhely. Előbb vegyél fel legalább egy aktív lokációt a törzsadatoknál.</p>}
+                </div>
+              </section>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 pt-4">
+                <div className="text-sm text-white/65">Mentés után a termék azonnal megjelenik a raktárlistában, a készletmozgás pedig kézi bevitelként naplózódik.</div>
+                <div className="flex gap-2">
+                  <button className={btnSoft} type="button" onClick={closeNewProductModal} disabled={newProductSaving}>Mégse</button>
+                  <button className={primaryBtn} type="button" onClick={saveNewProduct} disabled={newProductSaving || newProductTotalQty() <= 0}><Save size={15} /> Termék mentése</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {productDeleteTarget && (
         <div className={modalWrap}>
           <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
@@ -4520,7 +4979,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek, színek, márka színkódok és összetevők kezelése</h2>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek, színek, méretek, márkakódok és összetevők kezelése</h2>
                   <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
                 </div>
                 <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
@@ -4539,6 +4998,12 @@ export default function AllInWarehouse() {
                 </button>
                 <button className={taxonomyTab === "brandColors" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("brandColors"); setOpenTaxonomyMenu(null); }}>
                   Márka színkódok <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{brandColorCodes.length}</span>
+                </button>
+                <button className={taxonomyTab === "sizes" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("sizes"); setOpenTaxonomyMenu(null); }}>
+                  Méretek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{sizeTypes.length}</span>
+                </button>
+                <button className={taxonomyTab === "brandSizes" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("brandSizes"); setOpenTaxonomyMenu(null); }}>
+                  Márkaméretek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{brandSizeCodes.length}</span>
                 </button>
                 <button className={taxonomyTab === "materials" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("materials"); setOpenTaxonomyMenu(null); }}>
                   Összetevők <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{materialTypes.length}</span>
@@ -4795,6 +5260,141 @@ export default function AllInWarehouse() {
                 </div>
               )}
 
+              {taxonomyTab === "sizes" && (
+                <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">{sizeForm.id ? "Standard méret módosítása" : "Új standard méret"}</p>
+                        <p className="text-[11px] text-white/50">AllIn méret, amit importnál és kézi termékfelvételnél egységesen használunk.</p>
+                      </div>
+                      {sizeForm.id && <button className={taxonomySmallBtn} onClick={resetSizeForm}>Új méret</button>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Standard méret
+                        <input className={taxonomyInput} value={sizeForm.name} onChange={(e) => setSizeForm((x) => ({ ...x, name: e.target.value.toUpperCase() }))} placeholder="pl. OSFM, EU 42, 36 2/3" />
+                      </label>
+                      <label className={taxonomyField}>Magyar megnevezés
+                        <input className={taxonomyInput} value={sizeForm.nameHu} onChange={(e) => setSizeForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. one size, 42-es" />
+                      </label>
+                      <label className={taxonomyField}>Belső kód
+                        <input className={taxonomyInput} value={sizeForm.code} onChange={(e) => setSizeForm((x) => ({ ...x, code: e.target.value }))} placeholder="üresen automatikus" />
+                      </label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek
+                        <textarea className={taxonomyTextarea} value={sizeForm.aliases} onChange={(e) => setSizeForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="ONE SIZE, OS, one-size, 42 EU, EU42" />
+                      </label>
+                      <label className={taxonomyField}>Sorrend
+                        <input className={taxonomyInput} value={sizeForm.sortOrder} onChange={(e) => setSizeForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!sizeForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextSizeSortOrder}</span>}
+                      </label>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveSizeForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                    </div>
+                  </section>
+
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Standard méret lista</p>
+                        <p className="text-[11px] text-white/50">OSFM, ruhaméretek és cipőméretek standard oldala.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{sizeTypes.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
+                      {sizeTypes.map((row, index) => (
+                        <div key={row.id} className={taxonomyRow}>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-white">{sizeTypeLabel(row)}</p>
+                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.code}</span>
+                              <span className="rounded-full border border-[#67d4d1]/25 bg-[#208d8b]/18 px-2 py-0.5 text-[10px] text-white">#{row.sort_order ?? "-"}</span>
+                            </div>
+                            {row.name_hu && <p className="mt-0.5 text-[11px] text-white/50">HU: {row.name_hu}</p>}
+                            {!!row.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {row.aliases.join(", ")}</p>}
+                          </div>
+                          {taxonomyActionMenu({
+                            menuId: `size-${row.id}`,
+                            openUp: taxonomyMenuOpensUp(index, sizeTypes.length),
+                            onEdit: () => editSizeRow(row),
+                            onDelete: () => setDeleteTarget({ kind: "size", id: String(row.id), name: sizeTypeLabel(row) }),
+                          })}
+                        </div>
+                      ))}
+                      {!sizeTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív standard méret.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {taxonomyTab === "brandSizes" && (
+                <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">{brandSizeForm.id ? "Márkaméret módosítása" : "Új márkaméret"}</p>
+                        <p className="text-[11px] text-white/50">Gyártói méret fordítása standard AllIn méretre, márkához kötve. Cipőknél ez márkánként eltérhet.</p>
+                      </div>
+                      {brandSizeForm.id && <button className={taxonomySmallBtn} onClick={resetBrandSizeForm}>Új márkaméret</button>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Márka
+                        <select className={taxonomyInput} value={brandSizeForm.brandId} onChange={(e) => setBrandSizeForm((x) => ({ ...x, brandId: e.target.value }))}>
+                          <option value="">Válassz márkát</option>
+                          {brands.map((b) => <option key={b.id} value={b.id}>{brandLabel(b)}</option>)}
+                        </select>
+                      </label>
+                      <label className={taxonomyField}>Gyártói méret / méretkód
+                        <input className={taxonomyInput} value={brandSizeForm.sizeCode} onChange={(e) => setBrandSizeForm((x) => ({ ...x, sizeCode: e.target.value.toUpperCase() }))} placeholder="pl. 8.5, 42, MENS 9" />
+                      </label>
+                      <label className={taxonomyField}>Standard AllIn méret
+                        <select className={taxonomyInput} value={brandSizeForm.sizeTypeId} onChange={(e) => setBrandSizeForm((x) => ({ ...x, sizeTypeId: e.target.value }))}>
+                          <option value="">Válassz standard méretet</option>
+                          {sizeTypes.map((st) => <option key={st.id} value={st.id}>{sizeTypeLabel(st)}</option>)}
+                        </select>
+                      </label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Megjegyzés
+                        <textarea className={taxonomyTextarea} value={brandSizeForm.notes} onChange={(e) => setBrandSizeForm((x) => ({ ...x, notes: e.target.value }))} placeholder="pl. Adidas US 8.5 = EU 42" />
+                      </label>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveBrandSizeForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                    </div>
+                  </section>
+
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Márkaméret lista</p>
+                        <p className="text-[11px] text-white/50">Importnál például Adidas + US 8.5 → EU 42.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{brandSizeCodes.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
+                      {brandSizeCodes.map((row, index) => (
+                        <div key={row.id} className={taxonomyRow}>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-white">{row.brand_name || row.brand_code || "-"}</p>
+                              <span className="rounded-full border border-[#67d4d1]/25 bg-[#208d8b]/18 px-2 py-0.5 text-[10px] text-white">{row.size_code}</span>
+                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.size_name || row.size_type_code || "-"}</span>
+                            </div>
+                            {row.notes && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">{row.notes}</p>}
+                          </div>
+                          {taxonomyActionMenu({
+                            menuId: `brand-size-${row.id}`,
+                            openUp: taxonomyMenuOpensUp(index, brandSizeCodes.length),
+                            onEdit: () => editBrandSizeRow(row),
+                            onDelete: () => setDeleteTarget({ kind: "brandSize", id: String(row.id), name: `${row.brand_name || row.brand_code || "-"} / ${row.size_code}` }),
+                          })}
+                        </div>
+                      ))}
+                      {!brandSizeCodes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív márkaméret.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
               {taxonomyTab === "materials" && (
                 <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
                   <section className={taxonomyCard}>
@@ -4981,7 +5581,7 @@ export default function AllInWarehouse() {
                       <label className={label}>S/N/COD<input className={input} value={edit.snCod} onChange={(e) => setEdit((x) => ({ ...x, snCod: e.target.value }))} placeholder="belső azonosító" /></label>
                       <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, colorName: normalizeColor(x.colorName) }))} placeholder="pl. negru" /></label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
-                      <label className={label}>Méret<input className={input} value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} /></label>
+                      <label className={label}>Méret<input className={input} list="warehouse-standard-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
                       <label className={label}>Vételár<input className={input} value={edit.buyPrice} onChange={(e) => setEdit((x) => ({ ...x, buyPrice: e.target.value }))} /></label>
                       <label className={label}>Eladási ár<input className={input} value={edit.sellPrice} onChange={(e) => setEdit((x) => ({ ...x, sellPrice: e.target.value }))} /></label>
                       <label className={label}>Variáns állapot<select className={select} value={edit.variantStatus} onChange={(e) => setEdit((x) => ({ ...x, variantStatus: e.target.value }))}><option value="active">Aktív</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
