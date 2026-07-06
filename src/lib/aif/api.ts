@@ -554,7 +554,40 @@ export function apiAifUpdateVariantStock(
     `/variants/${encodeURIComponent(variantId)}/stock`,
     {
       method: "PATCH",
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ rows: items, items }),
+    }
+  );
+}
+
+export type AifStockTransferLineInput = {
+  variantId: string;
+  fromLocationId?: string;
+  fromLocationCode?: string;
+  toLocationId?: string;
+  toLocationCode?: string;
+  qty: number | string;
+};
+
+export type AifStockTransferResponse = {
+  ok: true;
+  transferId: string;
+  lineCount: number;
+  movedRows?: number;
+  movedLines?: number;
+  movedQty: number;
+  title?: string | null;
+  totalQty?: number;
+  movements?: number;
+  items: any[];
+};
+
+export function apiAifCreateStockTransfer(payload: { title?: string; note?: string; rows?: AifStockTransferLineInput[]; lines?: AifStockTransferLineInput[] }) {
+  const rows = payload.rows || payload.lines || [];
+  return fetchAifJSON<AifStockTransferResponse>(
+    "/stock-transfers",
+    {
+      method: "POST",
+      body: JSON.stringify({ ...payload, rows, lines: payload.lines || rows }),
     }
   );
 }
