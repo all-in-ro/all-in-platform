@@ -180,6 +180,10 @@ function toNumber(v: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function isRonCurrencyCode(value: unknown) {
+  return String(value ?? "").trim().toUpperCase() === "RON";
+}
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -742,6 +746,8 @@ export default function AllInIncoming(_props: Props) {
 
   const activeLocationTypes = useMemo(() => locationTypes.filter((t) => t.is_active), [locationTypes]);
   const activeCurrencies = useMemo(() => currencies.filter((c) => c.is_active), [currencies]);
+  const isRonCurrency = isRonCurrencyCode(currencyCode);
+  const exchangeRateRequired = Boolean(currencyCode && !isRonCurrency);
   const locationTypeOptions = useMemo(() => {
     if (activeLocationTypes.length) return activeLocationTypes;
     return [{ id: "warehouse", code: "warehouse", name: "Raktár", is_active: true } as AifLocationType];
@@ -749,6 +755,13 @@ export default function AllInIncoming(_props: Props) {
 
   function typeLabel(code: string) {
     return locationTypes.find((t) => t.code === code)?.name || locationTypeLabel(code);
+  }
+
+  function handleCurrencyCodeChange(nextCurrencyCode: string) {
+    setCurrencyCode(nextCurrencyCode);
+    if (String(nextCurrencyCode || "").trim().toUpperCase() === "RON") {
+      setExchangeRateToRon("");
+    }
   }
 
   async function loadSalesTvaSettings(showMessage = false) {
@@ -771,6 +784,11 @@ export default function AllInIncoming(_props: Props) {
   useEffect(() => {
     loadSalesTvaSettings(false);
   }, []);
+
+  useEffect(() => {
+    if (!isRonCurrency || !exchangeRateToRon.trim()) return;
+    setExchangeRateToRon("");
+  }, [isRonCurrency, exchangeRateToRon]);
 
   useEffect(() => {
     if (defaultBrandCode && !brandOptionsForSupplier.some((b) => (b.code || b.id) === defaultBrandCode)) {
@@ -897,7 +915,8 @@ export default function AllInIncoming(_props: Props) {
   const approvedQty = useMemo(() => approvedRowList.reduce((sum, row) => sum + toNumber(row.normalized?.qty), 0), [approvedRowList]);
   const savedReceptionGoodsValue = selectedReceptionId ? loadedReceptionRowTotals.value : 0;
   const totalReceptionGoodsValue = savedReceptionGoodsValue + approvedGoodsValue;
-  const rateValue = exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
+  const rateValue = exchangeRateRequired && exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
+  const exchangeRateToRonForPayload = exchangeRateRequired ? rateValue : null;
   const shippingValue = shippingCost.trim() ? toNumber(shippingCost) : 0;
   const vatRateValue = tvaMode === "with_tva" && tvaRate.trim() ? toNumber(tvaRate) : 0;
   const goodsPlusShipping = totalReceptionGoodsValue + shippingValue;
@@ -909,7 +928,7 @@ export default function AllInIncoming(_props: Props) {
     invoiceDate: !invoiceDate,
     receptionDate: !receptionDate,
     currencyCode: !currencyCode,
-    exchangeRateToRon: !exchangeRateToRon.trim() || rateValue <= 0,
+    exchangeRateToRon: exchangeRateRequired && (!exchangeRateToRon.trim() || rateValue <= 0),
     tvaMode: !tvaMode,
     tvaRate: tvaRateRequired && (!tvaRate.trim() || vatRateValue < 0),
     invoiceGross: !invoiceGrossProvided,
@@ -926,19 +945,21 @@ export default function AllInIncoming(_props: Props) {
     return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
   }, [goodsPlusShipping, tvaMode, vatRateValue]);
   const invoiceDifference = invoiceGrossProvided ? invoiceGrossValue - computedReception.gross : 0;
-  const receptionRonValue = (invoiceGrossProvided ? invoiceGrossValue : computedReception.gross) * (rateValue || 0);
+  const receptionBaseValue = invoiceGrossProvided ? invoiceGrossValue : computedReception.gross;
+  const receptionRonValue = isRonCurrency ? receptionBaseValue : receptionBaseValue * rateValue;
   const receptionReady = Boolean(
     invoiceNumber.trim() &&
     invoiceDate &&
     receptionDate &&
     currencyCode &&
-    rateValue > 0 &&
+    (!exchangeRateRequired || rateValue > 0) &&
     tvaMode &&
     (!tvaRateRequired || tvaRate.trim()) &&
     invoiceGrossProvided
   );
   const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/80 bg-red-500/10 focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
   const requiredSelectInput = (missing: boolean) => `${selectInput} w-full ${missing ? "border-red-300/80 bg-[#303b4e] focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
+  const disabledExchangeRateInput = "h-9 w-full cursor-not-allowed rounded-lg border border-white/14 bg-[#303b4e]/55 px-3 text-sm text-white/45 caret-transparent outline-none opacity-70 transition placeholder:text-transparent focus:border-white/14 focus:ring-0 [color-scheme:dark] font-normal";
   const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
@@ -1144,8 +1165,9 @@ export default function AllInIncoming(_props: Props) {
     setInvoiceNumber(String(item.invoice_number || ""));
     setInvoiceDate(dateOnly(item.invoice_date));
     setReceptionDate(dateOnly(item.reception_date));
-    setCurrencyCode(String(item.currency_code || ""));
-    setExchangeRateToRon(String(item.exchange_rate_to_ron || ""));
+    const nextCurrencyCode = String(item.currency_code || "");
+    setCurrencyCode(nextCurrencyCode);
+    setExchangeRateToRon(String(nextCurrencyCode || "").trim().toUpperCase() === "RON" ? "" : String(item.exchange_rate_to_ron || ""));
     setTvaMode((String(item.tva_mode || "") as any) || "");
     setTvaRate(String(item.tva_rate ?? ""));
     setShippingCost(String(item.shipping_cost ?? ""));
@@ -1373,7 +1395,7 @@ export default function AllInIncoming(_props: Props) {
       return;
     }
     if (!receptionReady) {
-      setMessage("A receptió kötelező mezőit ki kell tölteni: számlaszám, dátumok, pénznem, árfolyam, TVA kezelés és számla végösszeg.");
+      setMessage("A receptió kötelező mezőit ki kell tölteni: számlaszám, dátumok, pénznem, külföldi pénznemnél árfolyam, TVA kezelés és számla végösszeg.");
       return;
     }
     setBusy(true);
@@ -1390,7 +1412,7 @@ export default function AllInIncoming(_props: Props) {
           invoiceDate,
           receptionDate,
           currencyCode,
-          exchangeRateToRon: rateValue,
+          exchangeRateToRon: exchangeRateToRonForPayload,
           tvaMode,
           tvaRate: vatRateValue,
           shippingCost: shippingValue,
@@ -1676,7 +1698,7 @@ export default function AllInIncoming(_props: Props) {
       setNewCurrencyName("");
       setNewCurrencySymbol("");
       await loadMeta();
-      setCurrencyCode(created.item.code);
+      handleCurrencyCodeChange(String(created.item.code || ""));
       setMessage("Pénznem mentve.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a pénznemet.");
@@ -1755,8 +1777,8 @@ export default function AllInIncoming(_props: Props) {
       setMessage("Új receptió fejadatai a kijelölt sorok mentésekor jönnek létre.");
       return;
     }
-    if (!invoiceNumber.trim() || !invoiceDate || !receptionDate || !currencyCode || rateValue <= 0 || !tvaMode || !invoiceGrossProvided) {
-      setMessage("A mentéshez töltsd ki a receptió kötelező mezőit.");
+    if (!invoiceNumber.trim() || !invoiceDate || !receptionDate || !currencyCode || (exchangeRateRequired && rateValue <= 0) || !tvaMode || !invoiceGrossProvided) {
+      setMessage("A mentéshez töltsd ki a receptió kötelező mezőit. Külföldi pénznemnél az árfolyam is kell.");
       return;
     }
     setBusy(true);
@@ -1772,7 +1794,7 @@ export default function AllInIncoming(_props: Props) {
             invoiceDate,
             receptionDate,
             currencyCode,
-            exchangeRateToRon: rateValue,
+            exchangeRateToRon: exchangeRateToRonForPayload,
             tvaMode,
             tvaRate: tvaMode === "no_tva" ? 0 : vatRateValue,
             shippingCost: shippingValue,
@@ -1901,7 +1923,7 @@ export default function AllInIncoming(_props: Props) {
                 <select
                   className={requiredSelectInput(requiredMissing.currencyCode)}
                   value={currencyCode}
-                  onChange={(e) => setCurrencyCode(e.target.value)}
+                  onChange={(e) => handleCurrencyCodeChange(e.target.value)}
                 >
                   <option style={mutedOptionStyle} value="">Pénznem kiválasztása</option>
                   {activeCurrencies.map((c) => (
@@ -1918,7 +1940,17 @@ export default function AllInIncoming(_props: Props) {
           <div className="grid gap-3 lg:grid-cols-5">
             <label className={label}>
               Árfolyam RON
-              <input className={requiredInput(requiredMissing.exchangeRateToRon)} value={exchangeRateToRon} onChange={(e) => setExchangeRateToRon(e.target.value)} placeholder="pl. 4.97" />
+              <input
+                className={isRonCurrency ? disabledExchangeRateInput : requiredInput(requiredMissing.exchangeRateToRon)}
+                value={isRonCurrency ? "" : exchangeRateToRon}
+                onChange={(e) => {
+                  if (!isRonCurrency) setExchangeRateToRon(e.target.value);
+                }}
+                disabled={isRonCurrency}
+                placeholder={isRonCurrency ? "" : "pl. 4.97"}
+                aria-disabled={isRonCurrency}
+                title={isRonCurrency ? "RON pénznemnél nincs szükség árfolyamra." : undefined}
+              />
             </label>
             <label className={label}>
               TVA kezelés
@@ -1976,7 +2008,7 @@ export default function AllInIncoming(_props: Props) {
             </div>
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
-              <p className="mt-1 text-sm text-white">{rateValue > 0 ? moneyText(receptionRonValue, "RON") : "-"}</p>
+              <p className="mt-1 text-sm text-white">{currencyCode && (!exchangeRateRequired || rateValue > 0) ? moneyText(receptionRonValue, "RON") : "-"}</p>
               {computedReception.vat > 0 && <p className="mt-1 text-[11px] text-white/55">TVA: {moneyText(computedReception.vat, currencyCode)}</p>}
             </div>
           </div>
