@@ -490,6 +490,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
         <tr>
           <th>Denumire</th>
           <th>SKU</th>
+          <th>S/N/COD</th>
           <th>Cant.</th>
           <th>Pret ${pdfEscape(currency)}</th>
           <th>Pret RON</th>
@@ -603,6 +604,7 @@ function checkRowData(row: any, draft: any, categories?: any[], genderTypes?: an
   const rawGender = draft.gender || row?.normalized?.gender;
   return {
     code: rowSku(row, draft),
+    snCod: cell(row?.sn_cod || draft.snCod || draft.sn_cod || row?.normalized?.snCod || row?.normalized?.sn_cod),
     title: cell(draft.titleRo || draft.productName || row?.normalized?.titleRo || row?.supplier_product_code),
     brand: cell(draft.brandName || draft.brandCode || row?.normalized?.brandName || row?.normalized?.brandCode),
     category: categoryPdfLabel(rawCategory, categories),
@@ -632,6 +634,7 @@ function buildReceptionVerificationHtml(
       <tr>
         <td class="num">${index + 1}</td>
         <td>${pdfEscape(x.code)}</td>
+        <td>${pdfEscape(x.snCod)}</td>
         <td>${pdfEscape(x.title)}</td>
         <td>${pdfEscape(x.brand)}</td>
         <td>${pdfEscape(x.category)}</td>
@@ -1004,6 +1007,8 @@ export default function AllInReceptions(_props: Props) {
       next[row.id] = {
         ...n,
         supplierProductCode: row.supplier_product_code || n.supplierProductCode || n.modelCode || "",
+        snCod: row.sn_cod || n.snCod || n.sn_cod || "",
+        sn_cod: row.sn_cod || n.snCod || n.sn_cod || "",
         titleRo: n.titleRo || "",
         colorName: n.colorName || "",
         colorCode: row.supplier_color_code || n.colorCode || "",
@@ -1150,6 +1155,8 @@ export default function AllInReceptions(_props: Props) {
     const rate = Number.isFinite(parsedRate) ? parsedRate : Number(DEFAULT_SALES_TVA_SETTINGS.salesTvaRate || 21);
     return {
       ...draft,
+      snCod: (draft as any).snCod ?? (draft as any).sn_cod ?? "",
+      sn_cod: (draft as any).snCod ?? (draft as any).sn_cod ?? "",
       sellPrice,
       sellPriceGrossRon: sellPrice,
       sellPriceCurrency: "RON",
@@ -1603,8 +1610,9 @@ export default function AllInReceptions(_props: Props) {
                             </button>
                           </div>
                         </div>
-                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[1fr_1.35fr_.52fr_.75fr_.62fr_.52fr_.68fr_.75fr_.75fr_.72fr]">
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[1fr_.85fr_1.35fr_.52fr_.75fr_.62fr_.52fr_.68fr_.75fr_.75fr_.72fr]">
                           <label className={rowLabel}>Termékkód<input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
+                          <label className={rowLabel}>S/N/COD<input className={rowInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
                           <label className={rowLabel}>Terméknév<input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} /></label>
                           <label className={rowLabel}>Méret<input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
                           <label className={rowLabel}>Szín<input className={rowInput} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
@@ -1662,7 +1670,7 @@ export default function AllInReceptions(_props: Props) {
             <h2 className="text-base text-white font-normal">Terméksor áthelyezése</h2>
             <p className="mt-2 text-sm text-white/76">Csak még nem készletre vett sor helyezhető át másik nyitott receptióba.</p>
             <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
-              {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)}
+              {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)} • S/N/COD: {cell((moveTarget as any).sn_cod || (moveTarget.normalized || {}).snCod || (moveTarget.normalized || {}).sn_cod)}
             </div>
             <label className={`${label} mt-3`}>
               Cél receptió
