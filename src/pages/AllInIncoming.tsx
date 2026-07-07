@@ -62,6 +62,24 @@ import {
 type Props = { onLogout?: () => void };
 
 type LocationType = string;
+
+const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
+const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
+
+function notifyWarehouseShowAllAfterIncoming(detail: Record<string, unknown> = {}) {
+  if (typeof window === "undefined") return;
+  const payload = { at: new Date().toISOString(), source: "incoming_commit", ...detail };
+  try {
+    window.localStorage.setItem(warehouseShowAllAfterIncomingStorageKey, JSON.stringify(payload));
+  } catch {
+    // Nem állítjuk meg a készletre vételt attól, hogy a böngésző épp papírsárkánynak képzeli a localStorage-ot.
+  }
+  try {
+    window.dispatchEvent(new CustomEvent(warehouseShowAllAfterIncomingEventName, { detail: payload }));
+  } catch {
+    // Nem kritikus. A raktár oldal belépéskor a localStorage jelből is észreveszi.
+  }
+}
 type EditableImportField =
   | "supplierProductCode"
   | "snCod"
@@ -1879,6 +1897,12 @@ export default function AllInIncoming(_props: Props) {
     setMessage("");
     try {
       const result = await apiAifCommitImportBatch(batch.id);
+      notifyWarehouseShowAllAfterIncoming({
+        importBatchId: batch.id,
+        receptionId: (batch as any).reception_id || selectedReceptionId || null,
+        committed: (result as any).committed ?? null,
+        failedCount: (result as any).failedCount ?? null,
+      });
       await Promise.all([loadBatches(), loadReceptions()]);
       const failedCount = Number((result as any).failedCount || (result as any).failedRows?.length || 0);
       if (failedCount > 0) {
