@@ -1266,6 +1266,13 @@ function itemVariantStatus(it: InventoryItem) {
   return String((it as any).variant_status || (it as any).status || "active").trim().toLowerCase();
 }
 
+function isArchivedInventoryItem(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  if (!it) return false;
+  const modelStatus = String((it as any).model_status || (it as any).modelStatus || "active").trim().toLowerCase();
+  const variantStatus = String((it as any).variant_status || (it as any).variantStatus || (it as any).status || "active").trim().toLowerCase();
+  return modelStatus === "archived" || variantStatus === "archived";
+}
+
 function needsWarehouseActivation(it: InventoryItem) {
   return itemModelStatus(it) !== "active" || itemVariantStatus(it) !== "active";
 }
@@ -1688,7 +1695,7 @@ async function apiCreateManualProduct(payload: Record<string, unknown>) {
 }
 
 async function apiVariantDelete(id: string) {
-  return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/variants/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return fetchJSON<{ ok: true; mode?: string; usage?: Record<string, unknown> }>(`/api/aif/variants/${encodeURIComponent(id)}?force=1&_=${Date.now()}`, { method: "DELETE" });
 }
 
 async function apiVariantStockUpdate(
@@ -2019,10 +2026,11 @@ export default function AllInWarehouse() {
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
-  const inventoryDisplayItems = useMemo(
-    () => (incomingFocusItems.length ? mergeInventoryItems(items, incomingFocusItems) : items),
-    [items, incomingFocusItems]
-  );
+  const inventoryDisplayItems = useMemo(() => {
+    const baseItems = items.filter((item) => !isArchivedInventoryItem(item));
+    const focusedItems = incomingFocusItems.filter((item) => !isArchivedInventoryItem(item));
+    return focusedItems.length ? mergeInventoryItems(baseItems, focusedItems).filter((item) => !isArchivedInventoryItem(item)) : baseItems;
+  }, [items, incomingFocusItems]);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -2082,14 +2090,22 @@ export default function AllInWarehouse() {
         detail = { batch: fallback.batch || null, rows: Array.isArray(fallback.rows) ? fallback.rows : [] };
       }
 
-      const rows = Array.isArray(detail.rows) ? detail.rows : [];
+      const rows = (Array.isArray(detail.rows) ? detail.rows : []).filter((row: any) => {
+        const variantStatus = String(row.variant_status || row.status || "").trim().toLowerCase();
+        const modelStatus = String(row.model_status || "").trim().toLowerCase();
+        return variantStatus !== "archived" && modelStatus !== "archived";
+      });
       const rawFocusedItems = [
         ...rows,
-        ...((detail.items || []) as any[]),
+        ...((detail.items || []) as any[]).filter((row: any) => {
+          const variantStatus = String(row.variant_status || row.status || "").trim().toLowerCase();
+          const modelStatus = String(row.model_status || "").trim().toLowerCase();
+          return variantStatus !== "archived" && modelStatus !== "archived";
+        }),
       ];
       const normalizedFocusedItems = rawFocusedItems
         .map((rawItem) => importFocusRowToInventoryItem(rawItem))
-        .filter(Boolean) as InventoryItem[];
+        .filter((item): item is InventoryItem => Boolean(item) && itemVariantStatus(item as InventoryItem) !== "archived" && itemModelStatus(item as InventoryItem) !== "archived");
       const focusedItemMap = normalizedFocusedItems.reduce<Map<string, InventoryItem>>((map, rawItem) => {
         const variantId = String(rawItem?.variant_id || rawItem?.variantId || rawItem?.selected_variant_id || rawItem?.selectedVariantId || "").trim();
         if (!variantId) return map;
@@ -2097,19 +2113,30 @@ export default function AllInWarehouse() {
         map.set(variantId, { ...previous, ...rawItem, variant_id: variantId } as InventoryItem);
         return map;
       }, new Map<string, InventoryItem>());
-      const focusedItems = Array.from(focusedItemMap.values());
+      const focusedItems = Array.from(focusedItemMap.values()).filter((item) =>
+        itemModelStatus(item) !== "archived" && itemVariantStatus(item) !== "archived"
+      );
+      const focusedItemIds = new Set(focusedItems.map((item) => String(item.variant_id || "").trim()).filter(Boolean));
+      const visibleRows = rows.filter((row) => {
+        const variantId = String(row.variant_id || row.variantId || "").trim();
+        if (!variantId) return false;
+        if (focusedItemIds.has(variantId)) return true;
+        const variantStatus = String(row.variant_status || row.variantStatus || row.status || "active").toLowerCase();
+        const modelStatus = String(row.model_status || row.modelStatus || "active").toLowerCase();
+        return variantStatus !== "archived" && modelStatus !== "archived";
+      });
       const variantIds = Array.from(new Set([
         ...(Array.isArray(detail.variantIds) ? detail.variantIds : []),
-        ...rows.map((row) => String(row.variant_id || row.variantId || "").trim()),
+        ...visibleRows.map((row) => String(row.variant_id || row.variantId || "").trim()),
         ...focusedItems.map((item) => String(item.variant_id || "").trim()),
-      ].map((id) => String(id || "").trim()).filter(Boolean)));
-      const committedRows = rows.filter((row) => String(row.status || "committed").toLowerCase() === "committed").length || Number(detail.rowCount || 0) || variantIds.length;
-      const totalQty = Number(detail.totalQty || rows.reduce((sum, row: any) => sum + n(row.import_qty || row.qty), 0) || focusedItems.reduce((sum, item: any) => sum + n(item.import_qty || item.total_qty), 0) || 0);
+      ].map((id) => String(id || "").trim()).filter((id) => Boolean(id) && (!focusedItemIds.size || focusedItemIds.has(id)))));
+      const committedRows = visibleRows.filter((row) => String(row.import_status || row.row_status || row.status || "committed").toLowerCase() === "committed").length || Number(detail.rowCount || 0) || variantIds.length;
+      const totalQty = Number(visibleRows.reduce((sum, row: any) => sum + n(row.import_qty || row.qty), 0) || focusedItems.reduce((sum, item: any) => sum + n(item.import_qty || item.total_qty), 0) || 0);
       setIncomingFocusItems(focusedItems);
       setIncomingFocus({
         batchId: cleanBatchId,
         variantIds,
-        rows,
+        rows: visibleRows,
         batch: detail.batch || null,
         totalQty,
         sourceFileName: String(detail.batch?.source_file_name || detail.batch?.sourceFileName || "").trim() || null,
@@ -2118,15 +2145,45 @@ export default function AllInWarehouse() {
       setListOpen(true);
       setSortMode("incoming_desc");
       if (showMessage) {
-        setMessage(`Utolsó bevételezés teendőlista aktív: ${rows.length || variantIds.length} import sor, ${committedRows} készleten, ${variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. Csak a még nem aktív modellek/variánsok látszanak; ami aktívra kerül, eltűnik innen.`);
+        setMessage(`Utolsó bevételezés teendőlista aktív: ${visibleRows.length || variantIds.length} import sor, ${committedRows} készleten, ${variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. Csak a még nem aktív modellek/variánsok látszanak; ami aktívra kerül vagy törölve lett, eltűnik innen.`);
       }
-      return { rows, variantIds, batch: detail.batch || null, totalQty };
+      return { rows: visibleRows, variantIds, batch: detail.batch || null, totalQty };
     } catch (error: any) {
       setIncomingFocus(null);
       setIncomingFocusItems([]);
       setMessage(error?.message || "Az utolsó bevételezés terméksorait nem sikerült betölteni.");
       return null;
     }
+  }
+
+  function removeVariantFromWarehouseClientState(variantId: unknown) {
+    const id = String(variantId || "").trim();
+    if (!id) return;
+
+    setItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    setIncomingFocusItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    setPersistedSelectedItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    setStockRows((current) => current.filter((row) => String(row.variant_id || "") !== id));
+    setSelectedVariants((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setSelectedWorkActions((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setIncomingFocus((current) => {
+      if (!current) return current;
+      const variantIds = (current.variantIds || []).filter((variantId) => String(variantId || "") !== id);
+      const rows = (current.rows || []).filter((row: any) => String(row.variant_id || row.variantId || "") !== id);
+      return { ...current, variantIds, rows };
+    });
+    setHighlightProductId((current) => current === id ? "" : current);
+    setPendingProductJumpId((current) => current === id ? "" : current);
   }
 
   async function focusLatestCommittedImportBatch() {
@@ -2658,8 +2715,8 @@ export default function AllInWarehouse() {
 
   const filtered = useMemo(() => {
     let out = [...inventoryDisplayItems];
-    const reviewMode = incomingFocusVariantSet.size > 0 || stockFilter === "watch";
-    if (incomingFocusVariantSet.size > 0) {
+    const reviewMode = Boolean(incomingFocus?.batchId) || stockFilter === "watch";
+    if (incomingFocus?.batchId) {
       out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")));
       // Az utolsó import nézet most munkalista: csak az aktiválásra váró sorok maradnak benne.
       out = out.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x));
@@ -2706,7 +2763,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -4086,7 +4143,7 @@ export default function AllInWarehouse() {
         }
       }
       const stockBackedItems = stockBackedInventoryItems(inv.items || [], stock.items || []);
-      setItems(stockBackedItems.filter((x) => String(x.variant_status || "active") !== "archived" && String(x.model_status || "active") !== "archived"));
+      setItems(stockBackedItems.filter((x) => !isArchivedInventoryItem(x)));
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
       setSupplierBrands(meta.supplierBrands || []);
@@ -4573,14 +4630,19 @@ export default function AllInWarehouse() {
     if (!productDeleteTarget?.variant_id) return;
     setSaving(true);
     setMessage("");
+    const deletedVariantId = String(productDeleteTarget.variant_id || "");
+    const activeIncomingBatchId = String(incomingFocus?.batchId || "").trim();
     try {
-      const deletedVariantId = String(productDeleteTarget.variant_id || "");
-      await apiVariantDelete(deletedVariantId);
-      notifyStockMovesChanged({ variantId: deletedVariantId, source: "warehouse_variant_delete" });
+      const result = await apiVariantDelete(deletedVariantId);
+      notifyStockMovesChanged({ variantId: deletedVariantId, source: "warehouse_variant_permanent_delete", mode: result?.mode || "deleted" });
+      removeVariantFromWarehouseClientState(deletedVariantId);
       setProductDeleteTarget(null);
-      if (detail?.item?.id && String(detail.item.id) === String(productDeleteTarget.variant_id)) setDetail(null);
+      if (detail?.item?.id && String(detail.item.id) === deletedVariantId) setDetail(null);
       await load();
-      setMessage("Termék törölve a raktárlistából.");
+      if (activeIncomingBatchId) await loadIncomingFocusBatch(activeIncomingBatchId, false);
+      setMessage(result?.mode === "archived" || result?.mode === "archived_after_delete_fallback"
+        ? "Termék archiválva és eltávolítva a raktárlistából."
+        : "Termék véglegesen törölve: készlet, import-kapcsolat, mozgásnapló és beszállítói kapcsolat kitakarítva.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült törölni a terméket.");
     } finally {
@@ -5913,7 +5975,7 @@ export default function AllInWarehouse() {
                 <p className="text-white">{productDeleteTarget.title_ro || "Névtelen termék"}</p>
                 <p className="mt-1 text-xs text-white/62">{productDeleteTarget.brand_name || "Nincs márka"} • {productDeleteTarget.category_name_hu || productDeleteTarget.category_name_ro || "Nincs kategória"} • {productDeleteTarget.size || "nincs méret"}</p>
               </div>
-              <p className="text-xs leading-relaxed text-white/68">A termék eltűnik a raktárlistából. Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
+              <p className="text-xs leading-relaxed text-white/68">A termék azonnal eltűnik a raktárlistából és az aktiválandó importlistából is. Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
               <div className="flex justify-end gap-2 pt-1">
                 <button className={btnSoft} onClick={() => setProductDeleteTarget(null)} disabled={saving} type="button">Mégse</button>
                 <button className={dangerBtn} onClick={confirmDeleteProduct} disabled={saving} type="button"><Trash2 size={15} /> Törlés</button>
