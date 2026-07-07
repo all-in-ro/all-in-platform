@@ -1266,8 +1266,16 @@ function itemVariantStatus(it: InventoryItem) {
   return String((it as any).variant_status || (it as any).status || "active").trim().toLowerCase();
 }
 
+function needsWarehouseActivation(it: InventoryItem) {
+  return itemModelStatus(it) !== "active" || itemVariantStatus(it) !== "active";
+}
+
+function isWarehouseVisibleInMainList(it: InventoryItem) {
+  return !needsWarehouseActivation(it);
+}
+
 function hasMissingData(it: InventoryItem) {
-  return !it.image_url || !it.barcode || !it.sell_price || !it.buy_price || !it.title_ro || !it.size || itemModelStatus(it) !== "active" || itemVariantStatus(it) !== "active";
+  return !it.image_url || !it.barcode || !it.sell_price || !it.buy_price || !it.title_ro || !it.size || needsWarehouseActivation(it);
 }
 
 function missingLabels(it: InventoryItem) {
@@ -2110,7 +2118,7 @@ export default function AllInWarehouse() {
       setListOpen(true);
       setSortMode("incoming_desc");
       if (showMessage) {
-        setMessage(`Utolsó bevételezés szűrő aktív: ${rows.length || variantIds.length} import sor, ${committedRows} készleten, ${variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. A terméklista most csak ezt az importot mutatja.`);
+        setMessage(`Utolsó bevételezés teendőlista aktív: ${rows.length || variantIds.length} import sor, ${committedRows} készleten, ${variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. Csak a még nem aktív modellek/variánsok látszanak; ami aktívra kerül, eltűnik innen.`);
       }
       return { rows, variantIds, batch: detail.batch || null, totalQty };
     } catch (error: any) {
@@ -2650,8 +2658,14 @@ export default function AllInWarehouse() {
 
   const filtered = useMemo(() => {
     let out = [...inventoryDisplayItems];
+    const reviewMode = incomingFocusVariantSet.size > 0 || stockFilter === "watch";
     if (incomingFocusVariantSet.size > 0) {
       out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")));
+      // Az utolsó import nézet most munkalista: csak az aktiválásra váró sorok maradnak benne.
+      out = out.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x));
+    } else if (!reviewMode && stockFilter !== "missing") {
+      // A fő raktárlista csak az aktív termékeket mutassa. A draft/inaktív importok a teendőlistában élnek, nem a kész raktárban.
+      out = out.filter(isWarehouseVisibleInMainList);
     }
     if (search.trim()) {
       const scannedCode = cleanScannedBarcode(scannedBarcodeSearch);
@@ -2677,7 +2691,7 @@ export default function AllInWarehouse() {
     if (stockFilter === "out") out = out.filter((x) => n(x.total_qty) <= 0);
     if (stockFilter === "reserved") out = out.filter((x) => n(x.total_reserved_qty) > 0);
     if (stockFilter === "missing") out = out.filter(hasMissingData);
-    if (stockFilter === "watch") out = out.filter((x) => n(x.total_qty) > 0 && hasMissingData(x));
+    if (stockFilter === "watch") out = out.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x));
     out.sort((a, b) => {
       if (sortMode === "incoming_desc") {
         const byIncoming = latestWarehouseIncomingMs(b) - latestWarehouseIncomingMs(a);
@@ -2738,7 +2752,7 @@ export default function AllInWarehouse() {
         out: "Nincs készleten",
         reserved: "Van foglalás",
         missing: "Hiányzó adat",
-        watch: "Figyelendő készlet",
+        watch: "Aktiválandó készlet",
       };
       labels.push(`Készlet: ${stockLabels[stockFilter] || stockFilter}`);
     }
@@ -2810,6 +2824,8 @@ export default function AllInWarehouse() {
 
   function resetListFiltersForProductFocus(searchText: string, scannedCode = "") {
     setDetail(null);
+    setIncomingFocus(null);
+    setIncomingFocusItems([]);
     setSelectedPanelOpen(false);
     setSelectedWorkPanel(null);
     setFiltersOpen(false);
@@ -3651,6 +3667,23 @@ export default function AllInWarehouse() {
     if (selectedWorkPanel && selectedWorkCounts[selectedWorkPanel] <= 0) setSelectedWorkPanel(null);
   }, [selectedPanelOpen, selectedCount, selectedWorkPanel, selectedWorkCounts.label, selectedWorkCounts.order, selectedWorkCounts.move]);
 
+  const activationTodoCount = useMemo(
+    () => inventoryDisplayItems.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x)).length,
+    [inventoryDisplayItems]
+  );
+
+  function showActivationTodoList() {
+    setIncomingFocus(null);
+    setIncomingFocusItems([]);
+    setStockFilter("watch");
+    setSortMode("incoming_desc");
+    setFiltersOpen(false);
+    setSummaryOpen(false);
+    setListOpen(true);
+    setProductPage(1);
+    setMessage("Az aktiválandó készletes variánsokat mutatom. Amint egy modell és variáns aktív lesz, eltűnik innen és átkerül a normál raktárlistába.");
+  }
+
   const totals = useMemo(() => {
     return filtered.reduce(
       (acc, x) => {
@@ -3660,7 +3693,7 @@ export default function AllInWarehouse() {
         acc.available += n(x.available_qty);
         acc.value += n(x.total_qty) * n(x.buy_price);
         if (hasMissingData(x)) acc.missing += 1;
-        if (n(x.total_qty) > 0 && hasMissingData(x)) acc.watch += 1;
+        if (n(x.total_qty) > 0 && needsWarehouseActivation(x)) acc.watch += 1;
         return acc;
       },
       { variants: 0, qty: 0, reserved: 0, available: 0, value: 0, missing: 0, watch: 0 }
@@ -4484,6 +4517,8 @@ export default function AllInWarehouse() {
 
   async function saveDetail() {
     if (!detail?.item?.id) return;
+    const detailId = String(detail.item.id || detail.item.variant_id || "");
+    const wasActivationWorkView = Boolean(incomingFocus?.batchId || stockFilter === "watch");
     setSaving(true);
     setMessage("");
     try {
@@ -4511,10 +4546,22 @@ export default function AllInWarehouse() {
         status: edit.variantStatus,
       });
       const d = await apiVariantDetail(detail.item.id);
-      setDetail(d);
-      setEdit(formFromDetail(d));
+      const resolvedActivation = !needsWarehouseActivation(d.item as InventoryItem);
+      if (wasActivationWorkView && resolvedActivation) {
+        setDetail(null);
+      } else {
+        setDetail(d);
+        setEdit(formFromDetail(d));
+      }
       await load();
-      setMessage("A termékadatok mentése megtörtént.");
+      if (incomingFocus?.batchId) await loadIncomingFocusBatch(incomingFocus.batchId, false);
+      if (wasActivationWorkView && resolvedActivation) {
+        setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról. Végre egy sorral kevesebb a káoszban.");
+        setHighlightProductId((current) => current === detailId ? "" : current);
+        setPendingProductJumpId((current) => current === detailId ? "" : current);
+      } else {
+        setMessage("A termékadatok mentése megtörtént.");
+      }
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a termékadatokat.");
     } finally {
@@ -4691,7 +4738,7 @@ export default function AllInWarehouse() {
             <button className={primaryBtn} onClick={openNewProductModal} type="button"><Plus size={16} /> Új termék hozzáadása</button>
             <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
             {hasActiveWarehouseFilters && <button className={primaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={15} /> Minden termék</button>}
-            <button className={btnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import összes variánsát mutatja">
+            <button className={btnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import még aktiválandó variánsait mutatja">
               <PackageCheck size={16} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
             </button>
             <button className={btnSoft} onClick={load} disabled={busy}><RefreshCw size={16} /> Frissítés</button>
@@ -4771,7 +4818,7 @@ export default function AllInWarehouse() {
                   <option value="out">Nincs készleten</option>
                   <option value="reserved">Van foglalás</option>
                   <option value="missing">Hiányzó adat</option>
-                  <option value="watch">Figyelendő készlet</option>
+                  <option value="watch">Aktiválandó készlet</option>
                 </select>
               </label>
               <label className={label}>Kép
@@ -4813,7 +4860,7 @@ export default function AllInWarehouse() {
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Elérhető</p><p className="mt-1 text-xl">{totals.available}</p></div>
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Foglalt</p><p className="mt-1 text-xl">{totals.reserved}</p></div>
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Készletérték</p><p className="mt-1 text-xl">{money(totals.value)}</p></div>
-                <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Figyelendő</p><p className="mt-1 text-xl">{totals.watch}</p></div>
+                <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Aktiválandó</p><p className="mt-1 text-xl">{activationTodoCount}</p></div>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-xl border border-white/40 bg-white p-4 text-slate-900 shadow-[0_10px_28px_rgba(15,23,42,0.12)]">
@@ -4869,7 +4916,7 @@ export default function AllInWarehouse() {
                 className={sortMode === "incoming_desc" ? primaryBtn : btnSoft}
                 onClick={focusLatestCommittedImportBatch}
                 type="button"
-                title="Legfrissebb bevételezett vagy módosított készletű variánsok felül"
+                title="A legutóbbi import még aktiválandó variánsait mutatja"
               >
                 <RefreshCw size={15} /> Legutóbbi bevételezés
               </button>
@@ -4908,8 +4955,8 @@ export default function AllInWarehouse() {
                 <div className="mb-3 rounded-xl border border-[#5bd0cc]/35 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <p className="font-semibold text-white">A legutóbbi készletre vétel sorait mutatom.</p>
-                      <p className="mt-1">Forrás: {String(incomingFocus.sourceFileName || incomingFocus.batch?.source_file_name || incomingFocus.batchId || "import")} • import sor: {incomingFocus.rows.length || incomingFocus.variantIds.length} • megjelenő variáns: {filtered.length}/{incomingFocus.variantIds.length}{incomingFocus.totalQty ? ` • ${incomingFocus.totalQty} db` : ""}</p>
+                      <p className="font-semibold text-white">A legutóbbi készletre vétel még aktiválandó sorait mutatom.</p>
+                      <p className="mt-1">Forrás: {String(incomingFocus.sourceFileName || incomingFocus.batch?.source_file_name || incomingFocus.batchId || "import")} • import sor: {incomingFocus.rows.length || incomingFocus.variantIds.length} • még teendő: {filtered.length}/{incomingFocus.variantIds.length} variáns{incomingFocus.totalQty ? ` • ${incomingFocus.totalQty} db` : ""}</p>
                       <p className="mt-1 text-[#bdf5f2]">Ha az összes raktári termékszám csak 1-gyel nőtt, az nem eltűnés: a többi sor már létező modell + szín + méret variánsra ment, és annak a készlete nőtt.</p>
                     </div>
                     <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button"><X size={14} /> Minden raktári variáns</button>
@@ -4939,7 +4986,7 @@ export default function AllInWarehouse() {
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
                   A raktárlista termékvariánsonként összesít: külön méret külön sor. Importnál a már létező modell + szín + méret nem új terméksor, hanem a meglévő sor készlete nő.
                   {incomingFocus ? (
-                    <span className="mt-1 block text-emerald-50">Most az utolsó bevételezés szűrő aktív, ezért a lista csak annak a {incomingFocus.rows.length || incomingFocus.variantIds.length} import sorából létrejött/frissített {incomingFocus.variantIds.length} variánst mutatja{incomingFocus.totalQty ? ` (${incomingFocus.totalQty} db)` : ""}.</span>
+                    <span className="mt-1 block text-emerald-50">Most az utolsó bevételezés teendőlistája aktív, ezért csak a még nem aktív modell/variáns sorok látszanak. Ami aktívra lett mentve, eltűnik innen és a normál raktárlistában jelenik meg.</span>
                   ) : null}
                 </div>
               )}
@@ -6580,7 +6627,16 @@ export default function AllInWarehouse() {
       )}
 
       {busy && <div className="fixed bottom-4 right-4 rounded-xl border border-white/15 bg-[#404a5b] px-4 py-3 text-sm text-white/80 shadow-xl"><RefreshCw className="mr-2 inline" size={15} /> Betöltés...</div>}
-      {totals.watch > 0 && <div className="fixed bottom-4 left-4 hidden rounded-xl border border-amber-200/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-50 shadow-xl lg:block"><AlertTriangle className="mr-2 inline" size={15} /> {totals.watch} figyelendő készleten lévő variáns</div>}
+      {activationTodoCount > 0 && (
+        <button
+          className="fixed bottom-4 left-4 hidden rounded-xl border border-amber-200/20 bg-amber-500/10 px-4 py-3 text-left text-sm text-amber-50 shadow-xl transition hover:bg-amber-500/16 lg:block"
+          type="button"
+          onClick={showActivationTodoList}
+          title="Aktiválandó készletes variánsok megnyitása"
+        >
+          <AlertTriangle className="mr-2 inline" size={15} /> {activationTodoCount} aktiválandó készleten lévő variáns
+        </button>
+      )}
     
       <div className="aifWarehouseLabelPrintRoot" style={labelPrintStyle}>
         {labelPrintPages.map((page, pageIndex) => (
