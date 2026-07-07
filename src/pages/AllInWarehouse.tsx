@@ -31,8 +31,12 @@ const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07
 const panelHead = "flex items-center justify-between gap-3 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tableIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/16 bg-white/[0.07] text-white/84 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:-translate-y-px hover:border-[#7bd7d4]/50 hover:bg-[#2a8d8b]/24 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
+const tableDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/35 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:-translate-y-px hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tableIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
+const tableDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
@@ -1262,10 +1266,10 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
   const hasAny = Boolean(barcode || snCod || customsCode || modelCode);
 
   return (
-    <span className="group relative inline-flex justify-center align-middle">
+    <span className="group relative inline-flex shrink-0 justify-center whitespace-nowrap align-middle">
       <button
         type="button"
-        className={`inline-flex h-6 items-center justify-center gap-1 rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
+        className={`inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
         aria-label="Termékazonosítók megjelenítése"
       >
         S/N/COD
@@ -2074,7 +2078,6 @@ export default function AllInWarehouse() {
     const rows = stockRowsForVariant(item.variant_id)
       .slice()
       .sort((a, b) => String(a.location_name || a.location_code || "Célhely").localeCompare(String(b.location_name || b.location_code || "Célhely"), "hu", { sensitivity: "base" }));
-    const activeRows = rows.filter((stockRow) => n(stockRow.qty) > 0);
     const knownRows = stockLocationRows.map((loc) => {
       const row = stockForLocation(rows, loc);
       return {
@@ -2097,15 +2100,15 @@ export default function AllInWarehouse() {
     const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
 
     return (
-      <span className="group relative inline-flex justify-center align-middle">
+      <span className="group relative inline-flex shrink-0 justify-center align-middle whitespace-nowrap">
         <button
-          className="inline-flex min-w-[72px] items-center justify-center gap-1.5 rounded-full border border-[#5bd0cc]/45 bg-[#203f49] px-2.5 py-1 text-center text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.10)] hover:border-[#79e1de]/70 hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+          className="inline-flex h-8 min-w-[86px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-[#5bd0cc]/45 bg-gradient-to-r from-[#173f49] to-[#246965] px-2 text-center text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.14),0_8px_18px_rgba(15,23,42,0.18)] transition hover:border-[#9cf4f0]/70 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
           onClick={() => openStockEditor(item)}
           aria-label={`Készlet üzletenként. Összesen: ${n(item.total_qty)}. Kattints a módosításhoz.`}
           type="button"
         >
-          <span className="text-sm tabular-nums">{n(item.total_qty)}</span>
-          <span className="rounded-full bg-[#2a8d8b]/28 px-1.5 py-0.5 text-[10px] text-[#cffffd] group-hover:bg-[#2a8d8b]/42">
+          <span className="text-sm font-semibold tabular-nums leading-none">{n(item.total_qty)}</span>
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-[#2a8d8b]/30 px-1.5 py-0.5 text-[10px] leading-none text-[#cffffd] group-hover:bg-[#2a8d8b]/45">
             {activePlaceCount || "0"} hely
           </span>
         </button>
@@ -4305,14 +4308,28 @@ export default function AllInWarehouse() {
               {productPager}
               {filtered.length > 0 && (
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
-                  A raktárlista termékvariánsonként összesít: külön méret külön sor. Csak az azonos modell + szín + méret sorok adódnak össze készletként.
+                  A raktárlista termékvariánsonként összesít: külön méret külön sor. A készlet badge-ben benne van az összes és a célhelyenkénti bontás is.
                 </div>
               )}
               <div className="hidden overflow-auto rounded-xl border border-white/20 bg-[#465163] lg:block">
-                <table className="min-w-full text-left text-[13px]">
-                  <thead className="bg-[#2f3a4c] text-[11px] uppercase tracking-[0.08em] text-white/72">
+                <table className="w-full min-w-[1100px] table-fixed text-left text-[13px]">
+                  <colgroup>
+                    <col style={{ width: 42 }} />
+                    <col style={{ width: 76 }} />
+                    <col style={{ width: 110 }} />
+                    <col />
+                    <col style={{ width: 112 }} />
+                    <col style={{ width: 86 }} />
+                    <col style={{ width: 62 }} />
+                    <col style={{ width: 104 }} />
+                    <col style={{ width: 92 }} />
+                    <col style={{ width: 98 }} />
+                    <col style={{ width: 64 }} />
+                    <col style={{ width: 76 }} />
+                  </colgroup>
+                  <thead className="bg-[#2f3a4c] text-[10px] uppercase tracking-[0.08em] text-white/72">
                     <tr>
-                      <th className="w-10 px-3 py-3 text-center align-middle font-normal">
+                      <th className="w-10 px-2 py-2.5 text-center align-middle font-normal">
                         <input
                           className={selectBox}
                           type="checkbox"
@@ -4323,18 +4340,17 @@ export default function AllInWarehouse() {
                           title="Az aktuális oldal termékeinek kijelölése"
                         />
                       </th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Kép</th>
-                      <th className="px-3 py-3 text-left align-middle font-normal">Márka</th>
-                      <th className="px-3 py-3 text-left align-middle font-normal">Terméknév</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Kategória</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Szín</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Méret</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Készlet</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Elérhető</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Vételár</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Eladási ár</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Állapot</th>
-                      <th className="px-3 py-3 text-center align-middle font-normal">Művelet</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Kép</th>
+                      <th className="px-2 py-2.5 text-left align-middle font-normal">Márka</th>
+                      <th className="px-2 py-2.5 text-left align-middle font-normal">Termék</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Kategória</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Szín</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Méret</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Készlet</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Vételár</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Eladási ár</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Állapot</th>
+                      <th className="px-2 py-2.5 text-center align-middle font-normal">Műv.</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/12 align-middle">
@@ -4346,9 +4362,9 @@ export default function AllInWarehouse() {
                       <tr
                         key={it.variant_id}
                         data-aif-variant-id={variantId}
-                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} scroll-mt-32 align-middle hover:bg-[#617084]`}
+                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} scroll-mt-32 align-middle transition-colors hover:bg-[#617084]`}
                       >
-                        <td className="px-3 py-2.5 text-center align-middle">
+                        <td className="px-2 py-2 text-center align-middle">
                           <input
                             className={selectBox}
                             type="checkbox"
@@ -4357,33 +4373,34 @@ export default function AllInWarehouse() {
                             aria-label={`${it.title_ro || "Termék"} kijelölése`}
                           />
                         </td>
-                        <td className="px-3 py-2.5 text-center align-middle">{it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-12 w-12 rounded-lg object-cover" /> : <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
-                        <td className="px-3 py-2.5 text-left align-middle">{it.brand_name || "-"}</td>
-                        <td className="px-3 py-2.5 text-left align-middle">
-                          <div>{it.title_ro || "-"}</div>
-                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
-                            <span className="max-w-[210px] truncate">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
-                            <VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} />
+                        <td className="px-2 py-2 text-center align-middle">{it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-11 w-11 rounded-lg object-cover shadow-sm" /> : <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={17} /></div>}</td>
+                        <td className="px-2 py-2 text-left align-middle"><span className="block truncate" title={it.brand_name || "-"}>{it.brand_name || "-"}</span></td>
+                        <td className="min-w-0 px-3 py-2.5 text-left align-middle">
+                          <div className="min-w-0">
+                            <button className="block w-full truncate text-left font-medium text-white transition hover:text-[#cffffd] focus:outline-none focus:text-[#cffffd]" type="button" title={it.title_ro || "-"} onClick={() => openDetail(it.variant_id)}>{it.title_ro || "-"}</button>
+                            <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 text-xs text-white/45">
+                              <span className="min-w-0 max-w-[260px] truncate">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
+                              <VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} />
+                            </div>
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-center align-middle">{it.category_name_hu || it.category_name_ro || "-"}</td>
-                        <td className="px-3 py-2.5 text-center align-middle">{colorDisplay(it.color_name, it.color_code)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle">{it.size || "-"}</td>
-                        <td className="px-3 py-2.5 text-center align-middle"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
-                        <td className="px-3 py-2.5 text-center align-middle tabular-nums">{n(it.available_qty)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle tabular-nums">{money(it.buy_price)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle tabular-nums">{money(it.sell_price)}</td>
-                        <td className="px-3 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
-                        <td className="px-3 py-2.5 text-center align-middle">
-                          <div className="flex justify-center gap-2">
-                            <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
-                            <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
+                        <td className="px-2 py-2.5 text-center align-middle"><span className="block truncate" title={it.category_name_hu || it.category_name_ro || "-"}>{it.category_name_hu || it.category_name_ro || "-"}</span></td>
+                        <td className="px-2 py-2.5 text-center align-middle"><span className="block truncate" title={colorDisplay(it.color_name, it.color_code)}>{colorDisplay(it.color_name, it.color_code)}</span></td>
+                        <td className="px-2 py-2.5 text-center align-middle font-medium whitespace-nowrap">{it.size || "-"}</td>
+                        <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><span className="inline-flex w-full justify-center"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span></td>
+                        <td className="px-2 py-2 text-center align-middle tabular-nums">{money(it.buy_price)}</td>
+                        <td className="px-2 py-2 text-center align-middle tabular-nums">{money(it.sell_price)}</td>
+                        <td className="px-2 py-2 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
+                        <td className="px-2 py-2.5 text-center align-middle">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button className={tableIconBtn} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={14} /></button>
+                            <button className={tableDangerIconBtn} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={14} /></button>
                           </div>
                         </td>
                       </tr>
                       );
                     })}
-                    {!productPageItems.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={13}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
+                    {!productPageItems.length && <tr><td className="px-3 py-10 text-center text-white/55" colSpan={12}>Nincs megjeleníthető termék az AIF készletben.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -4418,14 +4435,13 @@ export default function AllInWarehouse() {
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <StockQtyButton item={it} />
-                          <span className={chip}>Elérhető: {n(it.available_qty)}</span>
                           <MissingDataIndicator item={it} />
                         </div>
                       </div>
                     </div>
                     <div className="mt-3 flex justify-end gap-2">
-                      <button className={btnSoft} onClick={() => openDetail(it.variant_id)}><Edit3 size={15} /> Részletek</button>
-                      <button className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-300/35 bg-[#d31126] text-white hover:bg-[#b90f21]" onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
+                      <button className={`${tableIconBtn} h-9 w-9`} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={15} /></button>
+                      <button className={`${tableDangerIconBtn} h-9 w-9`} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={15} /></button>
                     </div>
                   </article>
                   );
@@ -4488,7 +4504,7 @@ export default function AllInWarehouse() {
                       <p className="mt-1 text-xs text-white/55">
                         {it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}
                       </p>
-                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Elérhető: {n(it.available_qty)} • SKU: {it.barcode || "-"}</p>
+                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • SKU: {it.barcode || "-"}</p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
                       <button className={btnSoft} onClick={() => { setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
@@ -4877,7 +4893,7 @@ export default function AllInWarehouse() {
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                        <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Elérhető: {n(it.available_qty)} • Vonalkód: {it.barcode || "-"}</p>
+                        <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Vonalkód: {it.barcode || "-"}</p>
                       </div>
                       <div className="flex flex-wrap justify-end gap-2">
                         <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
