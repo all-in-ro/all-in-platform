@@ -205,6 +205,10 @@ type InventoryItem = {
   barcode?: string | null;
   sn_cod?: string | null;
   snCod?: string | null;
+  customs_tariff_code?: string | null;
+  customsTariffCode?: string | null;
+  hs_code?: string | null;
+  attributes?: Record<string, unknown> | null;
   image_url?: string | null;
   brand_name?: string | null;
   brand_code?: string | null;
@@ -502,6 +506,7 @@ type EditForm = {
   categoryCode: string;
   barcode: string;
   snCod: string;
+  customsTariffCode: string;
   colorCode: string;
   colorName: string;
   size: string;
@@ -1220,6 +1225,69 @@ function splitCsv(v: unknown) {
     .filter(Boolean);
 }
 
+
+function itemSnCod(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  return String(it?.sn_cod || it?.snCod || "").trim();
+}
+
+function itemCustomsTariffCode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  const attrs = (it?.attributes && typeof it.attributes === "object" ? it.attributes : {}) as Record<string, unknown>;
+  return String(
+    it?.customs_tariff_code ||
+    it?.customsTariffCode ||
+    it?.hs_code ||
+    attrs.customsTariffCode ||
+    attrs.customs_tariff_code ||
+    attrs.hsCode ||
+    attrs.hs_code ||
+    attrs.tariffCode ||
+    attrs.tariff_code ||
+    ""
+  ).trim();
+}
+
+function VariantCodesTooltip({ item, openUp = false }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean }) {
+  const barcode = String(item.barcode || item.internal_sku || "").trim();
+  const snCod = itemSnCod(item);
+  const customsCode = itemCustomsTariffCode(item);
+  const modelCode = String(item.model_code || "").trim();
+  const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
+  const hasAny = Boolean(barcode || snCod || customsCode || modelCode);
+
+  return (
+    <span className="group relative inline-flex justify-center align-middle">
+      <button
+        type="button"
+        className={`inline-flex h-6 items-center justify-center gap-1 rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
+        aria-label="Termékazonosítók megjelenítése"
+      >
+        S/N/COD
+      </button>
+      <span className={`pointer-events-none absolute left-1/2 z-50 hidden w-72 -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
+        <span className="block text-[#cffffd]">Termékazonosítók</span>
+        <span className="mt-2 block space-y-1">
+          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+            <span className="min-w-0 truncate text-white/62">Vonalkód / SKU</span>
+            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{barcode || "-"}</span>
+          </span>
+          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+            <span className="min-w-0 truncate text-white/62">S/N/COD</span>
+            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{snCod || "-"}</span>
+          </span>
+          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+            <span className="min-w-0 truncate text-white/62">Vámtarifa kód</span>
+            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{customsCode || "-"}</span>
+          </span>
+          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+            <span className="min-w-0 truncate text-white/62">Modellkód</span>
+            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{modelCode || "-"}</span>
+          </span>
+        </span>
+      </span>
+    </span>
+  );
+}
+
 function itemMatchesScannedBarcode(it: InventoryItem, scannedBarcode: unknown) {
   const q = normalizeSearch(cleanScannedBarcode(scannedBarcode));
   if (!q) return false;
@@ -1372,6 +1440,7 @@ function itemMatchesSearch(it: InventoryItem, query: string) {
     it.barcode,
     it.sn_cod,
     it.snCod,
+    itemCustomsTariffCode(it),
     it.model_code,
     it.category_name_ro,
     it.category_name_hu,
@@ -1592,6 +1661,7 @@ function emptyForm(): EditForm {
     categoryCode: "",
     barcode: "",
     snCod: "",
+    customsTariffCode: "",
     colorCode: "",
     colorName: "",
     size: "",
@@ -1630,6 +1700,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     categoryCode: x.category_code || "",
     barcode: x.barcode || "",
     snCod: x.sn_cod || x.snCod || "",
+    customsTariffCode: itemCustomsTariffCode(x),
     colorCode: x.color_code || "",
     colorName: officialColorRo(x.color_name || ""),
     size: x.size || "",
@@ -3584,7 +3655,7 @@ export default function AllInWarehouse() {
   async function applyScannedBarcode(rawValue: unknown) {
     const code = cleanScannedBarcode(rawValue);
     if (!code) {
-      setBarcodeScannerStatus("Nem jött be olvasható vonalkód. A vonalkód is úgy döntött, hogy ma szabadságon van.");
+      setBarcodeScannerStatus("Nem érkezett olvasható vonalkód. Próbáld közelebb tartani a kódot, vagy írd be kézzel.");
       return;
     }
     if (barcodeScannerHandlingRef.current) return;
@@ -3671,7 +3742,7 @@ export default function AllInWarehouse() {
         : WAREHOUSE_BARCODE_SCAN_FORMATS;
       const detector = new NativeBarcodeDetector(formats.length ? { formats } : undefined);
 
-      setBarcodeScannerStatus("Kamera aktív. Beépített olvasó megy. Tartsd a vonalkódot a keretbe, és ne remegj úgy, mint egy CSS layout nyomtatás előtt.");
+      setBarcodeScannerStatus("Kamera aktív. A beépített olvasó fut. Tartsd a vonalkódot a keretbe.");
 
       const scanFrame = async () => {
         if (cancelled || barcodeScannerHandlingRef.current) return;
@@ -3704,7 +3775,7 @@ export default function AllInWarehouse() {
       const Reader = zxing?.BrowserMultiFormatReader || zxing?.BrowserMultiFormatOneDReader;
       const video = barcodeVideoRef.current;
       if (!Reader || !video) {
-        await attachPreviewStream("Kamera aktív, de automata laptopos dekódoló nincs betöltve. Kézi beírás marad, mert a böngészők imádják a felesleges akadálypályát.");
+        await attachPreviewStream("Kamera aktív, de az automatikus dekódoló nem érhető el ezen a böngészőn. Használd a kézi beírást.");
         return;
       }
 
@@ -3749,7 +3820,7 @@ export default function AllInWarehouse() {
       } catch (e: any) {
         const name = String(e?.name || "");
         if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-          setBarcodeScannerStatus("A kamera engedély nincs megadva. Engedélyezd a böngészőben, különben varázslatból sajnos nem olvasunk vonalkódot.");
+          setBarcodeScannerStatus("A kamera engedély nincs megadva. Engedélyezd a böngészőben, vagy használd a kézi beírást.");
           return;
         }
         if (name === "NotFoundError" || name === "DevicesNotFoundError") {
@@ -3852,6 +3923,7 @@ export default function AllInWarehouse() {
         modelStatus: newProduct.modelStatus || "active",
         barcode: newProduct.barcode,
         snCod: newProduct.snCod,
+        customsTariffCode: newProduct.customsTariffCode,
         colorCode: newProduct.colorCode,
         colorName: normalizeColor(newProduct.colorName),
         size: normalizeSize(newProduct.size),
@@ -3912,6 +3984,7 @@ export default function AllInWarehouse() {
         categoryCode: edit.categoryCode || null,
         barcode: edit.barcode,
         snCod: edit.snCod,
+        customsTariffCode: edit.customsTariffCode,
         colorCode: edit.colorCode,
         colorName: normalizeColor(edit.colorName),
         size: normalizeSize(edit.size),
@@ -4279,7 +4352,13 @@ export default function AllInWarehouse() {
                         </td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-12 w-12 rounded-lg object-cover" /> : <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}</td>
                         <td className="px-3 py-2.5 text-left align-middle">{it.brand_name || "-"}</td>
-                        <td className="px-3 py-2.5 text-left align-middle"><div>{it.title_ro || "-"}</div><div className="mt-1 text-xs text-white/45">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</div><div className="mt-0.5 text-xs text-white/45">{it.sn_cod || it.snCod ? `S/N/COD: ${it.sn_cod || it.snCod}` : "S/N/COD: -"}</div></td>
+                        <td className="px-3 py-2.5 text-left align-middle">
+                          <div>{it.title_ro || "-"}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
+                            <span className="max-w-[210px] truncate">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
+                            <VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} />
+                          </div>
+                        </td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.category_name_hu || it.category_name_ro || "-"}</td>
                         <td className="px-3 py-2.5 text-center align-middle">{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-3 py-2.5 text-center align-middle">{it.size || "-"}</td>
@@ -4926,13 +5005,12 @@ export default function AllInWarehouse() {
       {newProductOpen && (
         <div className={modalWrap}>
           <div className={modal}>
-            <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-white/45">Új termék kézi felvétele</p>
-                <h2 className="mt-1 text-xl text-white">Új termék hozzáadása raktárba</h2>
-                <p className="mt-1 max-w-3xl text-sm text-white/60">Ugyanazokat a fő termék-, variáns-, ár- és készletadatokat tudod megadni, mint import után, csak receptió nélkül.</p>
+                <p className="text-sm text-white/65">Új termék kézi felvétele</p>
+                <h2 className="text-xl">Új termék hozzáadása raktárba</h2>
               </div>
-              <button className={btnSoft} onClick={closeNewProductModal} disabled={newProductSaving} type="button"><X size={15} /> Bezárás</button>
+              <button className={btnSoft} onClick={closeNewProductModal} disabled={newProductSaving} type="button"><X size={16} /> Bezárás</button>
             </div>
 
             <div className="space-y-4 p-4">
@@ -4941,7 +5019,7 @@ export default function AllInWarehouse() {
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="text-sm text-amber-50">Vonalkód találat már létező termékre</p>
-                      <p className="text-xs text-amber-100/70">Nem nyitok adatlapot, a terméksorra tudsz ugrani, vagy rögtön a készletét módosítani. Igen, ez lenne a normális alapból is.</p>
+                      <p className="text-xs text-amber-100/70">Az adatlap nem nyílik meg automatikusan. A terméksorra tudsz ugrani, vagy rögtön a készletét módosítani.</p>
                     </div>
                     <span className="rounded-full border border-amber-200/30 bg-black/15 px-2.5 py-1 text-xs text-amber-50">{newProductBarcodeMatches.length} találat</span>
                   </div>
@@ -4954,7 +5032,11 @@ export default function AllInWarehouse() {
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
                           <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                          <p className="mt-1 text-xs text-white/45">Vonalkód: {it.barcode || it.internal_sku || "-"} • S/N/COD: {it.sn_cod || it.snCod || "-"} • Készlet: {n(it.total_qty)}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
+                            <span>Vonalkód: {it.barcode || it.internal_sku || "-"}</span>
+                            <VariantCodesTooltip item={it} />
+                            <span>Készlet: {n(it.total_qty)}</span>
+                          </div>
                         </div>
                         <div className="flex flex-wrap justify-end gap-2">
                           <button
@@ -4991,72 +5073,89 @@ export default function AllInWarehouse() {
                 </section>
               )}
 
-              <div className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
-                <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
-                  <div className="mb-3 flex items-center gap-2 text-sm text-white/88"><Edit3 size={15} /> Alapadatok</div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className={label}>Terméknév románul<input className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
-                    <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
-                    <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[86px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
-                    <label className={label}>Beszállító / forrás
-                      <select className={select} value={newProduct.supplierId} onChange={(e) => setNewProduct((x) => ({ ...x, supplierId: e.target.value }))}>
-                        <option value="">Nincs megadva</option>
-                        {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
-                    </label>
-                    <label className={label}>Márka
-                      <select className={select} value={newProduct.brandCode} onChange={(e) => {
-                        const nextBrand = e.target.value;
-                        const mapped = standardSizeForBrandSize(nextBrand, newProduct.supplierSize);
-                        setNewProduct((x) => ({ ...x, brandCode: nextBrand, size: mapped || x.size }));
-                      }}>
-                        <option value="">Nincs megadva</option>
-                        {brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}
-                      </select>
-                    </label>
-                    <label className={label}>Kategória
-                      <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value }))}>
-                        <option value="">Nincs megadva</option>
-                        {categories.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                      </select>
-                    </label>
-                    <label className={label}>Nem
-                      <select className={select} value={newProduct.gender} onChange={(e) => setNewProduct((x) => ({ ...x, gender: e.target.value }))}>
-                        {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
-                        {!genderTypes.length && <option value="unisex">Unisex</option>}
-                      </select>
-                    </label>
-                    <label className={label}>Terméktípus<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
-                    <label className={label}>Szezon<input className={input} value={newProduct.season} onChange={(e) => setNewProduct((x) => ({ ...x, season: e.target.value }))} /></label>
-                    <label className={`${label} md:col-span-2`}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} placeholder="pl. piele, textil, bumbac" /></label>
+              <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
+                <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
+                  {newProduct.imageUrl ? <img src={newProduct.imageUrl} alt="" className="aspect-square w-full rounded-xl object-cover" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={32} /></div>}
+                  <label className={label}>Kép URL
+                    <input className={input} value={newProduct.imageUrl} onChange={(e) => setNewProduct((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." />
+                  </label>
+                  <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
+                    <p>Beszállítói kód: {newProduct.supplierProductCode || "nincs megadva"}</p>
+                    <p className="mt-1">Vonalkód / SKU alap: {newProduct.barcode || "nincs megadva"}</p>
+                    <p className="mt-1">S/N/COD: {newProduct.snCod || "nincs megadva"}</p>
+                    <p className="mt-1">Vámtarifa kód: {newProduct.customsTariffCode || "nincs megadva"}</p>
+                    <p className="mt-1">Kezdő készlet: {newProductTotalQty()} db</p>
                   </div>
-                </section>
+                </div>
 
-                <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
-                  <div className="mb-3 flex items-center gap-2 text-sm text-white/88"><Barcode size={15} /> Import-azonosítók és variáns</div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className={label}>Termékkód / modellkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
-                    <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
-                    <label className={label}>Vonalkód / SKU<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label>
-                    <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
-                    <label className={label}>Gyártói színkód<input className={input} value={newProduct.supplierColorCode || newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierColorCode: e.target.value, colorCode: e.target.value }))} placeholder="pl. 001" /></label>
-                    <label className={label}>Szín<input className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
-                    <label className={label}>Gyártói méret<input className={input} value={newProduct.supplierSize} onChange={(e) => {
-                      const supplierSizeValue = e.target.value;
-                      const mapped = standardSizeForBrandSize(newProduct.brandCode, supplierSizeValue);
-                      setNewProduct((x) => ({ ...x, supplierSize: supplierSizeValue, size: mapped || x.size || supplierSizeValue }));
-                    }} placeholder="pl. US 8.5 vagy OSFM" /></label>
-                    <label className={label}>Standard méret<input className={input} list="warehouse-standard-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
-                    <label className={label}>Vételár<input className={input} value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} inputMode="decimal" /></label>
-                    <label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label>
-                    <label className={label}>Akció előtti ár<input className={input} value={newProduct.compareAtPrice} onChange={(e) => setNewProduct((x) => ({ ...x, compareAtPrice: e.target.value }))} inputMode="decimal" /></label>
-                    <label className={label}>Kép URL<input className={input} value={newProduct.imageUrl} onChange={(e) => setNewProduct((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." /></label>
-                    <label className={`${label} md:col-span-2`}>Shopify cím<input className={input} value={newProduct.shopifyTitle} onChange={(e) => setNewProduct((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
-                  </div>
-                </section>
+                <div className="grid gap-4">
+                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm"><Edit3 size={16} /> Alapadatok</div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={label}>Terméknév románul<input className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value, shopifyTitle: x.shopifyTitle || e.target.value }))} placeholder="pl. Pantofi running" /></label>
+                      <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
+                      <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
+                      <label className={label}>Beszállító / forrás
+                        <select className={select} value={newProduct.supplierId} onChange={(e) => setNewProduct((x) => ({ ...x, supplierId: e.target.value }))}>
+                          <option value="">Nincs megadva</option>
+                          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
+                      </label>
+                      <label className={label}>Márka
+                        <select className={select} value={newProduct.brandCode} onChange={(e) => {
+                          const nextBrand = e.target.value;
+                          const mapped = standardSizeForBrandSize(nextBrand, newProduct.supplierSize);
+                          setNewProduct((x) => ({ ...x, brandCode: nextBrand, size: mapped || x.size }));
+                        }}>
+                          <option value="">Nincs beállítva</option>
+                          {brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}
+                        </select>
+                      </label>
+                      <label className={label}>Kategória
+                        <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value }))}>
+                          <option value="">Nincs beállítva</option>
+                          {categories.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                        </select>
+                      </label>
+                      <label className={label}>Nem
+                        <select className={select} value={newProduct.gender} onChange={(e) => setNewProduct((x) => ({ ...x, gender: e.target.value }))}>
+                          {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
+                          {!genderTypes.length && <option value="unisex">Unisex</option>}
+                        </select>
+                      </label>
+                      <label className={label}>Terméktípus<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
+                      <label className={label}>Szezon<input className={input} value={newProduct.season} onChange={(e) => setNewProduct((x) => ({ ...x, season: e.target.value }))} /></label>
+                      <label className={label}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} placeholder="pl. piele, textil, bumbac" /></label>
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <label className={label}>Termékkód / modellkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
+                      <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
+                      <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label>
+                      <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
+                      <label className={label}>Vámtarifa kód<input className={input} value={newProduct.customsTariffCode} onChange={(e) => setNewProduct((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61102091" /></label>
+                      <label className={label}>Szín<input className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
+                      <label className={label}>Gyártói színkód<input className={input} value={newProduct.supplierColorCode || newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierColorCode: e.target.value, colorCode: e.target.value }))} placeholder="pl. 001" /></label>
+                      <label className={label}>Gyártói méret<input className={input} value={newProduct.supplierSize} onChange={(e) => {
+                        const supplierSizeValue = e.target.value;
+                        const mapped = standardSizeForBrandSize(newProduct.brandCode, supplierSizeValue);
+                        setNewProduct((x) => ({ ...x, supplierSize: supplierSizeValue, size: mapped || x.size || supplierSizeValue }));
+                      }} placeholder="pl. US 8.5 vagy OSFM" /></label>
+                      <label className={label}>Standard méret<input className={input} list="warehouse-standard-size-options" value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} placeholder="pl. OSFM, M, EU 42" /></label>
+                      <label className={label}>Vételár<input className={input} value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} inputMode="decimal" /></label>
+                      <label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label>
+                      <label className={label}>Akció előtti ár<input className={input} value={newProduct.compareAtPrice} onChange={(e) => setNewProduct((x) => ({ ...x, compareAtPrice: e.target.value }))} inputMode="decimal" /></label>
+                      <label className={`${label} md:col-span-2`}>Shopify cím<input className={input} value={newProduct.shopifyTitle} onChange={(e) => setNewProduct((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
+                      <label className={label}>Variáns állapot<select className={select} value={newProduct.variantStatus} onChange={(e) => setNewProduct((x) => ({ ...x, variantStatus: e.target.value }))}><option value="active">Aktív</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
+                    </div>
+                  </section>
+                </div>
               </div>
 
-              <section className="rounded-2xl border border-white/18 bg-[#566171] p-4">
+              <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-sm text-white/88">Kezdő készlet célhelyenként</p>
@@ -5333,7 +5432,7 @@ export default function AllInWarehouse() {
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm text-white/88">{brandColorForm.id ? "Márka színkód módosítása" : "Új márka színkód"}</p>
-                        <p className="text-[11px] text-white/50">Gyártói kód fordítása AllIn színre, márkához kötve. Nem globális alias, mert nem szeretnénk Excel-vuduval átkozni a jövőt.</p>
+                        <p className="text-[11px] text-white/50">Gyártói kód fordítása AllIn színre, márkához kötve. Nem globális alias, mert ugyanaz a kód márkánként mást jelenthet.</p>
                       </div>
                       {brandColorForm.id && <button className={taxonomySmallBtn} onClick={resetBrandColorForm}>Új színkód</button>}
                     </div>
@@ -5661,6 +5760,7 @@ export default function AllInWarehouse() {
                     <p>Belső azonosító: {detail.item?.internal_sku || "-"}</p>
                     <p className="mt-1">Vonalkód / SKU alap: {edit.barcode || "nincs megadva"}</p>
                     <p className="mt-1">S/N/COD: {edit.snCod || "nincs megadva"}</p>
+                    <p className="mt-1">Vámtarifa kód: {edit.customsTariffCode || "nincs megadva"}</p>
                     <p className="mt-1">Utolsó módosítás: {dateShort(detail.item?.updated_at)}</p>
                   </div>
                 </div>
@@ -5722,6 +5822,7 @@ export default function AllInWarehouse() {
                         </div>
                       </label>
                       <label className={label}>S/N/COD<input className={input} value={edit.snCod} onChange={(e) => setEdit((x) => ({ ...x, snCod: e.target.value }))} placeholder="belső azonosító" /></label>
+                      <label className={label}>Vámtarifa kód<input className={input} value={edit.customsTariffCode} onChange={(e) => setEdit((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61102091" /></label>
                       <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, colorName: normalizeColor(x.colorName) }))} placeholder="pl. negru" /></label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
                       <label className={label}>Méret<input className={input} list="warehouse-standard-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
@@ -5798,7 +5899,7 @@ export default function AllInWarehouse() {
                 }}
               >
                 <label className="grid gap-1.5 text-xs text-white/70">
-                  Kézi beírás, ha a kamera hisztizik
+                  Kézi beírás, ha a kamera nem olvas
                   <input
                     className={input}
                     value={barcodeScannerManualValue}
