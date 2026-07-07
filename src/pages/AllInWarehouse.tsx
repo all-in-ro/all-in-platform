@@ -1848,6 +1848,7 @@ export default function AllInWarehouse() {
   const [listOpen, setListOpen] = useState(true);
   const [productPage, setProductPage] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [recentImportFocusBusy, setRecentImportFocusBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
@@ -2011,6 +2012,7 @@ export default function AllInWarehouse() {
 
   async function focusLatestCommittedImportBatch() {
     setBusy(true);
+    setRecentImportFocusBusy(true);
     setMessage("");
     try {
       const batches = await apiImportBatches(25);
@@ -2030,6 +2032,7 @@ export default function AllInWarehouse() {
     } catch (error: any) {
       setMessage(error?.message || "A legutóbbi bevételezés betöltése nem sikerült.");
     } finally {
+      setRecentImportFocusBusy(false);
       setBusy(false);
     }
   }
@@ -4577,7 +4580,7 @@ export default function AllInWarehouse() {
             <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
             {hasActiveWarehouseFilters && <button className={primaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={15} /> Minden termék</button>}
             <button className={btnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import összes variánsát mutatja">
-              <PackageCheck size={16} /> Utolsó import
+              <PackageCheck size={16} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
             </button>
             <button className={btnSoft} onClick={load} disabled={busy}><RefreshCw size={16} /> Frissítés</button>
             <button className={btn} onClick={goHome}><ArrowLeft size={16} /> Vissza</button>
