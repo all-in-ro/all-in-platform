@@ -259,6 +259,95 @@ type PersistedSelectedWorkItem = InventoryItem & {
   selected_updated_at?: string | null;
 };
 
+
+function firstWarehouseText(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function firstWarehouseValue<T = unknown>(...values: T[]) {
+  for (const value of values) {
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+  }
+  return null;
+}
+
+function importFocusRowToInventoryItem(rawItem: any): InventoryItem | null {
+  if (!rawItem || typeof rawItem !== "object") return null;
+  const norm = rawItem.import_normalized && typeof rawItem.import_normalized === "object"
+    ? rawItem.import_normalized
+    : rawItem.normalized && typeof rawItem.normalized === "object"
+      ? rawItem.normalized
+      : {};
+  const raw = rawItem.import_raw && typeof rawItem.import_raw === "object"
+    ? rawItem.import_raw
+    : rawItem.raw && typeof rawItem.raw === "object"
+      ? rawItem.raw
+      : {};
+  const variantId = firstWarehouseText(rawItem.variant_id, rawItem.variantId, rawItem.selected_variant_id, rawItem.selectedVariantId, rawItem.id);
+  if (!variantId) return null;
+  const title = firstWarehouseText(rawItem.title_ro, rawItem.titleRo, norm.titleRo, norm.productName, norm.name, raw.ARTICOL, raw.Articol, raw.DENUMIRE, raw["DENUMIRE PRODUS"], rawItem.import_supplier_product_code, rawItem.supplier_product_code);
+  const brandName = firstWarehouseText(rawItem.brand_name, rawItem.brandName, norm.brandName, norm.brand, raw.BRAND, raw.Brand);
+  const brandCode = firstWarehouseText(rawItem.brand_code, rawItem.brandCode, norm.brandCode, norm.brand_code);
+  const categoryName = firstWarehouseText(rawItem.category_name_ro, rawItem.category_name_hu, rawItem.categoryName, norm.categoryName, norm.productType, raw.RODESCR, raw.CATEGORIE, raw.Category);
+  const categoryCode = firstWarehouseText(rawItem.category_code, rawItem.categoryCode, norm.categoryCode, norm.productType, raw.RODESCR, raw.CATEGORIE);
+  const colorCode = firstWarehouseText(rawItem.color_code, rawItem.colorCode, rawItem.import_supplier_color_code, rawItem.supplier_color_code, norm.colorCode, norm.supplierColorCode);
+  const colorName = firstWarehouseText(rawItem.color_name, rawItem.colorName, norm.colorName, norm.color, raw["CULOARE"], raw.CULOARE);
+  const size = firstWarehouseText(rawItem.size, rawItem.import_supplier_size, rawItem.supplier_size, norm.size, norm.supplierSize, raw.MARIME, raw["MĂRIME"], raw.SIZE);
+  const qtyFallback = firstWarehouseValue(rawItem.total_qty, rawItem.import_total_qty, rawItem.import_qty, rawItem.qty, norm.totalQty, norm.qty);
+  const reservedFallback = firstWarehouseValue(rawItem.total_reserved_qty, rawItem.reserved_qty, 0);
+  const availableFallback = firstWarehouseValue(rawItem.available_qty, rawItem.import_available_qty, rawItem.import_qty, rawItem.qty, norm.availableQty, norm.qty);
+  const attrs = (rawItem.attributes && typeof rawItem.attributes === "object" ? rawItem.attributes : null) ||
+    (rawItem.variant_attributes && typeof rawItem.variant_attributes === "object" ? rawItem.variant_attributes : null) ||
+    (norm.attributes && typeof norm.attributes === "object" ? norm.attributes : null);
+  const customsCode = firstWarehouseText(rawItem.customs_tariff_code, rawItem.customsTariffCode, rawItem.hs_code, norm.customsTariffCode, norm.customs_tariff_code, norm.tariffCode, norm.hsCode, raw.INTRASTAT, raw.VTSZ);
+
+  return {
+    ...rawItem,
+    variant_id: variantId,
+    internal_sku: firstWarehouseText(rawItem.internal_sku, rawItem.internalSku) || null,
+    barcode: firstWarehouseText(rawItem.barcode, rawItem.display_barcode, rawItem.internal_sku, norm.barcode, norm.supplierBarcode) || null,
+    sn_cod: firstWarehouseText(rawItem.sn_cod, rawItem.snCod, norm.snCod, norm.sn_cod, rawItem.import_sn_cod) || null,
+    snCod: firstWarehouseText(rawItem.snCod, rawItem.sn_cod, norm.snCod, norm.sn_cod, rawItem.import_sn_cod) || null,
+    customs_tariff_code: customsCode || null,
+    customsTariffCode: customsCode || null,
+    attributes: attrs,
+    image_url: firstWarehouseText(rawItem.image_url, rawItem.imageUrl, norm.imageUrl, norm.image_url, raw["IMAGE URL"], raw.IMAGE) || null,
+    brand_name: brandName || null,
+    brand_code: brandCode || null,
+    model_id: firstWarehouseText(rawItem.model_id, rawItem.modelId) || null,
+    model_code: firstWarehouseText(rawItem.model_code, rawItem.modelCode, norm.modelCode, rawItem.import_supplier_product_code, rawItem.supplier_product_code) || null,
+    title_ro: title || null,
+    title_hu: firstWarehouseText(rawItem.title_hu, rawItem.titleHu, norm.titleHu) || null,
+    description_ro: firstWarehouseText(rawItem.description_ro, rawItem.descriptionRo, norm.descriptionRo, raw.RODESCR) || null,
+    shopify_title: firstWarehouseText(rawItem.shopify_title, rawItem.shopifyTitle, norm.shopifyTitle, title) || null,
+    gender: firstWarehouseText(rawItem.gender, norm.gender, raw.GEN) || null,
+    product_type: firstWarehouseText(rawItem.product_type, rawItem.productType, norm.productType, raw.RODESCR) || null,
+    season: firstWarehouseText(rawItem.season, norm.season, norm.collection, raw.COLECTIE) || null,
+    material: firstWarehouseText(rawItem.material, norm.material, norm.composition, raw.COMPOZITIE) || null,
+    model_status: firstWarehouseText(rawItem.model_status, rawItem.modelStatus, "active") || "active",
+    category_code: categoryCode || null,
+    category_name_ro: categoryName || null,
+    category_name_hu: firstWarehouseText(rawItem.category_name_hu, rawItem.categoryNameHu) || null,
+    color_code: colorCode || null,
+    color_name: colorName || null,
+    color_hex: firstWarehouseText(rawItem.color_hex, rawItem.colorHex, norm.colorHex) || null,
+    size: size || null,
+    buy_price: firstWarehouseValue(rawItem.buy_price, rawItem.import_buy_price_ron, rawItem.import_buy_price, norm.buyPriceRon, norm.buyPrice),
+    sell_price: firstWarehouseValue(rawItem.sell_price, rawItem.import_sell_price_ron, rawItem.import_sell_price, norm.sellPriceRon, norm.sellPriceGrossRon, norm.sellPrice),
+    compare_at_price: firstWarehouseValue(rawItem.compare_at_price, norm.compareAtPrice),
+    variant_status: firstWarehouseText(rawItem.variant_status, rawItem.status, "active") || "active",
+    total_qty: qtyFallback ?? 0,
+    total_reserved_qty: reservedFallback ?? 0,
+    available_qty: availableFallback ?? qtyFallback ?? 0,
+    last_stock_movement_at: firstWarehouseText(rawItem.last_stock_movement_at, rawItem.updated_at, rawItem.import_updated_at, rawItem.committed_at) || null,
+    last_incoming_at: firstWarehouseText(rawItem.last_incoming_at, rawItem.committed_at, rawItem.updated_at) || null,
+  };
+}
+
 type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
 type GenderType = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type ColorType = {
@@ -1990,7 +2079,10 @@ export default function AllInWarehouse() {
         ...rows,
         ...((detail.items || []) as any[]),
       ];
-      const focusedItemMap = rawFocusedItems.reduce<Map<string, InventoryItem>>((map, rawItem) => {
+      const normalizedFocusedItems = rawFocusedItems
+        .map((rawItem) => importFocusRowToInventoryItem(rawItem))
+        .filter(Boolean) as InventoryItem[];
+      const focusedItemMap = normalizedFocusedItems.reduce<Map<string, InventoryItem>>((map, rawItem) => {
         const variantId = String(rawItem?.variant_id || rawItem?.variantId || rawItem?.selected_variant_id || rawItem?.selectedVariantId || "").trim();
         if (!variantId) return map;
         const previous = map.get(variantId) || ({ variant_id: variantId } as InventoryItem);
