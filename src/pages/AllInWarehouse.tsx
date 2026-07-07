@@ -309,7 +309,7 @@ function importFocusRowToInventoryItem(rawItem: any): InventoryItem | null {
     ...rawItem,
     variant_id: variantId,
     internal_sku: firstWarehouseText(rawItem.internal_sku, rawItem.internalSku) || null,
-    barcode: firstWarehouseText(rawItem.barcode, rawItem.display_barcode, rawItem.internal_sku, norm.barcode, norm.supplierBarcode) || null,
+    barcode: firstWarehouseText(rawItem.barcode, norm.barcode, norm.supplierBarcode) || null,
     sn_cod: firstWarehouseText(rawItem.sn_cod, rawItem.snCod, norm.snCod, norm.sn_cod, rawItem.import_sn_cod) || null,
     snCod: firstWarehouseText(rawItem.snCod, rawItem.sn_cod, norm.snCod, norm.sn_cod, rawItem.import_sn_cod) || null,
     customs_tariff_code: customsCode || null,
@@ -366,7 +366,7 @@ function warehouseMovementRowToInventoryItem(row: Record<string, any>): Inventor
   const mapped = importFocusRowToInventoryItem({
     ...row,
     variant_id: row.variant_id || row.variantId,
-    barcode: firstWarehouseText(row.barcode, row.display_barcode, row.internal_sku),
+    barcode: firstWarehouseText(row.barcode),
     total_qty: qtyAfter || qtyDelta,
     available_qty: qtyAfter || qtyDelta,
     import_qty: qtyDelta,
@@ -379,7 +379,7 @@ function warehouseMovementRowToInventoryItem(row: Record<string, any>): Inventor
   if (!mapped) return null;
   return {
     ...mapped,
-    barcode: mapped.barcode || firstWarehouseText(row.display_barcode, row.barcode, row.internal_sku) || null,
+    barcode: mapped.barcode || firstWarehouseText(row.barcode) || null,
     total_qty: qtyAfter || mapped.total_qty || qtyDelta,
     available_qty: qtyAfter || mapped.available_qty || qtyDelta,
     last_stock_movement_at: firstWarehouseText(row.created_at, mapped.last_stock_movement_at) || null,
@@ -685,6 +685,7 @@ type EditForm = {
   brandCode: string;
   categoryCode: string;
   barcode: string;
+  supplierProductCode: string;
   snCod: string;
   customsTariffCode: string;
   colorCode: string;
@@ -1368,13 +1369,13 @@ function isWarehouseVisibleInMainList(it: InventoryItem) {
 }
 
 function hasMissingData(it: InventoryItem) {
-  return !it.image_url || !it.barcode || !it.sell_price || !it.buy_price || !it.title_ro || !it.size || needsWarehouseActivation(it);
+  return !it.image_url || !visibleWarehouseBarcode(it) || !it.sell_price || !it.buy_price || !it.title_ro || !it.size || needsWarehouseActivation(it);
 }
 
 function missingLabels(it: InventoryItem) {
   const out = [];
   if (!it.image_url) out.push("kép");
-  if (!it.barcode) out.push("vonalkód");
+  if (!visibleWarehouseBarcode(it)) out.push("vonalkód");
   if (!it.buy_price) out.push("vételár");
   if (!it.sell_price) out.push("eladási ár");
   if (!it.title_ro) out.push("név");
@@ -1459,8 +1460,32 @@ function itemDisplayModelCode(it: Partial<InventoryItem> | Record<string, any> |
   return String(lastPart || raw).trim();
 }
 
+function visibleWarehouseBarcode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  const source = (it || {}) as Record<string, any>;
+  const raw = String(source.barcode || "").trim();
+  if (!raw) return "";
+  const internal = String(source.internal_sku || source.internalSku || "").trim();
+  if (internal && raw === internal) return "";
+  if (/^AIF[-_]/i.test(raw)) return "";
+  return raw;
+}
+
+function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
+  const item = (d?.item || {}) as Record<string, any>;
+  const supplierRows = Array.isArray(d?.supplierCodes) ? d!.supplierCodes : [];
+  const active = supplierRows.find((row: any) => row && row.is_active !== false && String(row.supplier_product_code || "").trim());
+  const anyRow = supplierRows.find((row: any) => row && String(row.supplier_product_code || "").trim());
+  return firstWarehouseText(
+    item.supplier_product_code,
+    item.supplierProductCode,
+    active?.supplier_product_code,
+    anyRow?.supplier_product_code,
+    item.model_code && String(item.model_code).includes(":") ? String(item.model_code).split(":").pop() : ""
+  );
+}
+
 function VariantCodesTooltip({ item, openUp = false }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean }) {
-  const barcode = String(item.barcode || item.internal_sku || "").trim();
+  const barcode = visibleWarehouseBarcode(item);
   const snCod = itemSnCod(item);
   const customsCode = itemCustomsTariffCode(item);
   const modelCode = itemDisplayModelCode(item);
@@ -1954,6 +1979,7 @@ function emptyForm(): EditForm {
     brandCode: "",
     categoryCode: "",
     barcode: "",
+    supplierProductCode: "",
     snCod: "",
     customsTariffCode: "",
     colorCode: "",
@@ -1992,7 +2018,8 @@ function formFromDetail(d: DetailResponse): EditForm {
     modelStatus: x.model_status || "active",
     brandCode: x.brand_code || "",
     categoryCode: x.category_code || "",
-    barcode: x.barcode || "",
+    barcode: visibleWarehouseBarcode(x),
+    supplierProductCode: supplierProductCodeFromDetail(d),
     snCod: x.sn_cod || x.snCod || "",
     customsTariffCode: itemCustomsTariffCode(x),
     colorCode: x.color_code || "",
@@ -2863,9 +2890,8 @@ export default function AllInWarehouse() {
     let out = [...inventoryDisplayItems];
     const reviewMode = stockFilter === "watch";
     if (incomingFocus?.batchId) {
-      // Az Utolsó import pontosan ugyanazt a bevételezést mutassa, amit az Incoming és a Mozgásnapló is lát.
-      // Nem aktiválási munkalista, nem találgatás, nem frontend-bűvészet: konkrét import batch -> konkrét variánsok.
-      out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")));
+      // Az utolsó bevezetés itt munkalista: ami már aktív, eltűnik innen, hogy ne 1000 sor között vadásszunk.
+      out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")) && needsWarehouseActivation(x));
     } else if (!reviewMode && stockFilter !== "missing") {
       // A fő raktárlista csak az aktív termékeket mutassa. A draft/inaktív importok az aktiválandó listában élnek, nem a kész raktárban.
       out = out.filter(isWarehouseVisibleInMainList);
@@ -4725,7 +4751,7 @@ export default function AllInWarehouse() {
   async function saveDetail() {
     if (!detail?.item?.id) return;
     const detailId = String(detail.item.id || detail.item.variant_id || "");
-    const wasActivationWorkView = stockFilter === "watch";
+    const wasActivationWorkView = stockFilter === "watch" || Boolean(incomingFocus?.batchId);
     setSaving(true);
     setMessage("");
     try {
@@ -4742,6 +4768,8 @@ export default function AllInWarehouse() {
         brandCode: edit.brandCode || null,
         categoryCode: edit.categoryCode || null,
         barcode: edit.barcode,
+        supplierProductCode: edit.supplierProductCode,
+        productCode: edit.supplierProductCode,
         snCod: edit.snCod,
         customsTariffCode: edit.customsTariffCode,
         colorCode: edit.colorCode,
@@ -4754,6 +4782,14 @@ export default function AllInWarehouse() {
       });
       const d = await apiVariantDetail(detail.item.id);
       const resolvedActivation = !needsWarehouseActivation(d.item as InventoryItem);
+      if (incomingFocus?.batchId && resolvedActivation) {
+        setIncomingFocusItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== detailId));
+        setIncomingFocus((current) => current ? {
+          ...current,
+          variantIds: (current.variantIds || []).filter((id) => String(id || "") !== detailId),
+          rows: (current.rows || []).filter((row: any) => String(row.variant_id || row.variantId || "") !== detailId),
+        } : current);
+      }
       if (wasActivationWorkView && resolvedActivation) {
         setDetail(null);
       } else {
@@ -5167,9 +5203,9 @@ export default function AllInWarehouse() {
                 <div className="mb-3 rounded-xl border border-[#5bd0cc]/35 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <p className="font-semibold text-white">A legutóbbi készletre vétel sorait mutatom.</p>
+                      <p className="font-semibold text-white">A legutóbbi bevezetés még aktiválandó sorait mutatom.</p>
                       <p className="mt-1">Forrás: {String(incomingFocus.sourceFileName || incomingFocus.batch?.source_file_name || incomingFocus.batchId || "import")} • import sor: {incomingFocus.rows.length || incomingFocus.variantIds.length} • megjelenő variáns: {filtered.length}/{incomingFocus.variantIds.length}{incomingFocus.totalQty ? ` • ${incomingFocus.totalQty} db` : ""}</p>
-                      <p className="mt-1 text-[#bdf5f2]">Ha az összes raktári termékszám csak 1-gyel nőtt, az nem eltűnés: a többi sor már létező modell + szín + méret variánsra ment, és annak a készlete nőtt.</p>
+                      <p className="mt-1 text-[#bdf5f2]">Amint a Modell állapot és a Variáns állapot aktív, a sor eltűnik innen. A készlet nem tűnik el, csak átkerül a normál raktárlistába.</p>
                     </div>
                     <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button"><X size={14} /> Minden raktári variáns</button>
                   </div>
@@ -5198,7 +5234,7 @@ export default function AllInWarehouse() {
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
                   A raktárlista termékvariánsonként összesít: külön méret külön sor. Importnál a már létező modell + szín + méret nem új terméksor, hanem a meglévő sor készlete nő.
                   {incomingFocus ? (
-                    <span className="mt-1 block text-emerald-50">Most az utolsó bevételezés szűrője aktív, ezért csak annak az importnak a variánsai látszanak. Az aktiválandó munkalistát külön az alsó figyelmeztetés vagy a Készlet állapot = Aktiválandó szűrő kezeli.</span>
+                    <span className="mt-1 block text-emerald-50">Most az utolsó bevezetés aktiválandó listája aktív, ezért csak azok a sorok látszanak, amelyeknél a modell vagy a variáns még nem aktív.</span>
                   ) : null}
                 </div>
               )}
@@ -5278,7 +5314,7 @@ export default function AllInWarehouse() {
                             {it.title_ro || "-"}
                           </button>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4 text-white/45">
-                            <span className="min-w-0 max-w-[170px] truncate overflow-hidden">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
+                            <span className="min-w-0 max-w-[170px] truncate overflow-hidden">{visibleWarehouseBarcode(it) ? `Vonalkód: ${visibleWarehouseBarcode(it)}` : "Nincs vonalkód"}</span>
                             <span className="relative z-40 shrink-0 overflow-visible"><VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
                           </div>
                         </td>
@@ -5402,7 +5438,7 @@ export default function AllInWarehouse() {
                       <p className="mt-1 text-xs text-white/55">
                         {it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}
                       </p>
-                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • SKU: {it.barcode || "-"}</p>
+                      <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • SKU: {visibleWarehouseBarcode(it) || "-"}</p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
                       <button className={btnSoft} onClick={() => { setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
@@ -5730,7 +5766,7 @@ export default function AllInWarehouse() {
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
                           <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                          <p className="mt-1 text-xs text-white/45">Vonalkód: {it.barcode || it.internal_sku || "-"} • Összes készlet: {n(it.total_qty)}</p>
+                          <p className="mt-1 text-xs text-white/45">Vonalkód: {visibleWarehouseBarcode(it) || "-"} • Összes készlet: {n(it.total_qty)}</p>
                           {rowProblem ? <p className="mt-1 text-xs text-amber-200">{rowProblem}</p> : <p className="mt-1 text-xs text-[#cffffd]">Forrás: {currentQty} db • foglalt: {reservedQty} • elérhető: {availableFrom}</p>}
                         </div>
                         <label className={label}>
@@ -5791,7 +5827,7 @@ export default function AllInWarehouse() {
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                        <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Vonalkód: {it.barcode || "-"}</p>
+                        <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Vonalkód: {visibleWarehouseBarcode(it) || "-"}</p>
                       </div>
                       <div className="flex flex-wrap justify-end gap-2">
                         <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button"><Edit3 size={14} /> Részletek</button>
@@ -5954,7 +5990,7 @@ export default function AllInWarehouse() {
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
                           <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
-                            <span>Vonalkód: {it.barcode || it.internal_sku || "-"}</span>
+                            <span>Vonalkód: {visibleWarehouseBarcode(it) || "-"}</span>
                             <VariantCodesTooltip item={it} />
                             <span>Készlet: {n(it.total_qty)}</span>
                           </div>
@@ -6679,6 +6715,7 @@ export default function AllInWarehouse() {
                   </label>
                   <div className="rounded-xl border border-white/12 bg-black/10 p-3 text-xs text-white/60">
                     <p>Belső azonosító: {detail.item?.internal_sku || "-"}</p>
+                    <p className="mt-1">Termékkód: {edit.supplierProductCode || "nincs megadva"}</p>
                     <p className="mt-1">Vonalkód / SKU alap: {edit.barcode || "nincs megadva"}</p>
                     <p className="mt-1">S/N/COD: {edit.snCod || "nincs megadva"}</p>
                     <p className="mt-1">Vámtarifa kód: {edit.customsTariffCode || "nincs megadva"}</p>
@@ -6705,6 +6742,7 @@ export default function AllInWarehouse() {
                   <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
+                      <label className={label}>Termékkód<input className={input} value={edit.supplierProductCode} onChange={(e) => setEdit((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 1329582-402" /></label>
                       <label className={label}>
                         <span className="flex items-center gap-1.5">
                           <span>Vonalkód / Shopify SKU alap</span>
