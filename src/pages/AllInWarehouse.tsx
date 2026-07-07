@@ -208,6 +208,12 @@ type InventoryItem = {
   variant_id: string;
   internal_sku?: string | null;
   barcode?: string | null;
+  supplier_product_code?: string | null;
+  supplierProductCode?: string | null;
+  product_code?: string | null;
+  productCode?: string | null;
+  import_supplier_product_code?: string | null;
+  importSupplierProductCode?: string | null;
   sn_cod?: string | null;
   snCod?: string | null;
   customs_tariff_code?: string | null;
@@ -310,6 +316,8 @@ function importFocusRowToInventoryItem(rawItem: any): InventoryItem | null {
     variant_id: variantId,
     internal_sku: firstWarehouseText(rawItem.internal_sku, rawItem.internalSku) || null,
     barcode: firstWarehouseText(rawItem.barcode, norm.barcode, norm.supplierBarcode) || null,
+    supplier_product_code: firstWarehouseText(rawItem.supplier_product_code, rawItem.supplierProductCode, rawItem.product_code, rawItem.productCode, rawItem.import_supplier_product_code, norm.supplierProductCode, norm.supplier_product_code, norm.productCode, norm.product_code, raw.CODPRODUS, raw["COD PRODUS"], firstCsvText(rawItem.supplier_codes)) || null,
+    supplierProductCode: firstWarehouseText(rawItem.supplierProductCode, rawItem.supplier_product_code, rawItem.productCode, rawItem.product_code, rawItem.import_supplier_product_code, norm.supplierProductCode, norm.supplier_product_code, norm.productCode, norm.product_code, raw.CODPRODUS, raw["COD PRODUS"], firstCsvText(rawItem.supplier_codes)) || null,
     sn_cod: firstWarehouseText(rawItem.sn_cod, rawItem.snCod, norm.snCod, norm.sn_cod, rawItem.import_sn_cod) || null,
     snCod: firstWarehouseText(rawItem.snCod, rawItem.sn_cod, norm.snCod, norm.sn_cod, rawItem.import_sn_cod) || null,
     customs_tariff_code: customsCode || null,
@@ -1452,22 +1460,90 @@ function itemCustomsTariffCode(it: Partial<InventoryItem> | Record<string, any> 
   ).trim();
 }
 
-function itemDisplayModelCode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+function firstCsvText(value: unknown) {
+  return String(value ?? "")
+    .split(",")
+    .map((x) => x.trim())
+    .find(Boolean) || "";
+}
+
+function itemProductCode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
   const source = (it || {}) as Record<string, any>;
-  const raw = String(source.model_code || source.modelCode || "").trim();
-  if (!raw) return "";
-  const lastPart = raw.includes(":") ? raw.split(":").pop() || raw : raw;
-  return String(lastPart || raw).trim();
+  const rawObj = source.raw && typeof source.raw === "object" ? source.raw as Record<string, any> : {};
+  const nestedRaw = rawObj.raw && typeof rawObj.raw === "object" ? rawObj.raw as Record<string, any> : {};
+  const normalized = source.normalized && typeof source.normalized === "object" ? source.normalized as Record<string, any> : {};
+  const rawNormalized = rawObj.normalized && typeof rawObj.normalized === "object" ? rawObj.normalized as Record<string, any> : {};
+  const direct = firstWarehouseText(
+    source.supplier_product_code,
+    source.supplierProductCode,
+    source.product_code,
+    source.productCode,
+    source.import_supplier_product_code,
+    source.importSupplierProductCode,
+    source.supplierCode,
+    normalized.supplierProductCode,
+    normalized.supplier_product_code,
+    normalized.productCode,
+    normalized.product_code,
+    rawNormalized.supplierProductCode,
+    rawNormalized.supplier_product_code,
+    rawNormalized.productCode,
+    rawNormalized.product_code,
+    rawObj.CODPRODUS,
+    rawObj["COD PRODUS"],
+    rawObj.CodProdus,
+    nestedRaw.CODPRODUS,
+    nestedRaw["COD PRODUS"],
+    nestedRaw.CodProdus,
+    firstCsvText(source.supplier_codes)
+  );
+  if (direct) return direct;
+  const barcodeLikeProductCode = firstWarehouseText(source.display_barcode, source.barcode);
+  const internal = String(source.internal_sku || source.internalSku || "").trim();
+  if (barcodeLikeProductCode && barcodeLikeProductCode !== internal && !/^AIF[-_]/i.test(barcodeLikeProductCode) && /[-_/]/.test(barcodeLikeProductCode)) return barcodeLikeProductCode;
+  const rawModel = String(source.model_code || source.modelCode || "").trim();
+  if (!rawModel) return "";
+  const lastPart = rawModel.includes(":") ? rawModel.split(":").pop() || rawModel : rawModel;
+  return String(lastPart || rawModel).trim();
 }
 
 function visibleWarehouseBarcode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
   const source = (it || {}) as Record<string, any>;
-  const raw = String(source.barcode || "").trim();
+  const raw = String(source.barcode || source.display_barcode || "").trim();
   if (!raw) return "";
   const internal = String(source.internal_sku || source.internalSku || "").trim();
+  const productCode = itemProductCode(source);
   if (internal && raw === internal) return "";
+  if (productCode && normalizeSearch(raw) === normalizeSearch(productCode)) return "";
   if (/^AIF[-_]/i.test(raw)) return "";
   return raw;
+}
+
+async function copyWarehouseCodeToClipboard(value: string) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Visszaesünk a régi módszerre. A böngészők néha külön drámakört futnak clipboardból.
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "readonly");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
@@ -1488,10 +1564,20 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
   const barcode = visibleWarehouseBarcode(item);
   const snCod = itemSnCod(item);
   const customsCode = itemCustomsTariffCode(item);
-  const modelCode = itemDisplayModelCode(item);
-  const hasAny = Boolean(barcode || snCod || customsCode || modelCode);
+  const productCode = itemProductCode(item);
+  const internalSku = String(item.internal_sku || item.internalSku || "").trim();
+  const codeRows = [
+    { key: "barcode", label: "Vonalkód / SKU", value: barcode },
+    { key: "sn", label: "S/N/COD", value: snCod },
+    { key: "tariff", label: "Vámtarifa kód", value: customsCode },
+    { key: "product", label: "Termékkód", value: productCode },
+    { key: "internal", label: "Belső AIF", value: internalSku },
+  ].filter((row) => String(row.value || "").trim() || row.key !== "internal");
+  const hasAny = codeRows.some((row) => String(row.value || "").trim());
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [copiedKey, setCopiedKey] = useState("");
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
 
   function updateTooltipPosition() {
@@ -1499,13 +1585,13 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
     const button = buttonRef.current;
     if (!button) return;
     const rect = button.getBoundingClientRect();
-    const tooltipWidth = 288;
+    const tooltipWidth = 336;
     const sidePadding = 12;
     const left = Math.min(
       Math.max(sidePadding, rect.left + rect.width / 2 - tooltipWidth / 2),
       Math.max(sidePadding, window.innerWidth - tooltipWidth - sidePadding)
     );
-    const shouldOpenUp = openUp || rect.bottom + 170 > window.innerHeight;
+    const shouldOpenUp = openUp || rect.bottom + 220 > window.innerHeight;
     setTooltipStyle({
       position: "fixed",
       left,
@@ -1520,8 +1606,26 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
     setTooltipOpen(true);
   }
 
+  function togglePinned(event?: React.MouseEvent<HTMLButtonElement>) {
+    event?.stopPropagation();
+    updateTooltipPosition();
+    setCopiedKey("");
+    setPinned((current) => {
+      const next = !current;
+      setTooltipOpen(next);
+      return next;
+    });
+  }
+
+  async function copyCode(rowKey: string, value: string) {
+    const ok = await copyWarehouseCodeToClipboard(value);
+    if (!ok) return;
+    setCopiedKey(rowKey);
+    window.setTimeout(() => setCopiedKey((current) => (current === rowKey ? "" : current)), 1200);
+  }
+
   useEffect(() => {
-    if (!tooltipOpen) return;
+    if (!tooltipOpen && !pinned) return;
     updateTooltipPosition();
     const onMove = () => updateTooltipPosition();
     window.addEventListener("scroll", onMove, true);
@@ -1530,35 +1634,59 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
       window.removeEventListener("scroll", onMove, true);
       window.removeEventListener("resize", onMove);
     };
-  }, [tooltipOpen, openUp]);
+  }, [tooltipOpen, pinned, openUp]);
+
+  useEffect(() => {
+    if (!pinned) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setPinned(false);
+      setTooltipOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pinned]);
 
   const tooltip = (
     <div
-      className="pointer-events-none z-[9999] rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl shadow-black/35"
+      className={`${pinned ? "pointer-events-auto" : "pointer-events-none"} z-[9999] rounded-2xl border border-[#5bd0cc]/35 bg-[#202838] p-2.5 text-left text-[11px] leading-snug text-white shadow-2xl shadow-black/35`}
       style={tooltipStyle}
       role="tooltip"
+      onMouseEnter={() => pinned && setTooltipOpen(true)}
     >
-      <span className="block text-[#cffffd]">Termékazonosítók</span>
-      <span className="mt-2 block space-y-1">
-        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-          <span className="min-w-0 truncate text-white/62">Vonalkód / SKU</span>
-          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{barcode || "-"}</span>
-        </span>
-        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-          <span className="min-w-0 truncate text-white/62">S/N/COD</span>
-          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{snCod || "-"}</span>
-        </span>
-        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-          <span className="min-w-0 truncate text-white/62">Vámtarifa kód</span>
-          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{customsCode || "-"}</span>
-        </span>
-        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-          <span className="min-w-0 truncate text-white/62">Modellkód</span>
-          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{modelCode || "-"}</span>
-        </span>
-      </span>
+      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+        <div>
+          <span className="block text-[#cffffd]">Termékazonosítók</span>
+          <span className="block text-[10px] text-white/45">Kattintás: fixálás, újabb kattintás: elengedés.</span>
+        </div>
+        {pinned && <span className="rounded-full border border-[#5bd0cc]/30 bg-[#2a8d8b]/22 px-2 py-0.5 text-[10px] text-[#cffffd]">fix</span>}
+      </div>
+      <div className="space-y-1.5">
+        {codeRows.map((row) => {
+          const value = String(row.value || "").trim();
+          return (
+            <div key={row.key} className="grid grid-cols-[96px,1fr,64px] items-center gap-2 rounded-xl bg-white/[0.06] px-2 py-1.5">
+              <span className="min-w-0 truncate text-white/62">{row.label}</span>
+              <span className="min-w-0 truncate text-right tabular-nums text-white" title={value || "-"}>{value || "-"}</span>
+              <button
+                type="button"
+                disabled={!value}
+                className="h-6 rounded-lg border border-white/12 bg-white/[0.08] px-2 text-[10px] text-white/78 transition hover:border-[#5bd0cc]/35 hover:bg-[#2a8d8b]/22 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void copyCode(row.key, value);
+                }}
+              >
+                {copiedKey === row.key ? "Másolva" : "Copy"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
+
+  const open = tooltipOpen || pinned;
 
   return (
     <>
@@ -1566,17 +1694,19 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
         <button
           ref={buttonRef}
           type="button"
-          className={`inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
-          aria-label="Termékazonosítók megjelenítése"
-          onMouseEnter={showTooltip}
-          onMouseLeave={() => setTooltipOpen(false)}
-          onFocus={showTooltip}
-          onBlur={() => setTooltipOpen(false)}
+          className={`inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${pinned ? "border-amber-200/50 bg-amber-300/15 text-amber-50" : hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
+          aria-label={pinned ? "Termékazonosítók elengedése" : "Termékazonosítók megjelenítése"}
+          title={pinned ? "Fix tooltip kikapcsolása" : "Kattintásra fix, újabb kattintásra elenged"}
+          onMouseEnter={() => !pinned && showTooltip()}
+          onMouseLeave={() => !pinned && setTooltipOpen(false)}
+          onFocus={() => !pinned && showTooltip()}
+          onBlur={() => !pinned && setTooltipOpen(false)}
+          onClick={togglePinned}
         >
           S/N/COD
         </button>
       </span>
-      {tooltipOpen && typeof document !== "undefined" ? createPortal(tooltip, document.body) : null}
+      {open && typeof document !== "undefined" ? createPortal(tooltip, document.body) : null}
     </>
   );
 }
@@ -1590,6 +1720,11 @@ function itemMatchesScannedBarcode(it: InventoryItem, scannedBarcode: unknown) {
     it.snCod,
     it.internal_sku,
     it.model_code,
+    itemProductCode(it),
+    it.supplier_product_code,
+    it.supplierProductCode,
+    it.product_code,
+    it.productCode,
     it.supplier_codes,
     ...splitCsv(it.supplier_codes),
     ...(it.suppliers || []).flatMap((s) => [s.code, s.name]),
@@ -2413,7 +2548,9 @@ export default function AllInWarehouse() {
         item: {
           variant_id: variantId,
           internal_sku: source.internal_sku || null,
-          barcode: nonEmpty(source.barcode, source.display_barcode, source.internal_sku) || null,
+          barcode: nonEmpty(source.barcode, source.display_barcode) || null,
+          supplier_product_code: nonEmpty(source.supplier_product_code, source.supplierProductCode, source.product_code, source.productCode, firstCsvText(source.supplier_codes)) || null,
+          supplierProductCode: nonEmpty(source.supplierProductCode, source.supplier_product_code, source.productCode, source.product_code, firstCsvText(source.supplier_codes)) || null,
           sn_cod: nonEmpty(source.sn_cod, source.snCod) || null,
           snCod: nonEmpty(source.sn_cod, source.snCod) || null,
           customs_tariff_code: nonEmpty(source.customs_tariff_code, source.customsTariffCode, source.hs_code) || null,
@@ -2469,7 +2606,9 @@ export default function AllInWarehouse() {
       current.item = {
         ...current.item,
         internal_sku: current.item.internal_sku || source.internal_sku || null,
-        barcode: current.item.barcode || nonEmpty(source.barcode, source.display_barcode, source.internal_sku) || null,
+        barcode: current.item.barcode || nonEmpty(source.barcode, source.display_barcode) || null,
+        supplier_product_code: current.item.supplier_product_code || nonEmpty(source.supplier_product_code, source.supplierProductCode, source.product_code, source.productCode, firstCsvText(source.supplier_codes)) || null,
+        supplierProductCode: current.item.supplierProductCode || nonEmpty(source.supplierProductCode, source.supplier_product_code, source.productCode, source.product_code, firstCsvText(source.supplier_codes)) || null,
         sn_cod: current.item.sn_cod || nonEmpty(source.sn_cod, source.snCod) || null,
         snCod: current.item.snCod || nonEmpty(source.sn_cod, source.snCod) || null,
         customs_tariff_code: current.item.customs_tariff_code || nonEmpty(source.customs_tariff_code, source.customsTariffCode, source.hs_code) || null,
@@ -2515,7 +2654,9 @@ export default function AllInWarehouse() {
           ...aggregate.item,
           ...item,
           variant_id: variantId,
-          barcode: item.barcode || aggregate.item.barcode || item.internal_sku || aggregate.item.internal_sku || null,
+          barcode: item.barcode || aggregate.item.barcode || null,
+          supplier_product_code: item.supplier_product_code || item.supplierProductCode || aggregate.item.supplier_product_code || aggregate.item.supplierProductCode || firstCsvText(item.supplier_codes) || firstCsvText(aggregate.item.supplier_codes) || null,
+          supplierProductCode: item.supplierProductCode || item.supplier_product_code || aggregate.item.supplierProductCode || aggregate.item.supplier_product_code || firstCsvText(item.supplier_codes) || firstCsvText(aggregate.item.supplier_codes) || null,
           sn_cod: item.sn_cod || item.snCod || aggregate.item.sn_cod || aggregate.item.snCod || null,
           snCod: item.snCod || item.sn_cod || aggregate.item.snCod || aggregate.item.sn_cod || null,
           customs_tariff_code: itemCustomsTariffCode(item) || itemCustomsTariffCode(aggregate.item) || null,
@@ -6090,7 +6231,7 @@ export default function AllInWarehouse() {
                   <section className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
-                      <label className={label}>Termékkód / modellkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
+                      <label className={label}>Termékkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
                       <label className={label}>Vámtarifa kód<input className={input} value={newProduct.customsTariffCode} onChange={(e) => setNewProduct((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61099020" /></label>
                       <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
                       <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label>
