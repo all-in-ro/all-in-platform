@@ -1246,11 +1246,18 @@ function itemCustomsTariffCode(it: Partial<InventoryItem> | Record<string, any> 
   ).trim();
 }
 
+function itemDisplayModelCode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  const raw = String(it?.model_code || it?.modelCode || "").trim();
+  if (!raw) return "";
+  const lastPart = raw.includes(":") ? raw.split(":").pop() || raw : raw;
+  return String(lastPart || raw).trim();
+}
+
 function VariantCodesTooltip({ item, openUp = false }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean }) {
   const barcode = String(item.barcode || item.internal_sku || "").trim();
   const snCod = itemSnCod(item);
   const customsCode = itemCustomsTariffCode(item);
-  const modelCode = String(item.model_code || "").trim();
+  const modelCode = itemDisplayModelCode(item);
   const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
   const hasAny = Boolean(barcode || snCod || customsCode || modelCode);
 
