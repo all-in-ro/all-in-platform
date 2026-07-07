@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -1260,40 +1261,95 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
   const snCod = itemSnCod(item);
   const customsCode = itemCustomsTariffCode(item);
   const modelCode = itemDisplayModelCode(item);
-  const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
   const hasAny = Boolean(barcode || snCod || customsCode || modelCode);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
 
-  return (
-    <span className="group relative inline-flex shrink-0 justify-center whitespace-nowrap align-middle">
-      <button
-        type="button"
-        className={`inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
-        aria-label="Termékazonosítók megjelenítése"
-      >
-        S/N/COD
-      </button>
-      <span className={`pointer-events-none absolute left-1/2 z-50 hidden w-72 -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
-        <span className="block text-[#cffffd]">Termékazonosítók</span>
-        <span className="mt-2 block space-y-1">
-          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-            <span className="min-w-0 truncate text-white/62">Vonalkód / SKU</span>
-            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{barcode || "-"}</span>
-          </span>
-          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-            <span className="min-w-0 truncate text-white/62">S/N/COD</span>
-            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{snCod || "-"}</span>
-          </span>
-          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-            <span className="min-w-0 truncate text-white/62">Vámtarifa kód</span>
-            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{customsCode || "-"}</span>
-          </span>
-          <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
-            <span className="min-w-0 truncate text-white/62">Modellkód</span>
-            <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{modelCode || "-"}</span>
-          </span>
+  function updateTooltipPosition() {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const tooltipWidth = 288;
+    const sidePadding = 12;
+    const left = Math.min(
+      Math.max(sidePadding, rect.left + rect.width / 2 - tooltipWidth / 2),
+      Math.max(sidePadding, window.innerWidth - tooltipWidth - sidePadding)
+    );
+    const shouldOpenUp = openUp || rect.bottom + 170 > window.innerHeight;
+    setTooltipStyle({
+      position: "fixed",
+      left,
+      top: shouldOpenUp ? rect.top - 8 : rect.bottom + 8,
+      transform: shouldOpenUp ? "translateY(-100%)" : "none",
+      width: tooltipWidth,
+    });
+  }
+
+  function showTooltip() {
+    updateTooltipPosition();
+    setTooltipOpen(true);
+  }
+
+  useEffect(() => {
+    if (!tooltipOpen) return;
+    updateTooltipPosition();
+    const onMove = () => updateTooltipPosition();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [tooltipOpen, openUp]);
+
+  const tooltip = (
+    <div
+      className="pointer-events-none z-[9999] rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl shadow-black/35"
+      style={tooltipStyle}
+      role="tooltip"
+    >
+      <span className="block text-[#cffffd]">Termékazonosítók</span>
+      <span className="mt-2 block space-y-1">
+        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+          <span className="min-w-0 truncate text-white/62">Vonalkód / SKU</span>
+          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{barcode || "-"}</span>
+        </span>
+        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+          <span className="min-w-0 truncate text-white/62">S/N/COD</span>
+          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{snCod || "-"}</span>
+        </span>
+        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+          <span className="min-w-0 truncate text-white/62">Vámtarifa kód</span>
+          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{customsCode || "-"}</span>
+        </span>
+        <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1">
+          <span className="min-w-0 truncate text-white/62">Modellkód</span>
+          <span className="shrink-0 max-w-[150px] truncate text-right tabular-nums text-white">{modelCode || "-"}</span>
         </span>
       </span>
-    </span>
+    </div>
+  );
+
+  return (
+    <>
+      <span className="relative inline-flex shrink-0 justify-center whitespace-nowrap align-middle">
+        <button
+          ref={buttonRef}
+          type="button"
+          className={`inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
+          aria-label="Termékazonosítók megjelenítése"
+          onMouseEnter={showTooltip}
+          onMouseLeave={() => setTooltipOpen(false)}
+          onFocus={showTooltip}
+          onBlur={() => setTooltipOpen(false)}
+        >
+          S/N/COD
+        </button>
+      </span>
+      {tooltipOpen && typeof document !== "undefined" ? createPortal(tooltip, document.body) : null}
+    </>
   );
 }
 
@@ -2110,7 +2166,7 @@ export default function AllInWarehouse() {
             {activePlaceCount || "0"} hely
           </span>
         </button>
-        <span className={`pointer-events-none absolute left-1/2 z-50 hidden w-72 -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
+        <span className={`pointer-events-none absolute left-1/2 z-[9999] hidden w-72 -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
           <span className="block text-[#cffffd]">Készlet üzletenként</span>
           <span className="mt-2 block space-y-1">
             {tooltipRows.length ? tooltipRows.map((row) => (
@@ -4360,7 +4416,7 @@ export default function AllInWarehouse() {
                       <tr
                         key={it.variant_id}
                         data-aif-variant-id={variantId}
-                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} scroll-mt-32 align-middle hover:bg-[#617084]`}
+                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} relative scroll-mt-32 align-middle hover:bg-[#617084]`}
                       >
                         <td className="px-2 py-2.5 text-center align-middle">
                           <input
@@ -4375,7 +4431,7 @@ export default function AllInWarehouse() {
                           {it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-11 w-11 rounded-lg object-cover" /> : <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={17} /></div>}
                         </td>
                         <td className="truncate px-2 py-2.5 text-left align-middle" title={it.brand_name || ""}>{it.brand_name || "-"}</td>
-                        <td className="min-w-0 px-2 py-2.5 text-left align-middle">
+                        <td className="relative min-w-0 overflow-visible px-2 py-2.5 text-left align-middle">
                           <button
                             className="block max-w-full truncate text-left text-[13px] leading-5 text-white hover:text-[#cffffd] focus:outline-none focus:underline"
                             onClick={() => openDetail(it.variant_id)}
@@ -4384,9 +4440,9 @@ export default function AllInWarehouse() {
                           >
                             {it.title_ro || "-"}
                           </button>
-                          <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden text-[11px] leading-4 text-white/45">
-                            <span className="min-w-0 truncate">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
-                            <span className="shrink-0"><VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
+                          <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4 text-white/45">
+                            <span className="min-w-0 max-w-[170px] truncate overflow-hidden">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
+                            <span className="relative z-40 shrink-0 overflow-visible"><VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
                           </div>
                         </td>
                         <td className="truncate px-2 py-2.5 text-center align-middle" title={it.category_name_hu || it.category_name_ro || ""}>{it.category_name_hu || it.category_name_ro || "-"}</td>
