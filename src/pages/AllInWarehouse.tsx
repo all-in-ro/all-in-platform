@@ -363,7 +363,7 @@ type StockTransferPrintLine = {
 };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
-type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing";
+type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc";
 
 type BarcodeScannerMode = "search" | "editBarcode";
 
@@ -552,6 +552,16 @@ function money(v: unknown) {
   const x = Number(v);
   if (!Number.isFinite(x)) return String(v);
   return x.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function dateTimeMs(value: unknown) {
+  if (!value) return 0;
+  const time = new Date(String(value)).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function latestWarehouseIncomingMs(item: Partial<InventoryItem> | Record<string, unknown>) {
+  return Math.max(dateTimeMs((item as any).last_incoming_at), dateTimeMs((item as any).last_stock_movement_at));
 }
 
 function chartBarWidth(value: unknown, maxValue: unknown, minPositivePercent = 4) {
@@ -2455,6 +2465,11 @@ export default function AllInWarehouse() {
     if (stockFilter === "missing") out = out.filter(hasMissingData);
     if (stockFilter === "watch") out = out.filter((x) => n(x.total_qty) > 0 && hasMissingData(x));
     out.sort((a, b) => {
+      if (sortMode === "incoming_desc") {
+        const byIncoming = latestWarehouseIncomingMs(b) - latestWarehouseIncomingMs(a);
+        if (byIncoming !== 0) return byIncoming;
+        return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+      }
       if (sortMode === "brand") return String(a.brand_name || "").localeCompare(String(b.brand_name || ""), "hu");
       if (sortMode === "stock_desc") return n(b.total_qty) - n(a.total_qty);
       if (sortMode === "stock_asc") return n(a.total_qty) - n(b.total_qty);
@@ -4334,6 +4349,7 @@ export default function AllInWarehouse() {
       }
       if (hadFlag) {
         resetWarehouseFilters(false);
+        setSortMode("incoming_desc");
         setFiltersOpen(false);
         setSummaryOpen(false);
         setListOpen(true);
@@ -4343,12 +4359,12 @@ export default function AllInWarehouse() {
 
     const hadIncomingCommit = consumeIncomingShowAllFlag();
     load().then(() => {
-      if (hadIncomingCommit) setMessage("Készletre vétel után töröltem a raktárszűrőket. Most az összes importált terméksor látszik, nem csak például a hiányzó képesek.");
+      if (hadIncomingCommit) setMessage("Készletre vétel után töröltem a raktárszűrőket és a legutóbbi bevételezést tettem felülre. Ha egy import sor már meglévő variánsra ment, a terméklista darabszáma nem nő, csak a készlet badge változik.");
     });
 
     const onIncomingShowAll = () => {
       consumeIncomingShowAllFlag();
-      load().then(() => setMessage("Készletre vétel után töröltem a raktárszűrőket. Most az összes importált terméksor látszik."));
+      load().then(() => setMessage("Készletre vétel után töröltem a raktárszűrőket és a legfrissebb készletmozgásokat tettem felülre."));
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === warehouseShowAllAfterIncomingStorageKey && event.newValue) onIncomingShowAll();
@@ -4531,6 +4547,7 @@ export default function AllInWarehouse() {
               </label>
               <label className={label}>Sorrend
                 <select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
+                  <option value="incoming_desc">Legutóbbi bevételezés</option>
                   <option value="name">Terméknév</option>
                   <option value="brand">Márka</option>
                   <option value="stock_desc">Készlet csökkenő</option>
@@ -4597,7 +4614,7 @@ export default function AllInWarehouse() {
             <div className="flex flex-wrap items-center gap-2 text-white/95">
               <Eye size={17} />
               <span>Terméklista</span>
-              <span className={chip}>{filtered.length} találat</span>
+              <span className={chip}>{filtered.length} variáns</span>
               {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
               {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
               {selectedCount > 0 && (
@@ -4607,6 +4624,14 @@ export default function AllInWarehouse() {
               )}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                className={sortMode === "incoming_desc" ? primaryBtn : btnSoft}
+                onClick={() => { setSortMode("incoming_desc"); setProductPage(1); setListOpen(true); setMessage("A legutóbbi bevételezések / készletmozgások kerültek felülre. Ez nem új termékszám, hanem variánslista: meglévő termékre importáláskor csak a készlet nő."); }}
+                type="button"
+                title="Legfrissebb bevételezett vagy módosított készletű variánsok felül"
+              >
+                <RefreshCw size={15} /> Legutóbbi bevételezés
+              </button>
               {selectedCount > 0 && (
                 <>
                   <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(true)} type="button">
@@ -4628,6 +4653,11 @@ export default function AllInWarehouse() {
           {listOpen && (
             <div className="p-4">
               {productPager}
+              {sortMode === "incoming_desc" && (
+                <div className="mb-3 rounded-xl border border-[#5bd0cc]/24 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                  Legutóbbi bevételezés szerinti sorrend van bekapcsolva. A lista termékvariánsokat mutat, ezért ha az import már meglévő modell + szín + méret sorra ment, nem új sor jön létre, hanem a készlet darabszáma nő.
+                </div>
+              )}
               {hasActiveWarehouseFilters && (
                 <div className="mb-3 rounded-xl border border-amber-200/26 bg-amber-400/10 px-3 py-2 text-xs text-amber-50">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -4645,7 +4675,7 @@ export default function AllInWarehouse() {
               )}
               {filtered.length > 0 && (
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
-                  A raktárlista termékvariánsonként összesít: külön méret külön sor. A készlet badge-ben benne van az összes és a célhelyenkénti bontás is.
+                  A raktárlista termékvariánsonként összesít: külön méret külön sor. Importnál a már létező modell + szín + méret nem új terméksor, hanem a meglévő sor készlete nő.
                 </div>
               )}
               <div className="hidden overflow-auto rounded-xl border border-white/20 bg-[#465163] lg:block">
