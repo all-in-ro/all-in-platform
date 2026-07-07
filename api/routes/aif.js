@@ -466,7 +466,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const raw = input?.raw && typeof input.raw === "object" ? input.raw : input || {};
 
     const rawProductCode = rawValueByHeaders(raw, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code", "cod produs"]);
+    const rawTitle = rawValueByHeaders(raw, ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "NÉV", "NEV"]);
+    const rawBrand = rawValueByHeaders(raw, ["BRAND", "MARCA", "MARCĂ", "MÁRKA", "MARKA", "BRAND NAME"]);
+    const rawProductType = rawValueByHeaders(raw, ["RODESCR", "RO DESCR", "RO_DESCR", "DESCRIERE RO", "DESCR_RO", "TIP PRODUS", "PRODUCT TYPE", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY"]);
+    const rawCategory = rawValueByHeaders(raw, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]);
+    const rawGender = rawValueByHeaders(raw, ["GEN", "GENDER", "SEX", "DEPT", "DEPARTMENT", "DEPARTMENT NAME"]);
+    const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
+    const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
     const rawSize = rawValueByHeaders(raw, ["MARIME", "MĂRIME", "MARIMI", "MĂRIMI", "MERET", "MÉRET", "SIZE", "TALLA", "GRÖSSE", "GROSIME"]);
+    const rawQty = rawValueByHeaders(raw, ["CANTITATE", "CANT.", "CANT", "QTY", "QUANTITY", "DARAB", "DB", "BUC", "BUCĂȚI"]);
+    const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
+    const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
+    const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "FOTO"]);
     const supplierProductCodeRaw = emptyToNull(
       src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.code || input?.product_code || rawProductCode
     );
@@ -478,25 +489,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const supplierColorCode = emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code || productSplit.colorCode);
     const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size || rawSize);
 
-    const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brand);
-    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.categoryId || src.category_id || src.category);
+    const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brandName || src.brand_name || src.brand || rawBrand);
+    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.categoryId || src.category_id || src.categoryName || src.category_name || src.productType || src.product_type || rawProductType || rawCategory);
 
     const normalized = {
       brandId: emptyToNull(src.brandId || src.brand_id),
       brandCode: brandRaw ? normCode(brandRaw) : null,
-      brandName: emptyToNull(src.brandName || src.brand_name || src.brand),
+      brandName: emptyToNull(src.brandName || src.brand_name || src.brand || rawBrand),
       categoryId: emptyToNull(src.categoryId || src.category_id),
       categoryCode: categoryRaw ? normCode(categoryRaw) : null,
-      categoryName: emptyToNull(src.categoryName || src.category_name || src.category),
+      categoryName: emptyToNull(src.categoryName || src.category_name || src.category || src.productType || src.product_type || rawProductType || rawCategory),
       modelCode: emptyToNull(src.modelCode || src.model_code || productSplit.modelCode || supplierProductCode),
-      titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
+      titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title || rawTitle),
       titleHu: emptyToNull(src.titleHu || src.title_hu),
-      descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
-      genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name),
-      gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || "unisex"),
-      productType: emptyToNull(src.productType || src.product_type),
-      season: emptyToNull(src.season),
-      material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric),
+      descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawProductType),
+      genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender),
+      gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender || "unisex"),
+      productType: emptyToNull(src.productType || src.product_type || rawProductType),
+      season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
+      material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric || rawMaterial),
       colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
       colorName: emptyToNull(src.colorName || src.color_name),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
@@ -506,8 +517,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       sn_cod: snCodFromSource(src, raw),
       customsTariffCode: customsTariffCodeFromSource(src, raw),
       customs_tariff_code: customsTariffCodeFromSource(src, raw),
-      buyPrice: toMoney(src.buyPrice ?? src.buy_price),
-      sellPrice: toMoney(src.sellPrice ?? src.sell_price),
+      buyPrice: toMoney(src.buyPrice ?? src.buy_price ?? rawBuyPrice),
+      sellPrice: toMoney(src.sellPrice ?? src.sell_price ?? rawSellPrice),
       sellPriceCurrency: emptyToNull(src.sellPriceCurrency || src.sell_price_currency || src.salePriceCurrency || src.sale_price_currency || "RON"),
       sellPriceIsRon: src.sellPriceIsRon !== undefined || src.sell_price_is_ron !== undefined || src.salePriceIsRon !== undefined
         ? Boolean(src.sellPriceIsRon ?? src.sell_price_is_ron ?? src.salePriceIsRon)
@@ -516,15 +527,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ? Boolean(src.sellPriceIncludesTva ?? src.sell_price_includes_tva ?? src.salesPriceIncludesTva)
         : true,
       salesTvaRate: toMoney(src.salesTvaRate ?? src.sales_tva_rate ?? src.saleTvaRate ?? src.sale_tva_rate),
-      sellPriceGrossRon: toMoney(src.sellPriceGrossRon ?? src.sell_price_gross_ron ?? src.sellPrice ?? src.sell_price),
+      sellPriceGrossRon: toMoney(src.sellPriceGrossRon ?? src.sell_price_gross_ron ?? src.sellPrice ?? src.sell_price ?? rawSellPrice),
       compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
       weightGrams: toInt(src.weightGrams ?? src.weight_grams),
-      imageUrl: emptyToNull(src.imageUrl || src.image_url),
+      imageUrl: emptyToNull(src.imageUrl || src.image_url || rawImageUrl),
       supplierProductCode,
       supplierVariantCode,
       supplierColorCode,
       supplierSize,
-      qty: toInt(src.qty ?? src.quantity ?? input?.qty),
+      qty: toInt(src.qty ?? src.quantity ?? input?.qty ?? rawQty),
     };
 
     const errors = [];
@@ -4255,6 +4266,123 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.delete("/import-batches/:id", requireAuthed, deleteImportBatchHistory);
 
 
+
+  // Erősített import -> raktár nézet: nem csak az inventory view-ra támaszkodik,
+  // hanem az import sor normalized/raw adataiból is kitölti a terméket. Igen, mert az adat ott volt, csak a felület úgy tett, mintha vak lenne.
+  router.get("/import-batches/:id/inventory", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "Import azonosító kötelező." });
+    try {
+      const batch = await pool.query(
+        `SELECT id, status, source_file_name, committed_at, row_count, reception_id
+         FROM aif_import_batches
+         WHERE id::text=$1
+         LIMIT 1`,
+        [id]
+      );
+      if (!batch.rowCount) return res.status(404).json({ error: "Import előzmény nem található." });
+
+      const rows = await pool.query(
+        `SELECT
+           rw.id AS import_row_id,
+           rw.row_no AS import_row_no,
+           rw.raw AS import_raw,
+           rw.normalized AS import_normalized,
+           rw.qty AS import_qty,
+           rw.buy_price AS import_buy_price,
+           rw.buy_price_ron AS import_buy_price_ron,
+           rw.sell_price AS import_sell_price,
+           rw.sell_price_ron AS import_sell_price_ron,
+           rw.supplier_product_code AS import_supplier_product_code,
+           rw.supplier_variant_code AS import_supplier_variant_code,
+           rw.supplier_color_code AS import_supplier_color_code,
+           rw.supplier_size AS import_supplier_size,
+           rw.variant_id AS variant_id,
+           NULLIF(v.internal_sku,'') AS internal_sku,
+           COALESCE(NULLIF(v.barcode,''), NULLIF(rw.normalized->>'barcode',''), NULLIF(rw.normalized->>'supplierBarcode','')) AS barcode,
+           COALESCE(NULLIF(v.sn_cod,''), NULLIF(rw.sn_cod,''), NULLIF(rw.normalized->>'snCod',''), NULLIF(rw.normalized->>'sn_cod','')) AS sn_cod,
+           COALESCE(NULLIF(v.sn_cod,''), NULLIF(rw.sn_cod,''), NULLIF(rw.normalized->>'snCod',''), NULLIF(rw.normalized->>'sn_cod','')) AS "snCod",
+           COALESCE(v.attributes, '{}'::jsonb) AS attributes,
+           COALESCE(v.attributes, '{}'::jsonb) AS variant_attributes,
+           COALESCE(${customsTariffSql('v')}, NULLIF(rw.normalized->>'customsTariffCode',''), NULLIF(rw.normalized->>'customs_tariff_code',''), NULLIF(rw.raw->>'INTRASTAT','')) AS customs_tariff_code,
+           COALESCE(${customsTariffSql('v')}, NULLIF(rw.normalized->>'customsTariffCode',''), NULLIF(rw.normalized->>'customs_tariff_code',''), NULLIF(rw.raw->>'INTRASTAT','')) AS "customsTariffCode",
+           COALESCE(v.image_url, NULLIF(rw.normalized->>'imageUrl',''), NULLIF(rw.normalized->>'image_url','')) AS image_url,
+           m.id AS model_id,
+           COALESCE(NULLIF(m.model_code,''), NULLIF(rw.normalized->>'modelCode',''), rw.supplier_product_code) AS model_code,
+           COALESCE(NULLIF(m.title_ro,''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.normalized->>'productName',''), NULLIF(rw.raw->>'ARTICOL',''), rw.supplier_product_code) AS title_ro,
+           COALESCE(NULLIF(m.title_hu,''), NULLIF(rw.normalized->>'titleHu','')) AS title_hu,
+           COALESCE(NULLIF(m.description_ro,''), NULLIF(rw.normalized->>'descriptionRo',''), NULLIF(rw.raw->>'RODESCR','')) AS description_ro,
+           COALESCE(NULLIF(m.shopify_title,''), NULLIF(rw.normalized->>'shopifyTitle',''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.raw->>'ARTICOL','')) AS shopify_title,
+           COALESCE(NULLIF(m.gender,''), NULLIF(rw.normalized->>'gender',''), NULLIF(rw.raw->>'GEN','')) AS gender,
+           COALESCE(NULLIF(m.product_type,''), NULLIF(rw.normalized->>'productType',''), NULLIF(rw.raw->>'RODESCR','')) AS product_type,
+           COALESCE(NULLIF(m.season,''), NULLIF(rw.normalized->>'season',''), NULLIF(rw.normalized->>'collection',''), NULLIF(rw.raw->>'COLECTIE','')) AS season,
+           COALESCE(NULLIF(m.material,''), NULLIF(rw.normalized->>'material',''), NULLIF(rw.normalized->>'composition',''), NULLIF(rw.raw->>'COMPOZITIE','')) AS material,
+           COALESCE(NULLIF(c.code,''), NULLIF(rw.normalized->>'categoryCode',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE','')) AS category_code,
+           COALESCE(NULLIF(c.name_ro,''), NULLIF(rw.normalized->>'categoryName',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE','')) AS category_name_ro,
+           NULLIF(c.name_hu,'') AS category_name_hu,
+           COALESCE(NULLIF(v.color_code,''), rw.supplier_color_code, NULLIF(rw.normalized->>'colorCode',''), NULLIF(rw.normalized->>'supplierColorCode','')) AS color_code,
+           COALESCE(NULLIF(v.color_name,''), NULLIF(rw.normalized->>'colorName','')) AS color_name,
+           COALESCE(v.color_hex, NULLIF(rw.normalized->>'colorHex','')) AS color_hex,
+           COALESCE(NULLIF(v.size,''), rw.supplier_size, NULLIF(rw.normalized->>'size',''), NULLIF(rw.raw->>'MARIME','')) AS size,
+           COALESCE(v.buy_price, rw.buy_price_ron, rw.buy_price) AS buy_price,
+           COALESCE(v.sell_price, rw.sell_price_ron, rw.sell_price) AS sell_price,
+           v.compare_at_price AS compare_at_price,
+           CASE
+             WHEN st.total_qty IS NULL OR st.total_qty=0 THEN COALESCE(rw.qty,0)
+             ELSE COALESCE(st.total_qty, 0)
+           END AS total_qty,
+           COALESCE(st.total_reserved_qty, 0) AS total_reserved_qty,
+           CASE
+             WHEN st.available_qty IS NULL OR st.available_qty=0 THEN COALESCE(rw.qty,0)
+             ELSE COALESCE(st.available_qty, 0)
+           END AS available_qty,
+           COALESCE(st.updated_at, b.committed_at, rw.updated_at) AS last_stock_movement_at,
+           COALESCE(b.committed_at, st.updated_at, rw.updated_at) AS last_incoming_at,
+           COALESCE(bnd.name, NULLIF(rw.normalized->>'brandName',''), NULLIF(rw.raw->>'BRAND','')) AS brand_name,
+           COALESCE(bnd.code, NULLIF(rw.normalized->>'brandCode','')) AS brand_code,
+           COALESCE(v.status, 'active') AS variant_status,
+           COALESCE(v.status, 'active') AS status,
+           COALESCE(m.status, 'active') AS model_status
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         LEFT JOIN aif_product_variants v ON v.id=rw.variant_id
+         LEFT JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands bnd ON bnd.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(sum(s.qty),0)::numeric AS total_qty,
+             COALESCE(sum(s.reserved_qty),0)::numeric AS total_reserved_qty,
+             COALESCE(sum(s.qty - s.reserved_qty),0)::numeric AS available_qty,
+             max(s.updated_at) AS updated_at
+           FROM aif_stock s
+           WHERE s.variant_id=rw.variant_id
+         ) st ON true
+         WHERE rw.batch_id=$1
+           AND rw.status='committed'
+           AND rw.variant_id IS NOT NULL
+         ORDER BY rw.row_no ASC`,
+        [batch.rows[0].id]
+      );
+
+      const variantIds = Array.from(new Set(rows.rows.map((row) => text(row.variant_id)).filter(Boolean)));
+      const totalQty = rows.rows.reduce((sum, row) => sum + Number(row.import_qty || 0), 0);
+      res.json({
+        ok: true,
+        batch: batch.rows[0],
+        batchId: String(batch.rows[0].id),
+        items: rows.rows,
+        rows: rows.rows,
+        variantIds,
+        rowCount: rows.rowCount,
+        totalQty,
+      });
+    } catch (e) {
+      console.error("AIF import batch inventory load failed", e);
+      res.status(500).json({ error: e?.message || "A bevételezett import termékei nem tölthetők be.", code: e?.code || null });
+    }
+  });
+
   router.get("/import-batches/:id/inventory", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "Import azonosító kötelező." });
@@ -5480,18 +5608,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const normalized = {
         brandId: emptyToNull(src.brandId || src.brand_id),
         brandCode: emptyToNull(src.brandCode || src.brand_code || src.brand),
-        brandName: emptyToNull(src.brandName || src.brand_name || src.brand),
+        brandName: emptyToNull(src.brandName || src.brand_name || src.brand || rawBrand),
         categoryId: emptyToNull(src.categoryId || src.category_id),
         categoryCode: emptyToNull(src.categoryCode || src.category_code || src.category),
-        categoryName: emptyToNull(src.categoryName || src.category_name || src.category),
+        categoryName: emptyToNull(src.categoryName || src.category_name || src.category || src.productType || src.product_type || rawProductType || rawCategory),
         modelCode: emptyToNull(src.modelCode || src.model_code || src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.barcode || src.titleRo || src.title_ro || src.name),
-        titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title),
+        titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title || rawTitle),
         titleHu: emptyToNull(src.titleHu || src.title_hu),
-        descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description),
+        descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawProductType),
         genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code),
         gender: canonicalGender(src.gender || src.genderCode || src.gender_code || "unisex"),
-        productType: emptyToNull(src.productType || src.product_type),
-        season: emptyToNull(src.season),
+        productType: emptyToNull(src.productType || src.product_type || rawProductType),
+        season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
         material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro),
         shopifyTitle: emptyToNull(src.shopifyTitle || src.shopify_title || src.titleRo || src.title_ro),
         colorCode: emptyToNull(src.colorCode || src.color_code || src.supplierColorCode || src.supplier_color_code),
@@ -5503,11 +5631,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         sn_cod: snCodFromSource(src, body.raw || body),
         customsTariffCode: customsTariffCodeFromSource(src, body.raw || body),
         customs_tariff_code: customsTariffCodeFromSource(src, body.raw || body),
-        buyPrice: toMoney(src.buyPrice ?? src.buy_price),
-        sellPrice: toMoney(src.sellPrice ?? src.sell_price),
+        buyPrice: toMoney(src.buyPrice ?? src.buy_price ?? rawBuyPrice),
+        sellPrice: toMoney(src.sellPrice ?? src.sell_price ?? rawSellPrice),
         compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
         weightGrams: toInt(src.weightGrams ?? src.weight_grams),
-        imageUrl: emptyToNull(src.imageUrl || src.image_url),
+        imageUrl: emptyToNull(src.imageUrl || src.image_url || rawImageUrl),
         supplierProductCode: emptyToNull(src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.modelCode || src.model_code),
         supplierVariantCode: emptyToNull(src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code),
         supplierColorCode: emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code),
@@ -6097,6 +6225,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const p = `$${args.length}`;
       where.push(`(
         COALESCE(m.title_ro,'') ILIKE ${p}
+        OR COALESCE(lid.normalized->>'titleRo', lid.normalized->>'productName', lid.raw->>'ARTICOL', '') ILIKE ${p}
         OR COALESCE(m.title_hu,'') ILIKE ${p}
         OR COALESCE(m.shopify_title,'') ILIKE ${p}
         OR COALESCE(v.internal_sku,'') ILIKE ${p}
@@ -6104,14 +6233,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         OR COALESCE(v.sn_cod,'') ILIKE ${p}
         OR ${tariffExpr} ILIKE ${p}
         OR COALESCE(m.model_code,'') ILIKE ${p}
+        OR COALESCE(lid.normalized->>'modelCode', lid.supplier_product_code, '') ILIKE ${p}
         OR COALESCE(b.name,'') ILIKE ${p}
         OR COALESCE(b.code,'') ILIKE ${p}
+        OR COALESCE(lid.normalized->>'brandName', lid.raw->>'BRAND', '') ILIKE ${p}
         OR COALESCE(c.name_ro,'') ILIKE ${p}
         OR COALESCE(c.name_hu,'') ILIKE ${p}
         OR COALESCE(c.code,'') ILIKE ${p}
+        OR COALESCE(lid.normalized->>'categoryName', lid.raw->>'RODESCR', lid.raw->>'CATEGORIE', '') ILIKE ${p}
         OR COALESCE(v.color_name,'') ILIKE ${p}
         OR COALESCE(v.color_code,'') ILIKE ${p}
+        OR COALESCE(lid.normalized->>'colorName', lid.supplier_color_code, '') ILIKE ${p}
         OR COALESCE(v.size,'') ILIKE ${p}
+        OR COALESCE(lid.normalized->>'size', lid.supplier_size, '') ILIKE ${p}
         OR COALESCE(si.supplier_names,'') ILIKE ${p}
         OR COALESCE(si.supplier_codes,'') ILIKE ${p}
       )`);
@@ -6165,50 +6299,71 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            AND rw.variant_id IS NOT NULL
            AND COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) >= now() - interval '30 days'
          GROUP BY rw.variant_id
+       ),
+       latest_import_detail AS (
+         SELECT DISTINCT ON (rw.variant_id)
+           rw.variant_id,
+           rw.raw,
+           rw.normalized,
+           rw.sn_cod,
+           rw.supplier_product_code,
+           rw.supplier_color_code,
+           rw.supplier_size,
+           rw.buy_price,
+           rw.buy_price_ron,
+           rw.sell_price,
+           rw.sell_price_ron,
+           rw.qty,
+           COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) AS last_import_at
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         WHERE rw.status='committed'
+           AND rw.variant_id IS NOT NULL
+         ORDER BY rw.variant_id, COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) DESC, rw.updated_at DESC NULLS LAST, rw.row_no DESC
        )
        SELECT
          v.id AS variant_id,
          v.internal_sku,
-         COALESCE(v.barcode, si.supplier_barcode, si.supplier_sku) AS barcode,
+         COALESCE(v.barcode, si.supplier_barcode, si.supplier_sku, NULLIF(lid.normalized->>'barcode',''), NULLIF(lid.normalized->>'supplierBarcode','')) AS barcode,
          v.barcode AS variant_barcode,
-         v.sn_cod,
-         v.sn_cod AS "snCod",
+         COALESCE(v.sn_cod, lid.sn_cod, NULLIF(lid.normalized->>'snCod',''), NULLIF(lid.normalized->>'sn_cod','')) AS sn_cod,
+         COALESCE(v.sn_cod, lid.sn_cod, NULLIF(lid.normalized->>'snCod',''), NULLIF(lid.normalized->>'sn_cod','')) AS "snCod",
          v.attributes,
          v.attributes AS variant_attributes,
-         ${tariffExpr} AS customs_tariff_code,
-         ${tariffExpr} AS "customsTariffCode",
+         COALESCE(${tariffExpr}, NULLIF(lid.normalized->>'customsTariffCode',''), NULLIF(lid.normalized->>'customs_tariff_code',''), NULLIF(lid.raw->>'INTRASTAT','')) AS customs_tariff_code,
+         COALESCE(${tariffExpr}, NULLIF(lid.normalized->>'customsTariffCode',''), NULLIF(lid.normalized->>'customs_tariff_code',''), NULLIF(lid.raw->>'INTRASTAT','')) AS "customsTariffCode",
          v.status AS variant_status,
          v.status AS status,
          m.id AS model_id,
-         m.model_code,
-         m.title_ro,
-         m.title_hu,
-         m.description_ro,
-         m.shopify_title,
-         m.gender,
-         m.product_type,
-         m.season,
-         m.material,
+         COALESCE(NULLIF(m.model_code,''), NULLIF(lid.normalized->>'modelCode',''), lid.supplier_product_code) AS model_code,
+         COALESCE(NULLIF(m.title_ro,''), NULLIF(lid.normalized->>'titleRo',''), NULLIF(lid.normalized->>'productName',''), NULLIF(lid.raw->>'ARTICOL',''), lid.supplier_product_code) AS title_ro,
+         COALESCE(NULLIF(m.title_hu,''), NULLIF(lid.normalized->>'titleHu','')) AS title_hu,
+         COALESCE(NULLIF(m.description_ro,''), NULLIF(lid.normalized->>'descriptionRo',''), NULLIF(lid.raw->>'RODESCR','')) AS description_ro,
+         COALESCE(NULLIF(m.shopify_title,''), NULLIF(lid.normalized->>'shopifyTitle',''), NULLIF(lid.normalized->>'titleRo',''), NULLIF(lid.raw->>'ARTICOL','')) AS shopify_title,
+         COALESCE(NULLIF(m.gender,''), NULLIF(lid.normalized->>'gender',''), NULLIF(lid.raw->>'GEN','')) AS gender,
+         COALESCE(NULLIF(m.product_type,''), NULLIF(lid.normalized->>'productType',''), NULLIF(lid.raw->>'RODESCR','')) AS product_type,
+         COALESCE(NULLIF(m.season,''), NULLIF(lid.normalized->>'season',''), NULLIF(lid.normalized->>'collection',''), NULLIF(lid.raw->>'COLECTIE','')) AS season,
+         COALESCE(NULLIF(m.material,''), NULLIF(lid.normalized->>'material',''), NULLIF(lid.normalized->>'composition',''), NULLIF(lid.raw->>'COMPOZITIE','')) AS material,
          m.status AS model_status,
-         b.name AS brand_name,
-         b.code AS brand_code,
-         c.name_ro AS category_name_ro,
+         COALESCE(b.name, NULLIF(lid.normalized->>'brandName',''), NULLIF(lid.raw->>'BRAND','')) AS brand_name,
+         COALESCE(b.code, NULLIF(lid.normalized->>'brandCode','')) AS brand_code,
+         COALESCE(c.name_ro, NULLIF(lid.normalized->>'categoryName',''), NULLIF(lid.raw->>'RODESCR',''), NULLIF(lid.raw->>'CATEGORIE','')) AS category_name_ro,
          c.name_hu AS category_name_hu,
-         c.code AS category_code,
-         v.color_code,
-         v.color_name,
-         v.color_hex,
-         v.size,
-         v.buy_price,
-         v.sell_price,
+         COALESCE(c.code, NULLIF(lid.normalized->>'categoryCode',''), NULLIF(lid.raw->>'RODESCR',''), NULLIF(lid.raw->>'CATEGORIE','')) AS category_code,
+         COALESCE(v.color_code, lid.supplier_color_code, NULLIF(lid.normalized->>'colorCode',''), NULLIF(lid.normalized->>'supplierColorCode','')) AS color_code,
+         COALESCE(v.color_name, NULLIF(lid.normalized->>'colorName','')) AS color_name,
+         COALESCE(v.color_hex, NULLIF(lid.normalized->>'colorHex','')) AS color_hex,
+         COALESCE(NULLIF(v.size,''), lid.supplier_size, NULLIF(lid.normalized->>'size',''), NULLIF(lid.raw->>'MARIME','')) AS size,
+         COALESCE(v.buy_price, lid.buy_price_ron, lid.buy_price) AS buy_price,
+         COALESCE(v.sell_price, lid.sell_price_ron, lid.sell_price) AS sell_price,
          v.compare_at_price,
-         v.image_url,
+         COALESCE(v.image_url, NULLIF(lid.normalized->>'imageUrl',''), NULLIF(lid.normalized->>'image_url','')) AS image_url,
          v.images,
-         COALESCE(st.total_qty, ci.committed_qty, 0) AS total_qty,
+         COALESCE(st.total_qty, ci.committed_qty, lid.qty, 0) AS total_qty,
          COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
-         COALESCE(st.available_qty, ci.committed_qty, 0) AS available_qty,
-         COALESCE(st.last_stock_movement_at, ci.last_import_at) AS last_stock_movement_at,
-         COALESCE(ii.last_incoming_at, ci.last_import_at, st.last_stock_movement_at) AS last_incoming_at,
+         COALESCE(st.available_qty, ci.committed_qty, lid.qty, 0) AS available_qty,
+         COALESCE(st.last_stock_movement_at, ci.last_import_at, lid.last_import_at) AS last_stock_movement_at,
+         COALESCE(ii.last_incoming_at, ci.last_import_at, lid.last_import_at, st.last_stock_movement_at) AS last_incoming_at,
          si.supplier_names,
          si.supplier_codes
        FROM aif_product_variants v
@@ -6217,6 +6372,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LEFT JOIN aif_categories c ON c.id=m.category_id
        LEFT JOIN stock_totals st ON st.variant_id=v.id
        LEFT JOIN committed_import ci ON ci.variant_id=v.id
+       LEFT JOIN latest_import_detail lid ON lid.variant_id=v.id
        LEFT JOIN supplier_info si ON si.variant_id=v.id
        LEFT JOIN incoming_info ii ON ii.variant_id=v.id
        WHERE ${where.join(" AND ")}
