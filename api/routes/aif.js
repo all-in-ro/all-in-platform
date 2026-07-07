@@ -899,7 +899,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           variantId,
           normalized.colorName,
           normalized.barcode,
-          normalized.supplierVariantCode || normalized.supplierProductCode,
+          normalized.supplierVariantCode || null,
           JSON.stringify(normalized),
         ]
       );
@@ -922,7 +922,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         normalized.colorName,
         normalized.supplierSize,
         normalized.barcode,
-        normalized.supplierVariantCode || normalized.supplierProductCode,
+        normalized.supplierVariantCode || null,
         JSON.stringify(normalized),
       ]
     );
@@ -4325,9 +4325,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            rw.sell_price AS import_sell_price,
            rw.sell_price_ron AS import_sell_price_ron,
            rw.supplier_product_code AS import_supplier_product_code,
+           rw.supplier_product_code AS supplier_product_code,
+           rw.supplier_product_code AS "supplierProductCode",
            rw.supplier_variant_code AS import_supplier_variant_code,
+           rw.supplier_variant_code AS supplier_variant_code,
            rw.supplier_color_code AS import_supplier_color_code,
+           rw.supplier_color_code AS supplier_color_code,
            rw.supplier_size AS import_supplier_size,
+           rw.supplier_size AS supplier_size,
            rw.variant_id AS variant_id,
            NULLIF(v.internal_sku,'') AS internal_sku,
            COALESCE(NULLIF(v.barcode,''), NULLIF(rw.normalized->>'barcode',''), NULLIF(rw.normalized->>'supplierBarcode','')) AS barcode,
@@ -4500,111 +4505,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         rows: mergedRows,
         variantIds,
         rowCount: mergedRows.length,
-        totalQty,
-      });
-    } catch (e) {
-      console.error("AIF import batch inventory load failed", e);
-      res.status(500).json({ error: e?.message || "A bevételezett import termékei nem tölthetők be.", code: e?.code || null });
-    }
-  });
-
-  router.get("/import-batches/:id/inventory", requireAuthed, async (req, res) => {
-    const id = text(req.params.id);
-    if (!id) return res.status(400).json({ error: "Import azonosító kötelező." });
-    try {
-      const batch = await pool.query(
-        `SELECT id, status, source_file_name, committed_at, row_count, reception_id
-         FROM aif_import_batches
-         WHERE id::text=$1
-         LIMIT 1`,
-        [id]
-      );
-      if (!batch.rowCount) return res.status(404).json({ error: "Import előzmény nem található." });
-
-      const rows = await pool.query(
-        `SELECT
-           rw.id AS import_row_id,
-           rw.row_no AS import_row_no,
-           rw.qty AS import_qty,
-           rw.supplier_product_code AS import_supplier_product_code,
-           rw.supplier_variant_code AS import_supplier_variant_code,
-           rw.supplier_color_code AS import_supplier_color_code,
-           rw.supplier_size AS import_supplier_size,
-           i.*,
-           rw.variant_id AS variant_id,
-           COALESCE(i.internal_sku, v.internal_sku) AS internal_sku,
-           COALESCE(i.barcode, v.barcode) AS barcode,
-           COALESCE(i.image_url, v.image_url) AS image_url,
-           COALESCE(i.model_id, m.id) AS model_id,
-           COALESCE(i.model_code, m.model_code) AS model_code,
-           COALESCE(i.title_ro, m.title_ro) AS title_ro,
-           COALESCE(i.title_hu, m.title_hu) AS title_hu,
-           COALESCE(i.description_ro, m.description_ro) AS description_ro,
-           COALESCE(i.shopify_title, m.shopify_title) AS shopify_title,
-           COALESCE(i.gender, m.gender) AS gender,
-           COALESCE(i.product_type, m.product_type) AS product_type,
-           COALESCE(i.season, m.season) AS season,
-           COALESCE(i.material, m.material) AS material,
-           COALESCE(i.category_code, c.code) AS category_code,
-           COALESCE(i.category_name_ro, c.name_ro) AS category_name_ro,
-           COALESCE(i.category_name_hu, c.name_hu) AS category_name_hu,
-           COALESCE(i.color_code, v.color_code) AS color_code,
-           COALESCE(i.color_name, v.color_name) AS color_name,
-           COALESCE(i.color_hex, v.color_hex) AS color_hex,
-           COALESCE(i.size, v.size) AS size,
-           COALESCE(i.buy_price, v.buy_price) AS buy_price,
-           COALESCE(i.sell_price, v.sell_price) AS sell_price,
-           COALESCE(i.compare_at_price, v.compare_at_price) AS compare_at_price,
-           COALESCE(i.total_qty, st.total_qty, 0) AS total_qty,
-           COALESCE(i.total_reserved_qty, st.total_reserved_qty, 0) AS total_reserved_qty,
-           COALESCE(i.available_qty, st.available_qty, 0) AS available_qty,
-           COALESCE(i.last_stock_movement_at, st.updated_at) AS last_stock_movement_at,
-           v.sn_cod,
-           v.attributes AS variant_attributes,
-           v.attributes AS attributes,
-           ${customsTariffSql('v')} AS customs_tariff_code,
-           ${customsTariffSql('v')} AS "customsTariffCode",
-           v.status AS variant_status,
-           v.status AS status,
-           m.status AS model_status,
-           b.code AS brand_code,
-           COALESCE(i.brand_name, b.name) AS brand_name
-         FROM aif_import_rows rw
-         LEFT JOIN aif_inventory_summary i ON i.variant_id::text=rw.variant_id::text
-         LEFT JOIN aif_product_variants v ON v.id=rw.variant_id
-         LEFT JOIN aif_product_models m ON m.id=v.model_id
-         LEFT JOIN aif_brands b ON b.id=m.brand_id
-         LEFT JOIN aif_categories c ON c.id=m.category_id
-         LEFT JOIN LATERAL (
-           SELECT
-             COALESCE(sum(s.qty),0)::int AS total_qty,
-             COALESCE(sum(s.reserved_qty),0)::int AS total_reserved_qty,
-             COALESCE(sum(s.qty - s.reserved_qty),0)::int AS available_qty,
-             max(s.updated_at) AS updated_at
-           FROM aif_stock s
-           WHERE s.variant_id=rw.variant_id
-         ) st ON true
-         WHERE rw.batch_id=$1
-           AND rw.status='committed'
-           AND rw.variant_id IS NOT NULL
-           AND v.id IS NOT NULL
-           AND m.id IS NOT NULL
-           AND COALESCE(v.status,'active') <> 'archived'
-           AND COALESCE(m.status,'active') <> 'archived'
-         ORDER BY rw.row_no ASC`,
-        [batch.rows[0].id]
-      );
-
-      const variantIds = Array.from(new Set(rows.rows.map((row) => text(row.variant_id)).filter(Boolean)));
-      const totalQty = rows.rows.reduce((sum, row) => sum + Number(row.import_qty || 0), 0);
-      res.json({
-        ok: true,
-        batch: batch.rows[0],
-        batchId: String(batch.rows[0].id),
-        items: rows.rows,
-        rows: rows.rows,
-        variantIds,
-        rowCount: rows.rowCount,
         totalQty,
       });
     } catch (e) {
@@ -5855,11 +5755,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            m.model_code, m.title_ro, m.title_hu, m.description_ro, m.gender, m.product_type,
            m.season, m.material, m.shopify_title, m.shopify_handle, m.status AS model_status,
            b.id AS brand_id, b.name AS brand_name, b.code AS brand_code,
-           c.id AS category_id, c.name_ro AS category_name_ro, c.name_hu AS category_name_hu, c.code AS category_code
+           c.id AS category_id, c.name_ro AS category_name_ro, c.name_hu AS category_name_hu, c.code AS category_code,
+           sc.supplier_id AS supplier_id,
+           sc.supplier_product_code AS supplier_product_code,
+           sc.supplier_product_code AS "supplierProductCode",
+           sc.supplier_variant_code AS supplier_variant_code,
+           sc.supplier_variant_code AS "supplierVariantCode",
+           sc.supplier_color_code AS supplier_color_code,
+           sc.supplier_color_code AS "supplierColorCode",
+           sc.supplier_size AS supplier_size,
+           sc.supplier_size AS "supplierSize",
+           sc.supplier_barcode AS supplier_barcode,
+           sc.supplier_sku AS supplier_sku
          FROM aif_product_variants v
          JOIN aif_product_models m ON m.id = v.model_id
          LEFT JOIN aif_brands b ON b.id = m.brand_id
          LEFT JOIN aif_categories c ON c.id = m.category_id
+         LEFT JOIN LATERAL (
+           SELECT sc.supplier_id, sc.supplier_product_code, sc.supplier_variant_code,
+                  sc.supplier_color_code, sc.supplier_size, sc.supplier_barcode, sc.supplier_sku
+           FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
          WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
          LIMIT 1`,
         [id]
@@ -5902,8 +5821,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [variantId]
       );
 
+      const primarySupplierCode = supplierCodes.rows.find((row) => row.is_active !== false) || supplierCodes.rows[0] || null;
+      const item = {
+        ...variant.rows[0],
+        supplier_product_code: primarySupplierCode?.supplier_product_code || null,
+        supplierProductCode: primarySupplierCode?.supplier_product_code || null,
+        product_code: primarySupplierCode?.supplier_product_code || null,
+        productCode: primarySupplierCode?.supplier_product_code || null,
+        supplier_variant_code: primarySupplierCode?.supplier_variant_code || null,
+        supplierVariantCode: primarySupplierCode?.supplier_variant_code || null,
+        supplier_color_code: primarySupplierCode?.supplier_color_code || null,
+        supplierColorCode: primarySupplierCode?.supplier_color_code || null,
+        supplier_size: primarySupplierCode?.supplier_size || null,
+        supplierSize: primarySupplierCode?.supplier_size || null,
+        supplier_barcode: primarySupplierCode?.supplier_barcode || null,
+        supplierBarcode: primarySupplierCode?.supplier_barcode || null,
+      };
+
       res.json({
-        item: variant.rows[0],
+        item,
         stock: stock.rows,
         supplierCodes: supplierCodes.rows,
         movements: movements.rows,
@@ -6089,6 +6025,84 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            WHERE id=$${mi}`,
           modelArgs
         );
+      }
+
+      const supplierProductCodeProvided =
+        body.supplierProductCode !== undefined || body.supplier_product_code !== undefined ||
+        body.productCode !== undefined || body.product_code !== undefined;
+      const supplierVariantCodeProvided = body.supplierVariantCode !== undefined || body.supplier_variant_code !== undefined;
+      const supplierColorCodeProvided = body.supplierColorCode !== undefined || body.supplier_color_code !== undefined;
+      const supplierSizeProvided = body.supplierSize !== undefined || body.supplier_size !== undefined;
+      const supplierLinkProvided = supplierProductCodeProvided || supplierVariantCodeProvided || supplierColorCodeProvided || supplierSizeProvided;
+      if (supplierLinkProvided) {
+        const supplierProductCode = supplierProductCodeProvided
+          ? emptyToNull(body.supplierProductCode ?? body.supplier_product_code ?? body.productCode ?? body.product_code)
+          : undefined;
+        const supplierVariantCode = supplierVariantCodeProvided
+          ? emptyToNull(body.supplierVariantCode ?? body.supplier_variant_code)
+          : undefined;
+        const supplierColorCode = supplierColorCodeProvided
+          ? emptyToNull(body.supplierColorCode ?? body.supplier_color_code)
+          : undefined;
+        const supplierSize = supplierSizeProvided
+          ? emptyToNull(body.supplierSize ?? body.supplier_size)
+          : undefined;
+
+        const existingSupplierCode = await client.query(
+          `SELECT id
+           FROM aif_variant_supplier_codes
+           WHERE variant_id=$1
+           ORDER BY COALESCE(is_active,true) DESC, updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+           LIMIT 1`,
+          [variantId]
+        );
+
+        if (existingSupplierCode.rowCount) {
+          const sets = [`is_active=true`, `updated_at=now()`];
+          const args = [existingSupplierCode.rows[0].id];
+          let nextArg = 2;
+          if (supplierProductCodeProvided) { sets.push(`supplier_product_code=$${nextArg++}`); args.push(supplierProductCode); }
+          if (supplierVariantCodeProvided) { sets.push(`supplier_sku=$${nextArg++}`); args.push(supplierVariantCode || null); }
+          if (supplierVariantCode !== undefined) { sets.push(`supplier_variant_code=$${nextArg++}`); args.push(supplierVariantCode); }
+          if (supplierColorCode !== undefined) { sets.push(`supplier_color_code=$${nextArg++}`); args.push(supplierColorCode); }
+          if (supplierSize !== undefined) { sets.push(`supplier_size=$${nextArg++}`); args.push(supplierSize); }
+          await client.query(
+            `UPDATE aif_variant_supplier_codes SET ${sets.join(', ')} WHERE id=$1`,
+            args
+          );
+        } else if (supplierProductCode || supplierVariantCode || supplierColorCode || supplierSize) {
+          const preferredSupplierId = emptyToNull(body.supplierId || body.supplier_id);
+          let supplierId = preferredSupplierId;
+          if (supplierId) {
+            const okSupplier = await client.query(`SELECT id FROM aif_suppliers WHERE id::text=$1 OR code=$1 LIMIT 1`, [supplierId]);
+            supplierId = okSupplier.rows[0]?.id || null;
+          }
+          if (!supplierId) {
+            const fallbackSupplier = await client.query(`SELECT id FROM aif_suppliers WHERE is_active=true ORDER BY name ASC LIMIT 1`);
+            supplierId = fallbackSupplier.rows[0]?.id || null;
+          }
+          if (supplierId) {
+            await client.query(
+              `INSERT INTO aif_variant_supplier_codes (
+                 variant_id, supplier_id, supplier_product_code, supplier_variant_code,
+                 supplier_color_code, supplier_color_name, supplier_size, supplier_barcode, supplier_sku, raw, is_active
+               )
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,true)`,
+              [
+                variantId,
+                supplierId,
+                supplierProductCode,
+                supplierVariantCode === undefined ? null : supplierVariantCode,
+                supplierColorCode === undefined ? null : supplierColorCode,
+                body.colorName ?? body.color_name ?? null,
+                supplierSize === undefined ? null : supplierSize,
+                body.barcode ? emptyToNull(body.barcode) : null,
+                supplierVariantCode === undefined ? null : supplierVariantCode,
+                JSON.stringify({ supplierProductCode, supplierVariantCode, supplierColorCode, supplierSize, source: 'variant_detail_edit' }),
+              ]
+            );
+          }
+        }
       }
 
       await client.query("COMMIT");
@@ -6531,6 +6545,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            sc.variant_id,
            string_agg(DISTINCT s.name, ', ' ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL AND s.name <> '') AS supplier_names,
            string_agg(DISTINCT NULLIF(concat_ws(' / ', sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_size), ''), ', ') AS supplier_codes,
+           (array_agg(sc.supplier_product_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_product_code IS NOT NULL AND sc.supplier_product_code <> ''))[1] AS supplier_product_code,
+           (array_agg(sc.supplier_variant_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_variant_code IS NOT NULL AND sc.supplier_variant_code <> ''))[1] AS supplier_variant_code,
+           (array_agg(sc.supplier_color_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_color_code IS NOT NULL AND sc.supplier_color_code <> ''))[1] AS supplier_color_code,
+           (array_agg(sc.supplier_size ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_size IS NOT NULL AND sc.supplier_size <> ''))[1] AS supplier_size,
            (array_agg(sc.supplier_barcode ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_barcode IS NOT NULL AND sc.supplier_barcode <> ''))[1] AS supplier_barcode,
            (array_agg(sc.supplier_sku ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_sku IS NOT NULL AND sc.supplier_sku <> ''))[1] AS supplier_sku
          FROM aif_variant_supplier_codes sc
@@ -6580,7 +6598,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        SELECT
          v.id AS variant_id,
          v.internal_sku,
-         COALESCE(v.barcode, si.supplier_barcode, si.supplier_sku, NULLIF(lid.normalized->>'barcode',''), NULLIF(lid.normalized->>'supplierBarcode','')) AS barcode,
+         COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,''), NULLIF(lid.normalized->>'barcode',''), NULLIF(lid.normalized->>'supplierBarcode','')) AS barcode,
+         COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,''), NULLIF(lid.normalized->>'barcode',''), NULLIF(lid.normalized->>'supplierBarcode','')) AS display_barcode,
          v.barcode AS variant_barcode,
          COALESCE(v.sn_cod, lid.sn_cod, NULLIF(lid.normalized->>'snCod',''), NULLIF(lid.normalized->>'sn_cod','')) AS sn_cod,
          COALESCE(v.sn_cod, lid.sn_cod, NULLIF(lid.normalized->>'snCod',''), NULLIF(lid.normalized->>'sn_cod','')) AS "snCod",
@@ -6592,6 +6611,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          v.status AS status,
          m.id AS model_id,
          COALESCE(NULLIF(m.model_code,''), NULLIF(lid.normalized->>'modelCode',''), lid.supplier_product_code) AS model_code,
+         COALESCE(NULLIF(si.supplier_product_code,''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS supplier_product_code,
+         COALESCE(NULLIF(si.supplier_product_code,''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS "supplierProductCode",
+         COALESCE(NULLIF(si.supplier_variant_code,''), NULLIF(lid.normalized->>'supplierVariantCode',''), NULLIF(lid.normalized->>'variantCode','')) AS supplier_variant_code,
+         COALESCE(NULLIF(si.supplier_color_code,''), lid.supplier_color_code, NULLIF(lid.normalized->>'supplierColorCode',''), NULLIF(lid.normalized->>'colorCode','')) AS supplier_color_code,
+         COALESCE(NULLIF(si.supplier_size,''), lid.supplier_size, NULLIF(lid.normalized->>'supplierSize',''), NULLIF(lid.normalized->>'size','')) AS supplier_size,
          COALESCE(NULLIF(m.title_ro,''), NULLIF(lid.normalized->>'titleRo',''), NULLIF(lid.normalized->>'productName',''), NULLIF(lid.raw->>'ARTICOL',''), lid.supplier_product_code) AS title_ro,
          COALESCE(NULLIF(m.title_hu,''), NULLIF(lid.normalized->>'titleHu','')) AS title_hu,
          COALESCE(NULLIF(m.description_ro,''), NULLIF(lid.normalized->>'descriptionRo',''), NULLIF(lid.raw->>'RODESCR','')) AS description_ro,
@@ -6621,7 +6645,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          COALESCE(st.last_stock_movement_at, ci.last_import_at, lid.last_import_at) AS last_stock_movement_at,
          COALESCE(ii.last_incoming_at, ci.last_import_at, lid.last_import_at, st.last_stock_movement_at) AS last_incoming_at,
          si.supplier_names,
-         si.supplier_codes
+         si.supplier_codes,
+         COALESCE(si.supplier_product_code, lid.supplier_product_code) AS supplier_product_code,
+         COALESCE(si.supplier_product_code, lid.supplier_product_code) AS "supplierProductCode",
+         si.supplier_variant_code AS supplier_variant_code,
+         si.supplier_variant_code AS "supplierVariantCode"
        FROM aif_product_variants v
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
@@ -6668,7 +6696,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       OR COALESCE(c.name_ro,'') ILIKE ${p}
       OR COALESCE(v.color_name,'') ILIKE ${p}
       OR COALESCE(v.size,'') ILIKE ${p}
-      OR COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku, '') ILIKE ${p}
+      OR COALESCE(v.barcode, sc.supplier_barcode, '') ILIKE ${p}
       OR COALESCE(v.sn_cod,'') ILIKE ${p}
       OR ${customsTariffSql('v')} ILIKE ${p}
       OR COALESCE(v.internal_sku,'') ILIKE ${p}
@@ -6706,7 +6734,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               ${customsTariffSql('v')} AS customs_tariff_code,
               ${customsTariffSql('v')} AS "customsTariffCode",
               v.status AS variant_status, v.status AS status,
-              COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+              COALESCE(NULLIF(v.barcode,''), NULLIF(sc.supplier_barcode,'')) AS display_barcode,
               v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
               v.buy_price, v.sell_price,
               m.id AS model_id, m.model_code, m.title_ro, m.shopify_title, m.status AS model_status,
@@ -6964,7 +6992,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 v.attributes AS variant_attributes,
                 ${customsTariffSql('v')} AS customs_tariff_code,
                 ${customsTariffSql('v')} AS "customsTariffCode",
-                COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+                COALESCE(NULLIF(v.barcode,''), NULLIF(sc.supplier_barcode,'')) AS display_barcode,
                 v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
                 m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
                 m.status AS model_status, v.status AS variant_status, v.status AS status,
@@ -6997,7 +7025,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
                 sm.location_id, sm.variant_id, sm.qty_delta, sm.qty_before, sm.qty_after,
                 sm.actor, sm.raw,
-                m.title_ro, v.sn_cod, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+                m.title_ro, v.sn_cod, COALESCE(NULLIF(v.barcode,''), NULLIF(sc.supplier_barcode,'')) AS display_barcode,
                 l.name AS location_name
          FROM aif_stock_movements sm
          JOIN aif_locations l ON l.id=sm.location_id
@@ -7132,7 +7160,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          ((icl.counted_qty - icl.expected_qty) * COALESCE(icl.sell_price,0))::numeric(14,2) AS diff_sell_value,
          icl.note, icl.raw, icl.created_at, icl.updated_at,
          l.id AS location_id, l.code AS location_code, l.name AS location_name,
-         v.internal_sku, v.barcode, v.sn_cod, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+         v.internal_sku, v.barcode, v.sn_cod, COALESCE(NULLIF(v.barcode,''), NULLIF(sc.supplier_barcode,'')) AS display_barcode,
          v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
          m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
          b.name AS brand_name, b.code AS brand_code,
@@ -7381,7 +7409,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const lines = await client.query(
-        `SELECT icl.*, m.title_ro, v.size, v.color_name, v.sn_cod, COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
+        `SELECT icl.*, m.title_ro, v.size, v.color_name, v.sn_cod, COALESCE(NULLIF(v.barcode,''), NULLIF(sc.supplier_barcode,'')) AS display_barcode,
                 COALESCE(s.qty,0) AS current_qty, COALESCE(s.reserved_qty,0) AS current_reserved_qty
          FROM aif_inventory_count_lines icl
          JOIN aif_product_variants v ON v.id=icl.variant_id
