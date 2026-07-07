@@ -611,7 +611,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0]?.id || null;
   }
 
-  async function upsertModel(client, { supplierCode, normalized }) {
+  function cleanModelLifecycleStatus(value, fallback = "active") {
+    const raw = text(value || fallback).toLowerCase();
+    return ["draft", "active", "archived"].includes(raw) ? raw : fallback;
+  }
+
+  function cleanVariantLifecycleStatus(value, fallback = "active") {
+    const raw = text(value || fallback).toLowerCase();
+    return ["draft", "active", "inactive", "archived"].includes(raw) ? raw : fallback;
+  }
+
+  async function upsertModel(client, { supplierCode, normalized, createStatus = "active", updateStatus = "active" }) {
     const safeNormalized = { ...normalized, gender: normalized.gender ? normCode(normalized.gender) : "unisex" };
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
@@ -619,6 +629,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
     const brandKey = normCode(safeNormalized.brandCode || safeNormalized.brandName || supplierCode || "aif");
     const modelCode = `${brandKey}:${normCode(baseModelCode)}`;
+    const modelCreateStatus = cleanModelLifecycleStatus(safeNormalized.modelStatus || safeNormalized.model_status || createStatus, "active");
+    const modelUpdateStatus = updateStatus === null || updateStatus === undefined
+      ? null
+      : cleanModelLifecycleStatus(safeNormalized.modelStatus || safeNormalized.model_status || updateStatus, "active");
 
     const existing = await client.query(
       `SELECT id FROM aif_product_models WHERE model_code=$1 LIMIT 1`,
@@ -639,7 +653,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            season = COALESCE($9, season),
            material = COALESCE($10, material),
            shopify_title = COALESCE($11, shopify_title),
-           status = CASE WHEN status='archived' THEN status ELSE 'active' END,
+           status = CASE
+             WHEN status='archived' THEN COALESCE($12::text, 'draft')
+             WHEN $12::text IS NULL THEN status
+             ELSE $12::text
+           END,
            updated_at = now()
          WHERE id=$1`,
         [
@@ -654,6 +672,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           safeNormalized.season,
           safeNormalized.material,
           safeNormalized.titleRo,
+          modelUpdateStatus,
         ]
       );
       return id;
@@ -664,7 +683,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          brand_id, category_id, model_code, title_ro, title_hu, description_ro,
          gender, product_type, season, material, shopify_title, status
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active')
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id`,
       [
         brandId,
@@ -678,18 +697,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         safeNormalized.season,
         safeNormalized.material,
         safeNormalized.titleRo,
+        modelCreateStatus,
       ]
     );
     return r.rows[0].id;
   }
 
-  async function upsertVariant(client, { modelId, normalized }) {
+  async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active" }) {
     const colorCode = normalized.colorCode || "";
     const colorName = normalized.colorName || "";
     const size = normalized.size;
     const barcode = emptyToNull(normalized.barcode);
     const snCod = emptyToNull(normalized.snCod ?? normalized.sn_cod);
     const variantAttributesJson = variantAttributesJsonFromNormalized(normalized);
+    const variantCreateStatus = cleanVariantLifecycleStatus(normalized.variantStatus || normalized.variant_status || normalized.status || createStatus, "active");
+    const variantUpdateStatus = updateStatus === null || updateStatus === undefined
+      ? null
+      : cleanVariantLifecycleStatus(normalized.variantStatus || normalized.variant_status || normalized.status || updateStatus, "active");
 
     const barcodeUsableForVariant = async (candidateBarcode, variantId = null) => {
       const candidate = emptyToNull(candidateBarcode);
@@ -720,7 +744,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            weight_grams = COALESCE($9, weight_grams),
            image_url = COALESCE($10, image_url),
            attributes = COALESCE(attributes, '{}'::jsonb) || $12::jsonb,
-           status = 'active',
+           status = CASE
+             WHEN status='archived' THEN COALESCE($13::text, 'active')
+             WHEN $13::text IS NULL THEN status
+             ELSE $13::text
+           END,
            updated_at = now()
          WHERE id=$1`,
         [
@@ -736,6 +764,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.imageUrl,
           snCod,
           variantAttributesJson,
+          variantUpdateStatus,
         ]
       );
       return id;
@@ -782,7 +811,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            model_id, barcode, color_code, color_name, color_hex, size,
            buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, attributes, status
          )
-         VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'active')
+         VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
          RETURNING id`,
         [
           modelId,
@@ -798,6 +827,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.imageUrl,
           snCod,
           variantAttributesJson,
+          variantCreateStatus,
         ]
       );
       return inserted.rows[0].id;
@@ -810,7 +840,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              model_id, barcode, color_code, color_name, color_hex, size,
              buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, attributes, status
            )
-           VALUES ($1,NULL,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'active')
+           VALUES ($1,NULL,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13)
            RETURNING id`,
           [
             modelId,
@@ -825,6 +855,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             normalized.imageUrl,
             snCod,
             variantAttributesJson,
+            variantCreateStatus,
           ]
         );
         return insertedWithoutBarcode.rows[0].id;
@@ -4139,7 +4170,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LEFT JOIN aif_locations l ON l.id=b.target_location_id
        LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
        LEFT JOIN aif_receptions r ON r.id=b.reception_id
-       ORDER BY b.created_at DESC
+       ORDER BY COALESCE(b.committed_at, b.updated_at, b.created_at) DESC
        LIMIT $1`,
       [limit]
     );
@@ -4369,16 +4400,106 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [batch.rows[0].id]
       );
 
-      const variantIds = Array.from(new Set(rows.rows.map((row) => text(row.variant_id)).filter(Boolean)));
-      const totalQty = rows.rows.reduce((sum, row) => sum + Number(row.import_qty || 0), 0);
+      const movementRows = await pool.query(
+        `SELECT
+           COALESCE(rw.id::text, sm.raw->>'rowId', sm.id::text) AS import_row_id,
+           COALESCE(rw.row_no, row_number() OVER (ORDER BY sm.created_at ASC, sm.id ASC)) AS import_row_no,
+           COALESCE(rw.raw, CASE WHEN jsonb_typeof(sm.raw->'raw')='object' THEN sm.raw->'raw' ELSE '{}'::jsonb END) AS import_raw,
+           COALESCE(rw.normalized, '{}'::jsonb) AS import_normalized,
+           COALESCE(rw.qty, ABS(sm.qty_delta)) AS import_qty,
+           rw.buy_price AS import_buy_price,
+           rw.buy_price_ron AS import_buy_price_ron,
+           rw.sell_price AS import_sell_price,
+           rw.sell_price_ron AS import_sell_price_ron,
+           rw.supplier_product_code AS import_supplier_product_code,
+           rw.supplier_variant_code AS import_supplier_variant_code,
+           rw.supplier_color_code AS import_supplier_color_code,
+           rw.supplier_size AS import_supplier_size,
+           sm.variant_id AS variant_id,
+           NULLIF(v.internal_sku,'') AS internal_sku,
+           COALESCE(NULLIF(v.barcode,''), NULLIF(rw.normalized->>'barcode',''), NULLIF(rw.normalized->>'supplierBarcode','')) AS barcode,
+           COALESCE(NULLIF(v.sn_cod,''), NULLIF(rw.sn_cod,''), NULLIF(rw.normalized->>'snCod',''), NULLIF(rw.normalized->>'sn_cod','')) AS sn_cod,
+           COALESCE(NULLIF(v.sn_cod,''), NULLIF(rw.sn_cod,''), NULLIF(rw.normalized->>'snCod',''), NULLIF(rw.normalized->>'sn_cod','')) AS "snCod",
+           COALESCE(v.attributes, '{}'::jsonb) AS attributes,
+           COALESCE(v.attributes, '{}'::jsonb) AS variant_attributes,
+           COALESCE(${customsTariffSql('v')}, NULLIF(rw.normalized->>'customsTariffCode',''), NULLIF(rw.normalized->>'customs_tariff_code',''), NULLIF(rw.raw->>'INTRASTAT',''), NULLIF((sm.raw->'raw')->>'INTRASTAT','')) AS customs_tariff_code,
+           COALESCE(${customsTariffSql('v')}, NULLIF(rw.normalized->>'customsTariffCode',''), NULLIF(rw.normalized->>'customs_tariff_code',''), NULLIF(rw.raw->>'INTRASTAT',''), NULLIF((sm.raw->'raw')->>'INTRASTAT','')) AS "customsTariffCode",
+           COALESCE(v.image_url, NULLIF(rw.normalized->>'imageUrl',''), NULLIF(rw.normalized->>'image_url','')) AS image_url,
+           m.id AS model_id,
+           COALESCE(NULLIF(m.model_code,''), NULLIF(rw.normalized->>'modelCode',''), rw.supplier_product_code) AS model_code,
+           COALESCE(NULLIF(m.title_ro,''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.normalized->>'productName',''), NULLIF(rw.raw->>'ARTICOL',''), NULLIF((sm.raw->'raw')->>'ARTICOL',''), rw.supplier_product_code) AS title_ro,
+           COALESCE(NULLIF(m.title_hu,''), NULLIF(rw.normalized->>'titleHu','')) AS title_hu,
+           COALESCE(NULLIF(m.description_ro,''), NULLIF(rw.normalized->>'descriptionRo',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'RODESCR','')) AS description_ro,
+           COALESCE(NULLIF(m.shopify_title,''), NULLIF(rw.normalized->>'shopifyTitle',''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.raw->>'ARTICOL',''), NULLIF((sm.raw->'raw')->>'ARTICOL','')) AS shopify_title,
+           COALESCE(NULLIF(m.gender,''), NULLIF(rw.normalized->>'gender',''), NULLIF(rw.raw->>'GEN',''), NULLIF((sm.raw->'raw')->>'GEN','')) AS gender,
+           COALESCE(NULLIF(m.product_type,''), NULLIF(rw.normalized->>'productType',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'RODESCR','')) AS product_type,
+           COALESCE(NULLIF(m.season,''), NULLIF(rw.normalized->>'season',''), NULLIF(rw.normalized->>'collection',''), NULLIF(rw.raw->>'COLECTIE',''), NULLIF((sm.raw->'raw')->>'COLECTIE','')) AS season,
+           COALESCE(NULLIF(m.material,''), NULLIF(rw.normalized->>'material',''), NULLIF(rw.normalized->>'composition',''), NULLIF(rw.raw->>'COMPOZITIE',''), NULLIF((sm.raw->'raw')->>'COMPOZITIE','')) AS material,
+           COALESCE(NULLIF(c.code,''), NULLIF(rw.normalized->>'categoryCode',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE',''), NULLIF((sm.raw->'raw')->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'CATEGORIE','')) AS category_code,
+           COALESCE(NULLIF(c.name_ro,''), NULLIF(rw.normalized->>'categoryName',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF(rw.raw->>'CATEGORIE',''), NULLIF((sm.raw->'raw')->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'CATEGORIE','')) AS category_name_ro,
+           NULLIF(c.name_hu,'') AS category_name_hu,
+           COALESCE(NULLIF(v.color_code,''), rw.supplier_color_code, NULLIF(rw.normalized->>'colorCode',''), NULLIF(rw.normalized->>'supplierColorCode','')) AS color_code,
+           COALESCE(NULLIF(v.color_name,''), NULLIF(rw.normalized->>'colorName','')) AS color_name,
+           COALESCE(v.color_hex, NULLIF(rw.normalized->>'colorHex','')) AS color_hex,
+           COALESCE(NULLIF(v.size,''), rw.supplier_size, NULLIF(rw.normalized->>'size',''), NULLIF(rw.raw->>'MARIME',''), NULLIF((sm.raw->'raw')->>'MARIME','')) AS size,
+           COALESCE(v.buy_price, rw.buy_price_ron, rw.buy_price) AS buy_price,
+           COALESCE(v.sell_price, rw.sell_price_ron, rw.sell_price) AS sell_price,
+           v.compare_at_price AS compare_at_price,
+           COALESCE(st.total_qty, 0) AS total_qty,
+           COALESCE(st.total_reserved_qty, 0) AS total_reserved_qty,
+           COALESCE(st.available_qty, 0) AS available_qty,
+           COALESCE(st.updated_at, sm.created_at) AS last_stock_movement_at,
+           sm.created_at AS last_incoming_at,
+           COALESCE(br.name, NULLIF(rw.normalized->>'brandName',''), NULLIF(rw.raw->>'BRAND',''), NULLIF((sm.raw->'raw')->>'BRAND','')) AS brand_name,
+           COALESCE(br.code, NULLIF(rw.normalized->>'brandCode','')) AS brand_code,
+           COALESCE(v.status, 'active') AS variant_status,
+           COALESCE(v.status, 'active') AS status,
+           COALESCE(m.status, 'active') AS model_status
+         FROM aif_stock_movements sm
+         LEFT JOIN aif_import_rows rw ON rw.id::text = sm.raw->>'rowId'
+         JOIN aif_product_variants v ON v.id=sm.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands br ON br.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(sum(s.qty),0)::numeric AS total_qty,
+             COALESCE(sum(s.reserved_qty),0)::numeric AS total_reserved_qty,
+             COALESCE(sum(s.qty - s.reserved_qty),0)::numeric AS available_qty,
+             max(s.updated_at) AS updated_at
+           FROM aif_stock s
+           WHERE s.variant_id=sm.variant_id
+         ) st ON true
+         WHERE (sm.source_id=$1 OR sm.raw->>'importBatchId'=$1)
+           AND COALESCE(sm.qty_delta,0) > 0
+           AND COALESCE(v.status,'active') <> 'archived'
+           AND COALESCE(m.status,'active') <> 'archived'
+         ORDER BY sm.created_at ASC, sm.id ASC`,
+        [String(batch.rows[0].id)]
+      );
+
+      const merged = new Map();
+      const addMerged = (row) => {
+        const variantId = text(row?.variant_id);
+        if (!variantId) return;
+        const key = variantId;
+        const previous = merged.get(key);
+        merged.set(key, previous ? { ...previous, ...row, variant_id: variantId } : { ...row, variant_id: variantId });
+      };
+      for (const row of movementRows.rows || []) addMerged(row);
+      for (const row of rows.rows || []) addMerged(row);
+      const mergedRows = Array.from(merged.values()).sort((a, b) => Number(a.import_row_no || 0) - Number(b.import_row_no || 0));
+
+      const variantIds = Array.from(new Set(mergedRows.map((row) => text(row.variant_id)).filter(Boolean)));
+      const totalQty = mergedRows.reduce((sum, row) => sum + Number(row.import_qty || 0), 0);
       res.json({
         ok: true,
         batch: batch.rows[0],
         batchId: String(batch.rows[0].id),
-        items: rows.rows,
-        rows: rows.rows,
+        items: mergedRows,
+        rows: mergedRows,
         variantIds,
-        rowCount: rows.rowCount,
+        rowCount: mergedRows.length,
         totalQty,
       });
     } catch (e) {
@@ -4712,8 +4833,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.sellPrice = Number(row.sell_price_ron);
         }
 
-        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized });
-        const variantId = await upsertVariant(client, { modelId, normalized });
+        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized, createStatus: "draft", updateStatus: null });
+        const variantId = await upsertVariant(client, { modelId, normalized, createStatus: "active", updateStatus: null });
         await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         await addStock(client, {
           locationId: batch.target_location_id,
@@ -6846,6 +6967,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
                 v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
                 m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
+                m.status AS model_status, v.status AS variant_status, v.status AS status,
                 b.name AS brand_name, b.code AS brand_code,
                 c.name_ro AS category_name_ro, c.code AS category_code
          ${fromSql}
