@@ -62,6 +62,8 @@ const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariant
 const selectedProductCloudMigrationStorageKey = "allinfashion:warehouse:selectedVariantsCloudMigrated:v1";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
+const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
+const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -1924,6 +1926,167 @@ export default function AllInWarehouse() {
     ) || null;
   }
 
+  function stockBackedInventoryItems(inventoryItems: InventoryItem[], stockItems: StockItem[]) {
+    type StockAggregate = {
+      item: InventoryItem;
+      totalQty: number;
+      reservedQty: number;
+      availableQty: number;
+      updatedAt: string;
+    };
+
+    const nonEmpty = (...values: unknown[]) => {
+      for (const value of values) {
+        const text = String(value ?? "").trim();
+        if (text) return text;
+      }
+      return "";
+    };
+
+    const aggregates = new Map<string, StockAggregate>();
+
+    for (const row of stockItems || []) {
+      const source = row as StockItem & Partial<InventoryItem> & Record<string, any>;
+      const variantId = String(source.variant_id || "").trim();
+      if (!variantId) continue;
+      const current = aggregates.get(variantId) || {
+        item: {
+          variant_id: variantId,
+          internal_sku: source.internal_sku || null,
+          barcode: nonEmpty(source.barcode, source.display_barcode, source.internal_sku) || null,
+          sn_cod: nonEmpty(source.sn_cod, source.snCod) || null,
+          snCod: nonEmpty(source.sn_cod, source.snCod) || null,
+          customs_tariff_code: nonEmpty(source.customs_tariff_code, source.customsTariffCode, source.hs_code) || null,
+          customsTariffCode: nonEmpty(source.customs_tariff_code, source.customsTariffCode, source.hs_code) || null,
+          attributes: source.attributes || source.variant_attributes || null,
+          image_url: source.image_url || null,
+          brand_name: source.brand_name || null,
+          brand_code: source.brand_code || null,
+          supplier_names: source.supplier_names || null,
+          supplier_codes: source.supplier_codes || null,
+          supplier_ids: source.supplier_ids || null,
+          suppliers: source.suppliers || null,
+          model_id: source.model_id || null,
+          model_code: source.model_code || null,
+          title_ro: source.title_ro || null,
+          title_hu: source.title_hu || null,
+          description_ro: source.description_ro || null,
+          shopify_title: source.shopify_title || null,
+          gender: source.gender || null,
+          product_type: source.product_type || null,
+          season: source.season || null,
+          material: source.material || null,
+          model_status: source.model_status || "active",
+          category_code: source.category_code || null,
+          category_name_ro: source.category_name_ro || null,
+          category_name_hu: source.category_name_hu || null,
+          color_code: source.color_code || null,
+          color_name: source.color_name || null,
+          color_hex: source.color_hex || null,
+          size: source.size || null,
+          buy_price: source.buy_price ?? null,
+          sell_price: source.sell_price ?? null,
+          compare_at_price: source.compare_at_price ?? null,
+          variant_status: source.variant_status || source.status || "active",
+          total_qty: 0,
+          total_reserved_qty: 0,
+          available_qty: 0,
+          last_stock_movement_at: source.updated_at || null,
+          last_incoming_at: source.last_incoming_at || null,
+        },
+        totalQty: 0,
+        reservedQty: 0,
+        availableQty: 0,
+        updatedAt: "",
+      };
+
+      current.totalQty += n(source.qty);
+      current.reservedQty += n(source.reserved_qty);
+      current.availableQty += source.available_qty !== undefined && source.available_qty !== null ? n(source.available_qty) : Math.max(0, n(source.qty) - n(source.reserved_qty));
+      const updatedAt = String(source.updated_at || source.last_stock_movement_at || "");
+      if (updatedAt && (!current.updatedAt || new Date(updatedAt).getTime() > new Date(current.updatedAt).getTime())) current.updatedAt = updatedAt;
+
+      current.item = {
+        ...current.item,
+        internal_sku: current.item.internal_sku || source.internal_sku || null,
+        barcode: current.item.barcode || nonEmpty(source.barcode, source.display_barcode, source.internal_sku) || null,
+        sn_cod: current.item.sn_cod || nonEmpty(source.sn_cod, source.snCod) || null,
+        snCod: current.item.snCod || nonEmpty(source.sn_cod, source.snCod) || null,
+        customs_tariff_code: current.item.customs_tariff_code || nonEmpty(source.customs_tariff_code, source.customsTariffCode, source.hs_code) || null,
+        customsTariffCode: current.item.customsTariffCode || nonEmpty(source.customs_tariff_code, source.customsTariffCode, source.hs_code) || null,
+        attributes: current.item.attributes || source.attributes || source.variant_attributes || null,
+        image_url: current.item.image_url || source.image_url || null,
+        brand_name: current.item.brand_name || source.brand_name || null,
+        brand_code: current.item.brand_code || source.brand_code || null,
+        model_id: current.item.model_id || source.model_id || null,
+        model_code: current.item.model_code || source.model_code || null,
+        title_ro: current.item.title_ro || source.title_ro || null,
+        title_hu: current.item.title_hu || source.title_hu || null,
+        description_ro: current.item.description_ro || source.description_ro || null,
+        shopify_title: current.item.shopify_title || source.shopify_title || null,
+        gender: current.item.gender || source.gender || null,
+        product_type: current.item.product_type || source.product_type || null,
+        season: current.item.season || source.season || null,
+        material: current.item.material || source.material || null,
+        model_status: current.item.model_status || source.model_status || "active",
+        category_code: current.item.category_code || source.category_code || null,
+        category_name_ro: current.item.category_name_ro || source.category_name_ro || null,
+        category_name_hu: current.item.category_name_hu || source.category_name_hu || null,
+        color_code: current.item.color_code || source.color_code || null,
+        color_name: current.item.color_name || source.color_name || null,
+        color_hex: current.item.color_hex || source.color_hex || null,
+        size: current.item.size || source.size || null,
+        buy_price: current.item.buy_price ?? source.buy_price ?? null,
+        sell_price: current.item.sell_price ?? source.sell_price ?? null,
+        compare_at_price: current.item.compare_at_price ?? source.compare_at_price ?? null,
+        variant_status: current.item.variant_status || source.variant_status || source.status || "active",
+      };
+
+      aggregates.set(variantId, current);
+    }
+
+    const out = new Map<string, InventoryItem>();
+    for (const item of inventoryItems || []) {
+      const variantId = selectedVariantIdFromItem(item);
+      if (!variantId) continue;
+      const aggregate = aggregates.get(variantId);
+      if (aggregate) {
+        out.set(variantId, {
+          ...aggregate.item,
+          ...item,
+          variant_id: variantId,
+          barcode: item.barcode || aggregate.item.barcode || item.internal_sku || aggregate.item.internal_sku || null,
+          sn_cod: item.sn_cod || item.snCod || aggregate.item.sn_cod || aggregate.item.snCod || null,
+          snCod: item.snCod || item.sn_cod || aggregate.item.snCod || aggregate.item.sn_cod || null,
+          customs_tariff_code: itemCustomsTariffCode(item) || itemCustomsTariffCode(aggregate.item) || null,
+          customsTariffCode: itemCustomsTariffCode(item) || itemCustomsTariffCode(aggregate.item) || null,
+          attributes: item.attributes || aggregate.item.attributes || null,
+          image_url: item.image_url || aggregate.item.image_url || null,
+          total_qty: aggregate.totalQty,
+          total_reserved_qty: aggregate.reservedQty,
+          available_qty: aggregate.availableQty,
+          last_stock_movement_at: item.last_stock_movement_at || aggregate.updatedAt || aggregate.item.last_stock_movement_at || null,
+        });
+      } else {
+        out.set(variantId, { ...item, variant_id: variantId });
+      }
+    }
+
+    for (const [variantId, aggregate] of aggregates.entries()) {
+      if (out.has(variantId)) continue;
+      out.set(variantId, {
+        ...aggregate.item,
+        variant_id: variantId,
+        total_qty: aggregate.totalQty,
+        total_reserved_qty: aggregate.reservedQty,
+        available_qty: aggregate.availableQty,
+        last_stock_movement_at: aggregate.updatedAt || aggregate.item.last_stock_movement_at || null,
+      });
+    }
+
+    return Array.from(out.values());
+  }
+
   function openStockEditor(item: InventoryItem) {
     const rows = stockRowsForVariant(item.variant_id);
     const next: Record<string, string> = {};
@@ -2300,6 +2463,60 @@ export default function AllInWarehouse() {
     });
     return out;
   }, [items, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+
+  function resetWarehouseFilters(showMessage = true) {
+    setSearch("");
+    setSnCodFilter("");
+    setScannedBarcodeSearch("");
+    setSupplier("all");
+    setBrand("all");
+    setCategory("all");
+    setGender("all");
+    setLocation("all");
+    setStockFilter("all");
+    setImageFilter("all");
+    setSortMode("name");
+    setProductPage(1);
+    setListOpen(true);
+    if (showMessage) setMessage("Szűrők törölve. Most az összes raktári terméksor látszik.");
+  }
+
+  function labelForMetaValue(rows: Array<MetaItem | GenderType>, value: unknown) {
+    const raw = String(value || "").trim();
+    const key = normalizeSearch(raw);
+    if (!key) return raw || "-";
+    const found = rows.find((row: any) => [row.id, row.code, row.name, row.name_ro, row.name_hu].map(normalizeSearch).some((x) => x === key));
+    if (!found) return raw;
+    return String((found as any).name_hu || (found as any).name_ro || (found as any).name || (found as any).code || raw);
+  }
+
+  const activeWarehouseFilterLabels = useMemo(() => {
+    const labels: string[] = [];
+    if (search.trim()) labels.push(`Keresés: ${search.trim()}`);
+    if (snCodFilter.trim()) labels.push(`S/N/COD: ${snCodFilter.trim()}`);
+    if (supplier !== "all") labels.push(`Beszállító: ${labelForMetaValue(suppliers, supplier)}`);
+    if (brand !== "all") labels.push(`Márka: ${labelForMetaValue(brands, brand)}`);
+    if (category !== "all") labels.push(`Kategória: ${labelForMetaValue(categories, category)}`);
+    if (gender !== "all") labels.push(`Nem: ${genderLabel(gender, genderTypes)}`);
+    if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
+    if (stockFilter !== "all") {
+      const stockLabels: Record<StockFilter, string> = {
+        all: "Összes",
+        available: "Készleten",
+        out: "Nincs készleten",
+        reserved: "Van foglalás",
+        missing: "Hiányzó adat",
+        watch: "Figyelendő készlet",
+      };
+      labels.push(`Készlet: ${stockLabels[stockFilter] || stockFilter}`);
+    }
+    if (imageFilter !== "all") {
+      labels.push(`Kép: ${imageFilter === "missing" ? "Hiányzik kép" : "Van kép"}`);
+    }
+    return labels;
+  }, [search, snCodFilter, supplier, brand, category, gender, location, stockFilter, imageFilter, suppliers, brands, categories, genderTypes, locations]);
+
+  const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
   const newProductBarcodeMatches = useMemo(() => {
     if (!newProductOpen) return [] as InventoryItem[];
@@ -3600,7 +3817,8 @@ export default function AllInWarehouse() {
           brandSizeRows = [];
         }
       }
-      setItems((inv.items || []).filter((x) => String(x.variant_status || "active") !== "archived" && String(x.model_status || "active") !== "archived"));
+      const stockBackedItems = stockBackedInventoryItems(inv.items || [], stock.items || []);
+      setItems(stockBackedItems.filter((x) => String(x.variant_status || "active") !== "archived" && String(x.model_status || "active") !== "archived"));
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
       setSupplierBrands(meta.supplierBrands || []);
@@ -4103,7 +4321,49 @@ export default function AllInWarehouse() {
   }
 
   useEffect(() => {
-    load();
+    const consumeIncomingShowAllFlag = () => {
+      if (typeof window === "undefined") return false;
+      let hadFlag = false;
+      try {
+        const raw = window.localStorage.getItem(warehouseShowAllAfterIncomingStorageKey);
+        hadFlag = Boolean(raw);
+        if (hadFlag) window.localStorage.removeItem(warehouseShowAllAfterIncomingStorageKey);
+      } catch {
+        hadFlag = false;
+      }
+      if (hadFlag) {
+        resetWarehouseFilters(false);
+        setFiltersOpen(false);
+        setSummaryOpen(false);
+        setListOpen(true);
+      }
+      return hadFlag;
+    };
+
+    const hadIncomingCommit = consumeIncomingShowAllFlag();
+    load().then(() => {
+      if (hadIncomingCommit) setMessage("Készletre vétel után töröltem a raktárszűrőket. Most az összes importált terméksor látszik, nem csak például a hiányzó képesek.");
+    });
+
+    const onIncomingShowAll = () => {
+      consumeIncomingShowAllFlag();
+      load().then(() => setMessage("Készletre vétel után töröltem a raktárszűrőket. Most az összes importált terméksor látszik."));
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === warehouseShowAllAfterIncomingStorageKey && event.newValue) onIncomingShowAll();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener(warehouseShowAllAfterIncomingEventName, onIncomingShowAll);
+      window.addEventListener("storage", onStorage);
+    }
+
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener(warehouseShowAllAfterIncomingEventName, onIncomingShowAll);
+        window.removeEventListener("storage", onStorage);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -4180,6 +4440,7 @@ export default function AllInWarehouse() {
           <div className="flex flex-wrap gap-2">
             <button className={primaryBtn} onClick={openNewProductModal} type="button"><Plus size={16} /> Új termék hozzáadása</button>
             <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
+            {hasActiveWarehouseFilters && <button className={primaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={15} /> Minden termék</button>}
             <button className={btnSoft} onClick={load} disabled={busy}><RefreshCw size={16} /> Frissítés</button>
             <button className={btn} onClick={goHome}><ArrowLeft size={16} /> Vissza</button>
           </div>
@@ -4279,7 +4540,7 @@ export default function AllInWarehouse() {
               </label>
               <div className="flex items-end gap-2">
                 <button className={btn} onClick={load} disabled={busy}><Search size={16} /> Keresés</button>
-                <button className={btnSoft} onClick={() => { setSearch(""); setSnCodFilter(""); setScannedBarcodeSearch(""); setSupplier("all"); setBrand("all"); setCategory("all"); setGender("all"); setLocation("all"); setStockFilter("all"); setImageFilter("all"); setSortMode("name"); }}>Alaphelyzet</button>
+                <button className={btnSoft} onClick={() => clearWarehouseFilters(false)} type="button">Alaphelyzet</button>
               </div>
             </div>
           )}
@@ -4336,6 +4597,7 @@ export default function AllInWarehouse() {
               <Eye size={17} />
               <span>Terméklista</span>
               <span className={chip}>{filtered.length} találat</span>
+              {hasActiveVisibilityFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
               {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
               {selectedCount > 0 && (
                 <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2.5 py-1 text-xs text-white">
@@ -4354,12 +4616,32 @@ export default function AllInWarehouse() {
                   </button>
                 </>
               )}
+              {hasActiveVisibilityFilters && (
+                <button className={btnSoft} onClick={() => clearWarehouseFilters()} type="button" title="Minden szűrő törlése">
+                  <X size={15} /> Szűrők törlése
+                </button>
+              )}
               <button className={btnSoft} onClick={() => setListOpen((x) => !x)}>{listOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {listOpen ? "Bezárás" : "Megnyitás"}</button>
             </div>
           </div>
           {listOpen && (
             <div className="p-4">
               {productPager}
+              {hasActiveVisibilityFilters && (
+                <div className="mb-3 rounded-xl border border-amber-200/26 bg-amber-400/10 px-3 py-2 text-xs text-amber-50">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-white">A terméklista most szűrve van, ezért nem minden készleten lévő sor látszik.</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {activeVisibilityFilterLabels.map((filterLabel) => (
+                          <span key={filterLabel} className="rounded-full border border-amber-200/22 bg-black/12 px-2 py-0.5 text-[11px] text-amber-50">{filterLabel}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <button className={btnSoft} onClick={() => clearWarehouseFilters()} type="button">Minden termék mutatása</button>
+                  </div>
+                </div>
+              )}
               {filtered.length > 0 && (
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
                   A raktárlista termékvariánsonként összesít: külön méret külön sor. A készlet badge-ben benne van az összes és a célhelyenkénti bontás is.
