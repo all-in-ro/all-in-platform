@@ -34,6 +34,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+  const uuidTextRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function isUuidText(value) {
+    return uuidTextRegex.test(text(value));
+  }
+
+  function invalidImportBatchId(res) {
+    return res.status(404).json({
+      error: "Import előzmény nem található.",
+      code: "invalid_import_batch_id",
+    });
+  }
+
   function rawValueByHeaders(raw, headers) {
     if (!raw || typeof raw !== "object") return null;
     const wanted = new Set((headers || []).map((x) => normCode(x)).filter(Boolean));
@@ -4303,6 +4315,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/import-batches/:id/inventory", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "Import azonosító kötelező." });
+    if (!isUuidText(id)) return invalidImportBatchId(res);
     try {
       const batch = await pool.query(
         `SELECT id, status, source_file_name, committed_at, row_count, reception_id
@@ -4515,36 +4528,47 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.get("/import-batches/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
-    const batch = await pool.query(
-      `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
-              l.code AS location_code, l.name AS location_name,
-              p.name AS profile_name, p.version AS profile_version,
-              to_jsonb(r.*) AS reception
-       FROM aif_import_batches b
-       JOIN aif_suppliers s ON s.id=b.supplier_id
-       LEFT JOIN aif_locations l ON l.id=b.target_location_id
-       LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
-       LEFT JOIN aif_receptions r ON r.id=b.reception_id
-       WHERE b.id=$1`,
-      [id]
-    );
-    if (!batch.rowCount) return res.status(404).json({ error: "not found" });
+    if (!id) return res.status(400).json({ error: "Import azonosító kötelező." });
+    if (!isUuidText(id)) return invalidImportBatchId(res);
 
-    const rows = await pool.query(
-      `SELECT id, row_no, raw, normalized, status, error_messages, variant_id,
-              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-              qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
-       FROM aif_import_rows
-       WHERE batch_id=$1
-       ORDER BY row_no ASC`,
-      [id]
-    );
+    try {
+      const batch = await pool.query(
+        `SELECT b.*, s.code AS supplier_code, s.name AS supplier_name,
+                l.code AS location_code, l.name AS location_name,
+                p.name AS profile_name, p.version AS profile_version,
+                to_jsonb(r.*) AS reception
+         FROM aif_import_batches b
+         JOIN aif_suppliers s ON s.id=b.supplier_id
+         LEFT JOIN aif_locations l ON l.id=b.target_location_id
+         LEFT JOIN aif_supplier_import_profiles p ON p.id=b.profile_id
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
+         WHERE b.id::text=$1
+         LIMIT 1`,
+        [id]
+      );
+      if (!batch.rowCount) return res.status(404).json({ error: "not found" });
 
-    res.json({ batch: batch.rows[0], rows: rows.rows });
+      const rows = await pool.query(
+        `SELECT id, row_no, raw, normalized, status, error_messages, variant_id,
+                supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
+                qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
+         FROM aif_import_rows
+         WHERE batch_id::text=$1
+         ORDER BY row_no ASC`,
+        [id]
+      );
+
+      res.json({ batch: batch.rows[0], rows: rows.rows });
+    } catch (e) {
+      console.error("AIF import batch detail failed", e);
+      res.status(500).json({ error: e?.message || "Az import csomag betöltése nem sikerült.", code: e?.code || null });
+    }
   });
 
   router.post("/import-batches/:id/rows", requireAuthed, async (req, res) => {
     const batchId = text(req.params.id);
+    if (!batchId) return res.status(400).json({ error: "Import azonosító kötelező." });
+    if (!isUuidText(batchId)) return invalidImportBatchId(res);
     const rowsInput = Array.isArray(req.body?.rows) ? req.body.rows : Array.isArray(req.body?.items) ? req.body.items : [];
     if (!rowsInput.length) return res.status(400).json({ error: "rows required" });
 
@@ -4557,7 +4581,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 r.exchange_rate_to_ron AS reception_exchange_rate, r.currency_code AS reception_currency_code
          FROM aif_import_batches b
          LEFT JOIN aif_receptions r ON r.id=b.reception_id
-         WHERE b.id=$1
+         WHERE b.id::text=$1
          FOR UPDATE OF b`,
         [batchId]
       );
@@ -4574,7 +4598,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const currency = currencyCode(batch.rows[0].currency_code || batch.rows[0].reception_currency_code || "RON") || "RON";
       const salesTvaSettings = await readSalesTvaSettings(client);
 
-      await client.query(`DELETE FROM aif_import_rows WHERE batch_id=$1`, [batchId]);
+      await client.query(`DELETE FROM aif_import_rows WHERE batch_id::text=$1`, [batchId]);
 
       let errorCount = 0;
       let rowNo = 1;
@@ -4626,7 +4650,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(
         `UPDATE aif_import_batches
          SET row_count=$2, error_count=$3, status=$4, updated_at=now()
-         WHERE id=$1`,
+         WHERE id::text=$1`,
         [batchId, rowsInput.length, errorCount, errorCount ? "needs_review" : "parsed"]
       );
 
@@ -4643,12 +4667,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
 
   async function commitBatchRows(client, { batchId, rowIds = null, actor = "system" }) {
+    if (!isUuidText(batchId)) {
+      const e = new Error("Import csomag nem található.");
+      e.statusCode = 404;
+      e.code = "invalid_import_batch_id";
+      throw e;
+    }
     await ensureSnCodSchema(client);
     const batchRes = await client.query(
       `SELECT b.*, s.code AS supplier_code
        FROM aif_import_batches b
        JOIN aif_suppliers s ON s.id=b.supplier_id
-       WHERE b.id=$1
+       WHERE b.id::text=$1
        FOR UPDATE OF b`,
       [batchId]
     );
@@ -4671,7 +4701,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
 
     const args = [batchId];
-    let where = `batch_id=$1 AND status NOT IN ('ignored','committed')`;
+    let where = `batch_id::text=$1 AND status NOT IN ('ignored','committed')`;
     if (Array.isArray(rowIds) && rowIds.length) {
       args.push(rowIds.map(String));
       where += ` AND id::text = ANY($2::text[])`;
@@ -4859,6 +4889,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.post("/import-batches/:id/commit", requireAuthed, async (req, res) => {
     const batchId = text(req.params.id);
+    if (!batchId) return res.status(400).json({ error: "Import azonosító kötelező." });
+    if (!isUuidText(batchId)) return invalidImportBatchId(res);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
