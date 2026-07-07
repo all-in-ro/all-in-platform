@@ -4278,8 +4278,37 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            rw.supplier_color_code AS import_supplier_color_code,
            rw.supplier_size AS import_supplier_size,
            i.*,
+           rw.variant_id AS variant_id,
+           COALESCE(i.internal_sku, v.internal_sku) AS internal_sku,
+           COALESCE(i.barcode, v.barcode) AS barcode,
+           COALESCE(i.image_url, v.image_url) AS image_url,
+           COALESCE(i.model_id, m.id) AS model_id,
+           COALESCE(i.model_code, m.model_code) AS model_code,
+           COALESCE(i.title_ro, m.title_ro) AS title_ro,
+           COALESCE(i.title_hu, m.title_hu) AS title_hu,
+           COALESCE(i.description_ro, m.description_ro) AS description_ro,
+           COALESCE(i.shopify_title, m.shopify_title) AS shopify_title,
+           COALESCE(i.gender, m.gender) AS gender,
+           COALESCE(i.product_type, m.product_type) AS product_type,
+           COALESCE(i.season, m.season) AS season,
+           COALESCE(i.material, m.material) AS material,
+           COALESCE(i.category_code, c.code) AS category_code,
+           COALESCE(i.category_name_ro, c.name_ro) AS category_name_ro,
+           COALESCE(i.category_name_hu, c.name_hu) AS category_name_hu,
+           COALESCE(i.color_code, v.color_code) AS color_code,
+           COALESCE(i.color_name, v.color_name) AS color_name,
+           COALESCE(i.color_hex, v.color_hex) AS color_hex,
+           COALESCE(i.size, v.size) AS size,
+           COALESCE(i.buy_price, v.buy_price) AS buy_price,
+           COALESCE(i.sell_price, v.sell_price) AS sell_price,
+           COALESCE(i.compare_at_price, v.compare_at_price) AS compare_at_price,
+           COALESCE(i.total_qty, st.total_qty, 0) AS total_qty,
+           COALESCE(i.total_reserved_qty, st.total_reserved_qty, 0) AS total_reserved_qty,
+           COALESCE(i.available_qty, st.available_qty, 0) AS available_qty,
+           COALESCE(i.last_stock_movement_at, st.updated_at) AS last_stock_movement_at,
            v.sn_cod,
            v.attributes AS variant_attributes,
+           v.attributes AS attributes,
            ${customsTariffSql('v')} AS customs_tariff_code,
            ${customsTariffSql('v')} AS "customsTariffCode",
            v.status AS variant_status,
@@ -4292,6 +4321,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_product_variants v ON v.id=rw.variant_id
          LEFT JOIN aif_product_models m ON m.id=v.model_id
          LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(sum(s.qty),0)::int AS total_qty,
+             COALESCE(sum(s.reserved_qty),0)::int AS total_reserved_qty,
+             COALESCE(sum(s.qty - s.reserved_qty),0)::int AS available_qty,
+             max(s.updated_at) AS updated_at
+           FROM aif_stock s
+           WHERE s.variant_id=rw.variant_id
+         ) st ON true
          WHERE rw.batch_id=$1
            AND rw.status='committed'
            AND rw.variant_id IS NOT NULL
