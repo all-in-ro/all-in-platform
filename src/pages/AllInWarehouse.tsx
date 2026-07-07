@@ -1917,10 +1917,15 @@ export default function AllInWarehouse() {
   const [pendingProductJumpId, setPendingProductJumpId] = useState("");
   const [highlightProductId, setHighlightProductId] = useState("");
   const [incomingFocus, setIncomingFocus] = useState<{ batchId: string; variantIds: string[]; rows: Array<Record<string, any>>; batch?: Record<string, any> | null; totalQty?: number; sourceFileName?: string | null } | null>(null);
+  const [incomingFocusItems, setIncomingFocusItems] = useState<InventoryItem[]>([]);
   const productListRef = useRef<HTMLElement | null>(null);
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
+  const inventoryDisplayItems = useMemo(
+    () => (incomingFocusItems.length ? mergeInventoryItems(items, incomingFocusItems) : items),
+    [items, incomingFocusItems]
+  );
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -1981,13 +1986,26 @@ export default function AllInWarehouse() {
       }
 
       const rows = Array.isArray(detail.rows) ? detail.rows : [];
+      const rawFocusedItems = [
+        ...rows,
+        ...((detail.items || []) as any[]),
+      ];
+      const focusedItemMap = rawFocusedItems.reduce<Map<string, InventoryItem>>((map, rawItem) => {
+        const variantId = String(rawItem?.variant_id || rawItem?.variantId || rawItem?.selected_variant_id || rawItem?.selectedVariantId || "").trim();
+        if (!variantId) return map;
+        const previous = map.get(variantId) || ({ variant_id: variantId } as InventoryItem);
+        map.set(variantId, { ...previous, ...rawItem, variant_id: variantId } as InventoryItem);
+        return map;
+      }, new Map<string, InventoryItem>());
+      const focusedItems = Array.from(focusedItemMap.values());
       const variantIds = Array.from(new Set([
         ...(Array.isArray(detail.variantIds) ? detail.variantIds : []),
         ...rows.map((row) => String(row.variant_id || row.variantId || "").trim()),
-        ...((detail.items || []) as any[]).map((item) => String(item.variant_id || item.variantId || item.id || "").trim()),
+        ...focusedItems.map((item) => String(item.variant_id || "").trim()),
       ].map((id) => String(id || "").trim()).filter(Boolean)));
       const committedRows = rows.filter((row) => String(row.status || "committed").toLowerCase() === "committed").length || Number(detail.rowCount || 0) || variantIds.length;
-      const totalQty = Number(detail.totalQty || rows.reduce((sum, row: any) => sum + n(row.import_qty || row.qty), 0) || 0);
+      const totalQty = Number(detail.totalQty || rows.reduce((sum, row: any) => sum + n(row.import_qty || row.qty), 0) || focusedItems.reduce((sum, item: any) => sum + n(item.import_qty || item.total_qty), 0) || 0);
+      setIncomingFocusItems(focusedItems);
       setIncomingFocus({
         batchId: cleanBatchId,
         variantIds,
@@ -2005,6 +2023,7 @@ export default function AllInWarehouse() {
       return { rows, variantIds, batch: detail.batch || null, totalQty };
     } catch (error: any) {
       setIncomingFocus(null);
+      setIncomingFocusItems([]);
       setMessage(error?.message || "Az utolsó bevételezés terméksorait nem sikerült betölteni.");
       return null;
     }
@@ -2538,7 +2557,7 @@ export default function AllInWarehouse() {
   const normalizeSize = (value: unknown) => officialSizeFromTypes(value, sizeTypes);
 
   const filtered = useMemo(() => {
-    let out = [...items];
+    let out = [...inventoryDisplayItems];
     if (incomingFocusVariantSet.size > 0) {
       out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")));
     }
@@ -2581,7 +2600,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [items, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -2596,6 +2615,7 @@ export default function AllInWarehouse() {
     setImageFilter("all");
     setSortMode("name");
     setIncomingFocus(null);
+    setIncomingFocusItems([]);
     setProductPage(1);
     setListOpen(true);
     if (showMessage) setMessage("Szűrők törölve. Most az összes raktári terméksor látszik.");
@@ -4764,7 +4784,7 @@ export default function AllInWarehouse() {
               {incomingFocus && (
                 <button
                   className={btnSoft}
-                  onClick={() => { setIncomingFocus(null); setProductPage(1); setMessage("Utolsó bevételezés szűrő törölve. Most újra az összes raktári variáns látszik."); }}
+                  onClick={() => { setIncomingFocus(null); setIncomingFocusItems([]); setProductPage(1); setMessage("Utolsó bevételezés szűrő törölve. Most újra az összes raktári variáns látszik."); }}
                   type="button"
                   title="Csak az utolsó import sorainak mutatását kikapcsolja"
                 >
