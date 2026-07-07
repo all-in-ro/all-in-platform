@@ -1252,7 +1252,8 @@ function itemCustomsTariffCode(it: Partial<InventoryItem> | Record<string, any> 
 }
 
 function itemDisplayModelCode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
-  const raw = String(it?.model_code || it?.modelCode || "").trim();
+  const source = (it || {}) as Record<string, any>;
+  const raw = String(source.model_code || source.modelCode || "").trim();
   if (!raw) return "";
   const lastPart = raw.includes(":") ? raw.split(":").pop() || raw : raw;
   return String(lastPart || raw).trim();
@@ -4540,7 +4541,7 @@ export default function AllInWarehouse() {
               </label>
               <div className="flex items-end gap-2">
                 <button className={btn} onClick={load} disabled={busy}><Search size={16} /> Keresés</button>
-                <button className={btnSoft} onClick={() => clearWarehouseFilters(false)} type="button">Alaphelyzet</button>
+                <button className={btnSoft} onClick={() => resetWarehouseFilters(false)} type="button">Alaphelyzet</button>
               </div>
             </div>
           )}
@@ -4597,7 +4598,7 @@ export default function AllInWarehouse() {
               <Eye size={17} />
               <span>Terméklista</span>
               <span className={chip}>{filtered.length} találat</span>
-              {hasActiveVisibilityFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
+              {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
               {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
               {selectedCount > 0 && (
                 <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2.5 py-1 text-xs text-white">
@@ -4616,8 +4617,8 @@ export default function AllInWarehouse() {
                   </button>
                 </>
               )}
-              {hasActiveVisibilityFilters && (
-                <button className={btnSoft} onClick={() => clearWarehouseFilters()} type="button" title="Minden szűrő törlése">
+              {hasActiveWarehouseFilters && (
+                <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button" title="Minden szűrő törlése">
                   <X size={15} /> Szűrők törlése
                 </button>
               )}
@@ -4627,18 +4628,18 @@ export default function AllInWarehouse() {
           {listOpen && (
             <div className="p-4">
               {productPager}
-              {hasActiveVisibilityFilters && (
+              {hasActiveWarehouseFilters && (
                 <div className="mb-3 rounded-xl border border-amber-200/26 bg-amber-400/10 px-3 py-2 text-xs text-amber-50">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0">
                       <p className="font-semibold text-white">A terméklista most szűrve van, ezért nem minden készleten lévő sor látszik.</p>
                       <div className="mt-1 flex flex-wrap gap-1.5">
-                        {activeVisibilityFilterLabels.map((filterLabel) => (
+                        {activeWarehouseFilterLabels.map((filterLabel) => (
                           <span key={filterLabel} className="rounded-full border border-amber-200/22 bg-black/12 px-2 py-0.5 text-[11px] text-amber-50">{filterLabel}</span>
                         ))}
                       </div>
                     </div>
-                    <button className={btnSoft} onClick={() => clearWarehouseFilters()} type="button">Minden termék mutatása</button>
+                    <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button">Minden termék mutatása</button>
                   </div>
                 </div>
               )}
