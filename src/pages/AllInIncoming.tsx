@@ -710,7 +710,7 @@ function savedRowRawObject(row: any) {
 function categoryCandidatesForRow(row: any) {
   const normalized = row?.normalized || row || {};
   return [
-    rawValueByHeader(row, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE"]),
+    rawValueByHeader(row, ["RODESCR", "RO DESCR", "RO_DESCR", "DESCRIERE RO", "DESCR_RO", "TIP PRODUS", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE"]),
     (normalized as any).subCategoryCode,
     (normalized as any).subcategoryCode,
     (normalized as any).subCategoryName,
@@ -1008,7 +1008,7 @@ export default function AllInIncoming(_props: Props) {
     const normalized = { ...(row.normalized || {}) } as any;
     const rawProductCode = rawValueByHeader(row, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code"]);
     const rawSellPrice = rawValueByHeader(row, [
-      "ELADASI AR", "ELADÁSI ÁR", "PRET VANZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA",
+      "ELADASI AR", "ELADÁSI ÁR", "PRET DE VINZARE", "PRET DE VANZARE", "PRET VANZARE", "PRET VINZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA",
       "SELL PRICE", "SALE PRICE", "SHOPIFY PRICE", "PRICE RON", "PRET RON"
     ]);
     if ((normalized.sellPrice === null || normalized.sellPrice === undefined || normalized.sellPrice === "") && String(rawSellPrice ?? "").trim()) {
