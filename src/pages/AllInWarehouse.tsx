@@ -402,7 +402,10 @@ function latestWarehouseImportMovementFocus(rows: Array<Record<string, any>>): W
       const sourceType = normalizeSearch(row?.source_type || "");
       const movementType = normalizeSearch(row?.movement_type || "");
       const rawReason = normalizeSearch(row?.raw?.reason || "");
-      return sourceType.includes("import_batch") || rawReason.includes("import_batch") || movementType === "incoming";
+      const rowSourceId = firstWarehouseText(row?.source_id, row?.raw?.importBatchId, row?.raw?.import_batch_id);
+      const sourceKey = normalizeSearch(rowSourceId);
+      if (sourceType.includes("stock_table_audit") || sourceKey.startsWith("stock_audit") || rawReason.includes("stock_audit")) return false;
+      return sourceType.includes("import_batch") || rawReason.includes("import_batch") || (movementType === "incoming" && isUuidLike(rowSourceId));
     })
     .slice()
     .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
@@ -1439,6 +1442,10 @@ function splitCsv(v: unknown) {
     .filter(Boolean);
 }
 
+function isUuidLike(value: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
 
 function itemSnCod(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
   return String(it?.sn_cod || it?.snCod || "").trim();
@@ -2363,7 +2370,7 @@ export default function AllInWarehouse() {
 
   async function loadIncomingFocusBatch(batchId: string, showMessage = true, mode: "import" | "activation" = "import") {
     const cleanBatchId = String(batchId || "").trim();
-    if (!cleanBatchId) return null;
+    if (!cleanBatchId || !isUuidLike(cleanBatchId)) return null;
     try {
       let detail: { batch?: Record<string, any> | null; rows: Array<Record<string, any>>; items?: InventoryItem[]; variantIds?: string[]; rowCount?: number; totalQty?: number };
       try {
@@ -2523,7 +2530,7 @@ export default function AllInWarehouse() {
       const movementSourceId = firstWarehouseText(movementFocus?.sourceId);
 
       let loadedFromBatch: { rows: Array<Record<string, any>>; variantIds: string[]; batch?: Record<string, any> | null; totalQty?: number } | null = null;
-      if (movementSourceId && !movementSourceId.startsWith("stock-movements:")) {
+      if (movementSourceId && isUuidLike(movementSourceId)) {
         loadedFromBatch = await loadIncomingFocusBatch(movementSourceId, false);
       }
 
@@ -4996,7 +5003,7 @@ export default function AllInWarehouse() {
         setEditBaseline({ ...savedForm });
       }
       await load();
-      if (incomingFocus?.batchId && !resolvedActivation) await loadIncomingFocusBatch(incomingFocus.batchId, false);
+      if (incomingFocus?.batchId && !resolvedActivation && isUuidLike(incomingFocus.batchId)) await loadIncomingFocusBatch(incomingFocus.batchId, false);
       if (wasActivationWorkView && resolvedActivation) {
         setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról. Végre egy sorral kevesebb a káoszban.");
         setHighlightProductId((current) => current === detailId ? "" : current);
@@ -5024,7 +5031,7 @@ export default function AllInWarehouse() {
       setProductDeleteTarget(null);
       if (detail?.item?.id && String(detail.item.id) === deletedVariantId) setDetail(null);
       await load();
-      if (activeIncomingBatchId) await loadIncomingFocusBatch(activeIncomingBatchId, false);
+      if (activeIncomingBatchId && isUuidLike(activeIncomingBatchId)) await loadIncomingFocusBatch(activeIncomingBatchId, false);
       setMessage(result?.mode === "archived" || result?.mode === "archived_after_delete_fallback"
         ? "Termék archiválva és eltávolítva a raktárlistából."
         : "Termék véglegesen törölve: készlet, import-kapcsolat, mozgásnapló és beszállítói kapcsolat kitakarítva.");
@@ -5075,7 +5082,7 @@ export default function AllInWarehouse() {
     const incomingPayload = consumeIncomingShowAllFlag();
     load().then(async () => {
       const batchId = String(incomingPayload?.importBatchId || incomingPayload?.batchId || "").trim();
-      if (batchId) {
+      if (batchId && isUuidLike(batchId)) {
         await loadIncomingFocusBatch(batchId, true);
       } else if (incomingPayload) {
         setMessage("Készletre vétel után töröltem a raktárszűrőket és betöltöttem az utolsó bevételezés sorait. Ha egy import sor már meglévő variánsra ment, a fő raktári termékszám nem nő, csak a készlet badge változik.");
@@ -5086,7 +5093,7 @@ export default function AllInWarehouse() {
       const payload = consumeIncomingShowAllFlag();
       load().then(async () => {
         const batchId = String(payload?.importBatchId || payload?.batchId || "").trim();
-        if (batchId) {
+        if (batchId && isUuidLike(batchId)) {
           await loadIncomingFocusBatch(batchId, true);
         } else if (payload) {
           setMessage("Készletre vétel után töröltem a raktárszűrőket és a legfrissebb készletmozgásokat tettem felülre.");
