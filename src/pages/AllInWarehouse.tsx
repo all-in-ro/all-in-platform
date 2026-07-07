@@ -3079,8 +3079,8 @@ export default function AllInWarehouse() {
 
   function focusProductInList(item: InventoryItem, searchValue?: unknown, messageText?: string) {
     const variantId = selectedVariantIdFromItem(item);
-    const searchText = String(searchValue || item.barcode || item.sn_cod || item.snCod || item.internal_sku || item.title_ro || "").trim();
-    const scannedCode = cleanScannedBarcode(searchValue || item.barcode || item.sn_cod || item.snCod || item.internal_sku || "");
+    const searchText = String(searchValue || visibleWarehouseBarcode(item) || item.sn_cod || item.snCod || item.title_ro || "").trim();
+    const scannedCode = cleanScannedBarcode(searchValue || visibleWarehouseBarcode(item) || item.sn_cod || item.snCod || "");
     resetListFiltersForProductFocus(searchText, scannedCode && normalizeSearch(scannedCode) === normalizeSearch(searchText) ? scannedCode : "");
     queueProductRowJump(variantId);
     if (messageText) setMessage(messageText);
@@ -4781,7 +4781,8 @@ export default function AllInWarehouse() {
         status: edit.variantStatus,
       });
       const d = await apiVariantDetail(detail.item.id);
-      const resolvedActivation = !needsWarehouseActivation(d.item as InventoryItem);
+      const formResolvedActivation = String(edit.modelStatus || "").toLowerCase() === "active" && String(edit.variantStatus || "").toLowerCase() === "active";
+      const resolvedActivation = formResolvedActivation || !needsWarehouseActivation(d.item as InventoryItem);
       if (incomingFocus?.batchId && resolvedActivation) {
         setIncomingFocusItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== detailId));
         setIncomingFocus((current) => current ? {
@@ -4797,7 +4798,7 @@ export default function AllInWarehouse() {
         setEdit(formFromDetail(d));
       }
       await load();
-      if (incomingFocus?.batchId) await loadIncomingFocusBatch(incomingFocus.batchId, false);
+      if (incomingFocus?.batchId && !resolvedActivation) await loadIncomingFocusBatch(incomingFocus.batchId, false);
       if (wasActivationWorkView && resolvedActivation) {
         setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról. Végre egy sorral kevesebb a káoszban.");
         setHighlightProductId((current) => current === detailId ? "" : current);
@@ -6090,10 +6091,10 @@ export default function AllInWarehouse() {
                     <div className="mb-3 flex items-center gap-2 text-sm"><Boxes size={16} /> Variáns és árak</div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <label className={label}>Termékkód / modellkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
+                      <label className={label}>Vámtarifa kód<input className={input} value={newProduct.customsTariffCode} onChange={(e) => setNewProduct((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61099020" /></label>
                       <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
                       <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label>
                       <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
-                      <label className={label}>Vámtarifa kód<input className={input} value={newProduct.customsTariffCode} onChange={(e) => setNewProduct((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61102091" /></label>
                       <label className={label}>Szín<input className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
                       <label className={label}>Gyártói színkód<input className={input} value={newProduct.supplierColorCode || newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierColorCode: e.target.value, colorCode: e.target.value }))} placeholder="pl. 001" /></label>
                       <label className={label}>Gyártói méret<input className={input} value={newProduct.supplierSize} onChange={(e) => {
