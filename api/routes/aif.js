@@ -4361,6 +4361,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE rw.batch_id=$1
            AND rw.status='committed'
            AND rw.variant_id IS NOT NULL
+           AND v.id IS NOT NULL
+           AND m.id IS NOT NULL
+           AND COALESCE(v.status,'active') <> 'archived'
+           AND COALESCE(m.status,'active') <> 'archived'
          ORDER BY rw.row_no ASC`,
         [batch.rows[0].id]
       );
@@ -4462,6 +4466,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE rw.batch_id=$1
            AND rw.status='committed'
            AND rw.variant_id IS NOT NULL
+           AND v.id IS NOT NULL
+           AND m.id IS NOT NULL
+           AND COALESCE(v.status,'active') <> 'archived'
+           AND COALESCE(m.status,'active') <> 'archived'
          ORDER BY rw.row_no ASC`,
         [batch.rows[0].id]
       );
@@ -5981,7 +5989,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "variant id required" });
 
+    const deleteMode = normCode(req.query.mode || req.query.deleteMode || req.query.delete_mode || req.query.permanent || req.query.force || "");
+    const permanentDelete = ["permanent", "hard", "force", "true", "1", "yes", "vegleges", "végleges"].includes(deleteMode);
+    const quoteIdent = (value) => `"${String(value).replace(/"/g, '""')}"`;
+    const optionalQuery = async (client, sql, args = []) => {
+      try {
+        return await client.query(sql, args);
+      } catch (e) {
+        if (["42P01", "42703", "42883"].includes(e?.code)) return { rowCount: 0, rows: [] };
+        throw e;
+      }
+    };
+
     const client = await pool.connect();
+    let permanentDeleteWarning = null;
     try {
       await client.query("BEGIN");
       const current = await client.query(
@@ -5999,6 +6020,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const variantId = current.rows[0].id;
       const modelId = current.rows[0].model_id;
+      const variantIdText = String(variantId);
 
       const stockUsage = await client.query(
         `SELECT count(*)::int AS stock_rows,
@@ -6020,6 +6042,114 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE variant_id=$1`,
         [variantId]
       );
+
+      const baseUsage = () => ({
+        stock_rows: Number(stockUsage.rows[0]?.stock_rows || 0),
+        qty: Number(stockUsage.rows[0]?.qty || 0),
+        reserved_qty: Number(stockUsage.rows[0]?.reserved_qty || 0),
+        movements: Number(movementUsage.rows[0]?.movements || 0),
+        import_rows: Number(importUsage.rows[0]?.import_rows || 0),
+      });
+
+      if (permanentDelete) {
+        await client.query("SAVEPOINT aif_variant_permanent_delete");
+        try {
+          const usage = { ...baseUsage(), deleted_rows: {} };
+          const addDeletedCount = (key, result) => {
+            usage.deleted_rows[key] = (usage.deleted_rows[key] || 0) + Number(result?.rowCount || 0);
+          };
+
+          addDeletedCount("selection", await optionalQuery(client, `DELETE FROM aif_user_selected_variants WHERE variant_id=$1`, [variantIdText]));
+          addDeletedCount("inventory_count_lines", await optionalQuery(client, `DELETE FROM aif_inventory_count_lines WHERE variant_id=$1`, [variantId]));
+          addDeletedCount("stock_movements", await optionalQuery(client, `DELETE FROM aif_stock_movements WHERE variant_id=$1`, [variantId]));
+          addDeletedCount("stock", await optionalQuery(client, `DELETE FROM aif_stock WHERE variant_id=$1`, [variantId]));
+          addDeletedCount("supplier_codes", await optionalQuery(client, `DELETE FROM aif_variant_supplier_codes WHERE variant_id=$1`, [variantId]));
+          addDeletedCount("import_rows_detached", await optionalQuery(client,
+            `UPDATE aif_import_rows
+             SET variant_id=NULL,
+                 status=CASE WHEN status='committed' THEN 'ignored' ELSE status END,
+                 normalized=COALESCE(normalized, '{}'::jsonb) || jsonb_build_object(
+                   'deletedVariantId', $1::text,
+                   'deletedAt', now()::text,
+                   'deleteMode', 'permanent_from_warehouse'
+                 ),
+                 updated_at=now()
+             WHERE variant_id=$1`,
+            [variantId]
+          ));
+
+          const handledRefs = new Set([
+            "aif_user_selected_variants.variant_id",
+            "aif_inventory_count_lines.variant_id",
+            "aif_stock_movements.variant_id",
+            "aif_stock.variant_id",
+            "aif_variant_supplier_codes.variant_id",
+            "aif_import_rows.variant_id",
+          ]);
+          const fkRefs = await optionalQuery(client, `
+            SELECT ns.nspname AS table_schema, cl.relname AS table_name, att.attname AS column_name, att.attnotnull
+            FROM pg_constraint con
+            JOIN pg_class cl ON cl.oid=con.conrelid
+            JOIN pg_namespace ns ON ns.oid=cl.relnamespace
+            JOIN unnest(con.conkey) WITH ORDINALITY cols(attnum, ord) ON true
+            JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=cols.attnum
+            WHERE con.contype='f'
+              AND con.confrelid='aif_product_variants'::regclass
+              AND array_length(con.conkey, 1)=1
+          `);
+          for (const ref of fkRefs.rows || []) {
+            const tableName = text(ref.table_name);
+            const columnName = text(ref.column_name);
+            const tableKey = `${tableName}.${columnName}`;
+            if (!tableName || !columnName || handledRefs.has(tableKey)) continue;
+            const qualifiedTable = `${quoteIdent(ref.table_schema)}.${quoteIdent(tableName)}`;
+            const quotedColumn = quoteIdent(columnName);
+            if (ref.attnotnull) {
+              addDeletedCount(tableKey, await optionalQuery(client, `DELETE FROM ${qualifiedTable} WHERE ${quotedColumn}=$1`, [variantId]));
+            } else {
+              addDeletedCount(tableKey, await optionalQuery(client, `UPDATE ${qualifiedTable} SET ${quotedColumn}=NULL WHERE ${quotedColumn}=$1`, [variantId]));
+            }
+          }
+
+          const deletedVariant = await client.query(`DELETE FROM aif_product_variants WHERE id=$1 RETURNING id`, [variantId]);
+          if (!deletedVariant.rowCount) {
+            await client.query("ROLLBACK TO SAVEPOINT aif_variant_permanent_delete");
+            await client.query("RELEASE SAVEPOINT aif_variant_permanent_delete");
+            await client.query("ROLLBACK");
+            return res.status(404).json({ error: "variant not found" });
+          }
+          usage.deleted_rows.variants = deletedVariant.rowCount;
+
+          const remainingSiblings = await client.query(
+            `SELECT count(*)::int AS c
+             FROM aif_product_variants
+             WHERE model_id=$1`,
+            [modelId]
+          );
+          if (Number(remainingSiblings.rows[0]?.c || 0) <= 0) {
+            try {
+              const deletedModel = await client.query(`DELETE FROM aif_product_models WHERE id=$1 RETURNING id`, [modelId]);
+              usage.deleted_rows.models = deletedModel.rowCount;
+            } catch (modelDeleteError) {
+              if (modelDeleteError?.code !== "23503") throw modelDeleteError;
+              const archivedModel = await client.query(
+                `UPDATE aif_product_models SET status='archived', updated_at=now() WHERE id=$1`,
+                [modelId]
+              );
+              usage.deleted_rows.models_archived = archivedModel.rowCount;
+            }
+          }
+
+          await client.query("RELEASE SAVEPOINT aif_variant_permanent_delete");
+          await client.query("COMMIT");
+          return res.json({ ok: true, mode: "permanently_deleted", variantId: variantIdText, modelId: String(modelId), usage });
+        } catch (hardDeleteError) {
+          permanentDeleteWarning = hardDeleteError?.message || "A végleges törlés nem sikerült, ezért archiválásra váltott a rendszer.";
+          console.error("AIF hard delete variant failed, falling back to archive", hardDeleteError);
+          try { await client.query("ROLLBACK TO SAVEPOINT aif_variant_permanent_delete"); } catch {}
+          try { await client.query("RELEASE SAVEPOINT aif_variant_permanent_delete"); } catch {}
+        }
+      }
 
       const stockRowsForRemoval = await client.query(
         `SELECT s.location_id, l.code AS location_code, l.name AS location_name,
@@ -6057,6 +6187,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             qtyAfter: 0,
             reservedBefore: beforeReserved,
             reservedAfter: 0,
+            hardDeleteFallback: Boolean(permanentDeleteWarning),
           },
         });
         if (logged) stockMovementsCreated++;
@@ -6080,11 +6211,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE variant_id=$1`,
         [variantId]
       );
+      try {
+        await ensureSelectedVariantsTable(client);
+        await client.query(`DELETE FROM aif_user_selected_variants WHERE variant_id=$1`, [variantIdText]);
+      } catch (selectionCleanupError) {
+        console.error("AIF archive variant selection cleanup warning", selectionCleanupError);
+      }
 
       const activeSiblings = await client.query(
         `SELECT count(*)::int AS c
          FROM aif_product_variants
-         WHERE model_id=$1 AND id <> $2 AND status <> 'archived'`,
+         WHERE model_id=$1 AND id <> $2 AND COALESCE(status,'active') <> 'archived'`,
         [modelId, variantId]
       );
       if (Number(activeSiblings.rows[0]?.c || 0) <= 0) {
@@ -6099,14 +6236,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("COMMIT");
       res.json({
         ok: true,
-        mode: "archived",
+        mode: permanentDeleteWarning ? "archived_after_delete_fallback" : "archived",
+        variantId: variantIdText,
+        modelId: String(modelId),
+        warning: permanentDeleteWarning,
         usage: {
-          stock_rows: Number(stockUsage.rows[0]?.stock_rows || 0),
-          qty: Number(stockUsage.rows[0]?.qty || 0),
-          reserved_qty: Number(stockUsage.rows[0]?.reserved_qty || 0),
-          movements: Number(movementUsage.rows[0]?.movements || 0),
+          ...baseUsage(),
           stock_movements_created: stockMovementsCreated,
-          import_rows: Number(importUsage.rows[0]?.import_rows || 0),
         },
       });
     } catch (e) {
@@ -6117,7 +6253,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
-
 
   async function loadSelectedVariants(req, res) {
     const ownerKey = selectionOwnerKey(req);
@@ -6425,7 +6560,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const args = [];
-    const where = [];
+    const where = [
+      `COALESCE(v.status,'active') <> 'archived'`,
+      `COALESCE(m.status,'active') <> 'archived'`,
+    ];
     if (location) {
       args.push(location);
       where.push(`(l.code=$${args.length} OR l.id::text=$${args.length})`);
