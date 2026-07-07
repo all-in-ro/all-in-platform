@@ -5,6 +5,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.use(express.json({ limit: "15mb" }));
 
+  router.use((_req, res, next) => {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    next();
+  });
+
   const text = (v) => String(v ?? "").trim();
   const emptyToNull = (v) => {
     const s = text(v);
@@ -4248,6 +4255,68 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.delete("/import-batches/:id", requireAuthed, deleteImportBatchHistory);
 
 
+  router.get("/import-batches/:id/inventory", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: "Import azonosító kötelező." });
+    try {
+      const batch = await pool.query(
+        `SELECT id, status, source_file_name, committed_at, row_count, reception_id
+         FROM aif_import_batches
+         WHERE id::text=$1
+         LIMIT 1`,
+        [id]
+      );
+      if (!batch.rowCount) return res.status(404).json({ error: "Import előzmény nem található." });
+
+      const rows = await pool.query(
+        `SELECT
+           rw.id AS import_row_id,
+           rw.row_no AS import_row_no,
+           rw.qty AS import_qty,
+           rw.supplier_product_code AS import_supplier_product_code,
+           rw.supplier_variant_code AS import_supplier_variant_code,
+           rw.supplier_color_code AS import_supplier_color_code,
+           rw.supplier_size AS import_supplier_size,
+           i.*,
+           v.sn_cod,
+           v.attributes AS variant_attributes,
+           ${customsTariffSql('v')} AS customs_tariff_code,
+           ${customsTariffSql('v')} AS "customsTariffCode",
+           v.status AS variant_status,
+           v.status AS status,
+           m.status AS model_status,
+           b.code AS brand_code,
+           COALESCE(i.brand_name, b.name) AS brand_name
+         FROM aif_import_rows rw
+         LEFT JOIN aif_inventory_summary i ON i.variant_id::text=rw.variant_id::text
+         LEFT JOIN aif_product_variants v ON v.id=rw.variant_id
+         LEFT JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         WHERE rw.batch_id=$1
+           AND rw.status='committed'
+           AND rw.variant_id IS NOT NULL
+         ORDER BY rw.row_no ASC`,
+        [batch.rows[0].id]
+      );
+
+      const variantIds = Array.from(new Set(rows.rows.map((row) => text(row.variant_id)).filter(Boolean)));
+      const totalQty = rows.rows.reduce((sum, row) => sum + Number(row.import_qty || 0), 0);
+      res.json({
+        ok: true,
+        batch: batch.rows[0],
+        batchId: String(batch.rows[0].id),
+        items: rows.rows,
+        rows: rows.rows,
+        variantIds,
+        rowCount: rows.rowCount,
+        totalQty,
+      });
+    } catch (e) {
+      console.error("AIF import batch inventory load failed", e);
+      res.status(500).json({ error: e?.message || "A bevételezett import termékei nem tölthetők be.", code: e?.code || null });
+    }
+  });
+
   router.get("/import-batches/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const batch = await pool.query(
@@ -4436,6 +4505,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const salesTvaSettings = await readSalesTvaSettings(client);
     let committed = 0;
     const failedRows = [];
+    const committedRowResults = [];
 
     for (const row of rows.rows) {
       const savepointName = `aif_commit_row_${String(row.id || row.row_no || "x").replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 32)}`;
@@ -4484,6 +4554,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
           [row.id, variantId]
         );
+
+        committedRowResults.push({
+          id: String(row.id || ""),
+          rowNo: row.row_no || null,
+          variantId: String(variantId || ""),
+          qty: Math.floor(qty),
+          supplierProductCode: normalized.supplierProductCode || row.supplier_product_code || null,
+          supplierColorCode: normalized.supplierColorCode || normalized.colorCode || row.supplier_color_code || null,
+          supplierSize: normalized.supplierSize || normalized.size || row.supplier_size || null,
+          titleRo: normalized.titleRo || null,
+          colorName: normalized.colorName || null,
+          size: normalized.size || null,
+        });
 
         await client.query(`RELEASE SAVEPOINT ${savepointName}`);
         committed++;
@@ -4570,6 +4653,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       errorRows: Number(st.error_rows || 0),
       failedRows,
       failedCount: failedRows.length,
+      committedRowResults,
+      variantIds: Array.from(new Set(committedRowResults.map((row) => row.variantId).filter(Boolean))),
+      committedVariantIds: Array.from(new Set(committedRowResults.map((row) => row.variantId).filter(Boolean))),
+      committedTotalQty: committedRowResults.reduce((sum, row) => sum + Number(row.qty || 0), 0),
       warning: failedRows.length ? `${failedRows.length} terméksor nem került készletre. A hibás sorok ellenőrzendő státuszba kerültek.` : null,
     };
   }
@@ -5953,41 +6040,152 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/inventory", requireAuthed, async (req, res) => {
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
+    const includeZero = ["1", "true", "yes"].includes(text(req.query.includeZero || req.query.include_zero).toLowerCase());
     const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 200)));
     const args = [];
-    const where = [];
+    const where = [
+      `COALESCE(v.status,'active') <> 'archived'`,
+      `COALESCE(m.status,'active') <> 'archived'`,
+    ];
+    const tariffExpr = customsTariffSql('v');
+
+    if (!includeZero) {
+      where.push(`(COALESCE(st.total_qty,0) <> 0 OR COALESCE(st.total_reserved_qty,0) <> 0 OR ci.variant_id IS NOT NULL)`);
+    }
+
     if (search) {
       args.push(`%${search}%`);
+      const p = `$${args.length}`;
       where.push(`(
-        i.title_ro ILIKE $1 OR i.internal_sku ILIKE $1 OR i.barcode ILIKE $1 OR COALESCE(v.sn_cod,'') ILIKE $1 OR
-        ${customsTariffSql('v')} ILIKE $1 OR
-        i.model_code ILIKE $1 OR i.brand_name ILIKE $1 OR i.color_name ILIKE $1 OR i.size ILIKE $1
+        COALESCE(m.title_ro,'') ILIKE ${p}
+        OR COALESCE(m.title_hu,'') ILIKE ${p}
+        OR COALESCE(m.shopify_title,'') ILIKE ${p}
+        OR COALESCE(v.internal_sku,'') ILIKE ${p}
+        OR COALESCE(v.barcode,'') ILIKE ${p}
+        OR COALESCE(v.sn_cod,'') ILIKE ${p}
+        OR ${tariffExpr} ILIKE ${p}
+        OR COALESCE(m.model_code,'') ILIKE ${p}
+        OR COALESCE(b.name,'') ILIKE ${p}
+        OR COALESCE(b.code,'') ILIKE ${p}
+        OR COALESCE(c.name_ro,'') ILIKE ${p}
+        OR COALESCE(c.name_hu,'') ILIKE ${p}
+        OR COALESCE(c.code,'') ILIKE ${p}
+        OR COALESCE(v.color_name,'') ILIKE ${p}
+        OR COALESCE(v.color_code,'') ILIKE ${p}
+        OR COALESCE(v.size,'') ILIKE ${p}
+        OR COALESCE(si.supplier_names,'') ILIKE ${p}
+        OR COALESCE(si.supplier_codes,'') ILIKE ${p}
       )`);
     }
+
     if (snCod) {
       args.push(`%${snCod}%`);
       where.push(`COALESCE(v.sn_cod,'') ILIKE $${args.length}`);
     }
+
     args.push(limit);
+    const limitParam = `$${args.length}`;
+
     const r = await pool.query(
-      `SELECT i.*, v.sn_cod,
-              v.attributes AS variant_attributes,
-              ${customsTariffSql('v')} AS customs_tariff_code,
-              ${customsTariffSql('v')} AS "customsTariffCode",
-              v.status AS variant_status,
-              v.status AS status,
-              m.status AS model_status,
-              b.code AS brand_code,
-              COALESCE(i.brand_name, b.name) AS brand_name
-       FROM aif_inventory_summary i
-       LEFT JOIN aif_product_variants v ON v.id=i.variant_id
-       LEFT JOIN aif_product_models m ON m.id=v.model_id
+      `WITH stock_totals AS (
+         SELECT
+           s.variant_id,
+           COALESCE(sum(COALESCE(s.qty,0)),0)::numeric AS total_qty,
+           COALESCE(sum(COALESCE(s.reserved_qty,0)),0)::numeric AS total_reserved_qty,
+           COALESCE(sum(COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0)),0)::numeric AS available_qty,
+           max(s.updated_at) AS last_stock_movement_at
+         FROM aif_stock s
+         GROUP BY s.variant_id
+       ),
+       supplier_info AS (
+         SELECT
+           sc.variant_id,
+           string_agg(DISTINCT s.name, ', ' ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL AND s.name <> '') AS supplier_names,
+           string_agg(DISTINCT NULLIF(concat_ws(' / ', sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_size), ''), ', ') AS supplier_codes,
+           (array_agg(sc.supplier_barcode ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_barcode IS NOT NULL AND sc.supplier_barcode <> ''))[1] AS supplier_barcode,
+           (array_agg(sc.supplier_sku ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_sku IS NOT NULL AND sc.supplier_sku <> ''))[1] AS supplier_sku
+         FROM aif_variant_supplier_codes sc
+         LEFT JOIN aif_suppliers s ON s.id=sc.supplier_id
+         WHERE COALESCE(sc.is_active,true)=true
+         GROUP BY sc.variant_id
+       ),
+       incoming_info AS (
+         SELECT sm.variant_id, max(sm.created_at) AS last_incoming_at
+         FROM aif_stock_movements sm
+         WHERE sm.movement_type='incoming' OR sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit'
+         GROUP BY sm.variant_id
+       ),
+       committed_import AS (
+         SELECT
+           rw.variant_id,
+           COALESCE(sum(COALESCE(rw.qty,0)),0)::numeric AS committed_qty,
+           max(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS last_import_at
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         WHERE rw.status='committed'
+           AND rw.variant_id IS NOT NULL
+           AND COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) >= now() - interval '30 days'
+         GROUP BY rw.variant_id
+       )
+       SELECT
+         v.id AS variant_id,
+         v.internal_sku,
+         COALESCE(v.barcode, si.supplier_barcode, si.supplier_sku) AS barcode,
+         v.barcode AS variant_barcode,
+         v.sn_cod,
+         v.sn_cod AS "snCod",
+         v.attributes,
+         v.attributes AS variant_attributes,
+         ${tariffExpr} AS customs_tariff_code,
+         ${tariffExpr} AS "customsTariffCode",
+         v.status AS variant_status,
+         v.status AS status,
+         m.id AS model_id,
+         m.model_code,
+         m.title_ro,
+         m.title_hu,
+         m.description_ro,
+         m.shopify_title,
+         m.gender,
+         m.product_type,
+         m.season,
+         m.material,
+         m.status AS model_status,
+         b.name AS brand_name,
+         b.code AS brand_code,
+         c.name_ro AS category_name_ro,
+         c.name_hu AS category_name_hu,
+         c.code AS category_code,
+         v.color_code,
+         v.color_name,
+         v.color_hex,
+         v.size,
+         v.buy_price,
+         v.sell_price,
+         v.compare_at_price,
+         v.image_url,
+         v.images,
+         COALESCE(st.total_qty, ci.committed_qty, 0) AS total_qty,
+         COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
+         COALESCE(st.available_qty, ci.committed_qty, 0) AS available_qty,
+         COALESCE(st.last_stock_movement_at, ci.last_import_at) AS last_stock_movement_at,
+         COALESCE(ii.last_incoming_at, ci.last_import_at, st.last_stock_movement_at) AS last_incoming_at,
+         si.supplier_names,
+         si.supplier_codes
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
-       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-       ORDER BY COALESCE(i.brand_name, b.name) ASC NULLS LAST, i.title_ro ASC, i.color_name ASC NULLS LAST, i.size ASC
-       LIMIT $${args.length}`,
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN stock_totals st ON st.variant_id=v.id
+       LEFT JOIN committed_import ci ON ci.variant_id=v.id
+       LEFT JOIN supplier_info si ON si.variant_id=v.id
+       LEFT JOIN incoming_info ii ON ii.variant_id=v.id
+       WHERE ${where.join(" AND ")}
+       ORDER BY COALESCE(b.name,'') ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC
+       LIMIT ${limitParam}`,
       args
     );
+
     res.json({ items: r.rows });
   });
 
