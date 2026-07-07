@@ -47,14 +47,14 @@ const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border bo
 const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
 const taxonomyCard = "rounded-2xl border border-white/18 bg-[#566171] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(15,23,42,0.10)]";
 const taxonomyTabBase = "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs transition-colors font-normal";
-const taxonomyTabActive = `${taxonomyTabBase} border-emerald-300/42 bg-emerald-500/18 text-white shadow-[0_0_0_1px_rgba(110,231,183,0.12)]`;
+const taxonomyTabActive = `${taxonomyTabBase} border-[#7bd7d4]/55 bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(42,141,139,0.22),0_8px_18px_rgba(15,23,42,0.12)]`;
 const taxonomyTabIdle = `${taxonomyTabBase} border-white/16 bg-[#3f4959] text-white/78 hover:bg-[#475365]`;
 const taxonomySmallBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/18 bg-[#3f4959] px-2.5 text-[11px] text-white/88 hover:bg-[#475365] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-emerald-300/35 bg-[#276454] px-3 text-xs text-white hover:bg-[#2d735f] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const taxonomyPrimaryBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_0_0_1px_rgba(42,141,139,0.12)] hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45 font-normal";
 const taxonomyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-300/30 bg-[#d31126] px-2.5 text-[11px] text-white shadow-[0_0_0_1px_rgba(248,113,113,0.06)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const taxonomyField = "grid gap-1.5 text-[11px] text-white/72";
-const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
-const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
+const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
+const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
 const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
@@ -2168,6 +2168,40 @@ function formFromDetail(d: DetailResponse): EditForm {
   };
 }
 
+const editFormComparableKeys: Array<keyof EditForm> = [
+  "titleRo",
+  "titleHu",
+  "descriptionRo",
+  "gender",
+  "productType",
+  "season",
+  "material",
+  "shopifyTitle",
+  "modelStatus",
+  "brandCode",
+  "categoryCode",
+  "barcode",
+  "supplierProductCode",
+  "snCod",
+  "customsTariffCode",
+  "colorCode",
+  "colorName",
+  "size",
+  "buyPrice",
+  "sellPrice",
+  "compareAtPrice",
+  "imageUrl",
+  "variantStatus",
+];
+
+function cleanEditComparableValue(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function editFormsEqual(a: EditForm, b: EditForm) {
+  return editFormComparableKeys.every((key) => cleanEditComparableValue(a[key]) === cleanEditComparableValue(b[key]));
+}
+
 
 function nextSortOrder(rows: Array<{ sort_order?: number | string | null }>) {
   return String(rows.length + 1);
@@ -2212,6 +2246,7 @@ export default function AllInWarehouse() {
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
+  const [editBaseline, setEditBaseline] = useState<EditForm>(emptyForm());
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newProductOpen, setNewProductOpen] = useState(false);
@@ -3026,6 +3061,17 @@ export default function AllInWarehouse() {
 
   const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
   const normalizeSize = (value: unknown) => officialSizeFromTypes(value, sizeTypes);
+
+  const detailHasChanges = useMemo(() => Boolean(detail?.item?.id) && !editFormsEqual(edit, editBaseline), [detail?.item?.id, edit, editBaseline]);
+  const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
+
+  const canSaveCategoryForm = Boolean(categoryForm.nameRo.trim());
+  const canSaveGenderForm = Boolean(genderForm.name.trim());
+  const canSaveColorForm = Boolean(colorForm.nameRo.trim());
+  const canSaveBrandColorForm = Boolean(brandColorForm.brandId && brandColorForm.colorCode.trim() && brandColorForm.colorTypeId);
+  const canSaveSizeForm = Boolean(sizeForm.name.trim());
+  const canSaveBrandSizeForm = Boolean(brandSizeForm.brandId && brandSizeForm.sizeCode.trim() && brandSizeForm.sizeTypeId);
+  const canSaveMaterialForm = Boolean(materialForm.nameRo.trim());
 
   const filtered = useMemo(() => {
     let out = [...inventoryDisplayItems];
@@ -4520,7 +4566,9 @@ export default function AllInWarehouse() {
         nextForm.brandCode = findBrandCodeForName(d.item?.brand_name || listItem?.brand_name || "");
       }
       nextForm.colorName = officialColorFromTypes(nextForm.colorName, colorTypes);
+      nextForm.size = officialSizeFromTypes(nextForm.size, sizeTypes);
       setEdit(nextForm);
+      setEditBaseline({ ...nextForm });
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült betölteni a termékadatlapot.");
     } finally {
@@ -4890,7 +4938,7 @@ export default function AllInWarehouse() {
   }
 
   async function saveDetail() {
-    if (!detail?.item?.id) return;
+    if (!detail?.item?.id || !detailHasChanges) return;
     const detailId = String(detail.item.id || detail.item.variant_id || "");
     const wasActivationWorkView = stockFilter === "watch" || Boolean(incomingFocus?.batchId);
     setSaving(true);
@@ -4934,9 +4982,18 @@ export default function AllInWarehouse() {
       }
       if (wasActivationWorkView && resolvedActivation) {
         setDetail(null);
+        setEditBaseline(emptyForm());
       } else {
+        const savedForm = formFromDetail(d);
+        if (!savedForm.brandCode) {
+          const listItem = items.find((it) => String(it.variant_id || "") === String(detailId));
+          savedForm.brandCode = findBrandCodeForName(d.item?.brand_name || listItem?.brand_name || "");
+        }
+        savedForm.colorName = officialColorFromTypes(savedForm.colorName, colorTypes);
+        savedForm.size = officialSizeFromTypes(savedForm.size, sizeTypes);
         setDetail(d);
-        setEdit(formFromDetail(d));
+        setEdit(savedForm);
+        setEditBaseline({ ...savedForm });
       }
       await load();
       if (incomingFocus?.batchId && !resolvedActivation) await loadIncomingFocusBatch(incomingFocus.batchId, false);
@@ -5296,7 +5353,7 @@ export default function AllInWarehouse() {
                 </span>
               )}
               {incomingFocus && (
-                <span className="rounded-full border border-emerald-200/35 bg-emerald-400/12 px-2.5 py-1 text-xs text-emerald-50">
+                <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/12 px-2.5 py-1 text-xs text-[#d7fffd]">
                   Utolsó bevételezés: {incomingFocus.rows.length || incomingFocus.variantIds.length} sor / {incomingFocus.variantIds.length} variáns{incomingFocus.totalQty ? ` / ${incomingFocus.totalQty} db` : ""}
                 </span>
               )}
@@ -5376,7 +5433,7 @@ export default function AllInWarehouse() {
                 <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.045] px-3 py-2 text-xs text-white/55">
                   A raktárlista termékvariánsonként összesít: külön méret külön sor. Importnál a már létező modell + szín + méret nem új terméksor, hanem a meglévő sor készlete nő.
                   {incomingFocus ? (
-                    <span className="mt-1 block text-emerald-50">Most az utolsó bevezetés aktiválandó listája aktív, ezért csak azok a sorok látszanak, amelyeknél a modell vagy a variáns még nem aktív.</span>
+                    <span className="mt-1 block text-[#d7fffd]">Most az utolsó bevezetés aktiválandó listája aktív, ezért csak azok a sorok látszanak, amelyeknél a modell vagy a variáns még nem aktív.</span>
                   ) : null}
                 </div>
               )}
@@ -6371,7 +6428,7 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveCategoryForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveCategoryForm} disabled={taxonomyBusy || !canSaveCategoryForm} title={!canSaveCategoryForm ? "A román megnevezés kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
                   <section className={taxonomyCard}>
@@ -6426,7 +6483,7 @@ export default function AllInWarehouse() {
                       <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={genderForm.aliases} onChange={(e) => setGenderForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="Barbat, Bărbat, Men, Ladies, Dama, Junior" /></label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveGenderForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveGenderForm} disabled={taxonomyBusy || !canSaveGenderForm} title={!canSaveGenderForm ? "A megnevezés kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
                   <section className={taxonomyCard}>
@@ -6485,7 +6542,7 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveColorForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveColorForm} disabled={taxonomyBusy || !canSaveColorForm} title={!canSaveColorForm ? "A román hivatalos név kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
                   <section className={taxonomyCard}>
@@ -6556,7 +6613,7 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveBrandColorForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveBrandColorForm} disabled={taxonomyBusy || !canSaveBrandColorForm} title={!canSaveBrandColorForm ? "Márka, gyártói színkód és AllIn szín kell." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
 
@@ -6630,7 +6687,7 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveSizeForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveSizeForm} disabled={taxonomyBusy || !canSaveSizeForm} title={!canSaveSizeForm ? "A standard méret kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
 
@@ -6699,7 +6756,7 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveBrandSizeForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveBrandSizeForm} disabled={taxonomyBusy || !canSaveBrandSizeForm} title={!canSaveBrandSizeForm ? "Márka, gyártói méret és standard méret kell." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
 
@@ -6758,7 +6815,7 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveMaterialForm} disabled={taxonomyBusy}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveMaterialForm} disabled={taxonomyBusy || !canSaveMaterialForm} title={!canSaveMaterialForm ? "A román hivatalos összetevőnév kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
                   <section className={taxonomyCard}>
@@ -6956,14 +7013,14 @@ export default function AllInWarehouse() {
                   <p className="mb-3 text-sm text-white/80">Hiányzó adatok</p>
                   <div className="flex flex-wrap gap-2">
                     {missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size, model_status: edit.modelStatus, variant_status: edit.variantStatus }).map((x) => <span key={x} className="rounded-full border border-amber-200/25 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-100">{x}</span>)}
-                    {!missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size, model_status: edit.modelStatus, variant_status: edit.variantStatus }).length && <span className="rounded-full border border-emerald-200/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-100">Nincs jelölt hiány</span>}
+                    {!missingLabels({ ...detail.item, image_url: edit.imageUrl, barcode: edit.barcode, buy_price: edit.buyPrice, sell_price: edit.sellPrice, title_ro: edit.titleRo, size: edit.size, model_status: edit.modelStatus, variant_status: edit.variantStatus }).length && <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2.5 py-1 text-xs text-[#d7fffd]">Nincs jelölt hiány</span>}
                   </div>
                 </section>
               </div>
 
               <div className="flex flex-wrap justify-end gap-2 border-t border-white/12 pt-4">
                 <button className={btnSoft} onClick={() => setDetail(null)}><X size={16} /> Mégse</button>
-                <button className={btn} onClick={saveDetail} disabled={saving}><Save size={16} /> Mentés</button>
+                <button className={detailSaveButtonClass} onClick={saveDetail} disabled={saving || !detailHasChanges} title={!detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése"}><Save size={16} /> Mentés</button>
               </div>
             </div>
           </div>
