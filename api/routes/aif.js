@@ -52,6 +52,61 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
 
+  const CUSTOMS_TARIFF_HEADER_ALIASES = [
+    "Vámtarifa kód", "VAMTARIFA KOD", "VAMTARIFA", "VÁMTARIFA", "Vamtarifa", "vamtarifa",
+    "Cod vamal", "COD VAMAL", "Cod tarifar", "COD TARIFAR", "Cod tarifar vamal", "COD TARIFAR VAMAL",
+    "Tarif vamal", "TARIF VAMAL", "Tarif code", "TARIFF CODE", "Customs tariff", "CUSTOMS TARIFF",
+    "HS CODE", "HSCode", "HS", "TARIC", "TARIC CODE", "CN CODE", "NC CODE", "Commodity code",
+    "Intrastat code", "Intrastat", "Customs code", "VTSZ"
+  ];
+
+  function customsTariffCodeFromSource(src = {}, raw = {}) {
+    const attrs = src?.attributes && typeof src.attributes === "object" && !Array.isArray(src.attributes) ? src.attributes : {};
+    return emptyToNull(
+      src.customsTariffCode || src.customs_tariff_code || src.tariffCode || src.tariff_code ||
+      src.hsCode || src.hs_code || src.taricCode || src.taric_code || src.cnCode || src.cn_code ||
+      src.ncCode || src.nc_code || src.commodityCode || src.commodity_code || src.intrastatCode || src.intrastat_code ||
+      attrs.customsTariffCode || attrs.customs_tariff_code || attrs.tariffCode || attrs.tariff_code || attrs.hsCode || attrs.hs_code || attrs.taricCode || attrs.taric_code ||
+      rawValueByHeaders(raw, CUSTOMS_TARIFF_HEADER_ALIASES)
+    );
+  }
+
+  function customsTariffCodeFromNormalized(normalized = {}) {
+    const attrs = normalized?.attributes && typeof normalized.attributes === "object" && !Array.isArray(normalized.attributes) ? normalized.attributes : {};
+    return emptyToNull(
+      normalized.customsTariffCode || normalized.customs_tariff_code || normalized.tariffCode || normalized.tariff_code ||
+      normalized.hsCode || normalized.hs_code || normalized.taricCode || normalized.taric_code ||
+      normalized.cnCode || normalized.cn_code || normalized.ncCode || normalized.nc_code ||
+      normalized.commodityCode || normalized.commodity_code || normalized.intrastatCode || normalized.intrastat_code ||
+      attrs.customsTariffCode || attrs.customs_tariff_code || attrs.tariffCode || attrs.tariff_code || attrs.hsCode || attrs.hs_code || attrs.taricCode || attrs.taric_code
+    );
+  }
+
+  function variantAttributesFromNormalized(normalized = {}) {
+    const attrs = normalized.attributes && typeof normalized.attributes === "object" && !Array.isArray(normalized.attributes)
+      ? { ...normalized.attributes }
+      : {};
+    const tariff = customsTariffCodeFromNormalized(normalized);
+    if (tariff !== null && tariff !== undefined && String(tariff).trim() !== "") {
+      attrs.customsTariffCode = tariff;
+      attrs.customs_tariff_code = tariff;
+      attrs.tariffCode = tariff;
+      attrs.tariff_code = tariff;
+      attrs.hsCode = tariff;
+      attrs.hs_code = tariff;
+    }
+    return attrs;
+  }
+
+  function variantAttributesJsonFromNormalized(normalized = {}) {
+    return JSON.stringify(variantAttributesFromNormalized(normalized));
+  }
+
+  function customsTariffSql(alias = "v") {
+    return `COALESCE(${alias}.attributes->>'customsTariffCode', ${alias}.attributes->>'customs_tariff_code', ${alias}.attributes->>'tariffCode', ${alias}.attributes->>'tariff_code', ${alias}.attributes->>'hsCode', ${alias}.attributes->>'hs_code', ${alias}.attributes->>'taricCode', ${alias}.attributes->>'taric_code')`;
+  }
+
+
   let snCodSchemaEnsured = false;
   let snCodSchemaPromise = null;
 
@@ -442,6 +497,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
       snCod: snCodFromSource(src, raw),
       sn_cod: snCodFromSource(src, raw),
+      customsTariffCode: customsTariffCodeFromSource(src, raw),
+      customs_tariff_code: customsTariffCodeFromSource(src, raw),
       buyPrice: toMoney(src.buyPrice ?? src.buy_price),
       sellPrice: toMoney(src.sellPrice ?? src.sell_price),
       sellPriceCurrency: emptyToNull(src.sellPriceCurrency || src.sell_price_currency || src.salePriceCurrency || src.sale_price_currency || "RON"),
@@ -614,6 +671,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const size = normalized.size;
     const barcode = emptyToNull(normalized.barcode);
     const snCod = emptyToNull(normalized.snCod ?? normalized.sn_cod);
+    const variantAttributesJson = variantAttributesJsonFromNormalized(normalized);
 
     const barcodeUsableForVariant = async (candidateBarcode, variantId = null) => {
       const candidate = emptyToNull(candidateBarcode);
@@ -643,6 +701,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            compare_at_price = COALESCE($8, compare_at_price),
            weight_grams = COALESCE($9, weight_grams),
            image_url = COALESCE($10, image_url),
+           attributes = COALESCE(attributes, '{}'::jsonb) || $12::jsonb,
            status = 'active',
            updated_at = now()
          WHERE id=$1`,
@@ -658,6 +717,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.weightGrams,
           normalized.imageUrl,
           snCod,
+          variantAttributesJson,
         ]
       );
       return id;
@@ -702,9 +762,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const inserted = await client.query(
         `INSERT INTO aif_product_variants (
            model_id, barcode, color_code, color_name, color_hex, size,
-           buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, status
+           buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, attributes, status
          )
-         VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,'active')
+         VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'active')
          RETURNING id`,
         [
           modelId,
@@ -719,6 +779,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.weightGrams,
           normalized.imageUrl,
           snCod,
+          variantAttributesJson,
         ]
       );
       return inserted.rows[0].id;
@@ -729,9 +790,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const insertedWithoutBarcode = await client.query(
           `INSERT INTO aif_product_variants (
              model_id, barcode, color_code, color_name, color_hex, size,
-             buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, status
+             buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, attributes, status
            )
-           VALUES ($1,NULL,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,'active')
+           VALUES ($1,NULL,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'active')
            RETURNING id`,
           [
             modelId,
@@ -745,6 +806,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             normalized.weightGrams,
             normalized.imageUrl,
             snCod,
+            variantAttributesJson,
           ]
         );
         return insertedWithoutBarcode.rows[0].id;
@@ -4729,6 +4791,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              buy_price=COALESCE($6, buy_price),
              sell_price=COALESCE($7, sell_price),
              compare_at_price=COALESCE($8, compare_at_price),
+             attributes=COALESCE(attributes,'{}'::jsonb) || $10::jsonb,
              updated_at=now()
            WHERE id=$1`,
           [
@@ -4741,6 +4804,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.sellPrice,
             nr.normalized.compareAtPrice,
             nr.normalized.snCod || nr.normalized.sn_cod,
+            variantAttributesJsonFromNormalized(nr.normalized),
           ]
         );
         if (nr.normalized.titleRo) {
@@ -5311,6 +5375,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
         snCod: snCodFromSource(src, body.raw || body),
         sn_cod: snCodFromSource(src, body.raw || body),
+        customsTariffCode: customsTariffCodeFromSource(src, body.raw || body),
+        customs_tariff_code: customsTariffCodeFromSource(src, body.raw || body),
         buyPrice: toMoney(src.buyPrice ?? src.buy_price),
         sellPrice: toMoney(src.sellPrice ?? src.sell_price),
         compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
@@ -5399,7 +5465,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT
            v.id, v.model_id, v.internal_sku, v.barcode, v.sn_cod, v.color_code, v.color_name, v.color_hex,
            v.size, v.buy_price, v.sell_price, v.compare_at_price, v.weight_grams, v.image_url,
-           v.images, v.attributes, v.status, v.created_at, v.updated_at,
+           v.images, v.attributes,
+           ${customsTariffSql('v')} AS customs_tariff_code,
+           ${customsTariffSql('v')} AS "customsTariffCode",
+           v.status, v.created_at, v.updated_at,
            m.model_code, m.title_ro, m.title_hu, m.description_ro, m.gender, m.product_type,
            m.season, m.material, m.shopify_title, m.shopify_handle, m.status AS model_status,
            b.id AS brand_id, b.name AS brand_name, b.code AS brand_code,
@@ -5495,6 +5564,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         variantSets.push(`${column}=$${vi++}`);
         variantArgs.push(value);
       };
+      const variantAttributePatch = body.attributes && typeof body.attributes === "object" && !Array.isArray(body.attributes)
+        ? { ...body.attributes }
+        : {};
+      const tariffProvided = body.customsTariffCode !== undefined || body.customs_tariff_code !== undefined || body.tariffCode !== undefined || body.tariff_code !== undefined || body.hsCode !== undefined || body.hs_code !== undefined || body.taricCode !== undefined || body.taric_code !== undefined;
+      if (tariffProvided) {
+        const tariff = emptyToNull(body.customsTariffCode ?? body.customs_tariff_code ?? body.tariffCode ?? body.tariff_code ?? body.hsCode ?? body.hs_code ?? body.taricCode ?? body.taric_code);
+        variantAttributePatch.customsTariffCode = tariff;
+        variantAttributePatch.customs_tariff_code = tariff;
+        variantAttributePatch.tariffCode = tariff;
+        variantAttributePatch.tariff_code = tariff;
+        variantAttributePatch.hsCode = tariff;
+        variantAttributePatch.hs_code = tariff;
+      }
 
       if (body.barcode !== undefined) addVariant("barcode", emptyToNull(body.barcode));
       if (body.snCod !== undefined || body.sn_cod !== undefined) addVariant("sn_cod", emptyToNull(body.snCod ?? body.sn_cod));
@@ -5533,6 +5615,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            SET ${variantSets.join(", ")}, updated_at=now()
            WHERE id=$${vi}`,
           variantArgs
+        );
+      }
+
+      if (Object.keys(variantAttributePatch).length) {
+        await client.query(
+          `UPDATE aif_product_variants
+           SET attributes=COALESCE(attributes,'{}'::jsonb) || $2::jsonb,
+               updated_at=now()
+           WHERE id=$1`,
+          [variantId, JSON.stringify(variantAttributePatch)]
         );
       }
 
@@ -5868,6 +5960,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       args.push(`%${search}%`);
       where.push(`(
         i.title_ro ILIKE $1 OR i.internal_sku ILIKE $1 OR i.barcode ILIKE $1 OR COALESCE(v.sn_cod,'') ILIKE $1 OR
+        ${customsTariffSql('v')} ILIKE $1 OR
         i.model_code ILIKE $1 OR i.brand_name ILIKE $1 OR i.color_name ILIKE $1 OR i.size ILIKE $1
       )`);
     }
@@ -5878,6 +5971,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     args.push(limit);
     const r = await pool.query(
       `SELECT i.*, v.sn_cod,
+              v.attributes AS variant_attributes,
+              ${customsTariffSql('v')} AS customs_tariff_code,
+              ${customsTariffSql('v')} AS "customsTariffCode",
               v.status AS variant_status,
               v.status AS status,
               m.status AS model_status,
@@ -5925,6 +6021,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       OR COALESCE(v.size,'') ILIKE ${p}
       OR COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku, '') ILIKE ${p}
       OR COALESCE(v.sn_cod,'') ILIKE ${p}
+      OR ${customsTariffSql('v')} ILIKE ${p}
       OR COALESCE(v.internal_sku,'') ILIKE ${p}
     )`;
   }
@@ -5953,6 +6050,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const r = await pool.query(
       `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
               v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
+              v.attributes AS variant_attributes,
+              ${customsTariffSql('v')} AS customs_tariff_code,
+              ${customsTariffSql('v')} AS "customsTariffCode",
               v.status AS variant_status, v.status AS status,
               COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
               v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
@@ -6209,6 +6309,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 CASE WHEN sm.qty_delta > 0 THEN 'in' WHEN sm.qty_delta < 0 THEN 'out' ELSE 'adjust' END AS direction,
                 l.id AS location_id, l.code AS location_code, l.name AS location_name,
                 v.id AS variant_id, v.internal_sku, v.barcode, v.sn_cod,
+                v.attributes AS variant_attributes,
+                ${customsTariffSql('v')} AS customs_tariff_code,
+                ${customsTariffSql('v')} AS "customsTariffCode",
                 COALESCE(v.barcode, sc.supplier_barcode, sc.supplier_sku) AS display_barcode,
                 v.size, v.color_code, v.color_name, v.color_hex, v.image_url, v.images,
                 m.id AS model_id, m.model_code, m.title_ro, m.shopify_title,
