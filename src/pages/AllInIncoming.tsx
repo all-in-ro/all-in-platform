@@ -65,6 +65,7 @@ type LocationType = string;
 type EditableImportField =
   | "supplierProductCode"
   | "snCod"
+  | "customsTariffCode"
   | "titleRo"
   | "brandCode"
   | "categoryCode"
@@ -82,15 +83,25 @@ type AifGenderOption = { code: string; name: string; aliases?: string[] | null; 
 type AifSupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 
 const SN_COD_FIELD = "snCod" as AifColumnField;
+const CUSTOMS_TARIFF_FIELD = "customsTariffCode" as AifColumnField;
 const SN_COD_HEADER_KEYS = new Set([
   "s_n_cod", "sn_cod", "s_n", "sn", "s_n_ev_honap", "sn_ev_honap", "s_n_ev_hónap",
   "s_n_c_o_d", "serial_code", "cod_serial", "cod_serie", "cod_intern", "internal_code", "internal_id", "client_code"
 ]);
+const CUSTOMS_TARIFF_HEADER_ALIASES = [
+  "Vámtarifa kód", "VAMTARIFA KOD", "VAMTARIFA", "VÁMTARIFA", "Vamtarifa", "VTSZ",
+  "Cod vamal", "COD VAMAL", "Cod tarifar", "COD TARIFAR", "Cod tarifar vamal", "COD TARIFAR VAMAL",
+  "Tarif vamal", "TARIF VAMAL", "Tarif code", "TARIFF CODE", "Customs tariff", "CUSTOMS TARIFF",
+  "Customs code", "CUSTOMS CODE", "HS CODE", "HSCode", "HS", "TARIC", "TARIC CODE", "CN CODE", "NC CODE",
+  "Commodity code", "Intrastat code", "Intrastat"
+];
+const CUSTOMS_TARIFF_HEADER_KEYS = new Set(CUSTOMS_TARIFF_HEADER_ALIASES.map((x) => snCodHeaderKey(x)));
 const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   const base = AIF_COLUMN_FIELD_OPTIONS as Array<{ value: AifColumnField; label: string }>;
-  return base.some((opt) => String(opt.value) === String(SN_COD_FIELD))
-    ? base
-    : [...base, { value: SN_COD_FIELD, label: "S/N/COD" }];
+  const out = [...base];
+  if (!out.some((opt) => String(opt.value) === String(SN_COD_FIELD))) out.push({ value: SN_COD_FIELD, label: "S/N/COD" });
+  if (!out.some((opt) => String(opt.value) === String(CUSTOMS_TARIFF_FIELD))) out.push({ value: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód" });
+  return out;
 })();
 function snCodHeaderKey(value: unknown) {
   return String(value ?? "")
@@ -105,6 +116,19 @@ function isSnCodHeader(value: unknown) {
   if (!key) return false;
   return SN_COD_HEADER_KEYS.has(key) || (key.includes("sn") && key.includes("cod"));
 }
+function isCustomsTariffHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  if (!key) return false;
+  return CUSTOMS_TARIFF_HEADER_KEYS.has(key) ||
+    key.includes("vamtarifa") ||
+    key.includes("vtsz") ||
+    key.includes("taric") ||
+    key.includes("intrastat") ||
+    key.includes("commodity_code") ||
+    ((key.includes("tarif") || key.includes("tariff") || key.includes("vamal") || key.includes("customs")) && key.includes("cod")) ||
+    key === "hs" || key === "hscode" || key === "hs_code" ||
+    key === "cn_code" || key === "nc_code";
+}
 function rawValueByExactHeader(raw: Record<string, unknown> | undefined | null, header: unknown) {
   if (!raw || typeof raw !== "object") return "";
   const wanted = snCodHeaderKey(header);
@@ -113,13 +137,44 @@ function rawValueByExactHeader(raw: Record<string, unknown> | undefined | null, 
   }
   return "";
 }
+function assignCustomsTariffCode(normalized: Record<string, any>, value: unknown) {
+  const code = String(value ?? "").trim();
+  if (!code) return normalized;
+  normalized.customsTariffCode = code;
+  normalized.customs_tariff_code = code;
+  normalized.tariffCode = code;
+  normalized.tariff_code = code;
+  normalized.hsCode = code;
+  normalized.hs_code = code;
+  return normalized;
+}
+function customsTariffCodeFromRow(row: any) {
+  const normalized = row?.normalized || row || {};
+  return firstNonEmptyText(
+    normalized.customsTariffCode,
+    normalized.customs_tariff_code,
+    normalized.tariffCode,
+    normalized.tariff_code,
+    normalized.hsCode,
+    normalized.hs_code,
+    normalized.taricCode,
+    normalized.taric_code,
+    row?.customs_tariff_code,
+    row?.customsTariffCode,
+    row?.tariff_code,
+    row?.tariffCode,
+    row?.hs_code,
+    row?.hsCode,
+    rawValueByHeader(row, CUSTOMS_TARIFF_HEADER_ALIASES)
+  );
+}
 function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAnalysis {
   return {
     ...analysis,
     columns: (analysis.columns || []).map((col) => {
-      if (String(col.field || "") !== "ignore" && !isSnCodHeader(col.header)) return col;
-      if (!isSnCodHeader(col.header)) return col;
-      return { ...col, field: SN_COD_FIELD, label: "S/N/COD", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if (isCustomsTariffHeader(col.header)) return { ...col, field: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if (isSnCodHeader(col.header)) return { ...col, field: SN_COD_FIELD, label: "S/N/COD", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      return col;
     }),
   };
 }
@@ -133,8 +188,19 @@ function applySnCodColumnMapping(rows: AifParsedRow[], analysis: AifWorkbookAnal
     return { ...row, normalized: { ...(row.normalized || {}), snCod: value, sn_cod: value } };
   });
 }
+function applyCustomsTariffColumnMapping(rows: AifParsedRow[], analysis: AifWorkbookAnalysis | null): AifParsedRow[] {
+  const tariffColumn = (analysis?.columns || []).find((col) => String(col.field) === String(CUSTOMS_TARIFF_FIELD));
+  if (!tariffColumn) return rows;
+  return rows.map((row) => {
+    const raw = (row.raw || {}) as Record<string, unknown>;
+    const value = rawValueByExactHeader(raw, tariffColumn.header);
+    if (!value) return row;
+    const normalized = assignCustomsTariffCode({ ...(row.normalized || {}) }, value);
+    return { ...row, normalized };
+  });
+}
 function applyAifColumnMappingWithSnCod(rows: AifParsedRow[], analysis: AifWorkbookAnalysis, supplier?: AifSupplier | null) {
-  return applySnCodColumnMapping(applyAifColumnMapping(rows, analysis, supplier || undefined), analysis);
+  return applyCustomsTariffColumnMapping(applySnCodColumnMapping(applyAifColumnMapping(rows, analysis, supplier || undefined), analysis), analysis);
 }
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
@@ -773,6 +839,7 @@ export default function AllInIncoming(_props: Props) {
   const [approvedRows, setApprovedRows] = useState<Record<string, boolean>>({});
   const [manualProductCode, setManualProductCode] = useState("");
   const [manualSnCod, setManualSnCod] = useState("");
+  const [manualCustomsTariffCode, setManualCustomsTariffCode] = useState("");
   const [manualTitle, setManualTitle] = useState("");
   const [manualBrandCode, setManualBrandCode] = useState("");
   const [manualCategoryCode, setManualCategoryCode] = useState("");
@@ -954,6 +1021,8 @@ export default function AllInIncoming(_props: Props) {
         normalized.colorTypeCode = found.code || normalized.colorTypeCode || "";
       }
     }
+    const tariffCode = customsTariffCodeFromRow({ ...row, normalized });
+    if (tariffCode) assignCustomsTariffCode(normalized, tariffCode);
     const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
     if (normalizedSize) normalized.size = normalizedSize;
     return { ...row, normalized };
@@ -1032,6 +1101,9 @@ export default function AllInIncoming(_props: Props) {
       normalized.snCod = snCod;
       normalized.sn_cod = snCod;
     }
+
+    const customsTariffCode = customsTariffCodeFromRow({ ...row, raw, normalized });
+    if (customsTariffCode) assignCustomsTariffCode(normalized, customsTariffCode);
 
     const brandCode = firstNonEmptyText(normalized.brandCode, row?.brand_code, row?.brandCode);
     const brandName = firstNonEmptyText(normalized.brandName, row?.brand_name, row?.brandName);
@@ -1243,6 +1315,7 @@ export default function AllInIncoming(_props: Props) {
           normalized.categoryName = category ? categoryLabel(category) : "";
         }
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
+        if (field === "customsTariffCode") assignCustomsTariffCode(normalized as Record<string, any>, value);
         return applyProductCodeAndBrandColor({ ...row, normalized });
       })
     );
@@ -1258,6 +1331,8 @@ export default function AllInIncoming(_props: Props) {
     if (normalized.sellPrice !== undefined && normalized.sellPrice !== null && normalized.sellPrice !== "") {
       normalized.sellPriceGrossRon = toNumber(normalized.sellPrice);
     }
+    const tariffCode = customsTariffCodeFromRow(row);
+    if (tariffCode) assignCustomsTariffCode(normalized, tariffCode);
     const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
     if (normalizedSize) normalized.size = normalizedSize;
     return normalizeAifRowSize({ ...row, normalized }) as AifParsedRow;
@@ -1385,6 +1460,7 @@ export default function AllInIncoming(_props: Props) {
   function resetManualRowForm() {
     setManualProductCode("");
     setManualSnCod("");
+    setManualCustomsTariffCode("");
     setManualTitle("");
     setManualBrandCode(defaultBrandCode);
     setManualCategoryCode(defaultCategoryCode);
@@ -1535,6 +1611,12 @@ export default function AllInIncoming(_props: Props) {
         productCode: manualProductCode,
         snCod: manualSnCod,
         sn_cod: manualSnCod,
+        customsTariffCode: manualCustomsTariffCode,
+        customs_tariff_code: manualCustomsTariffCode,
+        tariffCode: manualCustomsTariffCode,
+        tariff_code: manualCustomsTariffCode,
+        hsCode: manualCustomsTariffCode,
+        hs_code: manualCustomsTariffCode,
         title: manualTitle,
         brandCode,
         categoryCode,
@@ -1555,6 +1637,12 @@ export default function AllInIncoming(_props: Props) {
         modelCode: manualProductCode.trim(),
         snCod: manualSnCod.trim(),
         sn_cod: manualSnCod.trim(),
+        customsTariffCode: manualCustomsTariffCode.trim(),
+        customs_tariff_code: manualCustomsTariffCode.trim(),
+        tariffCode: manualCustomsTariffCode.trim(),
+        tariff_code: manualCustomsTariffCode.trim(),
+        hsCode: manualCustomsTariffCode.trim(),
+        hs_code: manualCustomsTariffCode.trim(),
         titleRo: manualTitle.trim(),
         brandCode,
         brandName: brand?.name || "",
@@ -2939,12 +3027,15 @@ export default function AllInIncoming(_props: Props) {
               <div className="rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/74">
                 Manuális bevételezéshez tölts ki egy terméksort, majd add hozzá az előnézethez. Mentés előtt ugyanúgy ellenőrizhető és kijelölhető, mint az importált sor.
               </div>
-              <div className="grid gap-3 lg:grid-cols-5">
+              <div className="grid gap-3 lg:grid-cols-6">
                 <label className={label}>Termékkód
                   <input className={`${input} w-full`} value={manualProductCode} onChange={(e) => setManualProductCode(e.target.value)} placeholder="pl. UA-123" />
                 </label>
                 <label className={label}>S/N/COD
                   <input className={`${input} w-full`} value={manualSnCod} onChange={(e) => setManualSnCod(e.target.value)} placeholder="belső azonosító" />
+                </label>
+                <label className={label}>Vámtarifa kód
+                  <input className={`${input} w-full`} value={manualCustomsTariffCode} onChange={(e) => setManualCustomsTariffCode(e.target.value)} placeholder="pl. 61102091" />
                 </label>
                 <label className={label}>Terméknév
                   <input className={`${input} w-full`} value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Termék megnevezése" />
@@ -3189,7 +3280,7 @@ export default function AllInIncoming(_props: Props) {
                       </div>
 
                       <div className="grid gap-1.5">
-                        <div className="grid grid-cols-[0.45fr,0.55fr,1fr] gap-1.5">
+                        <div className="grid grid-cols-[0.42fr,0.48fr,0.5fr,1fr] gap-1.5">
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Kód</span>
                             <input className={`${compactInput} w-full`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} />
@@ -3197,6 +3288,10 @@ export default function AllInIncoming(_props: Props) {
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>S/N/COD</span>
                             <input className={`${compactInput} w-full`} value={valueString((n as any).snCod || (n as any).sn_cod)} onChange={(e) => updateRowField(globalIndex, "snCod", e.target.value)} />
+                          </label>
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Vámkód</span>
+                            <input className={`${compactInput} w-full`} value={valueString((n as any).customsTariffCode || (n as any).customs_tariff_code || (n as any).tariffCode || (n as any).hsCode)} onChange={(e) => updateRowField(globalIndex, "customsTariffCode", e.target.value)} />
                           </label>
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Név</span>
