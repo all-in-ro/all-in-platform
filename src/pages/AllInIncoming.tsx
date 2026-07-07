@@ -1897,11 +1897,27 @@ export default function AllInIncoming(_props: Props) {
     setMessage("");
     try {
       const result = await apiAifCommitImportBatch(batch.id);
+      const committedRows = Array.isArray((result as any).committedRowResults)
+        ? (result as any).committedRowResults
+        : Array.isArray((result as any).committedRows)
+          ? (result as any).committedRows
+          : [];
+      const committedVariantIds = Array.isArray((result as any).variantIds)
+        ? (result as any).variantIds
+        : Array.isArray((result as any).committedVariantIds)
+          ? (result as any).committedVariantIds
+          : committedRows.map((row: any) => row?.variantId || row?.variant_id).filter(Boolean);
+      const committedTotalQty = Number((result as any).committedTotalQty || committedRows.reduce((sum: number, row: any) => sum + toNumber(row?.qty), 0) || 0);
       notifyWarehouseShowAllAfterIncoming({
         importBatchId: batch.id,
         receptionId: (batch as any).reception_id || selectedReceptionId || null,
         committed: (result as any).committed ?? null,
         failedCount: (result as any).failedCount ?? null,
+        variantIds: Array.from(new Set(committedVariantIds.map((id: unknown) => String(id || "").trim()).filter(Boolean))),
+        committedRows: committedRows.length || Number((result as any).committedRows || (result as any).committed || 0),
+        committedRowResults: committedRows,
+        rowCount: committedRows.length || Number((result as any).committed || 0),
+        totalQty: committedTotalQty || null,
       });
       await Promise.all([loadBatches(), loadReceptions()]);
       const failedCount = Number((result as any).failedCount || (result as any).failedRows?.length || 0);
