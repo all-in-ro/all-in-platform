@@ -31,12 +31,10 @@ const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07
 const panelHead = "flex items-center justify-between gap-3 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const tableIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/16 bg-white/[0.07] text-white/84 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:-translate-y-px hover:border-[#7bd7d4]/50 hover:bg-[#2a8d8b]/24 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
-const tableDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/35 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:-translate-y-px hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const tableIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
-const tableDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
+const warehouseListIconButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
+const warehouseListDangerButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
@@ -56,7 +54,7 @@ const taxonomyDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 r
 const taxonomyField = "grid gap-1.5 text-[11px] text-white/72";
 const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
 const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-emerald-200/50";
-const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
+const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
 const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariantActions:v1";
@@ -4312,24 +4310,24 @@ export default function AllInWarehouse() {
                 </div>
               )}
               <div className="hidden overflow-auto rounded-xl border border-white/20 bg-[#465163] lg:block">
-                <table className="w-full min-w-[1100px] table-fixed text-left text-[13px]">
+                <table className="min-w-[1120px] w-full table-fixed text-left text-[12px]">
                   <colgroup>
-                    <col style={{ width: 42 }} />
-                    <col style={{ width: 76 }} />
-                    <col style={{ width: 110 }} />
-                    <col />
-                    <col style={{ width: 112 }} />
-                    <col style={{ width: 86 }} />
-                    <col style={{ width: 62 }} />
-                    <col style={{ width: 104 }} />
-                    <col style={{ width: 92 }} />
-                    <col style={{ width: 98 }} />
-                    <col style={{ width: 64 }} />
-                    <col style={{ width: 76 }} />
+                    <col style={{ width: "42px" }} />
+                    <col style={{ width: "62px" }} />
+                    <col style={{ width: "94px" }} />
+                    <col style={{ width: "250px" }} />
+                    <col style={{ width: "118px" }} />
+                    <col style={{ width: "92px" }} />
+                    <col style={{ width: "58px" }} />
+                    <col style={{ width: "98px" }} />
+                    <col style={{ width: "88px" }} />
+                    <col style={{ width: "92px" }} />
+                    <col style={{ width: "62px" }} />
+                    <col style={{ width: "86px" }} />
                   </colgroup>
                   <thead className="bg-[#2f3a4c] text-[10px] uppercase tracking-[0.08em] text-white/72">
                     <tr>
-                      <th className="w-10 px-2 py-2.5 text-center align-middle font-normal">
+                      <th className="px-2 py-3 text-center align-middle font-normal">
                         <input
                           className={selectBox}
                           type="checkbox"
@@ -4340,17 +4338,17 @@ export default function AllInWarehouse() {
                           title="Az aktuális oldal termékeinek kijelölése"
                         />
                       </th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Kép</th>
-                      <th className="px-2 py-2.5 text-left align-middle font-normal">Márka</th>
-                      <th className="px-2 py-2.5 text-left align-middle font-normal">Termék</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Kategória</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Szín</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Méret</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Készlet</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Vételár</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Eladási ár</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Állapot</th>
-                      <th className="px-2 py-2.5 text-center align-middle font-normal">Műv.</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Kép</th>
+                      <th className="px-2 py-3 text-left align-middle font-normal">Márka</th>
+                      <th className="px-2 py-3 text-left align-middle font-normal">Terméknév</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Kategória</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Szín</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Méret</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Készlet</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Vételár</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Eladási ár</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Áll.</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Műv.</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/12 align-middle">
@@ -4362,9 +4360,9 @@ export default function AllInWarehouse() {
                       <tr
                         key={it.variant_id}
                         data-aif-variant-id={variantId}
-                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} scroll-mt-32 align-middle transition-colors hover:bg-[#617084]`}
+                        className={`${isHighlighted ? "bg-amber-400/18 ring-2 ring-inset ring-amber-200/75" : isSelected ? "bg-[#2a8d8b]/18 ring-1 ring-inset ring-[#2a8d8b]/45" : "odd:bg-[#526071] even:bg-[#4c5869]"} scroll-mt-32 align-middle hover:bg-[#617084]`}
                       >
-                        <td className="px-2 py-2 text-center align-middle">
+                        <td className="px-2 py-2.5 text-center align-middle">
                           <input
                             className={selectBox}
                             type="checkbox"
@@ -4373,28 +4371,35 @@ export default function AllInWarehouse() {
                             aria-label={`${it.title_ro || "Termék"} kijelölése`}
                           />
                         </td>
-                        <td className="px-2 py-2 text-center align-middle">{it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-11 w-11 rounded-lg object-cover shadow-sm" /> : <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={17} /></div>}</td>
-                        <td className="px-2 py-2 text-left align-middle"><span className="block truncate" title={it.brand_name || "-"}>{it.brand_name || "-"}</span></td>
-                        <td className="min-w-0 px-3 py-2.5 text-left align-middle">
-                          <div className="min-w-0">
-                            <button className="block w-full truncate text-left font-medium text-white transition hover:text-[#cffffd] focus:outline-none focus:text-[#cffffd]" type="button" title={it.title_ro || "-"} onClick={() => openDetail(it.variant_id)}>{it.title_ro || "-"}</button>
-                            <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 text-xs text-white/45">
-                              <span className="min-w-0 max-w-[260px] truncate">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
-                              <VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} />
-                            </div>
+                        <td className="px-2 py-2.5 text-center align-middle">
+                          {it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-11 w-11 rounded-lg object-cover" /> : <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={17} /></div>}
+                        </td>
+                        <td className="truncate px-2 py-2.5 text-left align-middle" title={it.brand_name || ""}>{it.brand_name || "-"}</td>
+                        <td className="min-w-0 px-2 py-2.5 text-left align-middle">
+                          <button
+                            className="block max-w-full truncate text-left text-[13px] leading-5 text-white hover:text-[#cffffd] focus:outline-none focus:underline"
+                            onClick={() => openDetail(it.variant_id)}
+                            title={it.title_ro || "Termék részletei"}
+                            type="button"
+                          >
+                            {it.title_ro || "-"}
+                          </button>
+                          <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden text-[11px] leading-4 text-white/45">
+                            <span className="min-w-0 truncate">{it.barcode ? `Vonalkód: ${it.barcode}` : "Nincs vonalkód"}</span>
+                            <span className="shrink-0"><VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
                           </div>
                         </td>
-                        <td className="px-2 py-2.5 text-center align-middle"><span className="block truncate" title={it.category_name_hu || it.category_name_ro || "-"}>{it.category_name_hu || it.category_name_ro || "-"}</span></td>
-                        <td className="px-2 py-2.5 text-center align-middle"><span className="block truncate" title={colorDisplay(it.color_name, it.color_code)}>{colorDisplay(it.color_name, it.color_code)}</span></td>
-                        <td className="px-2 py-2.5 text-center align-middle font-medium whitespace-nowrap">{it.size || "-"}</td>
-                        <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><span className="inline-flex w-full justify-center"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span></td>
-                        <td className="px-2 py-2 text-center align-middle tabular-nums">{money(it.buy_price)}</td>
-                        <td className="px-2 py-2 text-center align-middle tabular-nums">{money(it.sell_price)}</td>
-                        <td className="px-2 py-2 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
+                        <td className="truncate px-2 py-2.5 text-center align-middle" title={it.category_name_hu || it.category_name_ro || ""}>{it.category_name_hu || it.category_name_ro || "-"}</td>
+                        <td className="truncate px-2 py-2.5 text-center align-middle" title={colorDisplay(it.color_name, it.color_code)}>{colorDisplay(it.color_name, it.color_code)}</td>
+                        <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
+                        <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
+                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap">{money(it.buy_price)}</td>
+                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap">{money(it.sell_price)}</td>
+                        <td className="px-2 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
                         <td className="px-2 py-2.5 text-center align-middle">
                           <div className="flex items-center justify-center gap-1.5">
-                            <button className={tableIconBtn} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={14} /></button>
-                            <button className={tableDangerIconBtn} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={14} /></button>
+                            <button className={warehouseListIconButton} onClick={() => openDetail(it.variant_id)} title="Részletek" aria-label="Részletek" type="button"><Edit3 size={15} /></button>
+                            <button className={warehouseListDangerButton} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                           </div>
                         </td>
                       </tr>
@@ -4431,7 +4436,7 @@ export default function AllInWarehouse() {
                     <div className="flex gap-3">
                       {it.image_url ? <img src={it.image_url} alt="" className="h-20 w-20 rounded-xl object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={20} /></div>}
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm">{it.title_ro || "-"}</p>
+                        <button className="block max-w-full truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <StockQtyButton item={it} />
@@ -4440,8 +4445,8 @@ export default function AllInWarehouse() {
                       </div>
                     </div>
                     <div className="mt-3 flex justify-end gap-2">
-                      <button className={`${tableIconBtn} h-9 w-9`} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={15} /></button>
-                      <button className={`${tableDangerIconBtn} h-9 w-9`} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={15} /></button>
+                      <button className={`${warehouseListIconButton} h-9 w-9`} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={15} /></button>
+                      <button className={`${warehouseListDangerButton} h-9 w-9`} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={15} /></button>
                     </div>
                   </article>
                   );
@@ -4699,15 +4704,15 @@ export default function AllInWarehouse() {
             <div className="space-y-3 p-4">
               <p className="text-sm text-white/70">Válaszd ki, melyik munkalistára kerüljön a kijelölt termék.</p>
               <div className="grid gap-2">
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-3 py-3 text-left text-sm text-white hover:bg-[#2a8d8b]/26" onClick={() => assignSelectedItemToAction(selectedActionTarget, "label")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2 py-2 text-left text-sm text-white hover:bg-[#2a8d8b]/26" onClick={() => assignSelectedItemToAction(selectedActionTarget, "label")} type="button">
                   <span className="inline-flex items-center gap-2"><Barcode size={16} /> Vonalkód / címke</span>
                   <span className="text-xs text-white/55">címkelista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-3 py-3 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "order")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "order")} type="button">
                   <span className="inline-flex items-center gap-2"><ClipboardList size={16} /> Rendelés / PDF</span>
                   <span className="text-xs text-white/55">rendelési lista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-3 py-3 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "move")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "move")} type="button">
                   <span className="inline-flex items-center gap-2"><PackageCheck size={16} /> Készletmozgatás</span>
                   <span className="text-xs text-white/55">átadási lista</span>
                 </button>
@@ -5196,7 +5201,7 @@ export default function AllInWarehouse() {
                       </label>
                     );
                   })}
-                  {!stockLocationRows.length && <p className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-3 py-3 text-sm text-amber-100">Nincs aktív célhely. Előbb vegyél fel legalább egy aktív lokációt a törzsadatoknál.</p>}
+                  {!stockLocationRows.length && <p className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-2 py-2 text-sm text-amber-100">Nincs aktív célhely. Előbb vegyél fel legalább egy aktív lokációt a törzsadatoknál.</p>}
                 </div>
               </section>
 
@@ -5223,7 +5228,7 @@ export default function AllInWarehouse() {
               <button className={taxonomySmallBtn} onClick={() => setProductDeleteTarget(null)} type="button"><X size={14} /> Bezárás</button>
             </div>
             <div className="space-y-3 p-4">
-              <div className="rounded-xl border border-rose-200/24 bg-rose-500/10 px-3 py-3 text-sm text-white/86">
+              <div className="rounded-xl border border-rose-200/24 bg-rose-500/10 px-2 py-2 text-sm text-white/86">
                 <p className="text-white">{productDeleteTarget.title_ro || "Névtelen termék"}</p>
                 <p className="mt-1 text-xs text-white/62">{productDeleteTarget.brand_name || "Nincs márka"} • {productDeleteTarget.category_name_hu || productDeleteTarget.category_name_ro || "Nincs kategória"} • {productDeleteTarget.size || "nincs méret"}</p>
               </div>
