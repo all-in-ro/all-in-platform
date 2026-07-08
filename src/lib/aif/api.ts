@@ -15,6 +15,8 @@ export type AifBrand = {
 export type AifCategory = {
   id: string;
   code: string;
+  parent_id?: string | null;
+  parentId?: string | null;
   name_ro: string;
   name_hu?: string | null;
   aliases?: string[] | null;
@@ -307,6 +309,12 @@ export type AifInventoryItem = {
   gender?: string | null;
   category_code?: string | null;
   category_name_ro?: string | null;
+  subcategory_code?: string | null;
+  subcategory_name_ro?: string | null;
+  subcategory_name_hu?: string | null;
+  product_type?: string | null;
+  material?: string | null;
+  image_url?: string | null;
   color_code?: string | null;
   color_name?: string | null;
   size: string;
@@ -373,6 +381,11 @@ export type AifStockItem = {
   brand_code?: string | null;
   category_name_ro?: string | null;
   category_code?: string | null;
+  subcategory_code?: string | null;
+  subcategory_name_ro?: string | null;
+  subcategory_name_hu?: string | null;
+  product_type?: string | null;
+  material?: string | null;
   qty: number;
   reserved_qty: number;
   available_qty: number;
@@ -499,6 +512,9 @@ export type AifStockMovementItem = {
   brand_code?: string | null;
   category_name_ro?: string | null;
   category_code?: string | null;
+  subcategory_code?: string | null;
+  subcategory_name_ro?: string | null;
+  subcategory_name_hu?: string | null;
 };
 
 export type AifStockMovementTotals = {
@@ -820,13 +836,24 @@ export type AifManualProductInput = {
   categoryId?: string | null;
   categoryCode?: string | null;
   categoryName?: string | null;
+  parentCategoryCode?: string | null;
+  subCategoryId?: string | null;
+  subCategoryCode?: string | null;
+  subCategoryName?: string | null;
+  subcategoryId?: string | null;
+  subcategoryCode?: string | null;
+  subcategoryName?: string | null;
   gender?: string | null;
   productType?: string | null;
   season?: string | null;
   material?: string | null;
+  composition?: string | null;
+  longDescription?: string | null;
   shopifyTitle?: string | null;
   modelCode?: string | null;
   barcode?: string | null;
+  photoUrl?: string | null;
+  image_url?: string | null;
   snCod?: string | null;
   colorCode?: string | null;
   colorName?: string | null;
