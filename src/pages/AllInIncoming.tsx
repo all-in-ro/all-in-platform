@@ -3735,7 +3735,7 @@ export default function AllInIncoming(_props: Props) {
             }
           />
           <div className="mt-3 overflow-hidden rounded-xl border border-white/14">
-            <div className="hidden grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(205px,0.85fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
+            <div className="hidden grid-cols-[56px_minmax(0,1.8fr)_minmax(0,1.35fr)_minmax(0,0.95fr)_minmax(170px,0.75fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
               <div>Import</div>
               <div>Termék</div>
               <div>Besorolás</div>
@@ -3756,9 +3756,9 @@ export default function AllInIncoming(_props: Props) {
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
-                    className={errors.length ? "bg-red-500/10 px-2 py-2 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-2 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-2 hover:bg-[#4b596f]"}
+                    className={errors.length ? "bg-red-500/10 px-2 py-1.5 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-1.5 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-1.5 hover:bg-[#4b596f]"}
                   >
-                    <div className="grid gap-2 lg:grid-cols-[70px_minmax(210px,1.25fr)_minmax(250px,1.35fr)_minmax(220px,1fr)_minmax(205px,0.85fr)] lg:items-start">
+                    <div className="grid gap-2 lg:grid-cols-[56px_minmax(0,1.8fr)_minmax(0,1.35fr)_minmax(0,0.95fr)_minmax(170px,0.75fr)] lg:items-start">
                       <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 lg:block lg:bg-transparent lg:border-0 lg:px-0 lg:py-0">
                         <div className="flex items-center gap-2">
                           <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
@@ -3768,61 +3768,64 @@ export default function AllInIncoming(_props: Props) {
                       </div>
 
                       <div className="grid gap-1.5">
-                        <div className="grid grid-cols-[0.42fr,0.48fr,0.5fr,1fr] gap-1.5">
-                          <label className="grid gap-1">
+                        <div className="grid grid-cols-[0.42fr_0.48fr_0.5fr_1fr] gap-1.5">
+                          <label className="grid min-w-0 gap-1">
                             <span className={compactFieldLabel}>Kód</span>
                             <input className={`${compactInput} w-full`} value={valueString(n.supplierProductCode || n.modelCode)} onChange={(e) => updateRowField(globalIndex, "supplierProductCode", e.target.value)} />
                           </label>
-                          <label className="grid gap-1">
+                          <label className="grid min-w-0 gap-1">
                             <span className={compactFieldLabel}>S/N/COD</span>
                             <input className={`${compactInput} w-full`} value={valueString((n as any).snCod || (n as any).sn_cod)} onChange={(e) => updateRowField(globalIndex, "snCod", e.target.value)} />
                           </label>
-                          <label className="grid gap-1">
+                          <label className="grid min-w-0 gap-1">
                             <span className={compactFieldLabel}>Vámkód</span>
                             <input className={`${compactInput} w-full`} value={valueString((n as any).customsTariffCode || (n as any).customs_tariff_code || (n as any).tariffCode || (n as any).hsCode)} onChange={(e) => updateRowField(globalIndex, "customsTariffCode", e.target.value)} />
                           </label>
-                          <label className="grid gap-1">
+                          <label className="grid min-w-0 gap-1">
                             <span className={compactFieldLabel}>Név</span>
                             <input className={`${compactInput} w-full`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} />
                           </label>
                         </div>
-                        <div className="grid grid-cols-[0.6fr_1fr] gap-1.5">
-                          <label className="grid gap-1">
+                        <div className="grid grid-cols-[0.52fr_0.95fr_1.15fr] gap-1.5">
+                          <label className="grid min-w-0 gap-1">
                             <span className={compactFieldLabel}>Vonalkód</span>
                             <input className={`${compactInput} w-full`} value={valueString((n as any).barcode)} onChange={(e) => updateRowField(globalIndex, "barcode", e.target.value)} />
                           </label>
-                          <label className="grid gap-1">
+                          <label className="grid min-w-0 gap-1">
                             <span className={compactFieldLabel}>Fotó URL</span>
                             <input className={`${compactInput} w-full`} value={valueString((n as any).imageUrl || (n as any).image_url)} onChange={(e) => updateRowField(globalIndex, "imageUrl", e.target.value)} />
                           </label>
-                        </div>
-                        <div className="grid grid-cols-1 gap-1.5">
-                          <label className="grid gap-1">
-                            <span className={compactFieldLabel}>DESCRIERE / Leírás</span>
-                            <textarea className="min-h-[38px] rounded-md border border-white/18 bg-[#303b4e] px-2 py-1 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal" value={valueString((n as any).descriptionRo || (n as any).description_ro)} onChange={(e) => updateRowField(globalIndex, "descriptionRo", e.target.value)} />
+                          <label className="grid min-w-0 gap-1">
+                            <span className={`${compactFieldLabel} whitespace-nowrap`}>DESCRIERE / Leírás</span>
+                            <input
+                              className={`${compactInput} w-full`}
+                              value={valueString((n as any).descriptionRo || (n as any).description_ro)}
+                              onChange={(e) => updateRowField(globalIndex, "descriptionRo", e.target.value)}
+                              title={valueString((n as any).descriptionRo || (n as any).description_ro)}
+                            />
                           </label>
                         </div>
                         {errors.length ? <p className="rounded-md border border-amber-200/20 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-50">{errors.join(" ")}</p> : null}
                       </div>
 
-                      <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-[1fr,1.15fr,0.8fr]">
-                        <label className="grid gap-1">
-                          <span className={compactFieldLabel}>Márka</span>
+                      <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-[0.85fr_minmax(160px,1.45fr)_0.65fr]">
+                        <label className="grid min-w-0 gap-1">
+                          <span className={`${compactFieldLabel} whitespace-nowrap`}>Márka</span>
                           <select className={`${compactSelect} w-full`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
                             {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
                           </select>
                         </label>
-                        <label className="grid gap-1">
-                          <span className={compactFieldLabel}>Főkategória / alkategória</span>
-                          <select className={`${compactSelect} w-full`} value={categoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
+                        <label className="grid min-w-0 gap-1">
+                          <span className={`${compactFieldLabel} whitespace-nowrap`} title="Főkategória / alkategória">Főkat. / alkat.</span>
+                          <select className={`${compactSelect} w-full min-w-0 truncate`} value={categoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)} title={categoryValue || categoryHint || "Főkategória / alkategória"}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
                             {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{(c.parent_id || c.parentId) ? `↳ ${categoryLabel(c)}` : categoryLabel(c)}</option>)}
                           </select>
                           {categoryHint && !categoryValue ? <span className="text-[9px] text-amber-100">XLS: {categoryHint}</span> : null}
                         </label>
-                        <label className="grid gap-1">
-                          <span className={compactFieldLabel}>Nem</span>
+                        <label className="grid min-w-0 gap-1">
+                          <span className={`${compactFieldLabel} whitespace-nowrap`}>Nem</span>
                           <select className={`${compactSelect} w-full`} value={valueString(n.gender)} onChange={(e) => updateRowField(globalIndex, "gender", e.target.value)}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
                             {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
@@ -3830,7 +3833,7 @@ export default function AllInIncoming(_props: Props) {
                         </label>
                       </div>
 
-                      <div className="grid grid-cols-[1fr,0.65fr,0.55fr] gap-1.5">
+                      <div className="grid grid-cols-[1fr_0.65fr_0.55fr] gap-1.5">
                         <label className="grid gap-1">
                           <span className={compactFieldLabel}>Szín</span>
                           <input className={`${compactInput} w-full`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} />
@@ -3860,7 +3863,7 @@ export default function AllInIncoming(_props: Props) {
                         </label>
                       </div>
 
-                      <div className="grid grid-cols-[0.75fr,1fr] gap-1.5 lg:grid-cols-1">
+                      <div className="grid grid-cols-[0.75fr_1fr] gap-1.5 lg:grid-cols-1">
                         <div className="grid grid-cols-3 gap-1.5">
                           <label className="grid gap-1">
                             <span className={compactFieldLabel}>Darab</span>
