@@ -3,7 +3,20 @@ import express from "express";
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
-  router.use(express.json({ limit: "15mb" }));
+  const AIF_JSON_BODY_LIMIT = "80mb";
+
+  router.use(express.json({ limit: AIF_JSON_BODY_LIMIT }));
+  router.use(express.urlencoded({ extended: true, limit: AIF_JSON_BODY_LIMIT }));
+  router.use((err, _req, res, next) => {
+    if (err?.type === "entity.too.large" || err?.status === 413 || err?.statusCode === 413) {
+      return res.status(413).json({
+        error: `A küldött import csomag túl nagy. Limit: ${AIF_JSON_BODY_LIMIT}.`,
+        code: "payload_too_large",
+        limit: AIF_JSON_BODY_LIMIT,
+      });
+    }
+    return next(err);
+  });
 
   router.use((_req, res, next) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
