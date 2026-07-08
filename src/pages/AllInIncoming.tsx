@@ -87,6 +87,12 @@ type EditableImportField =
   | "titleRo"
   | "brandCode"
   | "categoryCode"
+  | "subCategoryCode"
+  | "productType"
+  | "descriptionRo"
+  | "material"
+  | "imageUrl"
+  | "barcode"
   | "gender"
   | "colorName"
   | "colorCode"
@@ -96,12 +102,16 @@ type EditableImportField =
   | "sellPrice";
 
 type AifBrandOption = { id: string; code?: string; name?: string; is_active?: boolean };
-type AifCategoryOption = { id: string; code?: string; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
+type AifCategoryOption = { id: string; code?: string; parent_id?: string | null; parentId?: string | null; name_ro?: string; name_hu?: string | null; name?: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifGenderOption = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type AifSupplierBrandLink = { id: string; supplier_id: string; brand_id: string; supplier_name?: string; brand_name?: string; is_preferred?: boolean; is_active?: boolean };
 
 const SN_COD_FIELD = "snCod" as AifColumnField;
 const CUSTOMS_TARIFF_FIELD = "customsTariffCode" as AifColumnField;
+const DESCRIPTION_FIELD = "descriptionRo" as AifColumnField;
+const IMAGE_URL_FIELD = "imageUrl" as AifColumnField;
+const BARCODE_FIELD = "barcode" as AifColumnField;
+const MATERIAL_FIELD = "material" as AifColumnField;
 const SN_COD_HEADER_KEYS = new Set([
   "s_n_cod", "sn_cod", "s_n", "sn", "s_n_ev_honap", "sn_ev_honap", "s_n_ev_hónap",
   "s_n_c_o_d", "serial_code", "cod_serial", "cod_serie", "cod_intern", "internal_code", "internal_id", "client_code"
@@ -114,11 +124,25 @@ const CUSTOMS_TARIFF_HEADER_ALIASES = [
   "Commodity code", "Intrastat code", "Intrastat"
 ];
 const CUSTOMS_TARIFF_HEADER_KEYS = new Set(CUSTOMS_TARIFF_HEADER_ALIASES.map((x) => snCodHeaderKey(x)));
+const DESCRIPTION_HEADER_ALIASES = [
+  "DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "DESCRIERE RO", "DESCR_RO", "RODESCRIPTION",
+  "LONG DESCRIPTION", "DESCRIPTION", "PRODUCT DESCRIPTION", "LEÍRÁS", "LEIRAS"
+];
+const IMAGE_URL_HEADER_ALIASES = [
+  "IMAGE", "IMAGE URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "URL POZA", "URL POZĂ",
+  "KÉP", "KEP", "KÉP URL", "KEP URL", "PICTURE", "PICTURE URL"
+];
+const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "EAN-13", "UPC", "SKU", "SHOPIFY SKU"];
+const MATERIAL_HEADER_ALIASES = ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ANYAG", "ÖSSZETÉTEL", "OSSZETETEL"];
 const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   const base = AIF_COLUMN_FIELD_OPTIONS as Array<{ value: AifColumnField; label: string }>;
   const out = [...base];
   if (!out.some((opt) => String(opt.value) === String(SN_COD_FIELD))) out.push({ value: SN_COD_FIELD, label: "S/N/COD" });
   if (!out.some((opt) => String(opt.value) === String(CUSTOMS_TARIFF_FIELD))) out.push({ value: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód" });
+  if (!out.some((opt) => String(opt.value) === String(BARCODE_FIELD))) out.push({ value: BARCODE_FIELD, label: "Vonalkód" });
+  if (!out.some((opt) => String(opt.value) === String(IMAGE_URL_FIELD))) out.push({ value: IMAGE_URL_FIELD, label: "Fotó URL" });
+  if (!out.some((opt) => String(opt.value) === String(DESCRIPTION_FIELD))) out.push({ value: DESCRIPTION_FIELD, label: "Leírás / DESCRIERE" });
+  if (!out.some((opt) => String(opt.value) === String(MATERIAL_FIELD))) out.push({ value: MATERIAL_FIELD, label: "Összetétel" });
   return out;
 })();
 function snCodHeaderKey(value: unknown) {
@@ -146,6 +170,26 @@ function isCustomsTariffHeader(value: unknown) {
     ((key.includes("tarif") || key.includes("tariff") || key.includes("vamal") || key.includes("customs")) && key.includes("cod")) ||
     key === "hs" || key === "hscode" || key === "hs_code" ||
     key === "cn_code" || key === "nc_code";
+}
+function headerMatchesAny(value: unknown, aliases: string[]) {
+  const key = snCodHeaderKey(value);
+  return Boolean(key && aliases.some((alias) => snCodHeaderKey(alias) === key));
+}
+function isDescriptionHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, DESCRIPTION_HEADER_ALIASES) || (key.includes("descr") && !key.includes("rodescr"));
+}
+function isImageUrlHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, IMAGE_URL_HEADER_ALIASES) || (key.includes("image") || key.includes("foto") || key.includes("poza") || key.includes("picture")) && key.includes("url");
+}
+function isBarcodeHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, BARCODE_HEADER_ALIASES) || key === "ean" || key === "ean13" || key.includes("barcode") || key.includes("vonal");
+}
+function isMaterialHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, MATERIAL_HEADER_ALIASES) || key.includes("compoz") || key.includes("composition") || key.includes("material");
 }
 function rawValueByExactHeader(raw: Record<string, unknown> | undefined | null, header: unknown) {
   if (!raw || typeof raw !== "object") return "";
@@ -192,6 +236,10 @@ function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAn
     columns: (analysis.columns || []).map((col) => {
       if (isCustomsTariffHeader(col.header)) return { ...col, field: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isSnCodHeader(col.header)) return { ...col, field: SN_COD_FIELD, label: "S/N/COD", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if (isBarcodeHeader(col.header)) return { ...col, field: BARCODE_FIELD, label: "Vonalkód", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
+      if (isImageUrlHeader(col.header)) return { ...col, field: IMAGE_URL_FIELD, label: "Fotó URL", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
+      if (isDescriptionHeader(col.header)) return { ...col, field: DESCRIPTION_FIELD, label: "Leírás / DESCRIERE", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
+      if (isMaterialHeader(col.header)) return { ...col, field: MATERIAL_FIELD, label: "Összetétel", confidence: Math.max(Number(col.confidence || 0), 92), warnings: [] };
       return col;
     }),
   };
@@ -217,8 +265,44 @@ function applyCustomsTariffColumnMapping(rows: AifParsedRow[], analysis: AifWork
     return { ...row, normalized };
   });
 }
+function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: AifWorkbookAnalysis | null): AifParsedRow[] {
+  const columns = analysis?.columns || [];
+  const fieldByHeader = (field: AifColumnField) => columns.find((col) => String(col.field) === String(field));
+  const barcodeColumn = fieldByHeader(BARCODE_FIELD);
+  const imageColumn = fieldByHeader(IMAGE_URL_FIELD);
+  const descriptionColumn = fieldByHeader(DESCRIPTION_FIELD);
+  const materialColumn = fieldByHeader(MATERIAL_FIELD);
+  if (!barcodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
+  return rows.map((row) => {
+    const raw = (row.raw || {}) as Record<string, unknown>;
+    const normalized = { ...(row.normalized || {}) } as Record<string, any>;
+    if (barcodeColumn) {
+      const value = rawValueByExactHeader(raw, barcodeColumn.header);
+      if (value) { normalized.barcode = value; normalized.supplierBarcode = value; }
+    }
+    if (imageColumn) {
+      const value = rawValueByExactHeader(raw, imageColumn.header);
+      if (value) { normalized.imageUrl = value; normalized.image_url = value; }
+    }
+    if (descriptionColumn) {
+      const value = rawValueByExactHeader(raw, descriptionColumn.header);
+      if (value) { normalized.descriptionRo = value; normalized.description_ro = value; }
+    }
+    if (materialColumn) {
+      const value = rawValueByExactHeader(raw, materialColumn.header);
+      if (value) { normalized.material = value; normalized.composition = value; }
+    }
+    return { ...row, normalized };
+  });
+}
 function applyAifColumnMappingWithSnCod(rows: AifParsedRow[], analysis: AifWorkbookAnalysis, supplier?: AifSupplier | null) {
-  return applyCustomsTariffColumnMapping(applySnCodColumnMapping(applyAifColumnMapping(rows, analysis, supplier || undefined), analysis), analysis);
+  return applyExtraManualImportColumnMapping(
+    applyCustomsTariffColumnMapping(
+      applySnCodColumnMapping(applyAifColumnMapping(rows, analysis, supplier || undefined), analysis),
+      analysis
+    ),
+    analysis
+  );
 }
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
@@ -227,7 +311,7 @@ const topCard = "rounded-2xl border border-white/24 bg-[#465164] px-4 py-3 shado
 const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-3 shadow-lg shadow-slate-950/15 sm:p-4 font-normal";
 const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20 font-normal";
 const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/86 font-normal";
-const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
+const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-[#67d4d1]/80 focus:ring-1 focus:ring-[#67d4d1]/30 [color-scheme:dark] font-normal";
 const selectInput = `${input} aif-native-select [color-scheme:dark]`;
 const optionStyle = { backgroundColor: "#303b4e", color: "#ffffff" };
 const mutedOptionStyle = { backgroundColor: "#303b4e", color: "#a9b3c7" };
@@ -609,6 +693,27 @@ function rawValueByHeader(row: any, headers: string[]) {
   return "";
 }
 
+const AIF_DESCRIPTION_HEADERS = ["DESCRIERE", "DESCRIERE RO", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "DESCR", "DESCR_RO", "DESCRIPTION", "LONG DESCRIPTION", "PRODUCT DESCRIPTION", "TERMÉK LEÍRÁS", "TERMEK LEIRAS", "LEÍRÁS", "LEIRAS"];
+const AIF_IMAGE_HEADERS = ["FOTO", "FOTÓ", "FOTO URL", "LINK FOTO", "URL FOTO", "POZA", "POZĂ", "POZA URL", "LINK POZA", "URL POZA", "PHOTO", "PHOTO URL", "IMAGE", "IMAGE URL", "IMAGE LINK", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG"];
+const AIF_SUBCATEGORY_HEADERS = ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "RODESCR", "RO DESCR", "RO_DESCR"];
+const AIF_PRODUCT_TYPE_HEADERS = ["TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "RODESCR", "RO DESCR", "RO_DESCR"];
+
+function rawDescriptionValue(row: any) {
+  return firstNonEmptyText(rawValueByHeader(row, AIF_DESCRIPTION_HEADERS));
+}
+
+function rawImageValue(row: any) {
+  return firstNonEmptyText(rawValueByHeader(row, AIF_IMAGE_HEADERS));
+}
+
+function rawSubCategoryValue(row: any) {
+  return firstNonEmptyText(rawValueByHeader(row, AIF_SUBCATEGORY_HEADERS));
+}
+
+function rawProductTypeValue(row: any) {
+  return firstNonEmptyText(rawValueByHeader(row, AIF_PRODUCT_TYPE_HEADERS));
+}
+
 const AIF_SIZE_OPTIONS = [
   "XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "6XL",
   "OSFM", "OSFA", "OS", "ONE SIZE", "UNI",
@@ -710,19 +815,20 @@ function savedRowRawObject(row: any) {
 function categoryCandidatesForRow(row: any) {
   const normalized = row?.normalized || row || {};
   return [
-    rawValueByHeader(row, ["RODESCR", "RO DESCR", "RO_DESCR", "DESCRIERE RO", "DESCR_RO", "TIP PRODUS", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE"]),
     (normalized as any).subCategoryCode,
     (normalized as any).subcategoryCode,
     (normalized as any).subCategoryName,
     (normalized as any).subcategoryName,
-    (normalized as any).productType,
-    (normalized as any).type,
+    (normalized as any).sourceSubCategory,
+    (normalized as any).sourceSubCategoryCode,
+    (normalized as any).sourceSubCategoryName,
+    rawSubCategoryValue(row),
+    (normalized as any).categoryCode,
+    (normalized as any).categoryName,
     (normalized as any).sourceCategory,
     (normalized as any).sourceCategoryCode,
     (normalized as any).sourceCategoryName,
-    (normalized as any).categoryCode,
-    (normalized as any).categoryName,
-    rawValueByHeader(row, ["CATEGORIE", "CATEGORY"]),
+    rawValueByHeader(row, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]),
   ].filter((x) => String(x ?? "").trim());
 }
 
@@ -859,8 +965,14 @@ export default function AllInIncoming(_props: Props) {
   const [manualSnCod, setManualSnCod] = useState("");
   const [manualCustomsTariffCode, setManualCustomsTariffCode] = useState("");
   const [manualTitle, setManualTitle] = useState("");
+  const [manualBarcode, setManualBarcode] = useState("");
+  const [manualImageUrl, setManualImageUrl] = useState("");
+  const [manualDescription, setManualDescription] = useState("");
+  const [manualMaterial, setManualMaterial] = useState("");
+  const [manualProductType, setManualProductType] = useState("");
   const [manualBrandCode, setManualBrandCode] = useState("");
   const [manualCategoryCode, setManualCategoryCode] = useState("");
+  const [manualSubCategoryCode, setManualSubCategoryCode] = useState("");
   const [manualGender, setManualGender] = useState("");
   const [manualColorName, setManualColorName] = useState("");
   const [manualColorCode, setManualColorCode] = useState("");
@@ -896,6 +1008,25 @@ export default function AllInIncoming(_props: Props) {
       .sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })),
     [categories]
   );
+
+  const mainCategories = useMemo(
+    () => activeCategories.filter((c) => !String((c as any).parent_id || (c as any).parentId || "").trim()),
+    [activeCategories]
+  );
+  const subCategories = useMemo(
+    () => activeCategories.filter((c) => String((c as any).parent_id || (c as any).parentId || "").trim()),
+    [activeCategories]
+  );
+  const subCategoriesForManualCategory = useMemo(() => {
+    const parentKey = String(manualCategoryCode || defaultCategoryCode || "").trim();
+    if (!parentKey) return subCategories;
+    const parent = activeCategories.find((c) => String(c.code || c.id) === parentKey || String(c.id) === parentKey);
+    const parentId = parent?.id ? String(parent.id) : "";
+    return subCategories.filter((c) => {
+      const pid = String((c as any).parent_id || (c as any).parentId || "").trim();
+      return !pid || !parentId || pid === parentId;
+    });
+  }, [activeCategories, subCategories, manualCategoryCode, defaultCategoryCode]);
   const activeGenderTypes = useMemo(() => genderTypes.filter((g) => g.is_active !== false), [genderTypes]);
   const brandOptionsForSupplier = useMemo(() => {
     if (!supplierId) return activeBrands;
@@ -1014,6 +1145,19 @@ export default function AllInIncoming(_props: Props) {
     if ((normalized.sellPrice === null || normalized.sellPrice === undefined || normalized.sellPrice === "") && String(rawSellPrice ?? "").trim()) {
       normalized.sellPrice = toNumber(rawSellPrice);
     }
+
+    const rawDescription = rawDescriptionValue(row);
+    if (rawDescription && !String(normalized.descriptionRo || normalized.description || "").trim()) normalized.descriptionRo = rawDescription;
+    const rawImage = rawImageValue(row);
+    if (rawImage && !String(normalized.imageUrl || normalized.image_url || "").trim()) normalized.imageUrl = rawImage;
+    const rawProductType = rawProductTypeValue(row);
+    if (rawProductType && !String(normalized.productType || normalized.product_type || "").trim()) normalized.productType = rawProductType;
+    const rawSubCategory = rawSubCategoryValue(row);
+    if (rawSubCategory && !String(normalized.sourceSubCategory || normalized.subCategoryName || normalized.subCategoryCode || "").trim()) normalized.sourceSubCategory = rawSubCategory;
+    const rawMaterial = rawValueByHeader(row, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ÖSSZETÉTEL", "OSSZETETEL"]);
+    if (rawMaterial && !String(normalized.material || normalized.composition || "").trim()) normalized.material = String(rawMaterial).trim();
+    const rawBarcode = rawValueByHeader(row, ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "COD BARE", "COD DE BARE"]);
+    if (rawBarcode && !String(normalized.barcode || "").trim()) normalized.barcode = String(rawBarcode).trim();
     const sourceProductCode = normalized.supplierProductCode || normalized.productCode || normalized.modelCode || rawProductCode;
     const split = splitCodProdus(sourceProductCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
@@ -1164,6 +1308,17 @@ export default function AllInIncoming(_props: Props) {
     const titleRo = firstNonEmptyText(normalized.titleRo, normalized.title, row?.title_ro, row?.title, row?.name, rawValueByHeader({ raw }, ["DENUMIRE", "DENUMIRE PRODUS", "PRODUCT NAME", "TITLE", "MEGNEVEZÉS", "MEGNEVEZES"]));
     if (titleRo) normalized.titleRo = titleRo;
 
+    const descriptionRo = firstNonEmptyText(normalized.descriptionRo, normalized.description, row?.description_ro, row?.description, rawDescriptionValue({ raw }));
+    if (descriptionRo) normalized.descriptionRo = descriptionRo;
+    const imageUrl = firstNonEmptyText(normalized.imageUrl, normalized.image_url, row?.image_url, row?.imageUrl, rawImageValue({ raw }));
+    if (imageUrl) normalized.imageUrl = imageUrl;
+    const productType = firstNonEmptyText(normalized.productType, normalized.product_type, row?.product_type, row?.productType, rawProductTypeValue({ raw }));
+    if (productType) normalized.productType = productType;
+    const material = firstNonEmptyText(normalized.material, normalized.composition, row?.material, row?.composition, rawValueByHeader({ raw }, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ÖSSZETÉTEL", "OSSZETETEL"]));
+    if (material) normalized.material = material;
+    const barcode = firstNonEmptyText(normalized.barcode, row?.barcode, row?.supplier_barcode, rawValueByHeader({ raw }, ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "COD BARE", "COD DE BARE"]));
+    if (barcode) normalized.barcode = barcode;
+
     const qty = firstNonEmptyText(normalized.qty, row?.qty, row?.quantity, rawValueByHeader({ raw }, ["QTY", "QUANTITY", "CANTITATE", "DARAB", "DB"]));
     if (qty) normalized.qty = qty;
 
@@ -1223,10 +1378,18 @@ export default function AllInIncoming(_props: Props) {
       const normalized = { ...(rowWithCode.normalized || {}) } as any;
       const nextSize = normalizeAifSizeValue(normalized.size || (rowWithCode as any).supplier_size);
       if (nextSize) normalized.size = nextSize;
+      const mainCategoryRaw = firstNonEmptyText(
+        rawValueByHeader(rowWithCode, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]),
+        normalized.parentCategoryCode,
+        normalized.parentCategoryName
+      );
+      if (mainCategoryRaw) normalized.parentCategoryName = normalized.parentCategoryName || mainCategoryRaw;
       const match = findCategoryForRow({ ...rowWithCode, normalized }, activeCategories);
       if (match) {
         normalized.categoryCode = String(match.code || match.id);
         normalized.categoryName = categoryLabel(match);
+        const parentId = String((match as any).parent_id || (match as any).parentId || "").trim();
+        if (parentId) normalized.parentCategoryId = parentId;
       } else if (String(normalized.categoryCode || normalized.categoryName || "").trim()) {
         normalized.sourceCategory = normalized.sourceCategory || normalized.categoryCode || normalized.categoryName;
         normalized.categoryCode = "";
@@ -1328,9 +1491,28 @@ export default function AllInIncoming(_props: Props) {
           const brand = activeBrands.find((b) => (b.code || b.id) === value);
           normalized.brandName = brand?.name || "";
         }
-        if (field === "categoryCode") {
+        if (field === "categoryCode" || field === "subCategoryCode") {
           const category = activeCategories.find((c) => (c.code || c.id) === value);
+          normalized.categoryCode = value;
           normalized.categoryName = category ? categoryLabel(category) : "";
+          if (field === "subCategoryCode") {
+            normalized.subCategoryCode = value;
+            normalized.subCategoryName = category ? categoryLabel(category) : "";
+            const parent = activeCategories.find((c) => String(c.id) === String((category as any)?.parent_id || (category as any)?.parentId || ""));
+            if (parent) {
+              normalized.parentCategoryCode = parent.code || parent.id;
+              normalized.parentCategoryName = categoryLabel(parent);
+            }
+          }
+        }
+        if (field === "subCategoryCode") {
+          const subCategory = activeCategories.find((c) => (c.code || c.id) === value);
+          normalized.subCategoryCode = value;
+          normalized.subCategoryName = subCategory ? categoryLabel(subCategory) : "";
+          if (value) {
+            normalized.categoryCode = value;
+            normalized.categoryName = subCategory ? categoryLabel(subCategory) : "";
+          }
         }
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
         if (field === "customsTariffCode") assignCustomsTariffCode(normalized as Record<string, any>, value);
@@ -1340,7 +1522,8 @@ export default function AllInIncoming(_props: Props) {
   }
 
   function rowWithSalesMeta(row: AifParsedRow): AifParsedRow {
-    const normalized = { ...(row.normalized || {}) } as any;
+    const enrichedRow = applyProductCodeAndBrandColor(row);
+    const normalized = { ...(enrichedRow.normalized || {}) } as any;
     const rate = salesTvaRate.trim() ? toNumber(salesTvaRate) : 0;
     normalized.sellPriceCurrency = "RON";
     normalized.sellPriceIsRon = true;
@@ -1353,7 +1536,7 @@ export default function AllInIncoming(_props: Props) {
     if (tariffCode) assignCustomsTariffCode(normalized, tariffCode);
     const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
     if (normalizedSize) normalized.size = normalizedSize;
-    return normalizeAifRowSize({ ...row, normalized }) as AifParsedRow;
+    return normalizeAifRowSize({ ...enrichedRow, normalized }) as AifParsedRow;
   }
 
   async function saveSalesTvaSettings() {
@@ -1480,8 +1663,14 @@ export default function AllInIncoming(_props: Props) {
     setManualSnCod("");
     setManualCustomsTariffCode("");
     setManualTitle("");
+    setManualBarcode("");
+    setManualImageUrl("");
+    setManualDescription("");
+    setManualMaterial("");
+    setManualProductType("");
     setManualBrandCode(defaultBrandCode);
     setManualCategoryCode(defaultCategoryCode);
+    setManualSubCategoryCode("");
     setManualGender(defaultGender);
     setManualColorName("");
     setManualColorCode("");
@@ -1613,10 +1802,13 @@ export default function AllInIncoming(_props: Props) {
   function addManualRow() {
     const nextRowNo = rows.length + 1;
     const brandCode = manualBrandCode || defaultBrandCode;
-    const categoryCode = manualCategoryCode || defaultCategoryCode;
+    const parentCategoryCode = manualCategoryCode || defaultCategoryCode;
+    const subCategoryCode = manualSubCategoryCode;
+    const categoryCode = parentCategoryCode;
     const gender = manualGender || defaultGender;
     const brand = activeBrands.find((b) => (b.code || b.id) === brandCode);
     const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
+    const parentCategory = activeCategories.find((c) => (c.code || c.id) === parentCategoryCode);
     const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
     const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
     const sellPrice = manualSellPrice.trim() ? Number(String(manualSellPrice).replace(",", ".")) : null;
@@ -1636,6 +1828,20 @@ export default function AllInIncoming(_props: Props) {
         hsCode: manualCustomsTariffCode,
         hs_code: manualCustomsTariffCode,
         title: manualTitle,
+        barcode: manualBarcode,
+        imageUrl: manualImageUrl,
+        image_url: manualImageUrl,
+        descriptionRo: manualDescription,
+        description_ro: manualDescription,
+        descriere: manualDescription,
+        material: manualMaterial,
+        composition: manualMaterial,
+        productType: manualProductType,
+        product_type: manualProductType,
+        parentCategoryCode,
+        parentCategoryName: parentCategory ? categoryLabel(parentCategory) : "",
+        subCategoryCode,
+        subCategoryName: subCategoryCode ? (category ? categoryLabel(category) : "") : "",
         brandCode,
         categoryCode,
         gender,
@@ -1662,6 +1868,19 @@ export default function AllInIncoming(_props: Props) {
         hsCode: manualCustomsTariffCode.trim(),
         hs_code: manualCustomsTariffCode.trim(),
         titleRo: manualTitle.trim(),
+        barcode: manualBarcode.trim(),
+        imageUrl: manualImageUrl.trim(),
+        image_url: manualImageUrl.trim(),
+        descriptionRo: manualDescription.trim(),
+        description_ro: manualDescription.trim(),
+        material: manualMaterial.trim(),
+        composition: manualMaterial.trim(),
+        productType: manualProductType.trim(),
+        product_type: manualProductType.trim(),
+        parentCategoryCode,
+        parentCategoryName: parentCategory ? categoryLabel(parentCategory) : "",
+        subCategoryCode,
+        subCategoryName: subCategoryCode ? (category ? categoryLabel(category) : "") : "",
         brandCode,
         brandName: brand?.name || "",
         categoryCode,
@@ -3071,15 +3290,20 @@ export default function AllInIncoming(_props: Props) {
                 <label className={label}>Termékkód
                   <input className={`${input} w-full`} value={manualProductCode} onChange={(e) => setManualProductCode(e.target.value)} placeholder="pl. UA-123" />
                 </label>
+                <label className={label}>Vonalkód / bárkód
+                  <input className={`${input} w-full`} value={manualBarcode} onChange={(e) => setManualBarcode(e.target.value)} placeholder="EAN / barcode" />
+                </label>
                 <label className={label}>S/N/COD
                   <input className={`${input} w-full`} value={manualSnCod} onChange={(e) => setManualSnCod(e.target.value)} placeholder="belső azonosító" />
                 </label>
                 <label className={label}>Vámtarifa kód
                   <input className={`${input} w-full`} value={manualCustomsTariffCode} onChange={(e) => setManualCustomsTariffCode(e.target.value)} placeholder="pl. 61102091" />
                 </label>
-                <label className={label}>Terméknév
+                <label className={`${label} lg:col-span-2`}>Terméknév
                   <input className={`${input} w-full`} value={manualTitle} onChange={(e) => setManualTitle(e.target.value)} placeholder="Termék megnevezése" />
                 </label>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-6">
                 <label className={label}>Márka
                   <select className={`${selectInput} w-full`} value={manualBrandCode || defaultBrandCode} onChange={(e) => setManualBrandCode(e.target.value)}>
                     <option style={mutedOptionStyle} value="">Nincs</option>
@@ -3087,19 +3311,31 @@ export default function AllInIncoming(_props: Props) {
                   </select>
                 </label>
                 <label className={label}>Kategória
-                  <select className={`${selectInput} w-full`} value={manualCategoryCode || defaultCategoryCode} onChange={(e) => setManualCategoryCode(e.target.value)}>
+                  <select className={`${selectInput} w-full`} value={manualCategoryCode || defaultCategoryCode} onChange={(e) => { const value = e.target.value; const found = (mainCategories.length ? mainCategories : activeCategories).find((c) => String(c.code || c.id) === value); setManualCategoryCode(value); setManualSubCategoryCode(""); if (found) setManualProductType((current) => current || categoryLabel(found)); }}>
                     <option style={mutedOptionStyle} value="">Nincs</option>
-                    {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                    {(mainCategories.length ? mainCategories : activeCategories).map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                   </select>
                 </label>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-7">
+                <label className={label}>Alkategória
+                  <select className={`${selectInput} w-full`} value={manualSubCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategoriesForManualCategory.find((c) => String(c.code || c.id) === value); setManualSubCategoryCode(value); if (found) setManualProductType((current) => current || categoryLabel(found)); }}>
+                    <option style={mutedOptionStyle} value="">Nincs</option>
+                    {subCategoriesForManualCategory.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                  </select>
+                </label>
+                <label className={label}>Terméktípus
+                  <input className={`${input} w-full`} value={manualProductType} onChange={(e) => setManualProductType(e.target.value)} placeholder="pl. tricou, hoodie" />
+                </label>
                 <label className={label}>Nem
                   <select className={`${selectInput} w-full`} value={manualGender || defaultGender} onChange={(e) => setManualGender(e.target.value)}>
                     <option style={mutedOptionStyle} value="">Nincs</option>
                     {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
                   </select>
                 </label>
+                <label className={label}>Fotó URL
+                  <input className={`${input} w-full`} value={manualImageUrl} onChange={(e) => setManualImageUrl(e.target.value)} placeholder="https://..." />
+                </label>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-7">
                 <label className={label}>Szín
                   <input className={`${input} w-full`} value={manualColorName} onChange={(e) => setManualColorName(e.target.value)} placeholder="pl. fekete" />
                 </label>
@@ -3117,6 +3353,14 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>Eladási ár RON
                   <input className={`${input} w-full`} value={manualSellPrice} onChange={(e) => setManualSellPrice(e.target.value)} placeholder="TVA-s ár" />
+                </label>
+                <label className={label}>Termék összetétele
+                  <input className={`${input} w-full`} value={manualMaterial} onChange={(e) => setManualMaterial(e.target.value)} placeholder="pl. 100% bumbac" />
+                </label>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-1">
+                <label className={label}>Termék leírás / DESCRIERE
+                  <textarea className="min-h-[82px] rounded-lg border border-white/24 bg-[#303b4e] px-3 py-2 text-sm text-white caret-white outline-none placeholder:text-white/50 focus:border-[#67d4d1]/80 focus:ring-1 focus:ring-[#67d4d1]/30 font-normal" value={manualDescription} onChange={(e) => setManualDescription(e.target.value)} placeholder="DESCRIERE / hosszú termékleírás" />
                 </label>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
@@ -3338,6 +3582,22 @@ export default function AllInIncoming(_props: Props) {
                             <input className={`${compactInput} w-full`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} />
                           </label>
                         </div>
+                        <div className="grid grid-cols-[0.6fr_1fr] gap-1.5">
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Vonalkód</span>
+                            <input className={`${compactInput} w-full`} value={valueString((n as any).barcode)} onChange={(e) => updateRowField(globalIndex, "barcode", e.target.value)} />
+                          </label>
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>Fotó URL</span>
+                            <input className={`${compactInput} w-full`} value={valueString((n as any).imageUrl || (n as any).image_url)} onChange={(e) => updateRowField(globalIndex, "imageUrl", e.target.value)} />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-1 gap-1.5">
+                          <label className="grid gap-1">
+                            <span className={compactFieldLabel}>DESCRIERE / Leírás</span>
+                            <textarea className="min-h-[38px] rounded-md border border-white/18 bg-[#303b4e] px-2 py-1 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal" value={valueString((n as any).descriptionRo || (n as any).description_ro)} onChange={(e) => updateRowField(globalIndex, "descriptionRo", e.target.value)} />
+                          </label>
+                        </div>
                         {errors.length ? <p className="rounded-md border border-amber-200/20 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-50">{errors.join(" ")}</p> : null}
                       </div>
 
@@ -3353,7 +3613,7 @@ export default function AllInIncoming(_props: Props) {
                           <span className={compactFieldLabel}>Kategória</span>
                           <select className={`${compactSelect} w-full`} value={categoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
-                            {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                            {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{(c.parent_id || c.parentId) ? `↳ ${categoryLabel(c)}` : categoryLabel(c)}</option>)}
                           </select>
                           {categoryHint && !categoryValue ? <span className="text-[9px] text-amber-100">XLS: {categoryHint}</span> : null}
                         </label>
