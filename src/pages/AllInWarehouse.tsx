@@ -849,7 +849,7 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "title", label: "Terméknév", hint: "A fő terméknév, lehet 1-2 sor." },
   { key: "barcode", label: "Vonalkód", hint: "Code128 belső AllIn / Shopify SKU azonosító." },
   { key: "description", label: "Anyag / összetétel", hint: "Csak az anyagösszetétel kerül a címkére. Ha nincs megadva, üres marad." },
-  { key: "category", label: "Kategória", hint: "Póló, pantaloni, pantofi, stb." },
+  { key: "category", label: "Főkategória", hint: "Nagy gyűjtőcsoport, pl. Accesorii / Îmbrăcăminte." },
   { key: "sizeColor", label: "Méret / szín", hint: "A variáns gyors azonosításához." },
   { key: "code", label: "Termékkód", hint: "Beszállítói / belső cikkszám." },
   { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
@@ -3250,7 +3250,7 @@ export default function AllInWarehouse() {
     if (snCodFilter.trim()) labels.push(`S/N/COD: ${snCodFilter.trim()}`);
     if (supplier !== "all") labels.push(`Beszállító: ${labelForMetaValue(suppliers, supplier)}`);
     if (brand !== "all") labels.push(`Márka: ${labelForMetaValue(brands, brand)}`);
-    if (category !== "all") labels.push(`Kategória: ${labelForMetaValue(categories, category)}`);
+    if (category !== "all") labels.push(`Főkategória: ${labelForMetaValue(categories, category)}`);
     if (gender !== "all") labels.push(`Nem: ${genderLabel(gender, genderTypes)}`);
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
     if (stockFilter !== "all") {
@@ -4494,7 +4494,7 @@ export default function AllInWarehouse() {
 
   async function saveCategoryForm() {
     if (!categoryForm.nameRo.trim()) {
-      setMessage("A kategória neve kötelező.");
+      setMessage("A főkategória neve kötelező.");
       return;
     }
     setTaxonomyBusy(true);
@@ -4508,9 +4508,9 @@ export default function AllInWarehouse() {
       });
       resetCategoryForm();
       await load();
-      setMessage("Kategória mentve.");
+      setMessage("Főkategória mentve.");
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült menteni a kategóriát.");
+      setMessage(e.message || "Nem sikerült menteni a főkategóriát.");
     } finally {
       setTaxonomyBusy(false);
     }
@@ -4519,11 +4519,11 @@ export default function AllInWarehouse() {
 
   async function saveSubCategoryForm() {
     if (!subCategoryForm.parentId) {
-      setMessage("A fő kategória kiválasztása kötelező az alkategóriához.");
+      setMessage("A főkategória kiválasztása kötelező az alkategóriához / terméktípushoz.");
       return;
     }
     if (!subCategoryForm.nameRo.trim()) {
-      setMessage("Az alkategória román neve kötelező.");
+      setMessage("Az alkategória / terméktípus román neve kötelező.");
       return;
     }
     setTaxonomyBusy(true);
@@ -4537,9 +4537,9 @@ export default function AllInWarehouse() {
       });
       resetSubCategoryForm();
       await load();
-      setMessage("Alkategória mentve.");
+      setMessage("Alkategória / terméktípus mentve.");
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült menteni az alkategóriát.");
+      setMessage(e.message || "Nem sikerült menteni az alkategóriát / terméktípust.");
     } finally {
       setTaxonomyBusy(false);
     }
@@ -5426,7 +5426,7 @@ export default function AllInWarehouse() {
                   {selectedSupplier && !brandOptions.length && <option value="" disabled>Nincs kapcsolt márka</option>}
                 </select>
               </label>
-              <label className={label}>Kategória
+              <label className={label}>Főkategória
                 <select className={select} value={category} onChange={(e) => setCategory(e.target.value)}>
                   <option value="all">Összes</option>
                   {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
@@ -5655,7 +5655,7 @@ export default function AllInWarehouse() {
                       <th className="px-2 py-3 text-center align-middle font-normal">Kép</th>
                       <th className="px-2 py-3 text-left align-middle font-normal">Márka</th>
                       <th className="px-2 py-3 text-left align-middle font-normal">Terméknév</th>
-                      <th className="px-2 py-3 text-center align-middle font-normal">Kategória</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Főkategória</th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Szín</th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Méret</th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Készlet</th>
@@ -5865,7 +5865,7 @@ export default function AllInWarehouse() {
 
             <div className="space-y-4 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A címke a román kategóriát és az anyagösszetételt használja. Ha nincs anyagösszetétel, az a rész üres marad.
+                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A címke a román főkategóriát és az anyagösszetételt használja. Ha nincs anyagösszetétel, az a rész üres marad.
               </div>
 
               <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
@@ -6543,13 +6543,13 @@ export default function AllInWarehouse() {
                           {brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}
                         </select>
                       </label>
-                      <label className={label}>Kategória
+                      <label className={label}>Főkategória
                         <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}>
                           <option value="">Nincs beállítva</option>
                           {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                         </select>
                       </label>
-                      <label className={label}>Alkategória
+                      <label className={label}>Alkategória / terméktípus
                         <select className={select} value={newProduct.subCategoryCode} onChange={(e) => {
                           const value = e.target.value;
                           const found = subCategories.find((c) => categoryValueMatches(c, value));
@@ -6565,7 +6565,7 @@ export default function AllInWarehouse() {
                           {!genderTypes.length && <option value="unisex">Unisex</option>}
                         </select>
                       </label>
-                      <label className={label}>Terméktípus<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
+                      <label className={label}>Import terméktípus / RODESCR<input className={input} value={newProduct.productType} onChange={(e) => setNewProduct((x) => ({ ...x, productType: e.target.value }))} /></label>
                       <label className={label}>Szezon<input className={input} value={newProduct.season} onChange={(e) => setNewProduct((x) => ({ ...x, season: e.target.value }))} /></label>
                       <label className={label}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} placeholder="pl. piele, textil, bumbac" /></label>
                     </div>
@@ -6644,7 +6644,7 @@ export default function AllInWarehouse() {
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-rose-200/24 bg-rose-500/10 px-2 py-2 text-sm text-white/86">
                 <p className="text-white">{productDeleteTarget.title_ro || "Névtelen termék"}</p>
-                <p className="mt-1 text-xs text-white/62">{productDeleteTarget.brand_name || "Nincs márka"} • {productDeleteTarget.category_name_hu || productDeleteTarget.category_name_ro || "Nincs kategória"} • {productDeleteTarget.size || "nincs méret"}</p>
+                <p className="mt-1 text-xs text-white/62">{productDeleteTarget.brand_name || "Nincs márka"} • {productDeleteTarget.category_name_hu || productDeleteTarget.category_name_ro || "Nincs főkategória"} • {productDeleteTarget.size || "nincs méret"}</p>
               </div>
               <p className="text-xs leading-relaxed text-white/68">A termék azonnal eltűnik a raktárlistából és az aktuális importlistából is. Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
               <div className="flex justify-end gap-2 pt-1">
@@ -6663,7 +6663,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, alkategóriák, nemek, színek, méretek, márkakódok és összetevők kezelése</h2>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Főkategóriák, alkategóriák / terméktípusok, nemek, színek, méretek, márkakódok és összetevők kezelése</h2>
                   <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
                 </div>
                 <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
@@ -6672,10 +6672,10 @@ export default function AllInWarehouse() {
             <div className="space-y-3 p-4">
               <div className="inline-flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-black/10 p-1">
                 <button className={taxonomyTab === "categories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("categories"); setOpenTaxonomyMenu(null); }}>
-                  Kategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{mainCategories.length || categories.length}</span>
+                  Főkategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{mainCategories.length || categories.length}</span>
                 </button>
                 <button className={taxonomyTab === "subCategories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("subCategories"); setOpenTaxonomyMenu(null); }}>
-                  Alkategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{subCategories.length}</span>
+                  Alkategóriák / terméktípusok <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{subCategories.length}</span>
                 </button>
                 <button className={taxonomyTab === "genders" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("genders"); setOpenTaxonomyMenu(null); }}>
                   Nemek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{genderTypes.length}</span>
@@ -6702,7 +6702,7 @@ export default function AllInWarehouse() {
                   <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm text-white/88">{categoryForm.id ? "Kategória módosítása" : "Új kategória"}</p>
+                        <p className="text-sm text-white/88">{categoryForm.id ? "Főkategória módosítása" : "Új főkategória"}</p>
                         <p className="text-[11px] text-white/50">Román és magyar megnevezés, import aliasokkal.</p>
                       </div>
                       {categoryForm.id && <button className={taxonomySmallBtn} onClick={resetCategoryForm}>Új</button>}
@@ -6723,7 +6723,7 @@ export default function AllInWarehouse() {
                   <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm text-white/88">{"Kategória lista"}</p>
+                        <p className="text-sm text-white/88">{"Főkategória lista"}</p>
                         <p className="text-[11px] text-white/50">Aktív elemek törzsrendi kezelése.</p>
                       </div>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{mainCategories.length} elem</span>
@@ -6747,7 +6747,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!mainCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív kategória.</p>}
+                      {!mainCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív főkategória.</p>}
                     </div>
                   </section>
                 </div>
@@ -6758,15 +6758,15 @@ export default function AllInWarehouse() {
                   <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm text-white/88">{subCategoryForm.id ? "Alkategória módosítása" : "Új alkategória"}</p>
-                        <p className="text-[11px] text-white/50">Fő kategóriához kötött alcsoport, import aliasokkal.</p>
+                        <p className="text-sm text-white/88">{subCategoryForm.id ? "Alkategória / terméktípus módosítása" : "Új alkategória / terméktípus"}</p>
+                        <p className="text-[11px] text-white/50">Főkategóriához kötött terméktípus, import aliasokkal.</p>
                       </div>
                       {subCategoryForm.id && <button className={taxonomySmallBtn} onClick={resetSubCategoryForm}>Új</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={`${taxonomyField} md:col-span-2`}>Fő kategória
+                      <label className={`${taxonomyField} md:col-span-2`}>Főkategória
                         <select className={taxonomyInput} value={subCategoryForm.parentId} onChange={(e) => setSubCategoryForm((x) => ({ ...x, parentId: e.target.value }))}>
-                          <option value="">Válassz kategóriát</option>
+                          <option value="">Válassz főkategóriát</option>
                           {(mainCategories.length ? mainCategories : categories).map((c) => <option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}
                         </select>
                       </label>
@@ -6779,14 +6779,14 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveSubCategoryForm} disabled={taxonomyBusy || !canSaveSubCategoryForm} title={!canSaveSubCategoryForm ? "Fő kategória és román megnevezés kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveSubCategoryForm} disabled={taxonomyBusy || !canSaveSubCategoryForm} title={!canSaveSubCategoryForm ? "Főkategória és román megnevezés kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
                   <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm text-white/88">Alkategória lista</p>
-                        <p className="text-[11px] text-white/50">Fő kategória szerint kötött aktív elemek.</p>
+                        <p className="text-sm text-white/88">Alkategória / terméktípus lista</p>
+                        <p className="text-[11px] text-white/50">Főkategória szerint kötött aktív terméktípusok.</p>
                       </div>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{subCategories.length} elem</span>
                     </div>
@@ -6798,7 +6798,7 @@ export default function AllInWarehouse() {
                               <p className="text-sm text-white">{categoryLabel(c)}</p>
                               {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
                             </div>
-                            <p className="mt-0.5 text-[11px] text-white/50">Fő kategória: {subCategoryParentLabel(c)} • RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
+                            <p className="mt-0.5 text-[11px] text-white/50">Főkategória: {subCategoryParentLabel(c)} • RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
                             {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
                           </div>
                           {taxonomyActionMenu({
@@ -6809,7 +6809,7 @@ export default function AllInWarehouse() {
                           })}
                         </div>
                       ))}
-                      {!subCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív alkategória.</p>}
+                      {!subCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív alkategória / terméktípus.</p>}
                     </div>
                   </section>
                 </div>
@@ -7281,10 +7281,10 @@ export default function AllInWarehouse() {
                       <label className={label}>Terméknév magyarul<input className={input} value={edit.titleHu} onChange={(e) => setEdit((x) => ({ ...x, titleHu: e.target.value }))} /></label>
                       <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
                       <label className={label}>Márka<select className={select} value={edit.brandCode} onChange={(e) => setEdit((x) => ({ ...x, brandCode: e.target.value }))}><option value="">Nincs beállítva</option>{brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}</select></label>
-                      <label className={label}>Kategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}><option value="">Nincs beállítva</option>{categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
-                      <label className={label}>Alkategória<select className={select} value={edit.subCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategories.find((c) => categoryValueMatches(c, value)); setEdit((x) => ({ ...x, subCategoryCode: value, productType: x.productType || (found ? categoryLabel(found) : "") })); }}><option value="">Nincs beállítva</option>{editSubCategoryOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
+                      <label className={label}>Főkategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}><option value="">Nincs beállítva</option>{categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
+                      <label className={label}>Alkategória / terméktípus<select className={select} value={edit.subCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategories.find((c) => categoryValueMatches(c, value)); setEdit((x) => ({ ...x, subCategoryCode: value, productType: x.productType || (found ? categoryLabel(found) : "") })); }}><option value="">Nincs beállítva</option>{editSubCategoryOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
                       <label className={label}>Nem<select className={select} value={edit.gender} onChange={(e) => setEdit((x) => ({ ...x, gender: e.target.value }))}>{genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}</select></label>
-                      <label className={label}>Terméktípus<input className={input} value={edit.productType} onChange={(e) => setEdit((x) => ({ ...x, productType: e.target.value }))} /></label>
+                      <label className={label}>Import terméktípus / RODESCR<input className={input} value={edit.productType} onChange={(e) => setEdit((x) => ({ ...x, productType: e.target.value }))} /></label>
                       <label className={label}>Szezon<input className={input} value={edit.season} onChange={(e) => setEdit((x) => ({ ...x, season: e.target.value }))} /></label>
                       <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
                     </div>
