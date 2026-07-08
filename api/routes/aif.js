@@ -2173,7 +2173,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       lines.push(csvLine(["Szamla vegosszeg", head.invoice_gross || ""]));
       lines.push("");
       lines.push(csvLine([
-        "Sor", "Allapot", "Termekkod", "Variant kod", "Nev", "Marka", "Kategoria", "Nem",
+        "Sor", "Allapot", "Termekkod", "Variant kod", "Nev", "Marka", "Fokategoria", "Nem",
         "Szin", "Szinkod", "Meret", "S/N/COD", "Darab", "Vetelar", "Vetelar RON", "Eladasi ar", "Eladasi ar RON", "Forras fajl"
       ]));
       for (const x of rows.rows) {
