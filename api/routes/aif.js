@@ -159,6 +159,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return run();
   }
 
+  async function ensureAifSubcategorySchema(client = pool) {
+    try {
+      await client.query(`ALTER TABLE IF EXISTS aif_categories ADD COLUMN IF NOT EXISTS parent_id uuid NULL REFERENCES aif_categories(id)`);
+      await client.query(`ALTER TABLE IF EXISTS aif_product_models ADD COLUMN IF NOT EXISTS subcategory_id uuid NULL REFERENCES aif_categories(id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_categories_parent_idx ON aif_categories (parent_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_product_models_subcategory_idx ON aif_product_models (subcategory_id)`);
+    } catch (e) {
+      console.error("AIF subcategory schema ensure warning", e);
+      throw e;
+    }
+  }
+
 
   // Kompatibilitási alias a régebbi segédfüggvényekhez; a tényleges méret-séma és alapértékek az ensureAifSizeTables() alatt vannak.
   async function ensureSizeMasterDataSchema(client = pool) {
@@ -167,6 +179,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.use(async (_req, res, next) => {
     try {
       await ensureSnCodSchema(pool);
+      await ensureAifSubcategorySchema(pool);
       await ensureSizeMasterDataSchema(pool);
       next();
     } catch (e) {
@@ -480,8 +493,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawProductCode = rawValueByHeaders(raw, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code", "cod produs"]);
     const rawTitle = rawValueByHeaders(raw, ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "NÉV", "NEV"]);
     const rawBrand = rawValueByHeaders(raw, ["BRAND", "MARCA", "MARCĂ", "MÁRKA", "MARKA", "BRAND NAME"]);
-    const rawProductType = rawValueByHeaders(raw, ["RODESCR", "RO DESCR", "RO_DESCR", "DESCRIERE RO", "DESCR_RO", "TIP PRODUS", "PRODUCT TYPE", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY"]);
+    const rawProductType = rawValueByHeaders(raw, ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TYPE", "MODEL TYPE"]);
     const rawCategory = rawValueByHeaders(raw, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]);
+    const rawSubcategory = rawValueByHeaders(raw, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALKATEGORIA", "ALKATEGÓRIA", "AL KATEGORIA", "AL-KATEGORIA"]);
+    const rawDescription = rawValueByHeaders(raw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "LONG DESCRIPTION", "DESCRIPTION", "PRODUCT DESCRIPTION", "LEIRAS", "LEÍRÁS"]);
+    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU"]);
     const rawGender = rawValueByHeaders(raw, ["GEN", "GENDER", "SEX", "DEPT", "DEPARTMENT", "DEPARTMENT NAME"]);
     const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
     const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
@@ -489,7 +505,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawQty = rawValueByHeaders(raw, ["CANTITATE", "CANT.", "CANT", "QTY", "QUANTITY", "DARAB", "DB", "BUC", "BUCĂȚI"]);
     const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
     const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
-    const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "FOTO"]);
+    const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "FOTO", "FOTO URL", "URL FOTO", "LINK FOTO", "POZA", "POZĂ", "POZA URL", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
     const supplierProductCodeRaw = emptyToNull(
       src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.code || input?.product_code || rawProductCode
     );
@@ -502,7 +518,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const supplierSize = emptyToNull(src.supplierSize || src.supplier_size || src.size || rawSize);
 
     const brandRaw = emptyToNull(src.brandCode || src.brand_code || src.brandId || src.brand_id || src.brandName || src.brand_name || src.brand || rawBrand);
-    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.categoryId || src.category_id || src.categoryName || src.category_name || src.productType || src.product_type || rawProductType || rawCategory);
+    const categoryRaw = emptyToNull(src.categoryCode || src.category_code || src.categoryId || src.category_id || src.categoryName || src.category_name || rawCategory || src.productType || src.product_type || rawProductType);
+    const subcategoryRaw = emptyToNull(src.subcategoryId || src.subcategory_id || src.subCategoryId || src.sub_category_id || src.subcategoryCode || src.subcategory_code || src.subCategoryCode || src.sub_category_code || src.subcategoryName || src.subcategory_name || src.subCategoryName || src.sub_category_name || rawSubcategory);
 
     const normalized = {
       brandId: emptyToNull(src.brandId || src.brand_id),
@@ -510,21 +527,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       brandName: emptyToNull(src.brandName || src.brand_name || src.brand || rawBrand),
       categoryId: emptyToNull(src.categoryId || src.category_id),
       categoryCode: categoryRaw ? normCode(categoryRaw) : null,
-      categoryName: emptyToNull(src.categoryName || src.category_name || src.category || src.productType || src.product_type || rawProductType || rawCategory),
+      categoryName: emptyToNull(src.categoryName || src.category_name || src.category || rawCategory || src.productType || src.product_type || rawProductType),
+        subcategoryId: emptyToNull(src.subcategoryId || src.subcategory_id || src.subCategoryId || src.sub_category_id),
+        subcategoryCode: rawSubcategory || src.subcategoryCode || src.subcategory_code || src.subCategoryCode || src.sub_category_code ? normCode(src.subcategoryCode || src.subcategory_code || src.subCategoryCode || src.sub_category_code || rawSubcategory) : null,
+        subcategoryName: emptyToNull(src.subcategoryName || src.subcategory_name || src.subCategoryName || src.sub_category_name || rawSubcategory),
       modelCode: emptyToNull(src.modelCode || src.model_code || productSplit.modelCode || supplierProductCode),
       titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title || rawTitle),
       titleHu: emptyToNull(src.titleHu || src.title_hu),
-      descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawProductType),
+      descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawDescription || rawProductType),
       genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender),
       gender: canonicalGender(src.gender || src.genderCode || src.gender_code || src.dept || src.department || src.departmentName || src.department_name || rawGender || "unisex"),
-      productType: emptyToNull(src.productType || src.product_type || rawProductType),
+      productType: emptyToNull(src.productType || src.product_type || src.subCategoryName || src.sub_category_name || rawProductType),
       season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
       material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || src.fabric || src.bodyFabric || src.body_fabric || rawMaterial),
       colorCode: emptyToNull(src.colorCode || src.color_code || supplierColorCode || productSplit.colorCode),
       colorName: emptyToNull(src.colorName || src.color_name),
       colorHex: emptyToNull(src.colorHex || src.color_hex),
       size: emptyToNull(src.size || supplierSize || rawSize),
-      barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
+      barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode || rawBarcode),
       snCod: snCodFromSource(src, raw),
       sn_cod: snCodFromSource(src, raw),
       customsTariffCode: customsTariffCodeFromSource(src, raw),
@@ -601,7 +621,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   async function findCategoryId(client, normalizedOrCode) {
     const raw = typeof normalizedOrCode === "object" && normalizedOrCode
-      ? emptyToNull(normalizedOrCode.categoryId || normalizedOrCode.categoryCode || normalizedOrCode.categoryName)
+      ? emptyToNull(
+          normalizedOrCode.parentCategoryId || normalizedOrCode.parent_category_id ||
+          normalizedOrCode.parentCategoryCode || normalizedOrCode.parent_category_code ||
+          normalizedOrCode.parentCategoryName || normalizedOrCode.parent_category_name ||
+          normalizedOrCode.categoryId || normalizedOrCode.category_id ||
+          normalizedOrCode.categoryCode || normalizedOrCode.category_code ||
+          normalizedOrCode.categoryName || normalizedOrCode.category_name ||
+          normalizedOrCode.subCategoryId || normalizedOrCode.sub_category_id ||
+          normalizedOrCode.subCategoryCode || normalizedOrCode.sub_category_code ||
+          normalizedOrCode.subCategoryName || normalizedOrCode.sub_category_name
+        )
       : emptyToNull(normalizedOrCode);
     if (!raw) return null;
     const code = normCode(raw);
@@ -623,6 +653,33 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return r.rows[0]?.id || null;
   }
 
+  async function findSubcategoryId(client, normalized = {}) {
+    const raw = emptyToNull(
+      normalized.subcategoryId || normalized.subcategory_id || normalized.subCategoryId || normalized.sub_category_id ||
+      normalized.subcategoryCode || normalized.subcategory_code || normalized.subCategoryCode || normalized.sub_category_code ||
+      normalized.subcategoryName || normalized.subcategory_name || normalized.subCategoryName || normalized.sub_category_name
+    );
+    if (!raw) return null;
+    const code = normCode(raw);
+    const parentRaw = emptyToNull(normalized.categoryId || normalized.category_id || normalized.categoryCode || normalized.category_code || normalized.categoryName || normalized.category_name);
+    const args = [raw, code];
+    let parentFilter = "";
+    if (parentRaw) {
+      args.push(parentRaw, normCode(parentRaw));
+      parentFilter = ` AND (parent_id IS NULL OR parent_id IN (SELECT id FROM aif_categories WHERE id::text=$3 OR code=$3 OR code=$4 OR lower(name_ro)=lower($3) OR lower(COALESCE(name_hu,''))=lower($3)))`;
+    }
+    const r = await client.query(
+      `SELECT id FROM aif_categories
+       WHERE (id::text=$1 OR code=$1 OR code=$2 OR lower(name_ro)=lower($1) OR lower(COALESCE(name_hu,''))=lower($1)
+          OR EXISTS (SELECT 1 FROM unnest(COALESCE(aliases, '{}'::text[])) a WHERE lower(a)=lower($1) OR lower(a)=lower($2)))
+         ${parentFilter}
+       ORDER BY parent_id IS NULL ASC, is_active DESC, sort_order ASC
+       LIMIT 1`,
+      args
+    );
+    return r.rows[0]?.id || null;
+  }
+
   function cleanModelLifecycleStatus(value, fallback = "active") {
     const raw = text(value || fallback).toLowerCase();
     return ["draft", "active", "archived"].includes(raw) ? raw : fallback;
@@ -637,6 +694,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const safeNormalized = { ...normalized, gender: normalized.gender ? normCode(normalized.gender) : "unisex" };
     const brandId = await ensureBrand(client, safeNormalized, supplierCode);
     const categoryId = await findCategoryId(client, safeNormalized);
+    const subcategoryId = await findSubcategoryId(client, safeNormalized);
     applyProductCodeSplit(safeNormalized);
     const baseModelCode = safeNormalized.modelCode || safeNormalized.supplierProductCode || safeNormalized.titleRo;
     const brandKey = normCode(safeNormalized.brandCode || safeNormalized.brandName || supplierCode || "aif");
@@ -657,6 +715,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_product_models SET
            brand_id = COALESCE($2, brand_id),
            category_id = COALESCE($3, category_id),
+           subcategory_id = COALESCE($13, subcategory_id),
            title_ro = $4,
            title_hu = COALESCE($5, title_hu),
            description_ro = COALESCE($6, description_ro),
@@ -685,6 +744,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           safeNormalized.material,
           safeNormalized.titleRo,
           modelUpdateStatus,
+          subcategoryId,
         ]
       );
       return id;
@@ -692,10 +752,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const r = await client.query(
       `INSERT INTO aif_product_models (
-         brand_id, category_id, model_code, title_ro, title_hu, description_ro,
+         brand_id, category_id, subcategory_id, model_code, title_ro, title_hu, description_ro,
          gender, product_type, season, material, shopify_title, status
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       VALUES ($1,$2,$13,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id`,
       [
         brandId,
@@ -710,6 +770,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         safeNormalized.material,
         safeNormalized.titleRo,
         modelCreateStatus,
+        subcategoryId,
       ]
     );
     return r.rows[0].id;
@@ -1039,7 +1100,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   async function categoryUsage(client, categoryId) {
     const r = await client.query(
       `SELECT
-         (SELECT count(*)::int FROM aif_product_models WHERE category_id=$1) AS product_models,
+         (SELECT count(*)::int FROM aif_product_models WHERE category_id=$1 OR subcategory_id=$1) AS product_models,
          (SELECT count(*)::int FROM aif_categories WHERE parent_id=$1) AS child_categories`,
       [categoryId]
     );
@@ -1783,6 +1844,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       sets.push(`sort_order=$${i++}`);
       args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
     }
+    if (body.parentId !== undefined || body.parent_id !== undefined || body.parentCode !== undefined || body.parent_code !== undefined) {
+      const parentInput = emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code);
+      let parentId = null;
+      if (parentInput) {
+        const parent = await pool.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [parentInput]);
+        if (!parent.rowCount) return res.status(400).json({ error: "parent category not found" });
+        if (String(parent.rows[0].id) === String(id)) return res.status(400).json({ error: "category cannot be its own parent" });
+        parentId = parent.rows[0].id;
+      }
+      sets.push(`parent_id=NULLIF($${i++}, '')::uuid`);
+      args.push(parentId || '');
+    }
     if (body.is_active !== undefined || body.isActive !== undefined) {
       sets.push(`is_active=$${i++}`);
       args.push(Boolean(body.is_active ?? body.isActive));
@@ -2273,7 +2346,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post("/color-types", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const nameRo = text(body.nameRo || body.name_ro || body.name || body.nameRoOfficial);
-    const code = normCode(body.code || nameRo);
+    let code = normCode(body.code || nameRo);
     const aliases = colorAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
     const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
     if (!nameRo) return res.status(400).json({ error: "color Romanian name required" });
@@ -2283,6 +2356,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `INSERT INTO aif_color_types (code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active)
          VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,true)
          ON CONFLICT (code) DO UPDATE SET
+           parent_id=EXCLUDED.parent_id,
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
            name_en=EXCLUDED.name_en,
@@ -2585,7 +2659,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post("/material-types", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const nameRo = text(body.nameRo || body.name_ro || body.name || body.nameRoOfficial);
-    const code = normCode(body.code || nameRo);
+    let code = normCode(body.code || nameRo);
     const aliases = materialAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
     const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
     if (!nameRo) return res.status(400).json({ error: "material Romanian name required" });
@@ -2595,6 +2669,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `INSERT INTO aif_material_types (code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active)
          VALUES ($1,$2,$3,$4,$5,$6::text[],$7,true)
          ON CONFLICT (code) DO UPDATE SET
+           parent_id=EXCLUDED.parent_id,
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
            name_en=EXCLUDED.name_en,
@@ -2951,6 +3026,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       sets.push(`name_hu=$${i++}`);
       args.push(emptyToNull(body.nameHu ?? body.name_hu));
     }
+    if (body.parentId !== undefined || body.parent_id !== undefined || body.parentCode !== undefined || body.parent_code !== undefined) {
+      sets.push(`parent_id=NULLIF($${i++}, '')::uuid`);
+      args.push(emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code) || '');
+    }
     if (body.code !== undefined) {
       const code = normCode(body.code).toUpperCase();
       if (!code) return res.status(400).json({ error: "size code required" });
@@ -2964,6 +3043,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (body.sortOrder !== undefined || body.sort_order !== undefined) {
       sets.push(`sort_order=$${i++}`);
       args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.parentId !== undefined || body.parent_id !== undefined || body.parentCode !== undefined || body.parent_code !== undefined) {
+      const parentInput = emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code);
+      let parentId = null;
+      if (parentInput) {
+        const parent = await pool.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [parentInput]);
+        if (!parent.rowCount) return res.status(400).json({ error: "parent category not found" });
+        if (String(parent.rows[0].id) === String(id)) return res.status(400).json({ error: "category cannot be its own parent" });
+        parentId = parent.rows[0].id;
+      }
+      sets.push(`parent_id=NULLIF($${i++}, '')::uuid`);
+      args.push(parentId || '');
     }
     if (body.is_active !== undefined || body.isActive !== undefined) {
       sets.push(`is_active=$${i++}`);
@@ -3208,17 +3299,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const nameRo = text(body.nameRo || body.name_ro || body.name);
     const nameHu = emptyToNull(body.nameHu || body.name_hu);
-    const code = normCode(body.code || nameRo);
+    let code = normCode(body.code || nameRo);
     const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
     const aliases = categoryAliasesFromInput(body.aliases || body.alias_list || body.aliasList);
     const shopifyHandle = emptyToNull(body.shopifyCollectionHandle || body.shopify_collection_handle);
+    const parentInput = emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code);
     if (!nameRo) return res.status(400).json({ error: "category name required" });
     if (!code) return res.status(400).json({ error: "category code required" });
     try {
+      let parentId = null;
+      if (parentInput) {
+        const parent = await pool.query(`SELECT id, code FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [parentInput]);
+        if (!parent.rowCount) return res.status(400).json({ error: "parent category not found" });
+        parentId = parent.rows[0].id;
+        if (!emptyToNull(body.code)) code = normCode(`${parent.rows[0].code || parentId}_${nameRo}`);
+      }
       const r = await pool.query(
-        `INSERT INTO aif_categories (code, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active)
-         VALUES ($1,$2,$3,$4::text[],$5,$6,true)
+        `INSERT INTO aif_categories (code, parent_id, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,$5::text[],$6,$7,true)
          ON CONFLICT (code) DO UPDATE SET
+           parent_id=EXCLUDED.parent_id,
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
            aliases=EXCLUDED.aliases,
@@ -3227,7 +3327,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            is_active=true,
            updated_at=now()
          RETURNING id, code, parent_id, name_ro, name_hu, aliases, shopify_collection_handle, sort_order, is_active, created_at, updated_at`,
-        [code, nameRo, nameHu, aliases, shopifyHandle, sortOrder]
+        [code, parentId, nameRo, nameHu, aliases, shopifyHandle, sortOrder]
       );
       res.json({ item: r.rows[0] });
     } catch (e) {
@@ -3262,6 +3362,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!code) return res.status(400).json({ error: "category code required" });
       sets.push(`code=$${i++}`);
       args.push(code);
+    }
+    if (body.parentId !== undefined || body.parent_id !== undefined || body.parentCode !== undefined || body.parent_code !== undefined || body.parentCategoryId !== undefined || body.parent_category_id !== undefined || body.parentCategoryCode !== undefined || body.parent_category_code !== undefined) {
+      const parentInput = emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code ?? body.parentCategoryId ?? body.parent_category_id ?? body.parentCategoryCode ?? body.parent_category_code);
+      let parentId = null;
+      if (parentInput) {
+        const parent = await pool.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [parentInput]);
+        if (!parent.rowCount) return res.status(400).json({ error: "parent category not found" });
+        if (String(parent.rows[0].id) === String(id)) return res.status(400).json({ error: "category cannot be its own parent" });
+        parentId = parent.rows[0].id;
+      }
+      sets.push(`parent_id=$${i++}`);
+      args.push(parentId);
     }
     if (body.shopifyCollectionHandle !== undefined || body.shopify_collection_handle !== undefined) {
       sets.push(`shopify_collection_handle=$${i++}`);
@@ -3386,6 +3498,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       sets.push(`sort_order=$${i++}`);
       args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
     }
+    if (body.parentId !== undefined || body.parent_id !== undefined || body.parentCode !== undefined || body.parent_code !== undefined) {
+      const parentInput = emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code);
+      let parentId = null;
+      if (parentInput) {
+        const parent = await pool.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [parentInput]);
+        if (!parent.rowCount) return res.status(400).json({ error: "parent category not found" });
+        if (String(parent.rows[0].id) === String(id)) return res.status(400).json({ error: "category cannot be its own parent" });
+        parentId = parent.rows[0].id;
+      }
+      sets.push(`parent_id=NULLIF($${i++}, '')::uuid`);
+      args.push(parentId || '');
+    }
     if (body.is_active !== undefined || body.isActive !== undefined) {
       sets.push(`is_active=$${i++}`);
       args.push(Boolean(body.is_active ?? body.isActive));
@@ -3504,6 +3628,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (body.sortOrder !== undefined || body.sort_order !== undefined) {
       sets.push(`sort_order=$${i++}`);
       args.push(toInt(body.sortOrder ?? body.sort_order) || 100);
+    }
+    if (body.parentId !== undefined || body.parent_id !== undefined || body.parentCode !== undefined || body.parent_code !== undefined) {
+      const parentInput = emptyToNull(body.parentId ?? body.parent_id ?? body.parentCode ?? body.parent_code);
+      let parentId = null;
+      if (parentInput) {
+        const parent = await pool.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [parentInput]);
+        if (!parent.rowCount) return res.status(400).json({ error: "parent category not found" });
+        if (String(parent.rows[0].id) === String(id)) return res.status(400).json({ error: "category cannot be its own parent" });
+        parentId = parent.rows[0].id;
+      }
+      sets.push(`parent_id=NULLIF($${i++}, '')::uuid`);
+      args.push(parentId || '');
     }
     if (body.is_active !== undefined || body.isActive !== undefined) {
       sets.push(`is_active=$${i++}`);
@@ -3725,7 +3861,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                   FROM ranked
                   WHERE rn=1
                   ORDER BY name ASC`),
-      pool.query(`SELECT id, code, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY sort_order ASC, name_ro ASC`),
+      pool.query(`SELECT id, code, parent_id, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY parent_id NULLS FIRST, sort_order ASC, name_ro ASC`),
       pool.query(`SELECT code, name, aliases, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
@@ -4360,7 +4496,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(NULLIF(m.model_code,''), NULLIF(rw.normalized->>'modelCode',''), rw.supplier_product_code) AS model_code,
            COALESCE(NULLIF(m.title_ro,''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.normalized->>'productName',''), NULLIF(rw.raw->>'ARTICOL',''), rw.supplier_product_code) AS title_ro,
            COALESCE(NULLIF(m.title_hu,''), NULLIF(rw.normalized->>'titleHu','')) AS title_hu,
-           COALESCE(NULLIF(m.description_ro,''), NULLIF(rw.normalized->>'descriptionRo',''), NULLIF(rw.raw->>'RODESCR','')) AS description_ro,
+           COALESCE(NULLIF(m.description_ro,''), NULLIF(rw.normalized->>'descriptionRo',''), NULLIF(rw.raw->>'DESCRIERE',''), NULLIF(rw.raw->>'DESCRIERE PRODUS',''), NULLIF(rw.raw->>'DESCRIPTION','')) AS description_ro,
            COALESCE(NULLIF(m.shopify_title,''), NULLIF(rw.normalized->>'shopifyTitle',''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.raw->>'ARTICOL','')) AS shopify_title,
            COALESCE(NULLIF(m.gender,''), NULLIF(rw.normalized->>'gender',''), NULLIF(rw.raw->>'GEN','')) AS gender,
            COALESCE(NULLIF(m.product_type,''), NULLIF(rw.normalized->>'productType',''), NULLIF(rw.raw->>'RODESCR','')) AS product_type,
@@ -4447,7 +4583,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(NULLIF(m.model_code,''), NULLIF(rw.normalized->>'modelCode',''), rw.supplier_product_code) AS model_code,
            COALESCE(NULLIF(m.title_ro,''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.normalized->>'productName',''), NULLIF(rw.raw->>'ARTICOL',''), NULLIF((sm.raw->'raw')->>'ARTICOL',''), rw.supplier_product_code) AS title_ro,
            COALESCE(NULLIF(m.title_hu,''), NULLIF(rw.normalized->>'titleHu','')) AS title_hu,
-           COALESCE(NULLIF(m.description_ro,''), NULLIF(rw.normalized->>'descriptionRo',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'RODESCR','')) AS description_ro,
+           COALESCE(NULLIF(m.description_ro,''), NULLIF(rw.normalized->>'descriptionRo',''), NULLIF(rw.raw->>'DESCRIERE',''), NULLIF(rw.raw->>'DESCRIERE PRODUS',''), NULLIF(rw.raw->>'DESCRIPTION',''), NULLIF((sm.raw->'raw')->>'DESCRIERE',''), NULLIF((sm.raw->'raw')->>'DESCRIPTION','')) AS description_ro,
            COALESCE(NULLIF(m.shopify_title,''), NULLIF(rw.normalized->>'shopifyTitle',''), NULLIF(rw.normalized->>'titleRo',''), NULLIF(rw.raw->>'ARTICOL',''), NULLIF((sm.raw->'raw')->>'ARTICOL','')) AS shopify_title,
            COALESCE(NULLIF(m.gender,''), NULLIF(rw.normalized->>'gender',''), NULLIF(rw.raw->>'GEN',''), NULLIF((sm.raw->'raw')->>'GEN','')) AS gender,
            COALESCE(NULLIF(m.product_type,''), NULLIF(rw.normalized->>'productType',''), NULLIF(rw.raw->>'RODESCR',''), NULLIF((sm.raw->'raw')->>'RODESCR','')) AS product_type,
@@ -5591,6 +5727,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post(["/variants", "/variants/manual", "/manual-products"], requireAuthed, async (req, res) => {
     const body = req.body || {};
     const src = body.normalized && typeof body.normalized === "object" ? body.normalized : body;
+    const raw = body.raw && typeof body.raw === "object" ? body.raw : body;
+    const rawBrand = rawValueByHeaders(raw, ["BRAND", "MARCA", "MARCĂ", "MÁRKA", "MARKA", "BRAND NAME"]);
+    const rawCategory = rawValueByHeaders(raw, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]);
+    const rawProductType = rawValueByHeaders(raw, ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TYPE"]);
+    const rawSubcategory = rawValueByHeaders(raw, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE"]);
+    const rawDescription = rawValueByHeaders(raw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "DESCRIERE RO", "DESCR_RO", "DESCRIPTION", "LONG DESCRIPTION", "PRODUCT DESCRIPTION", "DETALII", "LEIRAS", "LEÍRÁS"]);
+    const rawTitle = rawValueByHeaders(raw, ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "NÉV", "NEV"]);
+    const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
+    const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
+    const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
+    const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
+    const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "URL POZA", "LINK FOTO", "LINK POZA", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
+    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU"]);
     const stockRowsInput = Array.isArray(body.stockRows)
       ? body.stockRows
       : Array.isArray(body.stock_rows)
@@ -5618,6 +5767,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
+      await ensureAifSubcategorySchema(client);
       await ensureAifSizeTables(client);
 
       let fallbackLocation = null;
@@ -5666,28 +5816,48 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
+      const manualRaw = body.raw && typeof body.raw === "object" ? body.raw : body;
+      const rawProductCode = rawValueByHeaders(manualRaw, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "PRODUCT CODE", "TERMÉKKÓD", "TERMEKKOD"]);
+      const rawTitle = rawValueByHeaders(manualRaw, ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "NÉV", "NEV", "TERMÉKNÉV", "TERMEKNEV"]);
+      const rawBrand = rawValueByHeaders(manualRaw, ["BRAND", "MARCA", "MARCĂ", "MÁRKA", "MARKA", "BRAND NAME"]);
+      const rawProductType = rawValueByHeaders(manualRaw, ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TIP", "TYPE"]);
+      const rawCategory = rawValueByHeaders(manualRaw, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]);
+      const rawSubcategory = rawValueByHeaders(manualRaw, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "ALCATEGORIA"]);
+      const rawDescription = rawValueByHeaders(manualRaw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "LONG DESCRIPTION", "DESCRIPTION", "PRODUCT DESCRIPTION", "LEIRAS", "LEÍRÁS", "TERMÉK LEÍRÁS", "TERMEK LEIRAS"]);
+      const rawMaterial = rawValueByHeaders(manualRaw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "TERMÉK ÖSSZETÉTELE", "TERMEK OSSZETETELE"]);
+      const rawSeason = rawValueByHeaders(manualRaw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
+      const rawImageUrl = rawValueByHeaders(manualRaw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTÓ", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "LINK FOTO", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
+      const rawBarcode = rawValueByHeaders(manualRaw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "COD BARE", "COD DE BARE", "EAN", "EAN13", "GTIN", "UPC", "VONALKOD", "VONALKÓD", "SKU"]);
+      const rawBuyPrice = rawValueByHeaders(manualRaw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
+      const rawSellPrice = rawValueByHeaders(manualRaw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
+
       const normalized = {
         brandId: emptyToNull(src.brandId || src.brand_id),
         brandCode: emptyToNull(src.brandCode || src.brand_code || src.brand),
         brandName: emptyToNull(src.brandName || src.brand_name || src.brand || rawBrand),
         categoryId: emptyToNull(src.categoryId || src.category_id),
-        categoryCode: emptyToNull(src.categoryCode || src.category_code || src.category),
-        categoryName: emptyToNull(src.categoryName || src.category_name || src.category || src.productType || src.product_type || rawProductType || rawCategory),
-        modelCode: emptyToNull(src.modelCode || src.model_code || src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.barcode || src.titleRo || src.title_ro || src.name),
+        categoryCode: emptyToNull(src.categoryCode || src.category_code || src.category || src.parentCategoryCode || src.parent_category_code || rawCategory),
+        categoryName: emptyToNull(src.categoryName || src.category_name || src.category || src.parentCategoryName || src.parent_category_name || rawCategory),
+        parentCategoryCode: emptyToNull(src.parentCategoryCode || src.parent_category_code || src.categoryCode || src.category_code || rawCategory),
+        parentCategoryName: emptyToNull(src.parentCategoryName || src.parent_category_name || src.categoryName || src.category_name || rawCategory),
+        subcategoryId: emptyToNull(src.subcategoryId || src.subcategory_id || src.subCategoryId || src.sub_category_id),
+        subcategoryCode: rawSubcategory || src.subcategoryCode || src.subcategory_code || src.subCategoryCode || src.sub_category_code ? normCode(src.subcategoryCode || src.subcategory_code || src.subCategoryCode || src.sub_category_code || rawSubcategory) : null,
+        subcategoryName: emptyToNull(src.subcategoryName || src.subcategory_name || src.subCategoryName || src.sub_category_name || rawSubcategory),
+        modelCode: emptyToNull(src.modelCode || src.model_code || src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || rawProductCode || src.barcode || src.titleRo || src.title_ro || src.name),
         titleRo: emptyToNull(src.titleRo || src.title_ro || src.nameRo || src.name_ro || src.productName || src.product_name || src.name || src.title || rawTitle),
         titleHu: emptyToNull(src.titleHu || src.title_hu),
-        descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawProductType),
+        descriptionRo: emptyToNull(src.descriptionRo || src.description_ro || src.description || rawDescription || rawProductType),
         genderRaw: emptyToNull(src.gender || src.genderCode || src.gender_code),
         gender: canonicalGender(src.gender || src.genderCode || src.gender_code || "unisex"),
-        productType: emptyToNull(src.productType || src.product_type || rawProductType),
+        productType: emptyToNull(src.productType || src.product_type || src.subCategoryName || src.sub_category_name || rawProductType),
         season: emptyToNull(src.season || src.collection || src.colectie || rawSeason),
-        material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro),
+        material: emptyToNull(src.material || src.composition || src.compositionRo || src.composition_ro || src.materialComposition || src.material_composition || rawMaterial),
         shopifyTitle: emptyToNull(src.shopifyTitle || src.shopify_title || src.titleRo || src.title_ro),
         colorCode: emptyToNull(src.colorCode || src.color_code || src.supplierColorCode || src.supplier_color_code),
         colorName: emptyToNull(src.colorName || src.color_name),
         colorHex: emptyToNull(src.colorHex || src.color_hex),
         size: emptyToNull(src.size || src.standardSize || src.standard_size || src.supplierSize || src.supplier_size),
-        barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode),
+        barcode: emptyToNull(src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode || rawBarcode),
         snCod: snCodFromSource(src, body.raw || body),
         sn_cod: snCodFromSource(src, body.raw || body),
         customsTariffCode: customsTariffCodeFromSource(src, body.raw || body),
@@ -5696,8 +5866,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         sellPrice: toMoney(src.sellPrice ?? src.sell_price ?? rawSellPrice),
         compareAtPrice: toMoney(src.compareAtPrice ?? src.compare_at_price),
         weightGrams: toInt(src.weightGrams ?? src.weight_grams),
-        imageUrl: emptyToNull(src.imageUrl || src.image_url || rawImageUrl),
-        supplierProductCode: emptyToNull(src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.modelCode || src.model_code),
+        imageUrl: emptyToNull(src.imageUrl || src.image_url || src.photoUrl || src.photo_url || rawImageUrl),
+        supplierProductCode: emptyToNull(src.supplierProductCode || src.supplier_product_code || src.productCode || src.product_code || src.modelCode || src.model_code || rawProductCode),
         supplierVariantCode: emptyToNull(src.supplierVariantCode || src.supplier_variant_code || src.variantCode || src.variant_code),
         supplierColorCode: emptyToNull(src.supplierColorCode || src.supplier_color_code || src.colorCode || src.color_code),
         supplierSize: emptyToNull(src.supplierSize || src.supplier_size || src.size),
@@ -5788,6 +5958,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            m.season, m.material, m.shopify_title, m.shopify_handle, m.status AS model_status,
            b.id AS brand_id, b.name AS brand_name, b.code AS brand_code,
            c.id AS category_id, c.name_ro AS category_name_ro, c.name_hu AS category_name_hu, c.code AS category_code,
+           subc.id AS subcategory_id, subc.name_ro AS subcategory_name_ro, subc.name_hu AS subcategory_name_hu, subc.code AS subcategory_code,
            sc.supplier_id AS supplier_id,
            sc.supplier_product_code AS supplier_product_code,
            sc.supplier_product_code AS "supplierProductCode",
@@ -5803,6 +5974,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          JOIN aif_product_models m ON m.id = v.model_id
          LEFT JOIN aif_brands b ON b.id = m.brand_id
          LEFT JOIN aif_categories c ON c.id = m.category_id
+         LEFT JOIN aif_categories subc ON subc.id = m.subcategory_id
          LEFT JOIN LATERAL (
            SELECT sc.supplier_id, sc.supplier_product_code, sc.supplier_variant_code,
                   sc.supplier_color_code, sc.supplier_size, sc.supplier_barcode, sc.supplier_sku
@@ -6031,6 +6203,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             return res.status(400).json({ error: "category not found" });
           }
           addModel("category_id", cat.rows[0].id);
+        }
+      }
+
+      const subcategoryInput = body.subcategoryId ?? body.subcategory_id ?? body.subCategoryId ?? body.sub_category_id ?? body.subcategoryCode ?? body.subcategory_code ?? body.subCategoryCode ?? body.sub_category_code;
+      if (subcategoryInput !== undefined) {
+        const subcategory = emptyToNull(subcategoryInput);
+        if (!subcategory) {
+          addModel("subcategory_id", null);
+        } else {
+          const subcat = await client.query(`SELECT id FROM aif_categories WHERE id::text=$1 OR code=$1 LIMIT 1`, [subcategory]);
+          if (!subcat.rowCount) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ error: "subcategory not found" });
+          }
+          addModel("subcategory_id", subcat.rows[0].id);
         }
       }
 
@@ -6650,7 +6837,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          COALESCE(NULLIF(si.supplier_size,''), lid.supplier_size, NULLIF(lid.normalized->>'supplierSize',''), NULLIF(lid.normalized->>'size','')) AS supplier_size,
          COALESCE(NULLIF(m.title_ro,''), NULLIF(lid.normalized->>'titleRo',''), NULLIF(lid.normalized->>'productName',''), NULLIF(lid.raw->>'ARTICOL',''), lid.supplier_product_code) AS title_ro,
          COALESCE(NULLIF(m.title_hu,''), NULLIF(lid.normalized->>'titleHu','')) AS title_hu,
-         COALESCE(NULLIF(m.description_ro,''), NULLIF(lid.normalized->>'descriptionRo',''), NULLIF(lid.raw->>'RODESCR','')) AS description_ro,
+         COALESCE(NULLIF(m.description_ro,''), NULLIF(lid.normalized->>'descriptionRo',''), NULLIF(lid.raw->>'DESCRIERE',''), NULLIF(lid.raw->>'DESCRIERE PRODUS',''), NULLIF(lid.raw->>'DESCRIPTION','')) AS description_ro,
          COALESCE(NULLIF(m.shopify_title,''), NULLIF(lid.normalized->>'shopifyTitle',''), NULLIF(lid.normalized->>'titleRo',''), NULLIF(lid.raw->>'ARTICOL','')) AS shopify_title,
          COALESCE(NULLIF(m.gender,''), NULLIF(lid.normalized->>'gender',''), NULLIF(lid.raw->>'GEN','')) AS gender,
          COALESCE(NULLIF(m.product_type,''), NULLIF(lid.normalized->>'productType',''), NULLIF(lid.raw->>'RODESCR','')) AS product_type,
@@ -6659,9 +6846,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          m.status AS model_status,
          COALESCE(b.name, NULLIF(lid.normalized->>'brandName',''), NULLIF(lid.raw->>'BRAND','')) AS brand_name,
          COALESCE(b.code, NULLIF(lid.normalized->>'brandCode','')) AS brand_code,
-         COALESCE(c.name_ro, NULLIF(lid.normalized->>'categoryName',''), NULLIF(lid.raw->>'RODESCR',''), NULLIF(lid.raw->>'CATEGORIE','')) AS category_name_ro,
+         COALESCE(c.name_ro, NULLIF(lid.normalized->>'categoryName',''), NULLIF(lid.raw->>'CATEGORIE','')) AS category_name_ro,
          c.name_hu AS category_name_hu,
-         COALESCE(c.code, NULLIF(lid.normalized->>'categoryCode',''), NULLIF(lid.raw->>'RODESCR',''), NULLIF(lid.raw->>'CATEGORIE','')) AS category_code,
+         COALESCE(c.code, NULLIF(lid.normalized->>'categoryCode',''), NULLIF(lid.raw->>'CATEGORIE','')) AS category_code,
+         COALESCE(subc.name_ro, NULLIF(lid.normalized->>'subcategoryName',''), NULLIF(lid.normalized->>'subCategoryName',''), NULLIF(lid.raw->>'SUBCATEGORIE','')) AS subcategory_name_ro,
+         subc.name_hu AS subcategory_name_hu,
+         COALESCE(subc.code, NULLIF(lid.normalized->>'subcategoryCode',''), NULLIF(lid.normalized->>'subCategoryCode',''), NULLIF(lid.raw->>'SUBCATEGORIE','')) AS subcategory_code,
          COALESCE(v.color_code, lid.supplier_color_code, NULLIF(lid.normalized->>'colorCode',''), NULLIF(lid.normalized->>'supplierColorCode','')) AS color_code,
          COALESCE(v.color_name, NULLIF(lid.normalized->>'colorName','')) AS color_name,
          COALESCE(v.color_hex, NULLIF(lid.normalized->>'colorHex','')) AS color_hex,
@@ -6686,6 +6876,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
        LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
        LEFT JOIN stock_totals st ON st.variant_id=v.id
        LEFT JOIN committed_import ci ON ci.variant_id=v.id
        LEFT JOIN latest_import_detail lid ON lid.variant_id=v.id
