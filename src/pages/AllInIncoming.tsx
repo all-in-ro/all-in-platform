@@ -114,6 +114,10 @@ const DESCRIPTION_FIELD = "descriptionRo" as AifColumnField;
 const IMAGE_URL_FIELD = "imageUrl" as AifColumnField;
 const BARCODE_FIELD = "barcode" as AifColumnField;
 const MATERIAL_FIELD = "material" as AifColumnField;
+const TITLE_RO_FIELD = "titleRo" as AifColumnField;
+const PRODUCT_TYPE_FIELD = "productType" as AifColumnField;
+const BUY_PRICE_FIELD = "buyPrice" as AifColumnField;
+const SELL_PRICE_FIELD = "sellPrice" as AifColumnField;
 const SN_COD_HEADER_KEYS = new Set([
   "s_n_cod", "sn_cod", "s_n", "sn", "s_n_ev_honap", "sn_ev_honap", "s_n_ev_hónap",
   "s_n_c_o_d", "serial_code", "cod_serial", "cod_serie", "cod_intern", "internal_code", "internal_id", "client_code"
@@ -136,17 +140,30 @@ const IMAGE_URL_HEADER_ALIASES = [
 ];
 const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "EAN-13", "UPC", "SKU", "SHOPIFY SKU"];
 const MATERIAL_HEADER_ALIASES = ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ANYAG", "ÖSSZETÉTEL", "OSSZETETEL"];
+const TITLE_HEADER_ALIASES = ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "TITLE", "NÉV", "NEV", "MEGNEVEZÉS", "MEGNEVEZES"];
+const PRODUCT_TYPE_HEADER_ALIASES = ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "MODEL TYPE"];
+const BUY_PRICE_HEADER_ALIASES = ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PRET CUMPARARE", "PREȚ CUMPĂRARE", "PURCHASE PRICE", "BUY PRICE", "COST PRICE", "VÉTELÁR", "VETELAR"];
+const SELL_PRICE_HEADER_ALIASES = ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA", "SELL PRICE", "SALE PRICE", "SHOPIFY PRICE", "PRICE RON", "PRET RON", "ELADÁSI ÁR", "ELADASI AR"];
 const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   const base = AIF_COLUMN_FIELD_OPTIONS as Array<{ value: AifColumnField; label: string }>;
-  const out = [...base];
-  if (!out.some((opt) => String(opt.value) === String(SN_COD_FIELD))) out.push({ value: SN_COD_FIELD, label: "S/N/COD" });
-  if (!out.some((opt) => String(opt.value) === String(CUSTOMS_TARIFF_FIELD))) out.push({ value: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód" });
-  if (!out.some((opt) => String(opt.value) === String(BARCODE_FIELD))) out.push({ value: BARCODE_FIELD, label: "Vonalkód" });
-  if (!out.some((opt) => String(opt.value) === String(IMAGE_URL_FIELD))) out.push({ value: IMAGE_URL_FIELD, label: "Fotó URL" });
-  if (!out.some((opt) => String(opt.value) === String(DESCRIPTION_FIELD))) out.push({ value: DESCRIPTION_FIELD, label: "Leírás / DESCRIERE" });
-  if (!out.some((opt) => String(opt.value) === String(MATERIAL_FIELD))) out.push({ value: MATERIAL_FIELD, label: "Összetétel" });
+  const out = base.map((opt) => ({ ...opt }));
+  const ensureOption = (value: AifColumnField, label: string) => {
+    const found = out.find((opt) => String(opt.value) === String(value));
+    if (found) found.label = label;
+    else out.push({ value, label });
+  };
+  ensureOption(TITLE_RO_FIELD, "Terméknév");
+  ensureOption(SN_COD_FIELD, "S/N/COD");
+  ensureOption(CUSTOMS_TARIFF_FIELD, "Vámtarifa kód");
+  ensureOption(BARCODE_FIELD, "Vonalkód");
+  ensureOption(IMAGE_URL_FIELD, "Fotó URL");
+  ensureOption(DESCRIPTION_FIELD, "Leírás / DESCRIERE");
+  ensureOption(MATERIAL_FIELD, "Összetétel");
+  ensureOption(PRODUCT_TYPE_FIELD, "Import terméktípus / RODESCR");
+  ensureOption(BUY_PRICE_FIELD, "Vételár");
+  ensureOption(SELL_PRICE_FIELD, "Eladási ár");
   return out;
-})();
+})();;
 function snCodHeaderKey(value: unknown) {
   return String(value ?? "")
     .normalize("NFD")
@@ -193,6 +210,22 @@ function isMaterialHeader(value: unknown) {
   const key = snCodHeaderKey(value);
   return headerMatchesAny(value, MATERIAL_HEADER_ALIASES) || key.includes("compoz") || key.includes("composition") || key.includes("material");
 }
+function isTitleHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, TITLE_HEADER_ALIASES) || key === "articol" || key.includes("denumire") || key.includes("product_name");
+}
+function isProductTypeHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, PRODUCT_TYPE_HEADER_ALIASES) || key === "rodescr" || key.includes("product_type") || key.includes("tip_produs");
+}
+function isBuyPriceHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, BUY_PRICE_HEADER_ALIASES) || (key.includes("pret") && key.includes("achiz")) || key.includes("purchase_price") || key.includes("buy_price") || key.includes("vetelar");
+}
+function isSellPriceHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, SELL_PRICE_HEADER_ALIASES) || ((key.includes("pret") || key.includes("price")) && (key.includes("vanz") || key.includes("vinz") || key.includes("sell") || key.includes("sale")));
+}
 function rawValueByExactHeader(raw: Record<string, unknown> | undefined | null, header: unknown) {
   if (!raw || typeof raw !== "object") return "";
   const wanted = snCodHeaderKey(header);
@@ -236,10 +269,14 @@ function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAn
   return {
     ...analysis,
     columns: (analysis.columns || []).map((col) => {
+      if (isTitleHeader(col.header)) return { ...col, field: TITLE_RO_FIELD, label: "Terméknév", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isCustomsTariffHeader(col.header)) return { ...col, field: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isSnCodHeader(col.header)) return { ...col, field: SN_COD_FIELD, label: "S/N/COD", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if (isBuyPriceHeader(col.header)) return { ...col, field: BUY_PRICE_FIELD, label: "Vételár", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
+      if (isSellPriceHeader(col.header)) return { ...col, field: SELL_PRICE_FIELD, label: "Eladási ár", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isBarcodeHeader(col.header)) return { ...col, field: BARCODE_FIELD, label: "Vonalkód", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isImageUrlHeader(col.header)) return { ...col, field: IMAGE_URL_FIELD, label: "Fotó URL", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
+      if (isProductTypeHeader(col.header)) return { ...col, field: PRODUCT_TYPE_FIELD, label: "Import terméktípus / RODESCR", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isDescriptionHeader(col.header)) return { ...col, field: DESCRIPTION_FIELD, label: "Leírás / DESCRIERE", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isMaterialHeader(col.header)) return { ...col, field: MATERIAL_FIELD, label: "Összetétel", confidence: Math.max(Number(col.confidence || 0), 92), warnings: [] };
       return col;
@@ -270,14 +307,39 @@ function applyCustomsTariffColumnMapping(rows: AifParsedRow[], analysis: AifWork
 function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: AifWorkbookAnalysis | null): AifParsedRow[] {
   const columns = analysis?.columns || [];
   const fieldByHeader = (field: AifColumnField) => columns.find((col) => String(col.field) === String(field));
+  const titleColumn = fieldByHeader(TITLE_RO_FIELD);
+  const productTypeColumn = fieldByHeader(PRODUCT_TYPE_FIELD);
+  const buyPriceColumn = fieldByHeader(BUY_PRICE_FIELD);
+  const sellPriceColumn = fieldByHeader(SELL_PRICE_FIELD);
   const barcodeColumn = fieldByHeader(BARCODE_FIELD);
   const imageColumn = fieldByHeader(IMAGE_URL_FIELD);
   const descriptionColumn = fieldByHeader(DESCRIPTION_FIELD);
   const materialColumn = fieldByHeader(MATERIAL_FIELD);
-  if (!barcodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
+  if (!titleColumn && !productTypeColumn && !buyPriceColumn && !sellPriceColumn && !barcodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
   return rows.map((row) => {
     const raw = (row.raw || {}) as Record<string, unknown>;
     const normalized = { ...(row.normalized || {}) } as Record<string, any>;
+    if (titleColumn) {
+      const value = rawValueByExactHeader(raw, titleColumn.header);
+      if (value) { normalized.titleRo = value; normalized.productName = value; }
+    }
+    if (productTypeColumn) {
+      const value = rawValueByExactHeader(raw, productTypeColumn.header);
+      if (value) {
+        normalized.productType = value;
+        normalized.product_type = value;
+        normalized.sourceSubCategory = normalized.sourceSubCategory || value;
+        normalized.subCategoryName = normalized.subCategoryName || value;
+      }
+    }
+    if (buyPriceColumn) {
+      const value = rawValueByExactHeader(raw, buyPriceColumn.header);
+      if (value) normalized.buyPrice = toNumber(value);
+    }
+    if (sellPriceColumn) {
+      const value = rawValueByExactHeader(raw, sellPriceColumn.header);
+      if (value) normalized.sellPrice = toNumber(value);
+    }
     if (barcodeColumn) {
       const value = rawValueByExactHeader(raw, barcodeColumn.header);
       if (value) { normalized.barcode = value; normalized.supplierBarcode = value; }
@@ -325,7 +387,7 @@ const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md bo
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
 const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
-const compactFieldLabel = "text-[9px] uppercase tracking-[0.05em] text-white/45";
+const compactFieldLabel = "text-[9px] uppercase tracking-[0.05em] text-white/45 whitespace-nowrap leading-3";
 const compactInput = "h-7 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
 const compactSelect = `${compactInput} aif-native-select pr-6`;
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
@@ -1332,10 +1394,10 @@ export default function AllInIncoming(_props: Props) {
     const qty = firstNonEmptyText(normalized.qty, row?.qty, row?.quantity, rawValueByHeader({ raw }, ["QTY", "QUANTITY", "CANTITATE", "DARAB", "DB"]));
     if (qty) normalized.qty = qty;
 
-    const buyPrice = firstNonEmptyText(normalized.buyPrice, row?.buy_price, row?.buyPrice, rawValueByHeader({ raw }, ["PRET ACHIZITIE", "PURCHASE PRICE", "BUY PRICE", "VÉTELÁR", "VETELAR"]));
+    const buyPrice = firstNonEmptyText(normalized.buyPrice, row?.buy_price, row?.buyPrice, rawValueByHeader({ raw }, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VÉTELÁR", "VETELAR"]));
     if (buyPrice) normalized.buyPrice = buyPrice;
 
-    const sellPrice = firstNonEmptyText(normalized.sellPrice, normalized.sellPriceGrossRon, row?.sell_price_ron, row?.sell_price, row?.sellPrice, rawValueByHeader({ raw }, ["ELADASI AR", "ELADÁSI ÁR", "PRET VANZARE", "SELL PRICE", "PRICE RON"]));
+    const sellPrice = firstNonEmptyText(normalized.sellPrice, normalized.sellPriceGrossRon, row?.sell_price_ron, row?.sell_price, row?.sellPrice, rawValueByHeader({ raw }, ["ELADASI AR", "ELADÁSI ÁR", "PRET DE VINZARE", "PRET DE VANZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "PRICE RON"]));
     if (sellPrice) normalized.sellPrice = sellPrice;
 
     const size = normalizeAifSizeValue(firstNonEmptyText(
@@ -3735,7 +3797,7 @@ export default function AllInIncoming(_props: Props) {
             }
           />
           <div className="mt-3 overflow-hidden rounded-xl border border-white/14">
-            <div className="hidden grid-cols-[56px_minmax(0,1.8fr)_minmax(0,1.35fr)_minmax(0,0.95fr)_minmax(170px,0.75fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
+            <div className="hidden grid-cols-[52px_minmax(0,1.65fr)_minmax(0,1.32fr)_minmax(0,0.86fr)_minmax(230px,0.8fr)] gap-2 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid">
               <div>Import</div>
               <div>Termék</div>
               <div>Besorolás</div>
@@ -3758,7 +3820,7 @@ export default function AllInIncoming(_props: Props) {
                     key={`${r.rowNo || idx}-${idx}`}
                     className={errors.length ? "bg-red-500/10 px-2 py-1.5 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-1.5 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-1.5 hover:bg-[#4b596f]"}
                   >
-                    <div className="grid gap-2 lg:grid-cols-[56px_minmax(0,1.8fr)_minmax(0,1.35fr)_minmax(0,0.95fr)_minmax(170px,0.75fr)] lg:items-start">
+                    <div className="grid gap-2 lg:grid-cols-[52px_minmax(0,1.65fr)_minmax(0,1.32fr)_minmax(0,0.86fr)_minmax(230px,0.8fr)] lg:items-start">
                       <div className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 lg:block lg:bg-transparent lg:border-0 lg:px-0 lg:py-0">
                         <div className="flex items-center gap-2">
                           <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
@@ -3864,17 +3926,17 @@ export default function AllInIncoming(_props: Props) {
                       </div>
 
                       <div className="grid grid-cols-[0.75fr_1fr] gap-1.5 lg:grid-cols-1">
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div className="grid grid-cols-[0.7fr_0.9fr_1fr] gap-1.5">
                           <label className="grid gap-1">
-                            <span className={compactFieldLabel}>Darab</span>
+                            <span className={`${compactFieldLabel} whitespace-nowrap`}>Darab</span>
                             <input className={`${compactInput} w-full text-right`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} />
                           </label>
                           <label className="grid gap-1">
-                            <span className={compactFieldLabel}>Vételár</span>
+                            <span className={`${compactFieldLabel} whitespace-nowrap`}>Vételár</span>
                             <input className={`${compactInput} w-full text-right`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} />
                           </label>
                           <label className="grid gap-1">
-                            <span className={compactFieldLabel}>Eladás RON</span>
+                            <span className={`${compactFieldLabel} whitespace-nowrap`} title="Eladás RON">Eladás RON</span>
                             <input className={`${compactInput} w-full text-right`} value={valueString(n.sellPrice)} onChange={(e) => updateRowField(globalIndex, "sellPrice", e.target.value)} />
                           </label>
                         </div>
