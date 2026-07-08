@@ -42,7 +42,9 @@ const moveLabel = "grid min-w-0 gap-1 text-[10px] uppercase tracking-[0.05em] te
 const moveInput = "h-8 min-w-0 rounded-lg border border-white/18 bg-[#303a4c] px-2 text-xs text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55";
 const moveSelect = `${moveInput} aif-native-select pr-7`;
 const moveQtyBox = "flex h-8 min-w-0 overflow-hidden rounded-lg border border-white/18 bg-[#303a4c]";
-const moveTinyBtn = "inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-white/16 bg-[#354153] px-2 text-[11px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
+const moveTinyBtn = "inline-flex h-7 min-w-[82px] shrink-0 items-center justify-center gap-1 rounded-lg border border-white/16 bg-[#354153] px-2 text-[11px] text-white transition hover:border-[#7bd7d4]/35 hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
+const moveActionsShell = "mt-2 rounded-xl border border-white/12 bg-[#303a4c]/68 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]";
+const moveActionsGrid = "grid gap-1.5 sm:grid-cols-3";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
 const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
@@ -6066,63 +6068,71 @@ export default function AllInWarehouse() {
                     const reservedQty = reservedAtLocation(variantId, draft.fromLocationId);
                     const rowProblem = preparedMove?.problem || "";
                     return (
-                      <div key={it.variant_id} className="grid gap-2 rounded-xl border border-white/12 bg-[#3f4959] p-2.5 lg:grid-cols-[24px,46px,minmax(175px,1fr)] xl:grid-cols-[24px,46px,minmax(190px,1fr),minmax(420px,0.95fr),auto] xl:items-center">
-                        <div className="flex justify-center">
-                          <input
-                            className={selectBox}
-                            type="checkbox"
-                            checked
-                            onChange={(e) => {
-                              if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
-                            }}
-                            aria-label="Kivétel ebből a feladatlistából"
-                            title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
-                          />
+                      <div key={it.variant_id} className="rounded-xl border border-white/12 bg-[#3f4959] p-2.5">
+                        <div className="grid gap-2 lg:grid-cols-[24px,46px,minmax(185px,1fr),minmax(430px,1.25fr)] lg:items-start">
+                          <div className="flex justify-center pt-3 lg:pt-4">
+                            <input
+                              className={selectBox}
+                              type="checkbox"
+                              checked
+                              onChange={(e) => {
+                                if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
+                              }}
+                              aria-label="Kivétel ebből a feladatlistából"
+                              title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
+                            />
+                          </div>
+                          <div className="pt-1 lg:pt-2">
+                            {it.image_url ? <img src={it.image_url} alt="" className="h-10 w-10 rounded-lg object-cover" /> : <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={16} /></div>}
+                          </div>
+                          <div className="min-w-0 py-1">
+                            <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
+                            <p className="mt-0.5 truncate text-[11px] text-white/55">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                            <p className="mt-0.5 truncate text-[11px] text-white/45">Vonalkód: {visibleWarehouseBarcode(it) || "-"} • Összes: {n(it.total_qty)}</p>
+                            {rowProblem ? <p className="mt-0.5 truncate text-[11px] text-amber-200">{rowProblem}</p> : <p className="mt-0.5 truncate text-[11px] text-[#cffffd]">Forrás: {currentQty} db • foglalt: {reservedQty} • elérhető: {availableFrom}</p>}
+                          </div>
+                          <div className="grid min-w-0 gap-2 rounded-xl border border-[#7bd7d4]/18 bg-[#303a4c]/62 p-2 sm:grid-cols-[minmax(150px,1fr),minmax(150px,1fr),88px] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+                            <label className={moveLabel}>
+                              Honnan
+                              <select className={moveSelect} value={draft.fromLocationId} onChange={(e) => setStockMoveRowField(variantId, { fromLocationId: e.target.value })}>
+                              <option value="">Forrás...</option>
+                              {stockLocationRows.map((loc) => {
+                                const value = locationValue(loc);
+                                const available = availableAtLocation(variantId, value);
+                                return <option key={value} value={value}>{loc.name || loc.code} ({available} db)</option>;
+                              })}
+                              </select>
+                            </label>
+                            <label className={moveLabel}>
+                              Hova
+                              <select className={moveSelect} value={draft.toLocationId} onChange={(e) => setStockMoveRowField(variantId, { toLocationId: e.target.value })}>
+                              <option value="">Cél...</option>
+                              {stockLocationRows.map((loc) => {
+                                const value = locationValue(loc);
+                                return <option key={value} value={value} disabled={value === draft.fromLocationId}>{loc.name || loc.code}</option>;
+                              })}
+                              </select>
+                            </label>
+                            <label className={moveLabel}>
+                              Db
+                              <div className={moveQtyBox}>
+                                <button className="flex w-7 shrink-0 items-center justify-center border-r border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, -1)}><Minus size={13} /></button>
+                                <input className="min-w-0 flex-1 bg-transparent px-1 text-center text-xs text-white outline-none tabular-nums" type="number" min={0} max={availableFrom || undefined} value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value })} />
+                                <button className="flex w-7 shrink-0 items-center justify-center border-l border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, 1)}><Plus size={13} /></button>
+                              </div>
+                            </label>
+                          </div>
                         </div>
-                        <div>
-                          {it.image_url ? <img src={it.image_url} alt="" className="h-10 w-10 rounded-lg object-cover" /> : <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={16} /></div>}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
-                          <p className="mt-0.5 truncate text-[11px] text-white/55">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                          <p className="mt-0.5 truncate text-[11px] text-white/45">Vonalkód: {visibleWarehouseBarcode(it) || "-"} • Összes: {n(it.total_qty)}</p>
-                          {rowProblem ? <p className="mt-0.5 truncate text-[11px] text-amber-200">{rowProblem}</p> : <p className="mt-0.5 truncate text-[11px] text-[#cffffd]">Forrás: {currentQty} db • foglalt: {reservedQty} • elérhető: {availableFrom}</p>}
-                        </div>
-                        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(132px,1fr),minmax(132px,1fr),96px] lg:col-span-3 xl:col-span-1">
-                          <label className={moveLabel}>
-                            Honnan
-                            <select className={moveSelect} value={draft.fromLocationId} onChange={(e) => setStockMoveRowField(variantId, { fromLocationId: e.target.value })}>
-                            <option value="">Forrás...</option>
-                            {stockLocationRows.map((loc) => {
-                              const value = locationValue(loc);
-                              const available = availableAtLocation(variantId, value);
-                              return <option key={value} value={value}>{loc.name || loc.code} ({available} db)</option>;
-                            })}
-                            </select>
-                          </label>
-                          <label className={moveLabel}>
-                            Hova
-                            <select className={moveSelect} value={draft.toLocationId} onChange={(e) => setStockMoveRowField(variantId, { toLocationId: e.target.value })}>
-                            <option value="">Cél...</option>
-                            {stockLocationRows.map((loc) => {
-                              const value = locationValue(loc);
-                              return <option key={value} value={value} disabled={value === draft.fromLocationId}>{loc.name || loc.code}</option>;
-                            })}
-                            </select>
-                          </label>
-                          <label className={moveLabel}>
-                            Db
-                            <div className={moveQtyBox}>
-                              <button className="flex w-7 shrink-0 items-center justify-center border-r border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, -1)}><Minus size={13} /></button>
-                              <input className="min-w-0 flex-1 bg-transparent px-1 text-center text-xs text-white outline-none tabular-nums" type="number" min={0} max={availableFrom || undefined} value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value })} />
-                              <button className="flex w-7 shrink-0 items-center justify-center border-l border-white/12 text-white hover:bg-white/10" type="button" onClick={() => adjustStockMoveQty(variantId, 1)}><Plus size={13} /></button>
-                            </div>
-                          </label>
-                        </div>
-                        <div className="flex flex-wrap justify-end gap-1.5 lg:col-span-3 xl:col-span-1 xl:flex-nowrap">
-                          <button className={moveTinyBtn} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button" title="Részletek"><Edit3 size={13} /><span className="hidden 2xl:inline">Részletek</span></button>
-                          <button className={moveTinyBtn} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button" title="Vissza a fő listába"><ArrowLeft size={13} /><span className="hidden 2xl:inline">Vissza</span></button>
-                          <button className={moveTinyBtn} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={13} /><span className="hidden 2xl:inline">Törlés</span></button>
+                        <div className={moveActionsShell}>
+                          <div className="mb-1.5 flex items-center justify-between gap-2">
+                            <span className="text-[10px] uppercase tracking-[0.08em] text-white/45">Műveletek</span>
+                            <span className="h-px flex-1 bg-white/10" />
+                          </div>
+                          <div className={moveActionsGrid}>
+                            <button className={moveTinyBtn} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button" title="Részletek"><Edit3 size={13} /><span>Részletek</span></button>
+                            <button className={moveTinyBtn} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button" title="Vissza a fő listába"><ArrowLeft size={13} /><span>Vissza</span></button>
+                            <button className={moveTinyBtn} onClick={() => removeSelectedItemEverywhere(String(it.variant_id || ""))} type="button" title="A teljes kijelölésből is kiveszi"><X size={13} /><span>Törlés</span></button>
+                          </div>
                         </div>
                       </div>
                     );
