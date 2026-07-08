@@ -79,7 +79,7 @@ function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   try {
     window.localStorage.setItem(stockMovesChangedStorageKey, JSON.stringify(payload));
   } catch {
-    // Ha a localStorage megsértődik, legalább az aktuális ablak kapjon jelzést. Webfejlesztés, gyönyörű szakma.
+    // Ha a localStorage nem elérhető, az aktuális ablak akkor is kapjon jelzést.
   }
   try {
     window.dispatchEvent(new CustomEvent(stockMovesChangedEventName, { detail: payload }));
@@ -179,7 +179,7 @@ function markSelectedCloudMigrationDone() {
   try {
     window.localStorage.setItem(selectedProductCloudMigrationStorageKey, "1");
   } catch {
-    // A localStorage néha úgy viselkedik, mint egy papírfecnire írt adatbázis. Nem állunk meg miatta.
+    // A localStorage hiba nem állíthatja meg a folyamatot.
   }
 }
 
@@ -1553,7 +1553,7 @@ async function copyWarehouseCodeToClipboard(value: string) {
       return true;
     }
   } catch {
-    // Visszaesünk a régi módszerre. A böngészők néha külön drámakört futnak clipboardból.
+    // Visszaesünk a régi másolási módszerre.
   }
   try {
     const area = document.createElement("textarea");
@@ -1884,6 +1884,54 @@ function categoryValueMatches(c: MetaItem | null | undefined, value: unknown) {
   const key = normalizeSearch(value);
   if (!c || !key) return false;
   return [c.id, c.code, c.name, c.name_ro, c.name_hu].map(normalizeSearch).some((x) => x === key);
+}
+
+function metaSelectionKeys(row?: Partial<MetaItem> | null) {
+  if (!row) return [];
+  return [row.id, row.code, row.name, row.name_ro, row.name_hu, ...(Array.isArray(row.aliases) ? row.aliases : [])]
+    .map(normalizeSearch)
+    .filter(Boolean);
+}
+
+function itemMatchesMetaSelection(values: unknown[], selectedValue: unknown, metaRows: MetaItem[]) {
+  const selectedKey = normalizeSearch(selectedValue);
+  if (!selectedKey || selectedKey === "all") return true;
+  const selectedMeta = metaRows.find((row) => metaSelectionKeys(row).includes(selectedKey));
+  const allowed = new Set([selectedKey, ...metaSelectionKeys(selectedMeta)]);
+  return values.map(normalizeSearch).filter(Boolean).some((value) => allowed.has(value));
+}
+
+function itemMainCategoryLabel(it: Partial<InventoryItem> | Record<string, any>) {
+  return firstWarehouseText(it.category_name_hu, it.category_name_ro, it.category_code) || "-";
+}
+
+function itemSubCategoryLabel(it: Partial<InventoryItem> | Record<string, any>) {
+  return firstWarehouseText(it.subcategory_name_hu, it.subcategory_name_ro, it.subcategory_code, it.product_type);
+}
+
+function itemMatchesMainCategory(it: InventoryItem, selectedValue: unknown, categoryRows: MetaItem[]) {
+  return itemMatchesMetaSelection([it.category_code, it.category_name_ro, it.category_name_hu], selectedValue, categoryRows);
+}
+
+function itemMatchesSubCategory(it: InventoryItem, selectedValue: unknown, subCategoryRows: MetaItem[]) {
+  return itemMatchesMetaSelection([it.subcategory_id, it.subcategory_code, it.subcategory_name_ro, it.subcategory_name_hu, it.product_type], selectedValue, subCategoryRows);
+}
+
+function modelStatusNeedsAttention(it: InventoryItem) {
+  return itemModelStatus(it) !== "active";
+}
+
+function ModelStatusBadge({ item, compact = false }: { item: InventoryItem; compact?: boolean }) {
+  const status = itemModelStatus(item);
+  if (status === "active") return null;
+  return (
+    <span
+      className={`${compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]"} inline-flex shrink-0 items-center rounded-full border border-red-300/35 bg-red-500/15 font-medium text-red-50`}
+      title={`Modell állapot: ${statusHu(status)}`}
+    >
+      Modell nem aktív: {statusHu(status)}
+    </span>
+  );
 }
 
 function genderLabel(code: unknown, items: GenderType[]) {
@@ -2266,7 +2314,7 @@ function nextSortOrder(rows: Array<{ sort_order?: number | string | null }>) {
 }
 
 function overviewOpenByDefault() {
-  // A raktári Áttekintés induljon csukva. Aki reggel grafikonokra vágyik, az majd kinyitja, mi többiek dolgoznánk.
+  // A raktári Áttekintés induljon csukva, hogy a terméklista gyorsabban elérhető legyen.
   return false;
 }
 
@@ -2290,6 +2338,7 @@ export default function AllInWarehouse() {
   const [supplier, setSupplier] = useState("all");
   const [brand, setBrand] = useState("all");
   const [category, setCategory] = useState("all");
+  const [subCategory, setSubCategory] = useState("all");
   const [gender, setGender] = useState("all");
   const [location, setLocation] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
@@ -2560,7 +2609,7 @@ export default function AllInWarehouse() {
     setListOpen(true);
     setSortMode("incoming_desc");
     if (showMessage) {
-      setMessage(`Utolsó bevételezés a mozgásnaplóból: ${rows.length} mozgássor, ${variantIds.length} raktári variáns${focus.totalQty ? `, ${focus.totalQty} db` : ""}. Ezt mutatja a StockMoves is, végre ugyanazt a nyelvet beszéli a raktár.`);
+      setMessage(`Utolsó bevételezés a mozgásnaplóból: ${rows.length} mozgássor, ${variantIds.length} raktári variáns${focus.totalQty ? `, ${focus.totalQty} db` : ""}.`);
     }
   }
 
@@ -3061,6 +3110,12 @@ export default function AllInWarehouse() {
   };
   const newProductSubCategoryOptions = useMemo(() => subCategoriesForValue(newProduct.categoryCode), [subCategories, categorySelectOptions, newProduct.categoryCode]);
   const editSubCategoryOptions = useMemo(() => subCategoriesForValue(edit.categoryCode), [subCategories, categorySelectOptions, edit.categoryCode]);
+  const subCategoryFilterOptions = useMemo(() => {
+    if (category === "all") return subCategories;
+    const parent = categorySelectOptions.find((c) => categoryValueMatches(c, category));
+    if (!parent) return subCategories;
+    return subCategories.filter((c) => categoryParentId(c) === String(parent.id));
+  }, [category, subCategories, categorySelectOptions]);
   const nextCategorySortOrder = useMemo(() => nextSortOrder(mainCategories.length ? mainCategories : categories), [mainCategories, categories]);
   const nextSubCategorySortOrder = useMemo(() => nextSortOrder(subCategories), [subCategories]);
   const subCategoryParentLabel = (row: MetaItem) => categoryLabel(mainCategories.find((c) => String(c.id) === String((row as any).parent_id || (row as any).parentId)) || categories.find((c) => String(c.id) === String((row as any).parent_id || (row as any).parentId)) || {} as MetaItem);
@@ -3142,6 +3197,12 @@ export default function AllInWarehouse() {
     if (!valid) setBrand("all");
   }, [brand, brandOptions]);
 
+  useEffect(() => {
+    if (subCategory === "all") return;
+    const valid = subCategoryFilterOptions.some((c) => categoryValueMatches(c, subCategory));
+    if (!valid) setSubCategory("all");
+  }, [subCategory, subCategoryFilterOptions]);
+
   const colorDisplay = (value: unknown, fallback?: unknown) => {
     return officialColorFromTypes(value, colorTypes) || String(fallback || "").trim() || "-";
   };
@@ -3165,7 +3226,7 @@ export default function AllInWarehouse() {
     let out = [...inventoryDisplayItems];
     const reviewMode = stockFilter === "watch";
     if (incomingFocus?.batchId) {
-      // Az utolsó bevezetés itt munkalista: ami már aktív, eltűnik innen, hogy ne 1000 sor között vadásszunk.
+      // Az utolsó bevezetés itt munkalista: ami már aktív, eltűnik innen.
       out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")) && needsWarehouseActivation(x));
     } else if (!reviewMode && stockFilter !== "missing") {
       // A fő raktárlista csak az aktív termékeket mutassa. A draft/inaktív importok az aktiválandó listában élnek, nem a kész raktárban.
@@ -3184,7 +3245,8 @@ export default function AllInWarehouse() {
     }
     if (supplier !== "all") out = out.filter((x) => supplierMatches(x, supplier));
     if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
-    if (category !== "all") out = out.filter((x) => (x.category_code || x.category_name_ro || "") === category || x.category_name_ro === category);
+    if (category !== "all") out = out.filter((x) => itemMatchesMainCategory(x, category, categorySelectOptions));
+    if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
     if (gender !== "all") out = out.filter((x) => (x.gender || "") === gender);
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
@@ -3214,7 +3276,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -3223,6 +3285,7 @@ export default function AllInWarehouse() {
     setSupplier("all");
     setBrand("all");
     setCategory("all");
+    setSubCategory("all");
     setGender("all");
     setLocation("all");
     setStockFilter("all");
@@ -3251,6 +3314,7 @@ export default function AllInWarehouse() {
     if (supplier !== "all") labels.push(`Beszállító: ${labelForMetaValue(suppliers, supplier)}`);
     if (brand !== "all") labels.push(`Márka: ${labelForMetaValue(brands, brand)}`);
     if (category !== "all") labels.push(`Főkategória: ${labelForMetaValue(categories, category)}`);
+    if (subCategory !== "all") labels.push(`Alkategória / terméktípus: ${labelForMetaValue(subCategories, subCategory)}`);
     if (gender !== "all") labels.push(`Nem: ${genderLabel(gender, genderTypes)}`);
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
     if (stockFilter !== "all") {
@@ -3271,7 +3335,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, gender, location, stockFilter, imageFilter, suppliers, brands, categories, genderTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, gender, location, stockFilter, imageFilter, suppliers, brands, categories, subCategories, genderTypes, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -3299,7 +3363,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, gender, location, stockFilter, imageFilter, sortMode, incomingFocusVariantIdsKey]);
+  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, gender, location, stockFilter, imageFilter, sortMode, incomingFocusVariantIdsKey]);
 
   useEffect(() => {
     if (productPage > totalProductPages) setProductPage(totalProductPages);
@@ -3342,6 +3406,7 @@ export default function AllInWarehouse() {
     setSupplier("all");
     setBrand("all");
     setCategory("all");
+    setSubCategory("all");
     setGender("all");
     setLocation("all");
     setStockFilter("all");
@@ -4910,7 +4975,7 @@ export default function AllInWarehouse() {
               return;
             }
           } catch {
-            // Egy-egy sikertelen képkocka normális, nem kell tőle felgyújtani a modált.
+            // Egy-egy sikertelen képkocka normális, a szkennelés folytatódik.
           }
         }
         if (!cancelled && !barcodeScannerHandlingRef.current) {
@@ -4961,7 +5026,7 @@ export default function AllInWarehouse() {
     async function startBarcodeScannerCamera() {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
-          setBarcodeScannerStatus("Ez a böngésző nem ad kamerát a weboldalnak. USB-s scanner vagy kézi beírás marad, mert a technika remek.");
+          setBarcodeScannerStatus("Ez a böngésző nem ad kamerát a weboldalnak. Használj USB-s scannert vagy kézi beírást.");
           return;
         }
 
@@ -5184,7 +5249,7 @@ export default function AllInWarehouse() {
       await load();
       if (incomingFocus?.batchId && !resolvedActivation && isUuidLike(incomingFocus.batchId)) await loadIncomingFocusBatch(incomingFocus.batchId, false);
       if (wasActivationWorkView && resolvedActivation) {
-        setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról. Végre egy sorral kevesebb a káoszban.");
+        setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról.");
         setHighlightProductId((current) => current === detailId ? "" : current);
         setPendingProductJumpId((current) => current === detailId ? "" : current);
       } else {
@@ -5427,9 +5492,16 @@ export default function AllInWarehouse() {
                 </select>
               </label>
               <label className={label}>Főkategória
-                <select className={select} value={category} onChange={(e) => setCategory(e.target.value)}>
+                <select className={select} value={category} onChange={(e) => { setCategory(e.target.value); setSubCategory("all"); }}>
                   <option value="all">Összes</option>
                   {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
+                </select>
+              </label>
+              <label className={label}>Alkategória / terméktípus
+                <select className={select} value={subCategory} onChange={(e) => setSubCategory(e.target.value)}>
+                  <option value="all">Összes</option>
+                  {subCategoryFilterOptions.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
+                  {!subCategoryFilterOptions.length && <option value="" disabled>Nincs alkategória</option>}
                 </select>
               </label>
               <label className={label}>Nem
@@ -5630,7 +5702,7 @@ export default function AllInWarehouse() {
                     <col style={{ width: "62px" }} />
                     <col style={{ width: "94px" }} />
                     <col style={{ width: "250px" }} />
-                    <col style={{ width: "118px" }} />
+                    <col style={{ width: "138px" }} />
                     <col style={{ width: "92px" }} />
                     <col style={{ width: "58px" }} />
                     <col style={{ width: "98px" }} />
@@ -5655,7 +5727,7 @@ export default function AllInWarehouse() {
                       <th className="px-2 py-3 text-center align-middle font-normal">Kép</th>
                       <th className="px-2 py-3 text-left align-middle font-normal">Márka</th>
                       <th className="px-2 py-3 text-left align-middle font-normal">Terméknév</th>
-                      <th className="px-2 py-3 text-center align-middle font-normal">Főkategória</th>
+                      <th className="px-2 py-3 text-center align-middle font-normal">Főkat. / alkat.</th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Szín</th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Méret</th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Készlet</th>
@@ -5702,8 +5774,12 @@ export default function AllInWarehouse() {
                             <span className="min-w-0 max-w-[170px] truncate overflow-hidden">{visibleWarehouseBarcode(it) ? `Vonalkód: ${visibleWarehouseBarcode(it)}` : "Nincs vonalkód"}</span>
                             <span className="relative z-40 shrink-0 overflow-visible"><VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
                           </div>
+                          {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         </td>
-                        <td className="truncate px-2 py-2.5 text-center align-middle" title={it.category_name_hu || it.category_name_ro || ""}>{it.category_name_hu || it.category_name_ro || "-"}</td>
+                        <td className="px-2 py-2.5 text-center align-middle" title={[itemMainCategoryLabel(it), itemSubCategoryLabel(it)].filter(Boolean).join(" / ")}>
+                          <div className="truncate text-white/90">{itemMainCategoryLabel(it)}</div>
+                          {itemSubCategoryLabel(it) ? <div className="truncate text-[10px] leading-3 text-white/48">{itemSubCategoryLabel(it)}</div> : null}
+                        </td>
                         <td className="truncate px-2 py-2.5 text-center align-middle" title={colorDisplay(it.color_name, it.color_code)}>{colorDisplay(it.color_name, it.color_code)}</td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
@@ -5751,7 +5827,8 @@ export default function AllInWarehouse() {
                       {it.image_url ? <img src={it.image_url} alt="" className="h-20 w-20 rounded-xl object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={20} /></div>}
                       <div className="min-w-0 flex-1">
                         <button className="block max-w-full truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
-                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <StockQtyButton item={it} />
                           <MissingDataIndicator item={it} />
@@ -5821,8 +5898,9 @@ export default function AllInWarehouse() {
                     <div className="min-w-0">
                       <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
                       <p className="mt-1 text-xs text-white/55">
-                        {it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}
+                        {it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}
                       </p>
+                      {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                       <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • SKU: {visibleWarehouseBarcode(it) || "-"}</p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
@@ -6251,7 +6329,8 @@ export default function AllInWarehouse() {
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
-                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Vonalkód: {visibleWarehouseBarcode(it) || "-"}</p>
                       </div>
                       <div className="flex flex-wrap justify-end gap-2">
@@ -6463,7 +6542,8 @@ export default function AllInWarehouse() {
                         </div>
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
-                          <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {it.category_name_hu || it.category_name_ro || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
                             <span>Vonalkód: {visibleWarehouseBarcode(it) || "-"}</span>
                             <VariantCodesTooltip item={it} />
