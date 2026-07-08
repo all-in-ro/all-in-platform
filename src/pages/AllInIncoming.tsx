@@ -62,6 +62,8 @@ import {
 type Props = { onLogout?: () => void };
 
 type LocationType = string;
+type IncomingWorkflowStep = "reception" | "source" | "import" | "manual" | "review";
+type IncomingInputMode = "" | "import" | "manual";
 
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
@@ -328,6 +330,12 @@ const compactInput = "h-7 rounded-md border border-white/18 bg-[#303b4e] px-2 te
 const compactSelect = `${compactInput} aif-native-select pr-6`;
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
+const wizardStepBase = "rounded-2xl border px-3 py-3 transition shadow-sm";
+const wizardStepActive = `${wizardStepBase} border-[#67d4d1]/55 bg-[#208d8b]/18 shadow-[#208d8b]/10`;
+const wizardStepDone = `${wizardStepBase} border-emerald-200/30 bg-emerald-400/10`;
+const wizardStepIdle = `${wizardStepBase} border-white/14 bg-[#354153]`;
+const wizardStepLocked = `${wizardStepBase} border-white/10 bg-[#303b4e]/60 opacity-70`;
+const sourceChoiceCard = "group rounded-2xl border border-white/16 bg-[#354153] p-4 text-left shadow-sm transition hover:border-[#67d4d1]/55 hover:bg-[#3b485c] disabled:cursor-not-allowed disabled:opacity-55";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -981,6 +989,8 @@ export default function AllInIncoming(_props: Props) {
   const [manualBuyPrice, setManualBuyPrice] = useState("");
   const [manualSellPrice, setManualSellPrice] = useState("");
   const [manualRowsOpen, setManualRowsOpen] = useState(true);
+  const [incomingStep, setIncomingStep] = useState<IncomingWorkflowStep>("reception");
+  const [incomingInputMode, setIncomingInputMode] = useState<IncomingInputMode>("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [locationModalOpen, setLocationModalOpen] = useState(false);
@@ -1459,8 +1469,26 @@ export default function AllInIncoming(_props: Props) {
     (!tvaRateRequired || tvaRate.trim()) &&
     invoiceGrossProvided
   );
-  const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/80 bg-red-500/10 focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
-  const requiredSelectInput = (missing: boolean) => `${selectInput} w-full ${missing ? "border-red-300/80 bg-[#303b4e] focus:border-red-200/90 focus:ring-red-200/25" : ""}`;
+  const receptionHeaderMissing = {
+    supplier: !supplierId,
+    location: !locationId,
+    ...requiredMissing,
+  };
+  const receptionHeaderReady = Boolean(supplierId && locationId && receptionReady);
+  const missingReceptionFieldLabels = [
+    receptionHeaderMissing.supplier ? "beszállító" : "",
+    receptionHeaderMissing.location ? "cél hely" : "",
+    receptionHeaderMissing.invoiceNumber ? "számlaszám" : "",
+    receptionHeaderMissing.invoiceDate ? "számla dátuma" : "",
+    receptionHeaderMissing.receptionDate ? "receptió dátuma" : "",
+    receptionHeaderMissing.currencyCode ? "pénznem" : "",
+    receptionHeaderMissing.exchangeRateToRon ? "RON árfolyam" : "",
+    receptionHeaderMissing.tvaMode ? "TVA kezelés" : "",
+    receptionHeaderMissing.tvaRate ? "TVA %" : "",
+    receptionHeaderMissing.invoiceGross ? "számla végösszeg" : "",
+  ].filter(Boolean);
+  const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white placeholder:text-red-100/60 shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
+  const requiredSelectInput = (missing: boolean) => `${selectInput} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
   const disabledExchangeRateInput = "h-9 w-full cursor-not-allowed rounded-lg border border-white/14 bg-[#303b4e]/55 px-3 text-sm text-white/45 caret-transparent outline-none opacity-70 transition placeholder:text-transparent focus:border-white/14 focus:ring-0 [color-scheme:dark] font-normal";
   const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
@@ -1712,7 +1740,9 @@ export default function AllInIncoming(_props: Props) {
     setManualRowsOpen(true);
     setReceptionOpen(true);
     setWorkbenchOpen(false);
-    if (showMessage) setMessage("Új üres bevételezés indítva. Előbb válassz beszállítót és töltsd ki a receptiót, majd jöhet kézi sor vagy XLS.");
+    setIncomingStep("reception");
+    setIncomingInputMode("");
+    if (showMessage) setMessage("Új üres bevételezés indítva. Töltsd ki a receptió fejadatait, majd válaszd ki a terméksor forrását.");
   }
 
   function fillReceptionHeader(detail: AifReceptionDetail, options: { clearDraftRows?: boolean } = {}) {
@@ -1763,6 +1793,8 @@ export default function AllInIncoming(_props: Props) {
         loadReceptions(),
       ]);
       fillReceptionHeader(detail);
+      setIncomingStep("source");
+      setIncomingInputMode("");
       const remaining = Number((detail.item as any).remaining_rows || 0);
       setMessage(`Receptió és törzsadatok betöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Új sorokat is hozzáadhatsz ehhez a receptióhoz."}`);
     } catch (e: any) {
@@ -1906,6 +1938,8 @@ export default function AllInIncoming(_props: Props) {
     const key = rowKey(mappedManualRow, rowIndex);
     setRows((current) => [...current, mappedManualRow]);
     setFileName((current) => current || "Manuális bevételezés");
+    setIncomingInputMode("manual");
+    setIncomingStep("manual");
     setWorkbenchOpen(false);
     setPreviewLimit((current) => Math.max(current, rowIndex + 1));
     setApprovedRows((current) => ({ ...current, [key]: errors.length === 0 }));
@@ -2024,6 +2058,8 @@ export default function AllInIncoming(_props: Props) {
       setFileName(file.name);
       setRows(normalizedRows);
       setWorkbench(analysisWithSnCod);
+      setIncomingInputMode("import");
+      setIncomingStep("import");
       setWorkbenchOpen(true);
       setPreviewLimit(25);
       setApprovedRows({});
@@ -2039,7 +2075,16 @@ export default function AllInIncoming(_props: Props) {
   }
 
   async function saveDraft() {
-    if (!supplierId || !locationId || !rows.length) return;
+    if (!supplierId || !locationId) {
+      setIncomingStep("reception");
+      setMessage(`A receptió kötelező mezői hiányoznak: ${missingReceptionFieldLabels.join(", ") || "beszállító / cél hely"}.`);
+      return;
+    }
+    if (!rows.length) {
+      setIncomingStep("source");
+      setMessage("Nincs menthető terméksor. Válassz XLS importot vagy adj hozzá manuális sort.");
+      return;
+    }
     if (!approvedRowList.length) {
       setMessage("Nincs kijelölt sor. Beolvasás után csak a kijelölt sorok menthetők importként.");
       return;
@@ -2048,8 +2093,9 @@ export default function AllInIncoming(_props: Props) {
       setMessage("A kijelölt sorok között hibás vagy hiányos adat van. Javítás vagy kizárás után menthető.");
       return;
     }
-    if (!receptionReady) {
-      setMessage("A receptió kötelező mezőit ki kell tölteni: számlaszám, dátumok, pénznem, külföldi pénznemnél árfolyam, TVA kezelés és számla végösszeg.");
+    if (!receptionHeaderReady) {
+      setIncomingStep("reception");
+      setMessage(`A receptió kötelező mezőit ki kell tölteni: ${missingReceptionFieldLabels.join(", ") || "hiányzó adat"}.`);
       return;
     }
     setBusy(true);
@@ -2509,6 +2555,182 @@ export default function AllInIncoming(_props: Props) {
     }
   }
 
+  function goToReceptionStep() {
+    setIncomingStep("reception");
+  }
+
+  function goToSourceStep() {
+    if (!receptionHeaderReady) {
+      setIncomingStep("reception");
+      setMessage(`Előbb töltsd ki a kötelező receptió mezőket: ${missingReceptionFieldLabels.join(", ") || "hiányzó adat"}.`);
+      return;
+    }
+    setIncomingStep("source");
+    setMessage("");
+  }
+
+  function chooseIncomingMode(mode: IncomingInputMode) {
+    if (!receptionHeaderReady) {
+      goToSourceStep();
+      return;
+    }
+    if (!mode) return;
+    setIncomingInputMode(mode);
+    setIncomingStep(mode);
+    if (mode === "manual") {
+      setManualRowsOpen(true);
+      setWorkbenchOpen(false);
+    }
+    if (mode === "import") {
+      setWorkbenchOpen(Boolean(workbench));
+    }
+    setMessage(mode === "import" ? "Import mód kiválasztva. Válaszd ki az XLS/XLSX fájlt, majd ellenőrizd az oszloptársítást." : "Manuális mód kiválasztva. Töltsd ki a terméksort, majd add hozzá az előnézethez.");
+  }
+
+  function workflowStepCard(step: IncomingWorkflowStep, done = false, locked = false) {
+    if (locked) return wizardStepLocked;
+    if (incomingStep === step) return wizardStepActive;
+    if (done) return wizardStepDone;
+    return wizardStepIdle;
+  }
+
+  function workflowStepBadge(step: IncomingWorkflowStep, done = false, locked = false) {
+    if (locked) return "border-white/12 bg-white/5 text-white/45";
+    if (done) return "border-emerald-200/45 bg-emerald-300/18 text-emerald-50";
+    if (incomingStep === step) return "border-[#67d4d1]/60 bg-[#208d8b] text-white";
+    return "border-white/18 bg-[#303b4e] text-white/70";
+  }
+
+  function renderWorkflowWizard() {
+    const sourceDone = incomingInputMode === "import" || incomingInputMode === "manual";
+    const rowsDone = rows.length > 0;
+    return (
+      <section className={card}>
+        <SectionTitle
+          icon={<FileSpreadsheet size={16} />}
+          title="Bevételezés lépései"
+          right={<span className="text-xs text-white/60">Előbb fejadatai, utána terméksorok</span>}
+        />
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-4">
+          <button className={`${workflowStepCard("reception", receptionHeaderReady)} text-left`} onClick={goToReceptionStep} type="button">
+            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("reception", receptionHeaderReady)}`}>1</span>
+            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Receptió adatai</p>
+            <p className="mt-1 text-xs leading-5 text-white/62">Beszállító, cél hely, számla, pénznem és TVA.</p>
+            <p className={receptionHeaderReady ? "mt-2 text-xs text-emerald-100" : "mt-2 text-xs text-red-100"}>
+              {receptionHeaderReady ? "Kitöltve" : `${missingReceptionFieldLabels.length} mező hiányzik`}
+            </p>
+          </button>
+
+          <button className={`${workflowStepCard("source", sourceDone, !receptionHeaderReady)} text-left`} onClick={goToSourceStep} disabled={!receptionHeaderReady} type="button">
+            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("source", sourceDone, !receptionHeaderReady)}`}>2</span>
+            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Sorforrás</p>
+            <p className="mt-1 text-xs leading-5 text-white/62">Választás: XLS import vagy kézi terméksor.</p>
+            <p className="mt-2 text-xs text-white/58">{incomingInputMode === "import" ? "XLS import" : incomingInputMode === "manual" ? "Manuális bevitel" : "Nincs kiválasztva"}</p>
+          </button>
+
+          <button className={`${workflowStepCard(incomingInputMode === "manual" ? "manual" : "import", rowsDone, !receptionHeaderReady || !sourceDone)} text-left`} onClick={() => sourceDone ? setIncomingStep(incomingInputMode || "source") : goToSourceStep()} disabled={!receptionHeaderReady} type="button">
+            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge(incomingInputMode === "manual" ? "manual" : "import", rowsDone, !receptionHeaderReady || !sourceDone)}`}>3</span>
+            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Terméksorok</p>
+            <p className="mt-1 text-xs leading-5 text-white/62">Oszloptársítás, kézi sor, előnézet és kijelölés.</p>
+            <p className="mt-2 text-xs text-white/58">{rows.length ? `${rows.length} sor előnézetben` : "Még nincs sor"}</p>
+          </button>
+
+          <button className={`${workflowStepCard("review", approvedCount > 0, !rows.length)} text-left`} onClick={() => rows.length ? setIncomingStep("review") : undefined} disabled={!rows.length} type="button">
+            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("review", approvedCount > 0, !rows.length)}`}>4</span>
+            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Mentés</p>
+            <p className="mt-1 text-xs leading-5 text-white/62">Csak kijelölt, hibátlan sorok kerülnek receptióba.</p>
+            <p className="mt-2 text-xs text-white/58">{approvedCount ? `${approvedCount} kijelölt sor` : "Nincs kijelölt sor"}</p>
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-white/14 bg-[#354153] p-3">
+          <div className="grid gap-3 lg:grid-cols-[1fr_2fr_auto] lg:items-end">
+            <div>
+              <p className="text-xs uppercase tracking-[0.08em] text-white/58">Aktuális receptió</p>
+              <p className="mt-1 text-sm text-white">{selectedReceptionId ? "Meglévő receptió folytatása" : "Új üres bevételezés"}</p>
+              {selectedReceptionSummary && (
+                <p className="mt-1 text-xs text-white/62">
+                  {selectedReceptionSummary.invoice_number || "Számlaszám nélkül"} • {receptionStatusLabel(selectedReceptionSummary.status)} • {moneyText(toNumber(selectedReceptionSummary.invoice_gross), selectedReceptionSummary.currency_code || "")}
+                </p>
+              )}
+            </div>
+            <label className={label}>
+              Meglévő receptió folytatása
+              <select className={`${selectInput} w-full`} value={receptionPickerId} onChange={(e) => setReceptionPickerId(e.target.value)}>
+                <option style={mutedOptionStyle} value="">Válassz meglévő receptiót</option>
+                {receptions.filter(receptionHasImportHistory).map((r) => (
+                  <option style={optionStyle} key={r.id} value={r.id}>
+                    {r.invoice_number || "Számlaszám nélkül"} • {r.supplier_name || "-"} • {receptionStatusLabel(r.status)} • {moneyText(toNumber(r.invoice_gross), r.currency_code || "")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap gap-2 lg:justify-end">
+              <button className={primaryBtn} onClick={() => loadReceptionIntoWorkspace()} disabled={busy || !receptionPickerId} type="button">
+                <Edit3 size={14} /> Betöltés
+              </button>
+              <button className={neutralBtn} onClick={startNewEmptyReception} disabled={busy} type="button">
+                <Plus size={14} /> Új üres
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderSourceChooser() {
+    return (
+      <section className={card}>
+        <SectionTitle
+          icon={<UploadCloud size={16} />}
+          title="Hogyan kerüljenek be a terméksorok?"
+          right={<span className="text-xs text-white/60">A receptió fejadatai rendben vannak</span>}
+        />
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <button className={sourceChoiceCard} onClick={() => chooseIncomingMode("import")} disabled={!receptionHeaderReady} type="button">
+            <div className="flex items-start gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-red-300/35 bg-[#c90d22] text-white shadow-sm shadow-[#c90d22]/20">
+                <FileSpreadsheet size={20} />
+              </span>
+              <div>
+                <p className="text-base text-white">XLS / XLSX import</p>
+                <p className="mt-1 text-sm leading-6 text-white/68">Fájl beolvasás, Excel oszlopok társítása, soronkénti előnézet és kijelölés.</p>
+                <p className="mt-3 inline-flex rounded-full border border-white/14 bg-white/8 px-2.5 py-1 text-xs text-white/76">Ajánlott beszállítói listához</p>
+              </div>
+            </div>
+          </button>
+
+          <button className={sourceChoiceCard} onClick={() => chooseIncomingMode("manual")} disabled={!receptionHeaderReady} type="button">
+            <div className="flex items-start gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#67d4d1]/45 bg-[#208d8b] text-white shadow-sm shadow-[#208d8b]/20">
+                <Plus size={20} />
+              </span>
+              <div>
+                <p className="text-base text-white">Manuális terméksor</p>
+                <p className="mt-1 text-sm leading-6 text-white/68">Egy termék gyors felvitele fotóval, leírással, összetétellel, bárkóddal és készlettel.</p>
+                <p className="mt-3 inline-flex rounded-full border border-white/14 bg-white/8 px-2.5 py-1 text-xs text-white/76">Ajánlott egyedi sorhoz</p>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap justify-between gap-2">
+          <button className={neutralBtn} onClick={goToReceptionStep} type="button">
+            <ArrowLeft size={14} /> Fejadatok módosítása
+          </button>
+          {rows.length > 0 && (
+            <button className={primaryBtn} onClick={() => setIncomingStep("review")} type="button">
+              <CheckCircle size={14} /> Előnézet és mentés
+            </button>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderReceptionHeaderEditor() {
     return (
       <section className={card}>
@@ -2549,7 +2771,7 @@ export default function AllInIncoming(_props: Props) {
           <div className="grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
             <label className={label}>
               Beszállító
-              <select className={`${selectInput} w-full`} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+              <select className={requiredSelectInput(receptionHeaderMissing.supplier)} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
                 <option style={mutedOptionStyle} value="">Beszállító kiválasztása</option>
                 {suppliers.map((s) => (
                   <option style={optionStyle} key={s.id} value={s.id}>{s.name}</option>
@@ -2560,7 +2782,7 @@ export default function AllInIncoming(_props: Props) {
             <label className={label}>
               Cél hely
               <div className="grid grid-cols-[1fr_auto] gap-2">
-                <select className={`${selectInput} w-full`} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                <select className={requiredSelectInput(receptionHeaderMissing.location)} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
                   <option style={mutedOptionStyle} value="">Cél hely kiválasztása</option>
                   {locations.map((l) => (
                     <option style={optionStyle} key={l.id} value={l.id}>{l.name}</option>
@@ -2687,11 +2909,21 @@ export default function AllInIncoming(_props: Props) {
             </div>
           </div>
 
-          {!receptionReady && (
-            <div className="rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
-              Mentés előtt töltsd ki a kötelező receptió mezőket. A pirossal jelölt mezők hiányoznak vagy hibásak.
+          {!receptionHeaderReady && (
+            <div className="rounded-xl border border-red-300/35 bg-[#c90d22]/16 px-3 py-2 text-sm text-red-50">
+              Kötelező mezők: {missingReceptionFieldLabels.join(", ") || "hiányzó adat"}. A pirossal jelölt mezők hiányoznak vagy hibásak.
             </div>
           )}
+
+          <div className="flex flex-col gap-3 rounded-2xl border border-white/14 bg-[#354153] px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.08em] text-white/58">Következő lépés</p>
+              <p className="mt-1 text-sm text-white/78">{receptionHeaderReady ? "A fejadatai rendben vannak, jöhet a terméksor forrása." : "Töltsd ki a piros mezőket, utána nyílik a következő oldal."}</p>
+            </div>
+            <button className={receptionHeaderReady ? primaryBtn : dangerBtn} onClick={goToSourceStep} disabled={!receptionHeaderReady} type="button">
+              Tovább a terméksorokhoz <ChevronDown size={14} />
+            </button>
+          </div>
         </div>
       </section>
     );
@@ -3121,46 +3353,13 @@ export default function AllInIncoming(_props: Props) {
 
         {message && <div className="rounded-xl border border-emerald-200/30 bg-emerald-400/12 px-3 py-2 text-sm text-white/92">{message}</div>}
 
-        <section className={card}>
-          <SectionTitle
-            icon={<FileSpreadsheet size={16} />}
-            title="Munkafolyamat"
-            right={<span className="text-xs text-white/60">Új bevételezés vagy meglévő receptió folytatása</span>}
-          />
-          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_2fr_auto] lg:items-end">
-            <div className="rounded-xl border border-white/12 bg-[#354153] px-3 py-2">
-              <p className="text-xs uppercase tracking-[0.08em] text-white/58">Aktuális mód</p>
-              <p className="mt-1 text-sm text-white">{selectedReceptionId ? "Meglévő receptió folytatása" : "Új üres bevételezés"}</p>
-              {selectedReceptionSummary && (
-                <p className="mt-1 text-xs text-white/62">
-                  {selectedReceptionSummary.invoice_number || "Számlaszám nélkül"} • {receptionStatusLabel(selectedReceptionSummary.status)} • {moneyText(toNumber(selectedReceptionSummary.invoice_gross), selectedReceptionSummary.currency_code || "")}
-                </p>
-              )}
-            </div>
-            <label className={label}>
-              Receptió kiválasztása listából
-              <select className={`${selectInput} w-full`} value={receptionPickerId} onChange={(e) => setReceptionPickerId(e.target.value)}>
-                <option style={mutedOptionStyle} value="">Válassz meglévő receptiót</option>
-                {receptions.filter(receptionHasImportHistory).map((r) => (
-                  <option style={optionStyle} key={r.id} value={r.id}>
-                    {r.invoice_number || "Számlaszám nélkül"} • {r.supplier_name || "-"} • {receptionStatusLabel(r.status)} • {moneyText(toNumber(r.invoice_gross), r.currency_code || "")}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="flex flex-wrap gap-2 lg:justify-end">
-              <button className={primaryBtn} onClick={() => loadReceptionIntoWorkspace()} disabled={busy || !receptionPickerId} type="button">
-                <Edit3 size={14} /> Betöltés / folytatás
-              </button>
-              <button className={neutralBtn} onClick={startNewEmptyReception} disabled={busy} type="button">
-                <Plus size={14} /> Új üres
-              </button>
-            </div>
-          </div>
-        </section>
+        {renderWorkflowWizard()}
 
-        {renderReceptionHeaderEditor()}
+        {incomingStep === "reception" && renderReceptionHeaderEditor()}
 
+        {incomingStep === "source" && renderSourceChooser()}
+
+        {incomingStep === "import" && (
         <section className={card}>
           <SectionTitle icon={<FileSpreadsheet size={16} />} title="XLS import és sormentés" right={<span className="text-xs text-white/60">Fájl, kijelölés, mentés</span>} />
 
@@ -3269,7 +3468,9 @@ export default function AllInIncoming(_props: Props) {
             </div>
           ) : null}
         </section>
+        )}
 
+        {incomingStep === "manual" && (
         <section className={card}>
           <SectionTitle
             icon={<Plus size={16} />}
@@ -3370,8 +3571,9 @@ export default function AllInIncoming(_props: Props) {
             </div>
           )}
         </section>
+        )}
 
-        {!selectedReceptionId && (
+        {incomingStep === "reception" && !selectedReceptionId && (
         <section className={card}>
           <SectionTitle
             icon={<FileSpreadsheet size={16} />}
@@ -3413,6 +3615,7 @@ export default function AllInIncoming(_props: Props) {
 
         )}
 
+        {incomingStep === "import" && (
         <section className={card}>
           <SectionTitle
             icon={<AlertTriangle size={16} />}
@@ -3498,8 +3701,9 @@ export default function AllInIncoming(_props: Props) {
             </div>
           )}
         </section>
+        )}
 
-        {rows.length > 0 && (
+        {rows.length > 0 && (incomingStep === "import" || incomingStep === "manual" || incomingStep === "review") && (
         <section className={card}>
           <SectionTitle
             icon={<FileSpreadsheet size={16} />}
@@ -3707,6 +3911,7 @@ export default function AllInIncoming(_props: Props) {
         </section>
         )}
 
+        {incomingStep !== "reception" && (
         <section className={card}>
           <SectionTitle icon={<CheckCircle size={16} />} title="Import előzmények" right={<span className="text-xs text-white/60">Legutóbbi bevételezések</span>} />
           <div className="mt-3 grid gap-2">
@@ -3759,7 +3964,8 @@ export default function AllInIncoming(_props: Props) {
             {!batches.length && <p className="rounded-xl border border-white/12 bg-[#354153] px-3 py-4 text-sm text-white/70">Még nincs import előzmény.</p>}
           </div>
         </section>
-        {renderLoadedReceptionContent()}
+        )}
+        {incomingStep !== "reception" && renderLoadedReceptionContent()}
       </div>
     </main>
   );
