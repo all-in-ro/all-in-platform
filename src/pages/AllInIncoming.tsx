@@ -541,7 +541,7 @@ function buildReceptionVerificationHtml(detail: AifReceptionDetail, categories: 
           <th>Cod produs</th>
           <th>Denumire produs</th>
           <th>Brand</th>
-          <th>Categorie</th>
+          <th>Categorie principala</th>
           <th>Gen</th>
           <th>Culoare</th>
           <th>Cod culoare</th>
@@ -1791,7 +1791,7 @@ export default function AllInIncoming(_props: Props) {
       fillReceptionHeader(detail, { clearDraftRows: false });
       setRows((current) => (current.length ? normalizeImportedRowsWithMeta(current) : current));
       const remaining = Number((detail.item as any).remaining_rows || 0);
-      setMessage(`Receptió lista és törzsadatok újratöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Az újonnan felvett színek, kategóriák és az OSFM méret is frissült a listában."}`);
+      setMessage(`Receptió lista és törzsadatok újratöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Az újonnan felvett színek, főkategóriák / alkategóriák és az OSFM méret is frissült a listában."}`);
     } catch (e: any) {
       setMessage(e?.message || "A receptió és a törzsadatok újratöltése nem sikerült.");
     } finally {
@@ -1986,7 +1986,7 @@ export default function AllInIncoming(_props: Props) {
         const detail = await apiAifGetReception(rid);
         fillReceptionHeader(detail, { clearDraftRows: false });
       }
-      setMessage("Lista és törzsadatok frissítve. Az újonnan felvett színek, kategóriák és az OSFM méret is újraellenőrizve.");
+      setMessage("Lista és törzsadatok frissítve. Az újonnan felvett színek, főkategóriák / alkategóriák és az OSFM méret is újraellenőrizve.");
     } catch (e: any) {
       setMessage(e?.message || "Az újratöltés nem sikerült.");
     } finally {
@@ -2721,7 +2721,7 @@ export default function AllInIncoming(_props: Props) {
                 <th className="px-3 py-2 font-normal">S/N/COD</th>
                 <th className="px-3 py-2 font-normal">Név</th>
                 <th className="px-3 py-2 font-normal">Márka</th>
-                <th className="px-3 py-2 font-normal">Kategória</th>
+                <th className="px-3 py-2 font-normal">Főkategória</th>
                 <th className="px-3 py-2 font-normal">Nem</th>
                 <th className="px-3 py-2 font-normal">Szín</th>
                 <th className="px-3 py-2 font-normal">Méret</th>
@@ -3220,7 +3220,7 @@ export default function AllInIncoming(_props: Props) {
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm uppercase tracking-[0.09em] text-white/90">Import besorolás</p>
-                <p className="mt-1 text-xs text-white/62">Márka, kategória és nem az AIF törzsadatokból. Ezek az értékek a mentett sorokkal együtt kerülnek tovább.</p>
+                <p className="mt-1 text-xs text-white/62">Márka, főkategória és nem az AIF törzsadatokból. Ezek az értékek a mentett sorokkal együtt kerülnek tovább.</p>
               </div>
               <button className={tinyBtn} onClick={() => (window.location.hash = "#allinwarehouse")} type="button">Törzsadatok</button>
             </div>
@@ -3235,10 +3235,10 @@ export default function AllInIncoming(_props: Props) {
                 </select>
               </label>
               <label className={label}>
-                Kategória
+                Főkategória
                 <select className={`${selectInput} w-full`} value={defaultCategoryCode} onChange={(e) => setDefaultCategoryCode(e.target.value)}>
-                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett kategória</option>
-                  {activeCategories.map((c) => (
+                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett főkategória</option>
+                  {(mainCategories.length ? mainCategories : activeCategories).map((c) => (
                     <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>
                   ))}
                 </select>
@@ -3310,19 +3310,19 @@ export default function AllInIncoming(_props: Props) {
                     {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
                   </select>
                 </label>
-                <label className={label}>Kategória
+                <label className={label}>Főkategória
                   <select className={`${selectInput} w-full`} value={manualCategoryCode || defaultCategoryCode} onChange={(e) => { const value = e.target.value; const found = (mainCategories.length ? mainCategories : activeCategories).find((c) => String(c.code || c.id) === value); setManualCategoryCode(value); setManualSubCategoryCode(""); if (found) setManualProductType((current) => current || categoryLabel(found)); }}>
                     <option style={mutedOptionStyle} value="">Nincs</option>
                     {(mainCategories.length ? mainCategories : activeCategories).map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                   </select>
                 </label>
-                <label className={label}>Alkategória
+                <label className={label}>Alkategória / terméktípus
                   <select className={`${selectInput} w-full`} value={manualSubCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategoriesForManualCategory.find((c) => String(c.code || c.id) === value); setManualSubCategoryCode(value); if (found) setManualProductType((current) => current || categoryLabel(found)); }}>
                     <option style={mutedOptionStyle} value="">Nincs</option>
                     {subCategoriesForManualCategory.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                   </select>
                 </label>
-                <label className={label}>Terméktípus
+                <label className={label}>Import terméktípus / RODESCR
                   <input className={`${input} w-full`} value={manualProductType} onChange={(e) => setManualProductType(e.target.value)} placeholder="pl. tricou, hoodie" />
                 </label>
                 <label className={label}>Nem
@@ -3610,7 +3610,7 @@ export default function AllInIncoming(_props: Props) {
                           </select>
                         </label>
                         <label className="grid gap-1">
-                          <span className={compactFieldLabel}>Kategória</span>
+                          <span className={compactFieldLabel}>Főkategória / alkategória</span>
                           <select className={`${compactSelect} w-full`} value={categoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
                             {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{(c.parent_id || c.parentId) ? `↳ ${categoryLabel(c)}` : categoryLabel(c)}</option>)}
