@@ -390,6 +390,7 @@ export default function AllInInventory() {
   const [manualBarcode, setManualBarcode] = useState("");
   const [scannerStatus, setScannerStatus] = useState("");
   const [pendingScan, setPendingScan] = useState<PendingScan | null>(null);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
 
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
@@ -490,6 +491,19 @@ export default function AllInInventory() {
     return () => stopCameraScanner();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const update = () => setIsMobileLayout(media.matches);
+    update();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
   const categories = useMemo(() => {
     const set = new Map<string, string>();
     for (const row of active?.lines || stockRows) {
@@ -506,8 +520,24 @@ export default function AllInInventory() {
 
   const filteredLines = useMemo(() => {
     const lines = active?.lines || [];
+    const searchKey = barcodeLooseKey(search);
     return lines.filter((line) => {
       if (categoryFilter !== "all" && line.category_code !== categoryFilter && line.category_name_ro !== categoryFilter) return false;
+      if (searchKey) {
+        const haystack = [
+          productTitle(line),
+          line.brand_name,
+          line.category_name_ro,
+          line.color_name,
+          line.color_code,
+          line.size,
+          line.display_barcode,
+          line.barcode,
+          line.internal_sku,
+          line.model_code,
+        ].map(barcodeLooseKey).join(" ");
+        if (!haystack.includes(searchKey)) return false;
+      }
       const diff = lineDiff(line, drafts);
       if (lineFilter === "uncounted") return diff === null;
       if (lineFilter === "ok") return diff === 0;
@@ -515,7 +545,7 @@ export default function AllInInventory() {
       if (lineFilter === "extra") return diff !== null && diff > 0;
       return true;
     });
-  }, [active, categoryFilter, lineFilter, drafts]);
+  }, [active, categoryFilter, lineFilter, drafts, search]);
 
   const activeStats = useMemo(() => {
     const lines = active?.lines || [];
@@ -735,7 +765,7 @@ export default function AllInInventory() {
     const code = String(rawCode || "").trim();
     if (!code) return;
     if (!activeRef.current) {
-      setMessage({ tone: "error", text: "Előbb indíts vagy tölts be egy leltárt. A kamera nem fog helyetted adatbázist varázsolni, sajnos." });
+      setMessage({ tone: "error", text: "Előbb indíts vagy tölts be egy leltárt." });
       return;
     }
     if (!canEditActive) {
@@ -752,7 +782,7 @@ export default function AllInInventory() {
     const line = findLineByBarcode(code);
     if (!line) {
       setScannerStatus(`Nem találom ezt a bárkódot a leltárban: ${code}`);
-      setMessage({ tone: "error", text: `A bárkód nincs ebben a leltárban: ${code}. Vagy másik helyszín, vagy a gép megint önálló művészetet végez.` });
+      setMessage({ tone: "error", text: `A bárkód nincs ebben a leltárban: ${code}. Ellenőrizd a helyszínt vagy a vonalkódot.` });
       return;
     }
 
@@ -775,7 +805,7 @@ export default function AllInInventory() {
 
   function clearPendingScan() {
     setPendingScan(null);
-    setScannerStatus("Beolvasás elvetve. A készlet túlélte ezt a drámát.");
+    setScannerStatus("Beolvasás elvetve.");
   }
 
   function applyPendingScan() {
@@ -783,7 +813,7 @@ export default function AllInInventory() {
     const line = (activeRef.current?.lines || []).find((item) => item.id === pendingScan.lineId);
     if (!line) {
       setPendingScan(null);
-      setMessage({ tone: "error", text: "A beolvasott sor közben eltűnt. Ez se gyakori, de hát itt vagyunk." });
+      setMessage({ tone: "error", text: "A beolvasott sor nem található. Frissítsd a leltárt." });
       return;
     }
     const current = draftCountedValue(draftsRef.current[pendingScan.lineId]) ?? 0;
@@ -820,7 +850,7 @@ export default function AllInInventory() {
     const BarcodeDetectorCtor = (window as any).BarcodeDetector;
     if (!BarcodeDetectorCtor) {
       setScannerStatus("Ez a böngésző nem támogatja a kamera alapú BarcodeDetector API-t. A kézi / bluetooth olvasós mező működik.");
-      setMessage({ tone: "error", text: "A böngésző nem támogatja a kamera-bárkódolvasást. Chrome / Safari frissítés, aztán újra próba. Mert természetesen a webkamera sem lehet egyszerű." });
+      setMessage({ tone: "error", text: "A böngésző nem támogatja a kamera-bárkódolvasást. Használj Chrome vagy Safari böngészőt, vagy a kézi / bluetooth olvasós mezőt." });
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -866,7 +896,7 @@ export default function AllInInventory() {
             const raw = first?.rawValue || first?.raw_value || first?.displayValue;
             if (raw) handleBarcodeCandidate(String(raw), "camera");
           } catch {
-            // Egy-egy kamera frame hibája nem ok arra, hogy az egész leltár belezuhanjon a Dunába.
+            // Egy-egy kamera frame hibáját figyelmen kívül hagyjuk, a következő képkockán folytatjuk.
           }
         }
         scannerFrameRef.current = window.requestAnimationFrame(tick);
@@ -894,9 +924,9 @@ export default function AllInInventory() {
           <div className="rounded-3xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/12 p-3 shadow-sm shadow-[#2a8d8b]/10">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#9ee4e2]/35 bg-[#2a8d8b]/28 px-3 py-1 text-xs text-[#d7fffe]"><Barcode size={14} /> Mobil bárkód gyorsszkenner</div>
-                <h3 className="mt-2 text-xl font-semibold text-white">Pitty, kép, +1, megerősítés</h3>
-                <p className="mt-1 text-sm leading-6 text-white/72">Telefonon kamera, bluetooth olvasóval vagy kézi beírással. Beolvasás után alapból 1 db kerül előkészítésre, de + / - gombbal egyből állítható.</p>
+                <div className="inline-flex items-center gap-2 rounded-full border border-[#9ee4e2]/35 bg-[#2a8d8b]/28 px-3 py-1 text-xs text-[#d7fffe]"><Barcode size={14} /> Bárkódos számolás</div>
+                <h3 className="mt-2 text-xl font-semibold text-white">Beolvasás, termékkép, mennyiség</h3>
+                <p className="mt-1 text-sm leading-6 text-white/72">Kamera, bluetooth olvasó vagy kézi beírás. Beolvasás után 1 db kerül előkészítésre, a mennyiség + / - gombbal állítható.</p>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2">
                 {scannerOpen ? (
@@ -923,7 +953,7 @@ export default function AllInInventory() {
             {scannerOpen ? (
               <div className="mt-3 overflow-hidden rounded-2xl border border-white/14 bg-black/35">
                 <video ref={scannerVideoRef} className="aspect-video w-full object-cover" muted playsInline />
-                <div className="border-t border-white/10 px-3 py-2 text-xs text-white/62">Tipp: tartsd stabilan a kamerát, mert a vonalkód nem spirituális élmény, hanem fókusz kérdése.</div>
+                <div className="border-t border-white/10 px-3 py-2 text-xs text-white/62">Tartsd stabilan a kamerát, és igazítsd a vonalkódot a kép közepére.</div>
               </div>
             ) : null}
 
@@ -977,6 +1007,175 @@ export default function AllInInventory() {
           </div>
         </div>
       </div>
+    );
+  }
+
+
+  function renderMobileActiveWorkspace() {
+    if (!active || !isMobileLayout) return null;
+    const canScan = Boolean(canEditActive);
+    const currentQty = pendingLine ? (draftCountedValue(drafts[pendingLine.id]) ?? 0) : 0;
+    const afterQty = pendingScan && pendingLine ? currentQty + pendingScan.qty : currentQty;
+    const afterDiff = pendingLine ? afterQty - n(pendingLine.expected_qty) : 0;
+    const pendingImg = getImageSrc(pendingLine || undefined);
+
+    return (
+      <section className="space-y-3 lg:hidden">
+        <div className="sticky top-2 z-30 rounded-2xl border border-[#2a8d8b]/45 bg-[#303a4c]/95 p-3 shadow-2xl backdrop-blur">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[#9ee4e2]">Aktív leltár</div>
+              <div className="mt-1 truncate text-base font-semibold text-white">{active.item.title}</div>
+              <div className="mt-1 text-xs text-white/62">{formatQty(activeStats.countedLines)} / {formatQty(activeStats.lines)} sor · {formatQty(activeStats.counted)} / {formatQty(activeStats.expected)} db</div>
+            </div>
+            <span className="shrink-0 rounded-full bg-white/[0.10] px-2.5 py-1 text-[11px] text-white/75">{statusLabel(active.item.status)}</span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-4 gap-1.5 text-center text-[11px]">
+            <div className="rounded-xl bg-white/[0.07] p-2"><div className="text-white/46">Rendszer</div><div className="font-semibold text-white">{formatQty(activeStats.expected)}</div></div>
+            <div className="rounded-xl bg-white/[0.07] p-2"><div className="text-white/46">Talált</div><div className="font-semibold text-white">{formatQty(activeStats.counted)}</div></div>
+            <div className="rounded-xl bg-red-500/10 p-2"><div className="text-white/46">Hiány</div><div className="font-semibold text-red-100">{formatQty(activeStats.missing)}</div></div>
+            <div className="rounded-xl bg-[#2a8d8b]/14 p-2"><div className="text-white/46">Többlet</div><div className="font-semibold text-emerald-100">{formatQty(activeStats.extra)}</div></div>
+          </div>
+
+          <form className="mt-3 grid grid-cols-[1fr_auto] gap-2" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
+            <input
+              className="h-11 min-w-0 rounded-xl border border-white/18 bg-[#202a3a] px-3 text-base text-white outline-none placeholder:text-white/42 focus:border-[#2a8d8b]/75"
+              value={manualBarcode}
+              onChange={(e) => setManualBarcode(e.target.value)}
+              placeholder="Bárkód"
+              autoComplete="off"
+              inputMode="numeric"
+              disabled={!canScan}
+            />
+            <button className={primaryBtn} type="submit" disabled={!canScan || !manualBarcode.trim()}><CheckCircle2 size={15} /> OK</button>
+          </form>
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {scannerOpen ? (
+              <button className={redBtn} type="button" onClick={stopCameraScanner}><X size={15} /> Kamera stop</button>
+            ) : (
+              <button className={primaryBtn} type="button" onClick={startCameraScanner} disabled={!canScan}><Barcode size={15} /> Kamera</button>
+            )}
+            <button className={btnSoft} type="button" onClick={saveLines} disabled={saving || !canEditActive}><Save size={15} /> Mentés</button>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button className={btnSoft} type="button" onClick={() => printPdf("result")}><Download size={15} /> Eredmény PDF</button>
+            <button className={primaryBtn} type="button" onClick={commitCount} disabled={saving || !canEditActive || !activeStats.complete}><CheckCircle2 size={15} /> Bevezetés</button>
+          </div>
+
+          {scannerOpen ? (
+            <div className="mt-2 overflow-hidden rounded-xl border border-white/14 bg-black/40">
+              <video ref={scannerVideoRef} className="max-h-56 w-full object-cover" muted playsInline />
+            </div>
+          ) : null}
+
+          {pendingLine && pendingScan ? (
+            <div className="mt-2 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/14 p-2">
+              <div className="grid grid-cols-[64px_1fr] gap-2">
+                <div className="grid h-20 w-16 place-items-center overflow-hidden rounded-lg border border-white/14 bg-white/90">
+                  {pendingImg ? <img src={pendingImg} alt="" className="h-full w-full object-contain" /> : <ImageIcon size={22} className="text-slate-400" />}
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-white">{productTitle(pendingLine)}</div>
+                  <div className="mt-0.5 text-xs text-white/65">{pendingLine.brand_name || "-"} · {pendingLine.color_name || pendingLine.color_code || "-"} · {pendingLine.size || "-"}</div>
+                  <div className="mt-1 grid grid-cols-3 gap-1 text-center text-[10px]">
+                    <div className="rounded-lg bg-white/[0.08] p-1"><div className="text-white/45">Volt</div><div className="text-white">{formatQty(currentQty)}</div></div>
+                    <div className="rounded-lg bg-white/[0.08] p-1"><div className="text-white/45">+ db</div><div className="text-white">{formatQty(pendingScan.qty)}</div></div>
+                    <div className="rounded-lg bg-white/[0.08] p-1"><div className="text-white/45">Utána</div><div className={afterDiff < 0 ? "text-red-100" : afterDiff > 0 ? "text-emerald-100" : "text-white"}>{formatQty(afterQty)}</div></div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 grid grid-cols-[44px_1fr_44px] gap-2">
+                <button className={btnSoft} type="button" onClick={() => changePendingQty(-1)} disabled={pendingScan.qty <= 1}>−</button>
+                <div className="grid place-items-center rounded-xl border border-white/14 bg-[#202a3a] text-center text-xl font-semibold text-white">{pendingScan.qty}</div>
+                <button className={btnSoft} type="button" onClick={() => changePendingQty(1)}>+</button>
+              </div>
+              <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                <button className={primaryBtn} type="button" onClick={applyPendingScan}><CheckCircle2 size={15} /> Hozzáadás</button>
+                <button className={btnSoft} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
+              </div>
+            </div>
+          ) : null}
+
+          {scannerStatus ? <div className="mt-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-xs text-white/76">{scannerStatus}</div> : null}
+        </div>
+
+        <div className="rounded-2xl border border-white/14 bg-white/[0.06] p-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" size={16} />
+            <input className="h-10 w-full rounded-xl border border-white/16 bg-[#303a4c] pl-9 pr-3 text-sm text-white outline-none placeholder:text-white/42" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Keresés termékre vagy vonalkódra" />
+          </div>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+            {([
+              ["all", "Minden"],
+              ["uncounted", "Nincs"],
+              ["ok", "Egyezik"],
+              ["missing", "Hiány"],
+              ["extra", "Többlet"],
+            ] as [LineFilter, string][]).map(([key, text]) => (
+              <button key={key} type="button" className={`${lineFilter === key ? chipActive : chipIdle} shrink-0`} onClick={() => setLineFilter(key)}>{text}</button>
+            ))}
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button className={btnSoft} type="button" onClick={setVisibleToExpected} disabled={!canEditActive}>Látható = rendszer</button>
+            <button className={btnSoft} type="button" onClick={clearVisible} disabled={!canEditActive}>Látható ürítés</button>
+          </div>
+        </div>
+
+        <div className="grid gap-2">
+          {filteredLines.map((line) => {
+            const diff = lineDiff(line, drafts);
+            const img = getImageSrc(line);
+            const counted = drafts[line.id]?.countedQty || "";
+            return (
+              <div key={line.id} className="rounded-2xl border border-white/14 bg-white/[0.055] p-2.5">
+                <div className="grid grid-cols-[54px_1fr_auto] gap-2">
+                  <div className="grid h-14 w-14 place-items-center overflow-hidden rounded-xl border border-white/14 bg-white/90">
+                    {img ? <img src={img} alt="" className="h-full w-full object-contain" /> : <ImageIcon size={18} className="text-slate-400" />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-[#9ee4e2]">{line.brand_name || "-"}</div>
+                    <div className="truncate text-sm font-semibold text-white">{productTitle(line)}</div>
+                    <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-white/68">
+                      <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{line.color_name || line.color_code || "-"}</span>
+                      <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{line.size || "-"}</span>
+                      <span className="rounded-full bg-white/[0.08] px-1.5 py-0.5">{line.display_barcode || line.barcode || "-"}</span>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs">
+                    <div className="text-white/45">Rendszer</div>
+                    <div className="text-base font-semibold text-white">{formatQty(line.expected_qty)}</div>
+                    <div className={diff === null ? "text-white/45" : diff < 0 ? "text-red-200" : diff > 0 ? "text-emerald-200" : "text-white/75"}>{diff === null ? "-" : `${diff > 0 ? "+" : ""}${formatQty(diff)}`}</div>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-[44px_1fr_44px] gap-2">
+                  <button
+                    className="h-11 rounded-xl border border-white/14 bg-white/[0.08] text-xl text-white disabled:opacity-40"
+                    type="button"
+                    disabled={!canEditActive}
+                    onClick={() => {
+                      const current = draftCountedValue(drafts[line.id]) ?? 0;
+                      updateDraft(line.id, { countedQty: String(Math.max(0, current - 1)) });
+                    }}
+                  >−</button>
+                  <input className="h-11 w-full rounded-xl border border-white/18 bg-[#202a3a] px-3 text-center text-lg font-semibold text-white outline-none focus:border-[#2a8d8b]/70" disabled={!canEditActive} inputMode="numeric" value={counted} onChange={(e) => updateDraft(line.id, { countedQty: e.target.value.replace(/[^0-9]/g, "") })} placeholder="Talált" />
+                  <button
+                    className="h-11 rounded-xl border border-white/14 bg-white/[0.08] text-xl text-white disabled:opacity-40"
+                    type="button"
+                    disabled={!canEditActive}
+                    onClick={() => {
+                      const current = draftCountedValue(drafts[line.id]) ?? 0;
+                      updateDraft(line.id, { countedQty: String(current + 1) });
+                    }}
+                  >+</button>
+                </div>
+              </div>
+            );
+          })}
+          {!filteredLines.length ? <div className="rounded-2xl border border-white/14 bg-white/[0.05] p-4 text-center text-sm text-white/62">Nincs találat a jelenlegi szűrésre.</div> : null}
+        </div>
+      </section>
     );
   }
 
@@ -1079,6 +1278,9 @@ export default function AllInInventory() {
 
         {message ? <div className={`rounded-2xl border px-4 py-3 text-sm ${messageClass}`}>{message.text}</div> : null}
 
+        {active && isMobileLayout ? renderMobileActiveWorkspace() : null}
+
+        {(!active || !isMobileLayout) ? (
         <section className={panel}>
           <div className={panelHead}>
             <div>
@@ -1116,14 +1318,18 @@ export default function AllInInventory() {
             </label>
           </div>
         </section>
+        ) : null}
 
+        {(!active || !isMobileLayout) ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard label={sourceLabel(currentLocation)} value={currentLocation?.name || "-"} hint="Kiválasztott helyszín" icon={<MapPin size={18} />} tone="blue" />
           <StatCard label="Készletsor" value={formatQty(stockStats.lines)} hint={`${formatQty(stockStats.qty)} db rendszer szerint`} icon={<PackageCheck size={18} />} />
           <StatCard label="Elérhető" value={formatQty(stockStats.available)} hint="Készlet mínusz foglalt" icon={<ShieldCheck size={18} />} tone="green" />
           <StatCard label="Becsült eladási érték" value={`${formatMoney(stockStats.sellValue)} RON`} hint="A kiválasztott készleten" icon={<FileText size={18} />} />
         </section>
+        ) : null}
 
+        {(!active || !isMobileLayout) ? (
         <section className={panel}>
           <div className={panelHead}>
             <div>
@@ -1151,8 +1357,10 @@ export default function AllInInventory() {
             )) : <div className="rounded-2xl border border-white/14 bg-white/[0.04] p-4 text-sm text-white/62 md:col-span-2 xl:col-span-3">Ehhez a helyszínhez még nincs leltár.</div>}
           </div>
         </section>
+        ) : null}
 
         {active ? (
+          isMobileLayout ? null : (
           <section className={panel}>
             <div className={panelHead}>
               <div>
@@ -1319,6 +1527,7 @@ export default function AllInInventory() {
               })}
             </div>
           </section>
+          )
         ) : (
           <section className={panel}>
             <div className={panelHead}>
