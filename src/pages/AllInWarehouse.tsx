@@ -240,7 +240,12 @@ type InventoryItem = {
   model_status?: string | null;
   category_code?: string | null;
   category_name_ro?: string | null;
-  category_name_hu?: string | null; aliases?: string[] | null;
+  category_name_hu?: string | null;
+  subcategory_id?: string | null;
+  subcategory_code?: string | null;
+  subcategory_name_ro?: string | null;
+  subcategory_name_hu?: string | null;
+  aliases?: string[] | null;
   color_code?: string | null;
   color_name?: string | null;
   color_hex?: string | null;
@@ -340,6 +345,10 @@ function importFocusRowToInventoryItem(rawItem: any): InventoryItem | null {
     category_code: categoryCode || null,
     category_name_ro: categoryName || null,
     category_name_hu: firstWarehouseText(rawItem.category_name_hu, rawItem.categoryNameHu) || null,
+    subcategory_id: firstWarehouseText(rawItem.subcategory_id, rawItem.subCategoryId, norm.subcategoryId, norm.subCategoryId) || null,
+    subcategory_code: firstWarehouseText(rawItem.subcategory_code, rawItem.subCategoryCode, norm.subcategoryCode, norm.subCategoryCode, norm.sourceSubCategory, raw.RODESCR) || null,
+    subcategory_name_ro: firstWarehouseText(rawItem.subcategory_name_ro, rawItem.subcategoryName, rawItem.subCategoryName, norm.subcategoryName, norm.subCategoryName, norm.sourceSubCategory, raw.RODESCR) || null,
+    subcategory_name_hu: firstWarehouseText(rawItem.subcategory_name_hu, rawItem.subcategoryNameHu, rawItem.subCategoryNameHu) || null,
     color_code: colorCode || null,
     color_name: colorName || null,
     color_hex: firstWarehouseText(rawItem.color_hex, rawItem.colorHex, norm.colorHex) || null,
@@ -445,7 +454,7 @@ function latestWarehouseImportMovementFocus(rows: Array<Record<string, any>>): W
   };
 }
 
-type MetaItem = { id: string; code?: string; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
+type MetaItem = { id: string; code?: string; parent_id?: string | null; parentId?: string | null; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
 type GenderType = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
 type ColorType = {
   id: string;
@@ -695,6 +704,7 @@ type EditForm = {
   modelStatus: string;
   brandCode: string;
   categoryCode: string;
+  subCategoryCode: string;
   barcode: string;
   supplierProductCode: string;
   snCod: string;
@@ -1838,6 +1848,22 @@ function categoryLabel(c: MetaItem) {
   return c.name_hu || c.name_ro || c.name || c.code || "-";
 }
 
+function categoryParentId(c?: Partial<MetaItem> | null) {
+  return String(c?.parent_id || (c as any)?.parentId || "").trim();
+}
+
+function isSubCategory(c?: Partial<MetaItem> | null) {
+  return Boolean(categoryParentId(c));
+}
+
+
+
+function categoryValueMatches(c: MetaItem | null | undefined, value: unknown) {
+  const key = normalizeSearch(value);
+  if (!c || !key) return false;
+  return [c.id, c.code, c.name, c.name_ro, c.name_hu].map(normalizeSearch).some((x) => x === key);
+}
+
 function genderLabel(code: unknown, items: GenderType[]) {
   const key = normalizeSearch(code);
   return items.find((g) => normalizeSearch(g.code) === key)?.name || String(code || "-");
@@ -2120,6 +2146,7 @@ function emptyForm(): EditForm {
     modelStatus: "active",
     brandCode: "",
     categoryCode: "",
+    subCategoryCode: "",
     barcode: "",
     supplierProductCode: "",
     snCod: "",
@@ -2160,6 +2187,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     modelStatus: x.model_status || "active",
     brandCode: x.brand_code || "",
     categoryCode: x.category_code || "",
+    subCategoryCode: x.subcategory_code || x.subCategoryCode || "",
     barcode: visibleWarehouseBarcode(x),
     supplierProductCode: supplierProductCodeFromDetail(d),
     snCod: x.sn_cod || x.snCod || "",
@@ -2187,6 +2215,7 @@ const editFormComparableKeys: Array<keyof EditForm> = [
   "modelStatus",
   "brandCode",
   "categoryCode",
+  "subCategoryCode",
   "barcode",
   "supplierProductCode",
   "snCod",
@@ -2261,16 +2290,17 @@ export default function AllInWarehouse() {
   const [newProductStockRows, setNewProductStockRows] = useState<Record<string, string>>({});
   const [newProductSaving, setNewProductSaving] = useState(false);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
-  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "genders" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "subCategories" | "genders" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
+  const [categoryForm, setCategoryForm] = useState({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
+  const [subCategoryForm, setSubCategoryForm] = useState({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [genderForm, setGenderForm] = useState({ code: "", name: "", aliases: "", sortOrder: "10" });
   const [colorForm, setColorForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
   const [brandColorForm, setBrandColorForm] = useState({ id: "", brandId: "", colorCode: "", colorTypeId: "", notes: "" });
   const [materialForm, setMaterialForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: "10" });
   const [sizeForm, setSizeForm] = useState({ id: "", code: "", name: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [brandSizeForm, setBrandSizeForm] = useState({ id: "", brandId: "", sizeCode: "", sizeTypeId: "", notes: "" });
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "subCategory" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
@@ -2324,6 +2354,7 @@ export default function AllInWarehouse() {
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
+
   const inventoryDisplayItems = useMemo(() => {
     const baseItems = items.filter((item) => !isArchivedInventoryItem(item));
     const focusedItems = incomingFocusItems.filter((item) => !isArchivedInventoryItem(item));
@@ -2405,7 +2436,8 @@ export default function AllInWarehouse() {
         .map((rawItem) => importFocusRowToInventoryItem(rawItem))
         .filter((item): item is InventoryItem => Boolean(item) && itemVariantStatus(item as InventoryItem) !== "archived" && itemModelStatus(item as InventoryItem) !== "archived");
       const focusedItemMap = normalizedFocusedItems.reduce<Map<string, InventoryItem>>((map, rawItem) => {
-        const variantId = String(rawItem?.variant_id || rawItem?.variantId || rawItem?.selected_variant_id || rawItem?.selectedVariantId || "").trim();
+        const anyRawItem = rawItem as InventoryItem & Record<string, any>;
+        const variantId = String(anyRawItem?.variant_id || anyRawItem?.variantId || anyRawItem?.selected_variant_id || anyRawItem?.selectedVariantId || "").trim();
         if (!variantId) return map;
         const previous = map.get(variantId) || ({ variant_id: variantId } as InventoryItem);
         map.set(variantId, { ...previous, ...rawItem, variant_id: variantId } as InventoryItem);
@@ -2993,7 +3025,20 @@ export default function AllInWarehouse() {
     );
   }
 
-  const nextCategorySortOrder = useMemo(() => nextSortOrder(categories), [categories]);
+  const mainCategories = useMemo(() => categories.filter((c) => !String((c as any).parent_id || (c as any).parentId || "").trim()), [categories]);
+  const subCategories = useMemo(() => categories.filter((c) => String((c as any).parent_id || (c as any).parentId || "").trim()), [categories]);
+  const categorySelectOptions = mainCategories.length ? mainCategories : categories;
+  const subCategoriesForValue = (categoryValue: unknown) => {
+    if (!categoryValue) return subCategories;
+    const parent = categorySelectOptions.find((c) => categoryValueMatches(c, categoryValue));
+    if (!parent) return subCategories;
+    return subCategories.filter((c) => categoryParentId(c) === String(parent.id));
+  };
+  const newProductSubCategoryOptions = useMemo(() => subCategoriesForValue(newProduct.categoryCode), [subCategories, categorySelectOptions, newProduct.categoryCode]);
+  const editSubCategoryOptions = useMemo(() => subCategoriesForValue(edit.categoryCode), [subCategories, categorySelectOptions, edit.categoryCode]);
+  const nextCategorySortOrder = useMemo(() => nextSortOrder(mainCategories.length ? mainCategories : categories), [mainCategories, categories]);
+  const nextSubCategorySortOrder = useMemo(() => nextSortOrder(subCategories), [subCategories]);
+  const subCategoryParentLabel = (row: MetaItem) => categoryLabel(mainCategories.find((c) => String(c.id) === String((row as any).parent_id || (row as any).parentId)) || categories.find((c) => String(c.id) === String((row as any).parent_id || (row as any).parentId)) || {} as MetaItem);
   const nextGenderSortOrder = useMemo(() => nextSortOrder(genderTypes), [genderTypes]);
   const nextColorSortOrder = useMemo(() => nextSortOrder(colorTypes), [colorTypes]);
   const nextMaterialSortOrder = useMemo(() => nextSortOrder(materialTypes), [materialTypes]);
@@ -3002,7 +3047,10 @@ export default function AllInWarehouse() {
   useEffect(() => {
     if (!taxonomyOpen) return;
     if (taxonomyTab === "categories" && !categoryForm.id && !categoryForm.nameRo.trim() && !categoryForm.nameHu.trim() && !categoryForm.aliases.trim()) {
-      setCategoryForm((x) => x.sortOrder === nextCategorySortOrder ? x : { ...x, sortOrder: nextCategorySortOrder });
+      setCategoryForm((x) => x.sortOrder === nextCategorySortOrder ? x : { ...x, sortOrder: nextCategorySortOrder, parentId: "" });
+    }
+    if (taxonomyTab === "subCategories" && !subCategoryForm.id && !subCategoryForm.nameRo.trim() && !subCategoryForm.nameHu.trim() && !subCategoryForm.aliases.trim()) {
+      setSubCategoryForm((x) => x.sortOrder === nextSubCategorySortOrder ? x : { ...x, sortOrder: nextSubCategorySortOrder, parentId: x.parentId || mainCategories[0]?.id || "" });
     }
     if (taxonomyTab === "genders" && !genderForm.code && !genderForm.name.trim()) {
       setGenderForm((x) => x.sortOrder === nextGenderSortOrder ? x : { ...x, sortOrder: nextGenderSortOrder });
@@ -3020,6 +3068,7 @@ export default function AllInWarehouse() {
     taxonomyOpen,
     taxonomyTab,
     nextCategorySortOrder,
+    nextSubCategorySortOrder,
     nextGenderSortOrder,
     nextColorSortOrder,
     nextMaterialSortOrder,
@@ -3028,6 +3077,12 @@ export default function AllInWarehouse() {
     categoryForm.nameRo,
     categoryForm.nameHu,
     categoryForm.aliases,
+    subCategoryForm.id,
+    subCategoryForm.nameRo,
+    subCategoryForm.nameHu,
+    subCategoryForm.aliases,
+    subCategoryForm.parentId,
+    mainCategories,
     genderForm.code,
     genderForm.name,
     colorForm.id,
@@ -3073,6 +3128,7 @@ export default function AllInWarehouse() {
   const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
 
   const canSaveCategoryForm = Boolean(categoryForm.nameRo.trim());
+  const canSaveSubCategoryForm = Boolean(subCategoryForm.parentId && subCategoryForm.nameRo.trim());
   const canSaveGenderForm = Boolean(genderForm.name.trim());
   const canSaveColorForm = Boolean(colorForm.nameRo.trim());
   const canSaveBrandColorForm = Boolean(brandColorForm.brandId && brandColorForm.colorCode.trim() && brandColorForm.colorTypeId);
@@ -3235,9 +3291,9 @@ export default function AllInWarehouse() {
   function findVisibleProductNode(variantId: string) {
     const root = productListRef.current;
     if (!root || !variantId) return null;
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-aif-variant-id]"))
-      .filter((node) => node.dataset.aifVariantId === variantId);
-    return nodes.find((node) => Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || nodes[0] || null;
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-aif-variant-id]")) as HTMLElement[];
+    const matchingNodes = nodes.filter((node) => node.dataset.aifVariantId === variantId);
+    return matchingNodes.find((node) => Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || matchingNodes[0] || null;
   }
 
   function queueProductRowJump(variantId: unknown) {
@@ -4149,17 +4205,35 @@ export default function AllInWarehouse() {
   }, [stockRows]);
 
   function resetCategoryForm() {
-    setCategoryForm({ id: "", nameRo: "", nameHu: "", aliases: "", sortOrder: nextCategorySortOrder });
+    setCategoryForm({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: nextCategorySortOrder });
   }
 
   function editCategoryRow(c: MetaItem) {
     setTaxonomyTab("categories");
     setCategoryForm({
       id: String(c.id || c.code || ""),
+      parentId: "",
       nameRo: String(c.name_ro || c.name || ""),
       nameHu: String(c.name_hu || ""),
       aliases: (Array.isArray(c.aliases) ? c.aliases : []).join(", "),
       sortOrder: c.sort_order == null ? nextCategorySortOrder : String(c.sort_order),
+    });
+  }
+
+
+  function resetSubCategoryForm() {
+    setSubCategoryForm({ id: "", parentId: mainCategories[0]?.id || "", nameRo: "", nameHu: "", aliases: "", sortOrder: nextSubCategorySortOrder });
+  }
+
+  function editSubCategoryRow(c: MetaItem) {
+    setTaxonomyTab("subCategories");
+    setSubCategoryForm({
+      id: String(c.id || c.code || ""),
+      parentId: String((c as any).parent_id || (c as any).parentId || ""),
+      nameRo: String(c.name_ro || c.name || ""),
+      nameHu: String(c.name_hu || ""),
+      aliases: (Array.isArray(c.aliases) ? c.aliases : []).join(", "),
+      sortOrder: c.sort_order == null ? nextSubCategorySortOrder : String(c.sort_order),
     });
   }
 
@@ -4359,12 +4433,42 @@ export default function AllInWarehouse() {
         nameHu: categoryForm.nameHu,
         aliases: categoryForm.aliases,
         sortOrder: categoryForm.sortOrder,
+        parentId: null,
       });
       resetCategoryForm();
       await load();
       setMessage("Kategória mentve.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a kategóriát.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
+
+  async function saveSubCategoryForm() {
+    if (!subCategoryForm.parentId) {
+      setMessage("A fő kategória kiválasztása kötelező az alkategóriához.");
+      return;
+    }
+    if (!subCategoryForm.nameRo.trim()) {
+      setMessage("Az alkategória román neve kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveCategory(subCategoryForm.id, {
+        parentId: subCategoryForm.parentId,
+        nameRo: subCategoryForm.nameRo,
+        nameHu: subCategoryForm.nameHu,
+        aliases: subCategoryForm.aliases,
+        sortOrder: subCategoryForm.sortOrder,
+      });
+      resetSubCategoryForm();
+      await load();
+      setMessage("Alkategória mentve.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni az alkategóriát.");
     } finally {
       setTaxonomyBusy(false);
     }
@@ -4471,7 +4575,7 @@ export default function AllInWarehouse() {
     if (!deleteTarget) return;
     setTaxonomyBusy(true);
     try {
-      if (deleteTarget.kind === "category") await apiDeleteCategory(deleteTarget.id);
+      if (deleteTarget.kind === "category" || deleteTarget.kind === "subCategory") await apiDeleteCategory(deleteTarget.id);
       if (deleteTarget.kind === "gender") await apiDeleteGenderType(deleteTarget.id);
       if (deleteTarget.kind === "color") await apiDeleteColorType(deleteTarget.id);
       if (deleteTarget.kind === "brandColor") await apiDeleteBrandColorCode(deleteTarget.id);
@@ -4894,6 +4998,9 @@ export default function AllInWarehouse() {
         descriptionRo: newProduct.descriptionRo,
         brandCode: newProduct.brandCode || null,
         categoryCode: newProduct.categoryCode || null,
+        parentCategoryCode: newProduct.categoryCode || null,
+        subcategoryCode: newProduct.subCategoryCode || null,
+        subCategoryCode: newProduct.subCategoryCode || null,
         gender: newProduct.gender || "unisex",
         productType: newProduct.productType,
         season: newProduct.season,
@@ -4963,6 +5070,7 @@ export default function AllInWarehouse() {
         modelStatus: edit.modelStatus,
         brandCode: edit.brandCode || null,
         categoryCode: edit.categoryCode || null,
+        subCategoryCode: edit.subCategoryCode || null,
         barcode: edit.barcode,
         supplierProductCode: edit.supplierProductCode,
         productCode: edit.supplierProductCode,
@@ -5250,7 +5358,7 @@ export default function AllInWarehouse() {
               <label className={label}>Kategória
                 <select className={select} value={category} onChange={(e) => setCategory(e.target.value)}>
                   <option value="all">Összes</option>
-                  {categories.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
+                  {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
                 </select>
               </label>
               <label className={label}>Nem
@@ -6275,9 +6383,19 @@ export default function AllInWarehouse() {
                         </select>
                       </label>
                       <label className={label}>Kategória
-                        <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value }))}>
+                        <select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}>
                           <option value="">Nincs beállítva</option>
-                          {categories.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                          {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                        </select>
+                      </label>
+                      <label className={label}>Alkategória
+                        <select className={select} value={newProduct.subCategoryCode} onChange={(e) => {
+                          const value = e.target.value;
+                          const found = subCategories.find((c) => categoryValueMatches(c, value));
+                          setNewProduct((x) => ({ ...x, subCategoryCode: value, productType: x.productType || (found ? categoryLabel(found) : "") }));
+                        }}>
+                          <option value="">Nincs beállítva</option>
+                          {newProductSubCategoryOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                         </select>
                       </label>
                       <label className={label}>Nem
@@ -6384,7 +6502,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, nemek, színek, méretek, márkakódok és összetevők kezelése</h2>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Kategóriák, alkategóriák, nemek, színek, méretek, márkakódok és összetevők kezelése</h2>
                   <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
                 </div>
                 <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
@@ -6393,7 +6511,10 @@ export default function AllInWarehouse() {
             <div className="space-y-3 p-4">
               <div className="inline-flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-black/10 p-1">
                 <button className={taxonomyTab === "categories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("categories"); setOpenTaxonomyMenu(null); }}>
-                  Kategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{categories.length}</span>
+                  Kategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{mainCategories.length || categories.length}</span>
+                </button>
+                <button className={taxonomyTab === "subCategories" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("subCategories"); setOpenTaxonomyMenu(null); }}>
+                  Alkategóriák <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{subCategories.length}</span>
                 </button>
                 <button className={taxonomyTab === "genders" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("genders"); setOpenTaxonomyMenu(null); }}>
                   Nemek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{genderTypes.length}</span>
@@ -6435,19 +6556,19 @@ export default function AllInWarehouse() {
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
-                      <button className={taxonomyPrimaryBtn} onClick={saveCategoryForm} disabled={taxonomyBusy || !canSaveCategoryForm} title={!canSaveCategoryForm ? "A román megnevezés kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
+                      <button className={taxonomyPrimaryBtn} onClick={saveCategoryForm} disabled={taxonomyBusy || !canSaveCategoryForm} title={!canSaveCategoryForm ? ("A román megnevezés kötelező.") : "Mentés"}><Save size={14} /> Mentés</button>
                     </div>
                   </section>
                   <section className={taxonomyCard}>
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm text-white/88">Kategória lista</p>
+                        <p className="text-sm text-white/88">{"Kategória lista"}</p>
                         <p className="text-[11px] text-white/50">Aktív elemek törzsrendi kezelése.</p>
                       </div>
-                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{categories.length} elem</span>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{mainCategories.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
-                      {categories.map((c, index) => (
+                      {mainCategories.map((c, index) => (
                         <div key={c.id} className={taxonomyRow}>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
@@ -6459,13 +6580,75 @@ export default function AllInWarehouse() {
                           </div>
                           {taxonomyActionMenu({
                             menuId: `category-${c.id}`,
-                            openUp: taxonomyMenuOpensUp(index, categories.length),
+                            openUp: taxonomyMenuOpensUp(index, mainCategories.length),
                             onEdit: () => editCategoryRow(c),
                             onDelete: () => setDeleteTarget({ kind: "category", id: String(c.id), name: categoryLabel(c) }),
                           })}
                         </div>
                       ))}
-                      {!categories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív kategória.</p>}
+                      {!mainCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív kategória.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {taxonomyTab === "subCategories" && (
+                <div className="grid gap-3 lg:grid-cols-[0.94fr,1.28fr]">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">{subCategoryForm.id ? "Alkategória módosítása" : "Új alkategória"}</p>
+                        <p className="text-[11px] text-white/50">Fő kategóriához kötött alcsoport, import aliasokkal.</p>
+                      </div>
+                      {subCategoryForm.id && <button className={taxonomySmallBtn} onClick={resetSubCategoryForm}>Új</button>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={`${taxonomyField} md:col-span-2`}>Fő kategória
+                        <select className={taxonomyInput} value={subCategoryForm.parentId} onChange={(e) => setSubCategoryForm((x) => ({ ...x, parentId: e.target.value }))}>
+                          <option value="">Válassz kategóriát</option>
+                          {(mainCategories.length ? mainCategories : categories).map((c) => <option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}
+                        </select>
+                      </label>
+                      <label className={taxonomyField}>Megnevezés románul<input className={taxonomyInput} value={subCategoryForm.nameRo} onChange={(e) => setSubCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
+                      <label className={taxonomyField}>Megnevezés magyarul<input className={taxonomyInput} value={subCategoryForm.nameHu} onChange={(e) => setSubCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
+                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={subCategoryForm.aliases} onChange={(e) => setSubCategoryForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="RODESCR, SUBCATEGORIE, PRODUCT TYPE, TRICOU" /></label>
+                      <label className={`${taxonomyField} md:max-w-[180px]`}>Sorrend
+                        <input className={taxonomyInput} value={subCategoryForm.sortOrder} onChange={(e) => setSubCategoryForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!subCategoryForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextSubCategorySortOrder}</span>}
+                      </label>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveSubCategoryForm} disabled={taxonomyBusy || !canSaveSubCategoryForm} title={!canSaveSubCategoryForm ? "Fő kategória és román megnevezés kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
+                    </div>
+                  </section>
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Alkategória lista</p>
+                        <p className="text-[11px] text-white/50">Fő kategória szerint kötött aktív elemek.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{subCategories.length} elem</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
+                      {subCategories.map((c, index) => (
+                        <div key={c.id} className={taxonomyRow}>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-white">{categoryLabel(c)}</p>
+                              {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-white/50">Fő kategória: {subCategoryParentLabel(c)} • RO: {c.name_ro || "-"} • HU: {c.name_hu || "-"}</p>
+                            {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
+                          </div>
+                          {taxonomyActionMenu({
+                            menuId: `subcategory-${c.id}`,
+                            openUp: taxonomyMenuOpensUp(index, subCategories.length),
+                            onEdit: () => editSubCategoryRow(c),
+                            onDelete: () => setDeleteTarget({ kind: "subCategory", id: String(c.id), name: categoryLabel(c) }),
+                          })}
+                        </div>
+                      ))}
+                      {!subCategories.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív alkategória.</p>}
                     </div>
                   </section>
                 </div>
@@ -6937,7 +7120,8 @@ export default function AllInWarehouse() {
                       <label className={label}>Terméknév magyarul<input className={input} value={edit.titleHu} onChange={(e) => setEdit((x) => ({ ...x, titleHu: e.target.value }))} /></label>
                       <label className={`${label} md:col-span-2`}>Leírás<textarea className="min-h-[90px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45" value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
                       <label className={label}>Márka<select className={select} value={edit.brandCode} onChange={(e) => setEdit((x) => ({ ...x, brandCode: e.target.value }))}><option value="">Nincs beállítva</option>{brands.map((b) => <option key={b.id} value={b.code || b.id}>{b.name}</option>)}</select></label>
-                      <label className={label}>Kategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value }))}><option value="">Nincs beállítva</option>{categories.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
+                      <label className={label}>Kategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}><option value="">Nincs beállítva</option>{categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
+                      <label className={label}>Alkategória<select className={select} value={edit.subCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategories.find((c) => categoryValueMatches(c, value)); setEdit((x) => ({ ...x, subCategoryCode: value, productType: x.productType || (found ? categoryLabel(found) : "") })); }}><option value="">Nincs beállítva</option>{editSubCategoryOptions.map((c) => <option key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}</select></label>
                       <label className={label}>Nem<select className={select} value={edit.gender} onChange={(e) => setEdit((x) => ({ ...x, gender: e.target.value }))}>{genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}</select></label>
                       <label className={label}>Terméktípus<input className={input} value={edit.productType} onChange={(e) => setEdit((x) => ({ ...x, productType: e.target.value }))} /></label>
                       <label className={label}>Szezon<input className={input} value={edit.season} onChange={(e) => setEdit((x) => ({ ...x, season: e.target.value }))} /></label>
