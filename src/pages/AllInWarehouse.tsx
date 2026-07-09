@@ -5592,7 +5592,7 @@ export default function AllInWarehouse() {
     <main className={page}>
       <style id="aifWarehouseLabelPrintCss">{WAREHOUSE_LABEL_APP_CSS}</style>
       <div className={`${shell} aifWarehouseScreenContent`}>
-        <header className="rounded-2xl border border-white/20 bg-[#303a4c] px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05]">
+        <header className="sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
               <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
