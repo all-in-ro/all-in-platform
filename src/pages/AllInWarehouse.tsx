@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Edit3,
   Eye,
+  EyeOff,
   FileText,
   Filter,
   ImagePlus,
@@ -50,6 +51,7 @@ const label = "grid gap-1.5 text-xs text-white/70";
 const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70";
 const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
 const WAREHOUSE_PRODUCTS_PER_PAGE = 50;
+const WAREHOUSE_PRODUCTS_PER_PAGE_OPTIONS = [50, 100, 150, 200];
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
 const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
 const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
@@ -757,6 +759,22 @@ function money(v: unknown) {
   const x = Number(v);
   if (!Number.isFinite(x)) return String(v);
   return x.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function priceNumber(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const parsed = Number(String(value).replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function priceMarkupPercentText(buyPrice: unknown, sellPrice: unknown) {
+  const buy = priceNumber(buyPrice);
+  const sell = priceNumber(sellPrice);
+  if (!buy || buy <= 0 || sell === null) return "";
+  const percent = ((sell - buy) / buy) * 100;
+  if (!Number.isFinite(percent)) return "";
+  const sign = percent > 0 ? "+" : "";
+  return `${sign}${percent.toLocaleString("hu-HU", { maximumFractionDigits: 0 })}%`;
 }
 
 function dateTimeMs(value: unknown) {
@@ -1585,19 +1603,17 @@ function supplierProductCodeFromDetail(d: DetailResponse | null | undefined) {
   );
 }
 
-function VariantCodesTooltip({ item, openUp = false }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean }) {
+function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók", buttonClassName = "" }: { item: Partial<InventoryItem> & Record<string, any>; openUp?: boolean; buttonLabel?: React.ReactNode; buttonClassName?: string }) {
   const barcode = visibleWarehouseBarcode(item);
   const snCod = itemSnCod(item);
   const customsCode = itemCustomsTariffCode(item);
   const productCode = itemProductCode(item);
-  const internalSku = String(item.internal_sku || item.internalSku || "").trim();
   const codeRows = [
     { key: "barcode", label: "Vonalkód / SKU", value: barcode },
     { key: "sn", label: "S/N/COD", value: snCod },
     { key: "tariff", label: "Vámtarifa kód", value: customsCode },
     { key: "product", label: "Termékkód", value: productCode },
-    { key: "internal", label: "Belső AIF", value: internalSku },
-  ].filter((row) => String(row.value || "").trim() || row.key !== "internal");
+  ];
   const hasAny = codeRows.some((row) => String(row.value || "").trim());
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -1719,7 +1735,7 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
         <button
           ref={buttonRef}
           type="button"
-          className={`inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${pinned ? "border-amber-200/50 bg-amber-300/15 text-amber-50" : hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
+          className={buttonClassName || `inline-flex h-6 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10px] transition focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45 ${pinned ? "border-amber-200/50 bg-amber-300/15 text-amber-50" : hasAny ? "border-[#5bd0cc]/35 bg-[#203f49] text-[#cffffd] hover:bg-[#25535c]" : "border-white/12 bg-white/[0.06] text-white/45"}`}
           aria-label={pinned ? "Termékazonosítók elengedése" : "Termékazonosítók megjelenítése"}
           title={pinned ? "Fix tooltip kikapcsolása" : "Kattintásra fix, újabb kattintásra elenged"}
           onMouseEnter={() => !pinned && showTooltip()}
@@ -1728,7 +1744,7 @@ function VariantCodesTooltip({ item, openUp = false }: { item: Partial<Inventory
           onBlur={() => !pinned && setTooltipOpen(false)}
           onClick={togglePinned}
         >
-          S/N/COD
+          {buttonLabel}
         </button>
       </span>
       {open && typeof document !== "undefined" ? createPortal(tooltip, document.body) : null}
@@ -1832,6 +1848,33 @@ function officialColorFromTypes(value: unknown, colors: ColorType[]) {
 
 function displayColorName(value: unknown, fallback?: unknown) {
   return officialColorRo(value) || String(fallback || "").trim() || "-";
+}
+
+function colorTypeValues(c?: Partial<ColorType> | null) {
+  if (!c) return [];
+  return [c.id, c.code, c.name_ro, c.name_hu, c.name_en, c.name_de, ...(Array.isArray(c.aliases) ? c.aliases : [])]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+}
+
+function findColorTypeByValue(colors: ColorType[], value: unknown) {
+  const key = colorKey(value);
+  if (!key) return null;
+  return (colors || []).find((c) => colorTypeValues(c).some((candidate) => colorKey(candidate) === key)) || null;
+}
+
+function itemMatchesColorSelection(it: Partial<InventoryItem> | Record<string, any>, selectedValue: unknown, colors: ColorType[]) {
+  const selectedKey = colorKey(selectedValue);
+  if (!selectedKey || selectedKey === "all") return true;
+  const selectedColor = findColorTypeByValue(colors, selectedValue);
+  const allowed = new Set([selectedKey, ...colorTypeValues(selectedColor).map(colorKey)].filter(Boolean));
+  const itemValues = [
+    it.color_name,
+    it.color_code,
+    officialColorFromTypes(it.color_name, colors),
+    officialColorFromTypes(it.color_code, colors),
+  ].map(colorKey).filter(Boolean);
+  return itemValues.some((value) => allowed.has(value));
 }
 
 function officialSizeFromTypes(value: unknown, sizes: SizeType[]) {
@@ -2340,6 +2383,7 @@ export default function AllInWarehouse() {
   const [category, setCategory] = useState("all");
   const [subCategory, setSubCategory] = useState("all");
   const [gender, setGender] = useState("all");
+  const [color, setColor] = useState("all");
   const [location, setLocation] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
@@ -2347,7 +2391,9 @@ export default function AllInWarehouse() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(() => overviewOpenByDefault());
   const [listOpen, setListOpen] = useState(true);
+  const [buyPricesVisible, setBuyPricesVisible] = useState(false);
   const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(WAREHOUSE_PRODUCTS_PER_PAGE);
   const [busy, setBusy] = useState(false);
   const [recentImportFocusBusy, setRecentImportFocusBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -3207,6 +3253,76 @@ export default function AllInWarehouse() {
     return officialColorFromTypes(value, colorTypes) || String(fallback || "").trim() || "-";
   };
 
+  const colorTypeForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    return findColorTypeByValue(colorTypes, item.color_name) || findColorTypeByValue(colorTypes, item.color_code);
+  };
+
+  const colorHexForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    return String(item.color_hex || colorTypeForItem(item)?.hex || "").trim();
+  };
+
+  const colorCodeForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    return firstWarehouseText(item.color_code, (item as any).supplier_color_code, (item as any).supplierColorCode);
+  };
+
+  function MaskedBuyPrice({ value }: { value: unknown }) {
+    const text = money(value);
+    if (text === "-") return <span>-</span>;
+    if (buyPricesVisible) return <span>{text}</span>;
+    return <span className="inline-block select-none rounded-md bg-white/10 px-2 py-0.5 text-white/65 blur-[3px]" title="Vételár homályosítva">{text}</span>;
+  }
+
+  function SellPriceWithMarkup({ sellPrice, buyPrice }: { sellPrice: unknown; buyPrice: unknown }) {
+    const percentText = buyPricesVisible ? priceMarkupPercentText(buyPrice, sellPrice) : "";
+    return (
+      <div className="leading-tight">
+        <div>{money(sellPrice)}</div>
+        {percentText && <div className="mt-0.5 text-[10px] font-semibold text-[#cffffd]">{percentText}</div>}
+      </div>
+    );
+  }
+
+  function SensitiveValueText({ value }: { value: unknown }) {
+    const text = money(value);
+    if (text === "-") return <span>-</span>;
+    if (buyPricesVisible) return <span>{text}</span>;
+    return <span className="inline-block select-none rounded-md bg-white/10 px-2 py-0.5 text-white/65 blur-[3px]" title="Vételárból számolt érték homályosítva">{text}</span>;
+  }
+
+  function ColorNameWithCode({ item, openUp = false }: { item: Partial<InventoryItem> | Record<string, any>; openUp?: boolean }) {
+    const code = colorCodeForItem(item);
+    const label = colorDisplay(item.color_name, item.color_code);
+    const hex = colorHexForItem(item);
+    const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
+    return (
+      <span className="group relative inline-flex max-w-full items-center justify-center gap-1.5 align-middle">
+        <span
+          className="h-3 w-3 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
+          style={hex ? { backgroundColor: hex } : undefined}
+        />
+        <span className="min-w-0 truncate">{label}</span>
+        {code && (
+          <span className={`pointer-events-none absolute left-1/2 z-[9999] hidden -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
+            <span className="block text-[#cffffd]">Színkód</span>
+            <span className="mt-1 inline-flex rounded-full border border-[#67d4d1]/35 bg-[#208d8b]/28 px-2 py-0.5 text-[11px] font-semibold text-white">{code}</span>
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  function ProductCodeTooltipButton({ item, openUp = false }: { item: InventoryItem; openUp?: boolean }) {
+    const code = itemProductCode(item);
+    return (
+      <VariantCodesTooltip
+        item={item}
+        openUp={openUp}
+        buttonLabel={code ? `Termékkód: ${code}` : "Nincs termékkód"}
+        buttonClassName="inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+      />
+    );
+  }
+
   const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
   const normalizeSize = (value: unknown) => officialSizeFromTypes(value, sizeTypes);
 
@@ -3248,6 +3364,7 @@ export default function AllInWarehouse() {
     if (category !== "all") out = out.filter((x) => itemMatchesMainCategory(x, category, categorySelectOptions));
     if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
     if (gender !== "all") out = out.filter((x) => (x.gender || "") === gender);
+    if (color !== "all") out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes));
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
     if (location !== "all") {
@@ -3276,7 +3393,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, gender, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, gender, color, colorTypes, location, stockFilter, imageFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -3287,6 +3404,7 @@ export default function AllInWarehouse() {
     setCategory("all");
     setSubCategory("all");
     setGender("all");
+    setColor("all");
     setLocation("all");
     setStockFilter("all");
     setImageFilter("all");
@@ -3316,6 +3434,7 @@ export default function AllInWarehouse() {
     if (category !== "all") labels.push(`Főkategória: ${labelForMetaValue(categories, category)}`);
     if (subCategory !== "all") labels.push(`Alkategória / terméktípus: ${labelForMetaValue(subCategories, subCategory)}`);
     if (gender !== "all") labels.push(`Nem: ${genderLabel(gender, genderTypes)}`);
+    if (color !== "all") labels.push(`Szín: ${labelForMetaValue(colorTypes as any, color)}`);
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
     if (stockFilter !== "all") {
       const stockLabels: Record<StockFilter, string> = {
@@ -3335,7 +3454,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, gender, location, stockFilter, imageFilter, suppliers, brands, categories, subCategories, genderTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -3346,15 +3465,15 @@ export default function AllInWarehouse() {
     return items.filter((item) => itemMatchesScannedBarcode(item, code)).slice(0, 4);
   }, [newProductOpen, newProduct.barcode, newProduct.snCod, items]);
 
-  const totalProductPages = Math.max(1, Math.ceil(filtered.length / WAREHOUSE_PRODUCTS_PER_PAGE));
+  const totalProductPages = Math.max(1, Math.ceil(filtered.length / productPageSize));
   const safeProductPage = Math.min(productPage, totalProductPages);
-  const productPageStartIndex = filtered.length ? (safeProductPage - 1) * WAREHOUSE_PRODUCTS_PER_PAGE + 1 : 0;
-  const productPageEndIndex = Math.min(safeProductPage * WAREHOUSE_PRODUCTS_PER_PAGE, filtered.length);
+  const productPageStartIndex = filtered.length ? (safeProductPage - 1) * productPageSize + 1 : 0;
+  const productPageEndIndex = Math.min(safeProductPage * productPageSize, filtered.length);
 
   const productPageItems = useMemo(() => {
-    const start = (safeProductPage - 1) * WAREHOUSE_PRODUCTS_PER_PAGE;
-    return filtered.slice(start, start + WAREHOUSE_PRODUCTS_PER_PAGE);
-  }, [filtered, safeProductPage]);
+    const start = (safeProductPage - 1) * productPageSize;
+    return filtered.slice(start, start + productPageSize);
+  }, [filtered, safeProductPage, productPageSize]);
 
   const filteredVariantIds = useMemo(
     () => productPageItems.map((x) => String(x.variant_id || "")).filter(Boolean),
@@ -3363,7 +3482,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, gender, location, stockFilter, imageFilter, sortMode, incomingFocusVariantIdsKey]);
+  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, sortMode, incomingFocusVariantIdsKey]);
 
   useEffect(() => {
     if (productPage > totalProductPages) setProductPage(totalProductPages);
@@ -3408,6 +3527,7 @@ export default function AllInWarehouse() {
     setCategory("all");
     setSubCategory("all");
     setGender("all");
+    setColor("all");
     setLocation("all");
     setStockFilter("all");
     setImageFilter("all");
@@ -3437,7 +3557,7 @@ export default function AllInWarehouse() {
     const targetIndex = filtered.findIndex((item) => String(item.variant_id || "") === targetId);
     if (targetIndex < 0) return;
 
-    const targetPage = Math.max(1, Math.floor(targetIndex / WAREHOUSE_PRODUCTS_PER_PAGE) + 1);
+    const targetPage = Math.max(1, Math.floor(targetIndex / productPageSize) + 1);
     if (targetPage !== safeProductPage) {
       setProductPage(targetPage);
       return;
@@ -3456,17 +3576,30 @@ export default function AllInWarehouse() {
     return () => window.clearTimeout(timer);
   }, [pendingProductJumpId, filtered, safeProductPage, productPageItems.length, listOpen]);
 
-  const productPager = filtered.length > WAREHOUSE_PRODUCTS_PER_PAGE ? (
+  const productPager = filtered.length > 0 ? (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
       <div>
         {productPageStartIndex}-{productPageEndIndex} / {filtered.length} termék
         <span className="ml-2 text-white/45">• oldal {safeProductPage} / {totalProductPages}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-1.5 text-white/62">
+          <span>Oldalanként</span>
+          <select
+            className="h-8 rounded-lg border border-white/18 bg-[#303a4c] px-2 text-xs text-white outline-none focus:border-[#7bd7d4]/55"
+            value={productPageSize}
+            onChange={(e) => {
+              setProductPageSize(Number(e.target.value) || WAREHOUSE_PRODUCTS_PER_PAGE);
+              setProductPage(1);
+            }}
+          >
+            {WAREHOUSE_PRODUCTS_PER_PAGE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
         <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(1)}>Első</button>
-        <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(safeProductPage - 1)}><ArrowLeft size={14} /> Előző 50</button>
+        <button className={btnSoft} type="button" disabled={safeProductPage <= 1} onClick={() => goToProductPage(safeProductPage - 1)}><ArrowLeft size={14} /> Előző {productPageSize}</button>
         <span className="rounded-full border border-white/12 bg-white/[0.08] px-3 py-2 text-white">{safeProductPage} / {totalProductPages}</span>
-        <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(safeProductPage + 1)}>Következő 50 <ArrowRight size={14} /></button>
+        <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(safeProductPage + 1)}>Következő {productPageSize} <ArrowRight size={14} /></button>
         <button className={btnSoft} type="button" disabled={safeProductPage >= totalProductPages} onClick={() => goToProductPage(totalProductPages)}>Utolsó</button>
       </div>
     </div>
@@ -5433,6 +5566,14 @@ export default function AllInWarehouse() {
             <p className="mt-1 max-w-3xl text-sm text-white/70">Termék- és készletközpont kereséssel, szűréssel, képekkel, készletértékkel és termékadat-szerkesztéssel.</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              className={buyPricesVisible ? primaryBtn : btnSoft}
+              onClick={() => setBuyPricesVisible((x) => !x)}
+              type="button"
+              title={buyPricesVisible ? "Vételár homályosítása" : "Vételár megjelenítése"}
+            >
+              {buyPricesVisible ? <EyeOff size={16} /> : <Eye size={16} />} {buyPricesVisible ? "Vételár látszik" : "Vételár rejtve"}
+            </button>
             <button className={primaryBtn} onClick={openNewProductModal} type="button"><Plus size={16} /> Új termék hozzáadása</button>
             <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
             {hasActiveWarehouseFilters && <button className={primaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={15} /> Minden termék</button>}
@@ -5510,6 +5651,35 @@ export default function AllInWarehouse() {
                   {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
                 </select>
               </label>
+              <div className={`${label} md:col-span-2`}>
+                Szín
+                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-auto rounded-xl border border-white/12 bg-[#303a4c] p-2">
+                  <button
+                    type="button"
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2 text-[11px] transition ${color === "all" ? "border-[#7bd7d4]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white/70 hover:bg-white/[0.09]"}`}
+                    onClick={() => setColor("all")}
+                  >
+                    Összes
+                  </button>
+                  {colorTypes.map((c) => {
+                    const value = String(c.id || c.code || c.name_ro || "");
+                    const active = colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]);
+                    return (
+                      <button
+                        key={c.id || c.code}
+                        type="button"
+                        className={`inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-full border px-2 text-[11px] transition ${active ? "border-[#7bd7d4]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white/70 hover:bg-white/[0.09]"}`}
+                        onClick={() => setColor(value)}
+                        title={c.name_ro || c.name_hu || c.code}
+                      >
+                        <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                        <span className="truncate">{c.name_hu || c.name_ro || c.code}</span>
+                      </button>
+                    );
+                  })}
+                  {!colorTypes.length && <span className="px-2 py-1 text-[11px] text-white/45">Nincs szín törzsadat.</span>}
+                </div>
+              </div>
               <label className={label}>Cél hely
                 <select className={select} value={location} onChange={(e) => setLocation(e.target.value)}>
                   <option value="all">Összes</option>
@@ -5564,7 +5734,7 @@ export default function AllInWarehouse() {
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Össz készlet</p><p className="mt-1 text-xl">{totals.qty}</p></div>
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Elérhető</p><p className="mt-1 text-xl">{totals.available}</p></div>
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Foglalt</p><p className="mt-1 text-xl">{totals.reserved}</p></div>
-                <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Készletérték</p><p className="mt-1 text-xl">{money(totals.value)}</p></div>
+                <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Készletérték</p><p className="mt-1 text-xl"><SensitiveValueText value={totals.value} /></p></div>
                 <div className="rounded-xl bg-[#3f4959] p-3"><p className="text-xs text-white/55">Aktiválandó</p><p className="mt-1 text-xl">{activationTodoCount}</p></div>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
@@ -5573,7 +5743,7 @@ export default function AllInWarehouse() {
                   <div className="space-y-2">
                     {brandChart.map((x) => (
                       <div key={x.name} className="grid gap-1">
-                        <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{money(x.value)}</span></div>
+                        <div className="flex justify-between gap-3 text-xs text-slate-600"><span>{x.name}</span><span>{buyPricesVisible ? money(x.value) : "••••"}</span></div>
                         <div className="h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-[#276454]" style={{ width: chartFillWidth(x.value, maxBrandValue) }} /></div>
                       </div>
                     ))}
@@ -5770,9 +5940,8 @@ export default function AllInWarehouse() {
                           >
                             {it.title_ro || "-"}
                           </button>
-                          <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4 text-white/45">
-                            <span className="min-w-0 max-w-[170px] truncate overflow-hidden">{visibleWarehouseBarcode(it) ? `Vonalkód: ${visibleWarehouseBarcode(it)}` : "Nincs vonalkód"}</span>
-                            <span className="relative z-40 shrink-0 overflow-visible"><VariantCodesTooltip item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
+                          <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
+                            <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
                           </div>
                           {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         </td>
@@ -5780,11 +5949,11 @@ export default function AllInWarehouse() {
                           <div className="truncate text-white/90">{itemMainCategoryLabel(it)}</div>
                           {itemSubCategoryLabel(it) ? <div className="truncate text-[10px] leading-3 text-white/48">{itemSubCategoryLabel(it)}</div> : null}
                         </td>
-                        <td className="truncate px-2 py-2.5 text-center align-middle" title={colorDisplay(it.color_name, it.color_code)}>{colorDisplay(it.color_name, it.color_code)}</td>
+                        <td className="px-2 py-2.5 text-center align-middle" title={colorDisplay(it.color_name, it.color_code)}><ColorNameWithCode item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
-                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap">{money(it.buy_price)}</td>
-                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap">{money(it.sell_price)}</td>
+                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><MaskedBuyPrice value={it.buy_price} /></td>
+                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><SellPriceWithMarkup sellPrice={it.sell_price} buyPrice={it.buy_price} /></td>
                         <td className="px-2 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
                         <td className="px-2 py-2.5 text-center align-middle">
                           <div className="flex items-center justify-center gap-1.5">
@@ -5799,6 +5968,8 @@ export default function AllInWarehouse() {
                   </tbody>
                 </table>
               </div>
+
+              <div className="mt-3 hidden lg:block">{productPager}</div>
 
               <div className="grid gap-3 lg:hidden">
                 {productPageItems.map((it) => {
@@ -5828,6 +5999,7 @@ export default function AllInWarehouse() {
                       <div className="min-w-0 flex-1">
                         <button className="block max-w-full truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        <div className="mt-1"><ProductCodeTooltipButton item={it} /></div>
                         {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <StockQtyButton item={it} />
