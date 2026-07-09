@@ -4719,6 +4719,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!batchId) return res.status(400).json({ error: "Import azonosító kötelező." });
     if (!isUuidText(batchId)) return invalidImportBatchId(res);
     const rowsInput = Array.isArray(req.body?.rows) ? req.body.rows : Array.isArray(req.body?.items) ? req.body.items : [];
+    const appendMode = Boolean(req.body?.append || req.body?.appendRows || req.body?.mode === "append");
     if (!rowsInput.length) return res.status(400).json({ error: "rows required" });
 
     const client = await pool.connect();
@@ -4747,15 +4748,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const currency = currencyCode(batch.rows[0].currency_code || batch.rows[0].reception_currency_code || "RON") || "RON";
       const salesTvaSettings = await readSalesTvaSettings(client);
 
-      await client.query(`DELETE FROM aif_import_rows WHERE batch_id::text=$1`, [batchId]);
+      let fallbackRowNo = 1;
+      if (appendMode) {
+        const maxRow = await client.query(
+          `SELECT COALESCE(max(row_no), 0)::int AS max_row_no FROM aif_import_rows WHERE batch_id::text=$1`,
+          [batchId]
+        );
+        fallbackRowNo = Number(maxRow.rows[0]?.max_row_no || 0) + 1;
+      } else {
+        await client.query(`DELETE FROM aif_import_rows WHERE batch_id::text=$1`, [batchId]);
+      }
 
-      let errorCount = 0;
-      let rowNo = 1;
+      let chunkErrorCount = 0;
+      let rowNo = fallbackRowNo;
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
         await enrichNormalizedRow(client, nr);
         applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
-        if (nr.errors.length) errorCount++;
+        if (nr.errors.length) chunkErrorCount++;
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
           : Number(nr.normalized.buyPrice) * exchangeRate;
@@ -4796,15 +4806,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         );
       }
 
+      const totals = await client.query(
+        `SELECT
+           count(*)::int AS row_count,
+           count(*) FILTER (
+             WHERE status='error'
+                OR COALESCE(cardinality(error_messages), 0) > 0
+           )::int AS error_count
+         FROM aif_import_rows
+         WHERE batch_id::text=$1`,
+        [batchId]
+      );
+      const totalRowCount = Number(totals.rows[0]?.row_count || 0);
+      const totalErrorCount = Number(totals.rows[0]?.error_count || 0);
+
       await client.query(
         `UPDATE aif_import_batches
          SET row_count=$2, error_count=$3, status=$4, updated_at=now()
          WHERE id::text=$1`,
-        [batchId, rowsInput.length, errorCount, errorCount ? "needs_review" : "parsed"]
+        [batchId, totalRowCount, totalErrorCount, totalErrorCount ? "needs_review" : "parsed"]
       );
 
       await client.query("COMMIT");
-      res.json({ ok: true, rowCount: rowsInput.length, errorCount });
+      res.json({ ok: true, rowCount: totalRowCount, errorCount: totalErrorCount, addedRows: rowsInput.length, chunkErrorCount });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF replace import rows failed", e);
