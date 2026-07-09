@@ -118,8 +118,10 @@ const MATERIAL_FIELD = "material" as AifColumnField;
 const TITLE_RO_FIELD = "titleRo" as AifColumnField;
 const PRODUCT_TYPE_FIELD = "productType" as AifColumnField;
 const SUB_CATEGORY_FIELD = "subCategoryCode" as AifColumnField;
+const COLOR_CODE_FIELD = "colorCode" as AifColumnField;
 const BUY_PRICE_FIELD = "buyPrice" as AifColumnField;
 const SELL_PRICE_FIELD = "sellPrice" as AifColumnField;
+const IGNORE_FIELD = "ignore" as AifColumnField;
 const SN_COD_HEADER_KEYS = new Set([
   "s_n_cod", "sn_cod", "s_n", "sn", "s_n_ev_honap", "sn_ev_honap", "s_n_ev_hónap",
   "s_n_c_o_d", "serial_code", "cod_serial", "cod_serie", "cod_intern", "internal_code", "internal_id", "client_code"
@@ -128,7 +130,8 @@ const CUSTOMS_TARIFF_HEADER_ALIASES = [
   "Vámtarifa kód", "VAMTARIFA KOD", "VAMTARIFA", "VÁMTARIFA", "Vamtarifa", "VTSZ",
   "Cod vamal", "COD VAMAL", "Cod tarifar", "COD TARIFAR", "Cod tarifar vamal", "COD TARIFAR VAMAL",
   "Tarif vamal", "TARIF VAMAL", "Tarif code", "TARIFF CODE", "Customs tariff", "CUSTOMS TARIFF",
-  "Customs code", "CUSTOMS CODE", "HS CODE", "HSCode", "HS", "TARIC", "TARIC CODE", "CN CODE", "NC CODE",
+  "Customs code", "CUSTOMS CODE", "HS CODE", "HSCode", "HS", "TARIC", "TARIC CODE",
+  "CN", "Cod CN", "COD CN", "CN CODE", "NC", "Cod NC", "COD NC", "NC CODE",
   "Commodity code", "Intrastat code", "Intrastat"
 ];
 const CUSTOMS_TARIFF_HEADER_KEYS = new Set(CUSTOMS_TARIFF_HEADER_ALIASES.map((x) => snCodHeaderKey(x)));
@@ -140,13 +143,23 @@ const IMAGE_URL_HEADER_ALIASES = [
   "IMAGE", "IMAGE URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "URL POZA", "URL POZĂ",
   "KÉP", "KEP", "KÉP URL", "KEP URL", "PICTURE", "PICTURE URL"
 ];
-const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "EAN-13", "UPC", "SKU", "SHOPIFY SKU"];
+const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "EAN-13", "COD EAN", "Cod EAN", "UPC", "SKU", "SHOPIFY SKU"];
 const MATERIAL_HEADER_ALIASES = ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ANYAG", "ÖSSZETÉTEL", "OSSZETETEL"];
 const TITLE_HEADER_ALIASES = ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "TITLE", "NÉV", "NEV", "MEGNEVEZÉS", "MEGNEVEZES"];
 const PRODUCT_TYPE_HEADER_ALIASES = ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "MODEL TYPE"];
 const SUBCATEGORY_HEADER_ALIASES = ["COLECTIE", "COLECȚIE", "COLECTIA", "COLECȚIA", "COLECTIE PRODUS", "COLECȚIE PRODUS", "COLLECTION", "PRODUCT COLLECTION", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALCATEGORIA", "ALKATEGORIA", "ALKATEGÓRIA"];
 const BUY_PRICE_HEADER_ALIASES = ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PRET CUMPARARE", "PREȚ CUMPĂRARE", "PURCHASE PRICE", "BUY PRICE", "COST PRICE", "VÉTELÁR", "VETELAR"];
 const SELL_PRICE_HEADER_ALIASES = ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA", "SELL PRICE", "SALE PRICE", "SHOPIFY PRICE", "PRICE RON", "PRET RON", "ELADÁSI ÁR", "ELADASI AR"];
+const COLOR_CODE_HEADER_ALIASES = [
+  "COD CULOARE", "COD CULOARE PRODUS", "COD DE CULOARE", "NR CULOARE", "NR. CULOARE", "NR_CULOARE",
+  "NUMAR CULOARE", "NUMĂR CULOARE", "NUMĂR DE CULOARE", "NUMAR DE CULOARE",
+  "COLOR CODE", "COLOUR CODE", "COLOR NO", "COLOR NO.", "COLOUR NO", "COLOUR NO.", "COLOR NUMBER", "COLOUR NUMBER",
+  "SZÍNKÓD", "SZINKOD", "SZÍN KÓD", "SZIN KOD"
+];
+const IGNORE_HEADER_ALIASES = [
+  "U.m.", "UM", "U.M.", "U M", "UNIT", "UNITS", "UNITATE", "UNITATE MASURA", "UNITATE MĂSURĂ",
+  "UNITATE DE MASURA", "UNITATE DE MĂSURĂ", "MEASURE UNIT", "MEASUREMENT UNIT", "UNIT OF MEASURE", "UOM", "U.O.M."
+];
 const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   const base = AIF_COLUMN_FIELD_OPTIONS as Array<{ value: AifColumnField; label: string }>;
   const out = base.map((opt) => ({ ...opt }));
@@ -155,10 +168,12 @@ const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
     if (found) found.label = label;
     else out.push({ value, label });
   };
+  ensureOption(IGNORE_FIELD, "Kihagyás");
   ensureOption(TITLE_RO_FIELD, "Terméknév");
   ensureOption(SN_COD_FIELD, "S/N/COD");
   ensureOption(CUSTOMS_TARIFF_FIELD, "Vámtarifa kód");
   ensureOption(BARCODE_FIELD, "Vonalkód");
+  ensureOption(COLOR_CODE_FIELD, "Színkód");
   ensureOption(IMAGE_URL_FIELD, "Fotó URL");
   ensureOption(DESCRIPTION_FIELD, "Leírás / DESCRIERE");
   ensureOption(MATERIAL_FIELD, "Összetétel");
@@ -166,7 +181,10 @@ const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   ensureOption(SUB_CATEGORY_FIELD, "Alkategória / terméktípus");
   ensureOption(BUY_PRICE_FIELD, "Vételár");
   ensureOption(SELL_PRICE_FIELD, "Eladási ár");
-  return out;
+  return out.slice().sort((a, b) =>
+    String(a.label || "").localeCompare(String(b.label || ""), "hu", { sensitivity: "base" }) ||
+    String(a.value || "").localeCompare(String(b.value || ""), "hu", { sensitivity: "base" })
+  );
 })();;
 function snCodHeaderKey(value: unknown) {
   return String(value ?? "")
@@ -192,6 +210,7 @@ function isCustomsTariffHeader(value: unknown) {
     key.includes("commodity_code") ||
     ((key.includes("tarif") || key.includes("tariff") || key.includes("vamal") || key.includes("customs")) && key.includes("cod")) ||
     key === "hs" || key === "hscode" || key === "hs_code" ||
+    key === "cn" || key === "nc" || key === "cod_cn" || key === "cod_nc" ||
     key === "cn_code" || key === "nc_code";
 }
 function headerMatchesAny(value: unknown, aliases: string[]) {
@@ -208,7 +227,34 @@ function isImageUrlHeader(value: unknown) {
 }
 function isBarcodeHeader(value: unknown) {
   const key = snCodHeaderKey(value);
-  return headerMatchesAny(value, BARCODE_HEADER_ALIASES) || key === "ean" || key === "ean13" || key.includes("barcode") || key.includes("vonal");
+  return headerMatchesAny(value, BARCODE_HEADER_ALIASES) || key === "ean" || key === "ean13" || key === "cod_ean" || key.includes("barcode") || key.includes("vonal");
+}
+function isColorCodeHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  if (!key) return false;
+  return headerMatchesAny(value, COLOR_CODE_HEADER_ALIASES) ||
+    key === "nr_culoare" ||
+    key === "numar_culoare" ||
+    key === "numar_de_culoare" ||
+    ((key.includes("culoare") || key.includes("color") || key.includes("colour")) &&
+      (key.includes("cod") || key.includes("code") || key.includes("nr") || key.includes("no") || key.includes("number") || key.includes("numar"))) ||
+    key.includes("szinkod");
+}
+function isIgnoredImportHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  if (!key) return false;
+  return headerMatchesAny(value, IGNORE_HEADER_ALIASES) ||
+    key === "u_m" ||
+    key === "um" ||
+    key === "uom" ||
+    key === "unit" ||
+    key === "units" ||
+    key === "unitate" ||
+    key === "unitate_masura" ||
+    key === "unitate_de_masura" ||
+    key === "measure_unit" ||
+    key === "measurement_unit" ||
+    key === "unit_of_measure";
 }
 function isMaterialHeader(value: unknown) {
   const key = snCodHeaderKey(value);
@@ -277,12 +323,14 @@ function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAn
   return {
     ...analysis,
     columns: (analysis.columns || []).map((col) => {
+      if (isIgnoredImportHeader(col.header)) return { ...col, field: IGNORE_FIELD, label: "Kihagyás", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isTitleHeader(col.header)) return { ...col, field: TITLE_RO_FIELD, label: "Terméknév", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isCustomsTariffHeader(col.header)) return { ...col, field: CUSTOMS_TARIFF_FIELD, label: "Vámtarifa kód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isSnCodHeader(col.header)) return { ...col, field: SN_COD_FIELD, label: "S/N/COD", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isBuyPriceHeader(col.header)) return { ...col, field: BUY_PRICE_FIELD, label: "Vételár", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isSellPriceHeader(col.header)) return { ...col, field: SELL_PRICE_FIELD, label: "Eladási ár", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isBarcodeHeader(col.header)) return { ...col, field: BARCODE_FIELD, label: "Vonalkód", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
+      if (isColorCodeHeader(col.header)) return { ...col, field: COLOR_CODE_FIELD, label: "Színkód", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isImageUrlHeader(col.header)) return { ...col, field: IMAGE_URL_FIELD, label: "Fotó URL", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isSubCategoryHeader(col.header)) return { ...col, field: SUB_CATEGORY_FIELD, label: "Alkategória / terméktípus", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isProductTypeHeader(col.header)) return { ...col, field: PRODUCT_TYPE_FIELD, label: "Import terméktípus / RODESCR", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
@@ -322,10 +370,11 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
   const buyPriceColumn = fieldByHeader(BUY_PRICE_FIELD);
   const sellPriceColumn = fieldByHeader(SELL_PRICE_FIELD);
   const barcodeColumn = fieldByHeader(BARCODE_FIELD);
+  const colorCodeColumn = fieldByHeader(COLOR_CODE_FIELD);
   const imageColumn = fieldByHeader(IMAGE_URL_FIELD);
   const descriptionColumn = fieldByHeader(DESCRIPTION_FIELD);
   const materialColumn = fieldByHeader(MATERIAL_FIELD);
-  if (!titleColumn && !subCategoryColumn && !productTypeColumn && !buyPriceColumn && !sellPriceColumn && !barcodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
+  if (!titleColumn && !subCategoryColumn && !productTypeColumn && !buyPriceColumn && !sellPriceColumn && !barcodeColumn && !colorCodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
   return rows.map((row) => {
     const raw = (row.raw || {}) as Record<string, unknown>;
     const normalized = { ...(row.normalized || {}) } as Record<string, any>;
@@ -362,6 +411,13 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
     if (barcodeColumn) {
       const value = rawValueByExactHeader(raw, barcodeColumn.header);
       if (value) { normalized.barcode = value; normalized.supplierBarcode = value; }
+    }
+    if (colorCodeColumn) {
+      const value = rawValueByExactHeader(raw, colorCodeColumn.header);
+      if (value) {
+        normalized.colorCode = value;
+        normalized.supplierColorCode = normalized.supplierColorCode || value;
+      }
     }
     if (imageColumn) {
       const value = rawValueByExactHeader(raw, imageColumn.header);
@@ -810,7 +866,7 @@ const sourceCategoryAliases: Record<string, string[]> = {
   tricou: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees", "training tee"],
   tricouri: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees"],
   pantaloni: ["pantaloni", "nadrag", "nadrág", "pants", "trousers"],
-  shorts: ["shorts", "pantaloni scurti", "pantaloni scurți", "rövidnadrág", "rovidnadrag"],
+  shorts: ["shorts", "shorts cas", "short cas", "shorts fnk", "bermuda", "sorturi", "șorturi", "pantaloni scurti", "pantaloni scurți", "rövidnadrág", "rovidnadrag"],
   hanorac: ["hanorac", "hoodie", "pulover", "sweatshirt", "kapucnis", "pulóver", "puloverek"],
   jacheta: ["jacheta", "jachetă", "geaca", "geacă", "jacket", "kabát", "dzseki"],
   vesta: ["vesta", "vestă", "vest", "melleny", "mellény"],
@@ -852,16 +908,35 @@ function categorySearchKeys(value: unknown) {
   return Array.from(new Set([raw, ...direct, ...byToken, ...byPhrase].map(normMatchKey).filter(Boolean)));
 }
 
-function categoryMatches(c: AifCategoryOption, value: unknown) {
+function categoryMatchScore(c: AifCategoryOption, value: unknown) {
+  const raw = normMatchKey(value);
   const sourceKeys = categorySearchKeys(value);
-  if (!sourceKeys.length) return false;
+  if (!raw || !sourceKeys.length) return 0;
   const optionKeys = categoryAliasValues(c).map(normMatchKey).filter(Boolean);
-  return sourceKeys.some((sourceKey) =>
-    optionKeys.some((optionKey) =>
-      optionKey === sourceKey ||
-      (sourceKey.length >= 4 && optionKey.length >= 4 && (optionKey.startsWith(sourceKey) || sourceKey.startsWith(optionKey)))
-    )
-  );
+  let best = 0;
+  for (const sourceKey of sourceKeys) {
+    for (const optionKey of optionKeys) {
+      if (!sourceKey || !optionKey) continue;
+      if (optionKey === sourceKey) {
+        const exactRawBonus = sourceKey === raw ? 40 : 0;
+        best = Math.max(best, 100 + exactRawBonus + Math.min(20, sourceKey.length));
+        continue;
+      }
+      if (sourceKey.length < 4 || optionKey.length < 4) continue;
+      const sourceHasSpace = sourceKey.includes(" ");
+      const optionHasSpace = optionKey.includes(" ");
+      if (optionKey.startsWith(sourceKey)) {
+        best = Math.max(best, (sourceHasSpace ? 76 : 42) + Math.min(16, sourceKey.length));
+      } else if (sourceKey.startsWith(optionKey)) {
+        best = Math.max(best, (optionHasSpace ? 72 : 40) + Math.min(16, optionKey.length));
+      }
+    }
+  }
+  return best;
+}
+
+function categoryMatches(c: AifCategoryOption, value: unknown) {
+  return categoryMatchScore(c, value) > 0;
 }
 
 function rawValueByHeader(row: any, headers: string[]) {
@@ -1060,12 +1135,19 @@ function isSubcategoryOption(c: AifCategoryOption) {
 }
 
 function findCategoryByCandidates(candidates: unknown[], categories: AifCategoryOption[]) {
+  let best: AifCategoryOption | null = null;
+  let bestScore = 0;
   for (const candidate of candidates) {
     if (!String(candidate ?? "").trim()) continue;
-    const found = categories.find((c) => categoryMatches(c, candidate));
-    if (found) return found;
+    for (const category of categories) {
+      const score = categoryMatchScore(category, candidate);
+      if (score > bestScore) {
+        best = category;
+        bestScore = score;
+      }
+    }
   }
-  return null;
+  return best;
 }
 
 function mainCategoryCandidatesForRow(row: any) {
@@ -1110,13 +1192,24 @@ function categoryCandidatesForRow(row: any) {
   return [...subCategoryCandidatesForRow(row), ...mainCategoryCandidatesForRow(row)];
 }
 
+function categoryColumnAsSubCategoryCandidatesForRow(row: any, categories: AifCategoryOption[]) {
+  const mainCategories = categories.filter((c) => !isSubcategoryOption(c));
+  return mainCategoryCandidatesForRow(row).filter((candidate) => {
+    if (!String(candidate ?? "").trim()) return false;
+    // Ha a Categorie/CATEGORY oszlop tényleg főkategória, nem használjuk alkategóriának.
+    // Ha viszont beszállítói terméktípus, pl. SHORTS CAS, akkor segít visszatenni a jó helyre.
+    return !findCategoryByCandidates([candidate], mainCategories);
+  });
+}
+
 function findMainCategoryForRow(row: any, categories: AifCategoryOption[]) {
   const mainCategories = categories.filter((c) => !isSubcategoryOption(c));
   const subCategories = categories.filter(isSubcategoryOption);
   const directMain = findCategoryByCandidates(mainCategoryCandidatesForRow(row), mainCategories);
   if (directMain) return directMain;
 
-  const subMatch = findCategoryByCandidates(subCategoryCandidatesForRow(row), subCategories);
+  const subCandidates = [...subCategoryCandidatesForRow(row), ...categoryColumnAsSubCategoryCandidatesForRow(row, categories)];
+  const subMatch = findCategoryByCandidates(subCandidates, subCategories);
   const parentId = categoryParentId(subMatch);
   if (parentId) return categories.find((c) => String(c.id) === parentId) || null;
   return null;
@@ -1126,7 +1219,7 @@ function findSubCategoryForRow(row: any, categories: AifCategoryOption[]) {
   const subCategories = categories.filter(isSubcategoryOption);
   const main = findMainCategoryForRow(row, categories);
   const mainId = main?.id ? String(main.id) : "";
-  const candidates = subCategoryCandidatesForRow(row);
+  const candidates = [...subCategoryCandidatesForRow(row), ...categoryColumnAsSubCategoryCandidatesForRow(row, categories)];
   const scoped = mainId ? subCategories.filter((c) => categoryParentId(c) === mainId) : subCategories;
   return findCategoryByCandidates(candidates, scoped) || findCategoryByCandidates(candidates, subCategories);
 }
@@ -1490,6 +1583,10 @@ export default function AllInIncoming(_props: Props) {
     if (split.colorCode && !normalized.colorCode) normalized.colorCode = split.colorCode;
     if (split.colorCode && !normalized.supplierColorCode) normalized.supplierColorCode = split.colorCode;
 
+    const rawColorCode = rawValueByHeader(row, COLOR_CODE_HEADER_ALIASES);
+    if (rawColorCode && !String(normalized.colorCode || "").trim()) normalized.colorCode = String(rawColorCode).trim();
+    if (rawColorCode && !String(normalized.supplierColorCode || "").trim()) normalized.supplierColorCode = String(rawColorCode).trim();
+
     const brandColor = brandColorCodeForNormalized(normalized) as any;
     if (brandColor) {
       normalized.colorName = brandColor.color_name_ro || normalized.colorName || "";
@@ -1639,7 +1736,7 @@ export default function AllInIncoming(_props: Props) {
       row?.supplier_color_code,
       row?.color_code,
       row?.colorCode,
-      rawValueByHeader({ raw }, ["COD CULOARE", "COLOR CODE", "COLOUR CODE", "SZÍNKÓD", "SZINKOD"])
+      rawValueByHeader({ raw }, COLOR_CODE_HEADER_ALIASES)
     );
     if (colorCode) {
       normalized.colorCode = normalized.colorCode || colorCode;
@@ -1749,10 +1846,18 @@ export default function AllInIncoming(_props: Props) {
 
       const subCategoryRaw = firstNonEmptyText(rawSubCategoryValue(rowWithCode), normalized.sourceSubCategory, normalized.subCategoryName, normalized.subcategoryName, normalized.productType, normalized.product_type);
       if (subCategoryRaw) {
-        normalized.sourceSubCategory = normalized.sourceSubCategory || subCategoryRaw;
-        normalized.sourceSubCategoryName = normalized.sourceSubCategoryName || subCategoryRaw;
-        normalized.subCategoryName = normalized.subCategoryName || subCategoryRaw;
-        normalized.subcategoryName = normalized.subcategoryName || subCategoryRaw;
+        const manualSubCategory = Boolean(normalized._manualSubCategory);
+        normalized.sourceSubCategory = manualSubCategory ? (normalized.sourceSubCategory || subCategoryRaw) : subCategoryRaw;
+        normalized.sourceSubCategoryName = manualSubCategory ? (normalized.sourceSubCategoryName || subCategoryRaw) : subCategoryRaw;
+        if (!manualSubCategory) {
+          normalized.subCategoryCode = "";
+          normalized.subcategoryCode = "";
+          normalized.subCategoryName = subCategoryRaw;
+          normalized.subcategoryName = subCategoryRaw;
+        } else {
+          normalized.subCategoryName = normalized.subCategoryName || subCategoryRaw;
+          normalized.subcategoryName = normalized.subcategoryName || subCategoryRaw;
+        }
         normalized.productType = normalized.productType || subCategoryRaw;
         normalized.product_type = normalized.product_type || subCategoryRaw;
       }
@@ -1913,6 +2018,7 @@ export default function AllInIncoming(_props: Props) {
         }
 
         if (field === "categoryCode") {
+          normalized._manualCategory = Boolean(value);
           const category = mainCategories.find((c) => (c.code || c.id) === value) || activeCategories.find((c) => (c.code || c.id) === value);
           if (value && category) {
             normalized.categoryCode = String(category.code || category.id);
@@ -1937,13 +2043,16 @@ export default function AllInIncoming(_props: Props) {
         }
 
         if (field === "subCategoryCode") {
+          normalized._manualSubCategory = Boolean(value);
           const subCategory = subCategories.find((c) => (c.code || c.id) === value) || activeCategories.find((c) => (c.code || c.id) === value);
           if (value && subCategory) {
             normalized.subCategoryCode = String(subCategory.code || subCategory.id);
             normalized.subcategoryCode = String(subCategory.code || subCategory.id);
             normalized.subCategoryName = categoryLabel(subCategory);
             normalized.subcategoryName = categoryLabel(subCategory);
-            normalized.sourceSubCategory = normalized.sourceSubCategory || categoryLabel(subCategory);
+            normalized.sourceSubCategory = categoryLabel(subCategory);
+            normalized.sourceSubCategoryCode = String(subCategory.code || subCategory.id);
+            normalized.sourceSubCategoryName = categoryLabel(subCategory);
             if (!String(normalized.productType || normalized.product_type || "").trim()) normalized.productType = categoryLabel(subCategory);
 
             const parent = activeCategories.find((c) => String(c.id) === categoryParentId(subCategory));
