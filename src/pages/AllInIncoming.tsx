@@ -2133,7 +2133,7 @@ export default function AllInIncoming(_props: Props) {
       fillReceptionHeader(detail, { clearDraftRows: false });
       setRows((current) => (current.length ? normalizeImportedRowsWithMeta(current) : current));
       const remaining = Number((detail.item as any).remaining_rows || 0);
-      setMessage(`Receptió lista és törzsadatok újratöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Az újonnan felvett színek, főkategóriák / alkategóriák és az OSFM méret is frissült a listában."}`);
+      setMessage(`Receptió lista és törzsadatok újratöltve: ${detail.item.invoice_number || "számlaszám nélkül"}. ${remaining ? `${remaining} még dolgozandó sor van benne.` : "Az újonnan felvett színek, főkategóriák / alkategóriák, standard méretek és márkaméretek is frissültek a listában."}`);
     } catch (e: any) {
       setMessage(e?.message || "A receptió és a törzsadatok újratöltése nem sikerült.");
     } finally {
@@ -2151,6 +2151,7 @@ export default function AllInIncoming(_props: Props) {
     const brand = activeBrands.find((b) => (b.code || b.id) === brandCode);
     const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
     const parentCategory = activeCategories.find((c) => (c.code || c.id) === parentCategoryCode);
+    const manualSubCategory = activeCategories.find((c) => (c.code || c.id) === subCategoryCode);
     const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
     const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
     const sellPrice = manualSellPrice.trim() ? Number(String(manualSellPrice).replace(",", ".")) : null;
@@ -2183,7 +2184,7 @@ export default function AllInIncoming(_props: Props) {
         parentCategoryCode,
         parentCategoryName: parentCategory ? categoryLabel(parentCategory) : "",
         subCategoryCode,
-        subCategoryName: subCategoryCode ? (category ? categoryLabel(category) : "") : "",
+        subCategoryName: subCategoryCode ? (manualSubCategory ? categoryLabel(manualSubCategory) : "") : "",
         brandCode,
         categoryCode,
         gender,
@@ -2222,7 +2223,7 @@ export default function AllInIncoming(_props: Props) {
         parentCategoryCode,
         parentCategoryName: parentCategory ? categoryLabel(parentCategory) : "",
         subCategoryCode,
-        subCategoryName: subCategoryCode ? (category ? categoryLabel(category) : "") : "",
+        subCategoryName: subCategoryCode ? (manualSubCategory ? categoryLabel(manualSubCategory) : "") : "",
         brandCode,
         brandName: brand?.name || "",
         categoryCode,
@@ -2332,7 +2333,7 @@ export default function AllInIncoming(_props: Props) {
         const detail = await apiAifGetReception(rid);
         fillReceptionHeader(detail, { clearDraftRows: false });
       }
-      setMessage("Lista és törzsadatok frissítve. Az újonnan felvett színek, főkategóriák / alkategóriák és az OSFM méret is újraellenőrizve.");
+      setMessage("Lista és törzsadatok frissítve. Az újonnan felvett színek, főkategóriák / alkategóriák, standard méretek és márkaméretek is újraellenőrizve.");
     } catch (e: any) {
       setMessage(e?.message || "Az újratöltés nem sikerült.");
     } finally {
