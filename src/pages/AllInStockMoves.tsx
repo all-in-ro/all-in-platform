@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type Componen
 import {
   Activity,
   ArrowDownLeft,
-  ArrowLeft,
   ArrowRightLeft,
   ArrowUpRight,
   Barcode,
@@ -12,6 +11,7 @@ import {
   Download,
   FileText,
   Filter,
+  Home,
   ImageIcon,
   MapPin,
   PackageSearch,
@@ -26,9 +26,11 @@ const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4
 const shell = "mx-auto max-w-7xl space-y-4";
 const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
 const panelHead = "flex flex-col gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3 sm:flex-row sm:items-center sm:justify-between";
-const btn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
@@ -41,6 +43,10 @@ const chipIdle = `${chipBase} border-white/14 bg-white/[0.06] text-white/72 hove
 const AIF_BASE = "/api/aif";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
+
+function goHome() {
+  window.location.hash = "#allin";
+}
 
 type AifLocation = {
   id: string;
@@ -666,11 +672,6 @@ export default function AllInStockMoves() {
     setTo(range.to);
   };
 
-  const handleBack = () => {
-    if (typeof window !== "undefined" && window.history.length > 1) window.history.back();
-    else if (typeof window !== "undefined") window.location.hash = "#allinwarehouse";
-  };
-
   const confirmDeleteMovement = useCallback(async () => {
     if (!deleteCandidate?.id) return;
     const id = deleteCandidate.id;
@@ -731,18 +732,42 @@ export default function AllInStockMoves() {
   return (
     <div className={page}>
       <div className={shell}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-sm text-white/58">AllInFashion</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Raktármozgás / készlet</h1>
-            <p className="mt-1 max-w-3xl text-sm text-white/70">
-              Termékes készletnézet képekkel, vonalkóddal, dátummal, PDF exporttal és törölhető mozgásnaplóval.
-            </p>
+        <header className="sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
+              <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Raktármozgás / készlet</h1>
+              <p className="mt-0.5 text-[11px] leading-snug text-white/52">Termékes készletnézet és mozgásnapló</p>
+            </div>
+            <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => setActiveTab("moves")}
+                className={activeTab === "moves" ? headerPrimaryBtn : headerBtnSoft}
+              >
+                <Activity size={15} /> Mozgásnapló
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("stock")}
+                className={activeTab === "stock" ? headerPrimaryBtn : headerBtnSoft}
+              >
+                <Boxes size={15} /> Jelenlegi készlet
+              </button>
+              <button
+                type="button"
+                onClick={() => refresh()}
+                disabled={loading}
+                className={headerBtnSoft}
+              >
+                <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés
+              </button>
+              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap">
+                <Home size={15} /> Kezdőlap
+              </button>
+            </div>
           </div>
-          <button type="button" onClick={handleBack} className={btn}>
-            <ArrowLeft size={16} /> Vissza
-          </button>
-        </div>
+        </header>
 
         <div className={panel}>
           <div className={panelHead}>
