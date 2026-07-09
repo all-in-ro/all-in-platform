@@ -405,15 +405,16 @@ const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md bo
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
 const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
-const compactFieldLabel = "text-[10.5px] uppercase tracking-[0.04em] text-white/72 whitespace-nowrap leading-[13px]";
+const compactFieldLabel = "block w-full truncate text-center text-[8px] uppercase tracking-[0.035em] text-white/36 whitespace-nowrap leading-[9px] font-normal";
 const compactInput = "h-7 min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
 const compactSelect = `${compactInput} aif-native-select pr-6`;
-const previewField = "grid min-w-0 gap-0.5";
+const previewField = "grid min-w-0 content-start gap-[1px]";
 const previewInput = "h-[28px] min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[12px] leading-[16px] text-white outline-none placeholder:text-white/44 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
 const previewSelect = `${previewInput} aif-native-select pr-6`;
-const previewTopGrid = "grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2.5fr)_minmax(0,1fr)_minmax(0,1.7fr)_minmax(0,1.9fr)] lg:items-end";
-const previewTopHeaderGrid = "hidden gap-1 bg-[#303b4e] px-2 py-2 text-[11.5px] uppercase tracking-[0.05em] text-white/72 lg:grid lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2.5fr)_minmax(0,1fr)_minmax(0,1.7fr)_minmax(0,1.9fr)]";
-const previewBottomGrid = "mt-1 grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,0.95fr)_minmax(0,1.4fr)_minmax(0,3fr)_minmax(0,0.65fr)_minmax(0,1fr)_minmax(0,0.68fr)_minmax(0,0.65fr)_minmax(0,0.66fr)_minmax(0,0.78fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.95fr)] lg:items-end";
+const previewTopGrid = "grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,0.9fr)_minmax(0,0.95fr)_minmax(0,0.9fr)_minmax(0,2.8fr)_minmax(0,1.05fr)] lg:items-end";
+const previewTopHeaderGrid = "hidden";
+const previewMiddleGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1.65fr)_minmax(0,1.85fr)_minmax(0,0.65fr)_minmax(0,1fr)_minmax(0,0.65fr)_minmax(0,0.65fr)] lg:items-end";
+const previewBottomGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,3fr)_minmax(0,0.6fr)_minmax(0,0.75fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.05fr)] lg:items-end";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
 const wizardStepBase = "rounded-2xl border px-3 py-3 transition shadow-sm";
@@ -3292,7 +3293,7 @@ export default function AllInIncoming(_props: Props) {
                 <th className="px-3 py-2 text-right font-normal">Eladási ár</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/10">
+            <tbody className="space-y-[2px]">
               {loadedReceptionRows.map((row: any) => (
                 <tr key={row.id || `${row.batch_id}-${row.row_no}`} className={row.status === "committed" ? "bg-emerald-400/10" : row.status === "error" ? "bg-red-500/10" : "bg-[#445064]"}>
                   <td className="px-3 py-2.5 text-xs text-white/80">{rowStatusText(row.status)}</td>
@@ -3997,7 +3998,7 @@ export default function AllInIncoming(_props: Props) {
                       <th className="px-3 py-2 font-normal">Megjegyzés</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/10">
+                  <tbody className="space-y-[2px]">
                     {(workbench?.columns || []).map((c) => {
                       const isIgnored = c.field === "ignore";
                       return (
@@ -4075,7 +4076,7 @@ export default function AllInIncoming(_props: Props) {
               <div>Főkategória</div>
               <div>Alkat. / típus</div>
             </div>
-            <div className="divide-y divide-white/10">
+            <div className="space-y-[2px] bg-[#303b4e]/25 p-[2px]">
               {preview.map((r, idx) => {
                 const globalIndex = idx;
                 const n = r.normalized || {};
@@ -4093,15 +4094,15 @@ export default function AllInIncoming(_props: Props) {
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
-                    className={errors.length ? "bg-red-500/10 px-2 py-1.5 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-1.5 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-1.5 hover:bg-[#4b596f]"}
+                    className={errors.length ? "rounded-md border border-red-300/14 bg-red-500/10 px-2 py-1 hover:bg-red-500/15" : approved ? "rounded-md border border-[#67d4d1]/20 bg-[#208d8b]/18 px-2 py-1 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "rounded-md border border-white/8 bg-[#445064] px-2 py-1 hover:bg-[#4b596f]"}
                   >
                     <div className={previewTopGrid}>
                       <div className="flex h-[28px] items-center justify-between gap-1 rounded-md border border-white/10 bg-black/10 px-1.5 lg:block lg:h-auto lg:border-0 lg:bg-transparent lg:px-0">
                         <div className="flex items-center gap-1">
                           <input className="h-3.5 w-3.5 accent-[#208d8b]" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
-                          <span className="text-[12px] text-white/65">#{r.rowNo || idx + 1}</span>
+                          <span className="text-[11px] text-white/50">#{r.rowNo || idx + 1}</span>
                         </div>
-                        <div className={errors.length ? "text-[11px] text-amber-100 lg:mt-1" : "text-[11px] text-emerald-100 lg:mt-1"}>{rowState}</div>
+                        <div className={errors.length ? "text-[10px] text-amber-100/82 lg:mt-1" : "text-[10px] text-emerald-100/78 lg:mt-1"}>{rowState}</div>
                       </div>
 
                       <label className={previewField}>
@@ -4121,49 +4122,32 @@ export default function AllInIncoming(_props: Props) {
                         <input className={`${previewInput} w-full`} value={valueString(n.titleRo)} onChange={(e) => updateRowField(globalIndex, "titleRo", e.target.value)} title={valueString(n.titleRo)} />
                       </label>
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} whitespace-nowrap`}>Márka</span>
+                        <span className={compactFieldLabel}>Márka</span>
                         <select className={`${previewSelect} w-full`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
                           <option style={mutedOptionStyle} value="">Nincs</option>
                           {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
                         </select>
                       </label>
+                    </div>
+
+                    <div className={previewMiddleGrid}>
+                      <div className="hidden lg:block" />
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} whitespace-nowrap`} title="Főkategória">Főkategória</span>
+                        <span className={compactFieldLabel} title="Főkategória">Főkategória</span>
                         <select className={`${previewSelect} w-full min-w-0 truncate`} value={mainCategoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)} title={mainCategoryValue || mainCategoryHint || "Főkategória"}>
                           <option style={mutedOptionStyle} value="">Nincs</option>
                           {(mainCategories.length ? mainCategories : activeCategories.filter((c) => !isSubcategoryOption(c))).map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                         </select>
                       </label>
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} whitespace-nowrap`} title="Alkategória / terméktípus">Alkat. / típus</span>
+                        <span className={compactFieldLabel} title="Alkategória / terméktípus">Alkat. / típus</span>
                         <select className={`${previewSelect} w-full min-w-0 truncate`} value={subCategoryValue} onChange={(e) => updateRowField(globalIndex, "subCategoryCode", e.target.value)} title={subCategoryValue || subCategoryHint || "Alkategória / terméktípus"}>
                           <option style={mutedOptionStyle} value="">Nincs</option>
                           {subCategoryOptions.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                         </select>
                       </label>
-                    </div>
-
-                    <div className={previewBottomGrid}>
-                      <div className="hidden lg:block" />
                       <label className={previewField}>
-                        <span className={compactFieldLabel}>Vonalkód</span>
-                        <input className={`${previewInput} w-full`} value={valueString((n as any).barcode)} onChange={(e) => updateRowField(globalIndex, "barcode", e.target.value)} />
-                      </label>
-                      <label className={previewField}>
-                        <span className={compactFieldLabel}>Fotó URL</span>
-                        <input className={`${previewInput} w-full`} value={valueString((n as any).imageUrl || (n as any).image_url)} onChange={(e) => updateRowField(globalIndex, "imageUrl", e.target.value)} title={valueString((n as any).imageUrl || (n as any).image_url)} />
-                      </label>
-                      <label className={previewField}>
-                        <span className={`${compactFieldLabel} whitespace-nowrap`}>DESCRIERE / Leírás</span>
-                        <input
-                          className={`${previewInput} w-full`}
-                          value={valueString((n as any).descriptionRo || (n as any).description_ro)}
-                          onChange={(e) => updateRowField(globalIndex, "descriptionRo", e.target.value)}
-                          title={valueString((n as any).descriptionRo || (n as any).description_ro)}
-                        />
-                      </label>
-                      <label className={previewField}>
-                        <span className={`${compactFieldLabel} whitespace-nowrap`}>Nem</span>
+                        <span className={compactFieldLabel}>Nem</span>
                         <select className={`${previewSelect} w-full`} value={valueString(n.gender)} onChange={(e) => updateRowField(globalIndex, "gender", e.target.value)}>
                           <option style={mutedOptionStyle} value="">Nincs</option>
                           {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
@@ -4174,12 +4158,12 @@ export default function AllInIncoming(_props: Props) {
                         <input className={`${previewInput} w-full`} value={valueString(n.colorName)} onChange={(e) => updateRowField(globalIndex, "colorName", e.target.value)} />
                       </label>
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} inline-flex items-center gap-1`}>
+                        <span className={`${compactFieldLabel} inline-flex items-center justify-center gap-1`}>
                           Színkód
                           {colorMissingHint ? (
                             <span className="group relative inline-flex">
                               <span
-                                className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-300 text-[11px] leading-none text-black shadow-sm ring-1 ring-yellow-100/70"
+                                className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-yellow-300 text-[10px] leading-none text-black shadow-sm ring-1 ring-yellow-100/70"
                                 title={`Nincs mapping: ${colorMissingHint}`}
                               >
                                 !
@@ -4196,16 +4180,37 @@ export default function AllInIncoming(_props: Props) {
                         <span className={compactFieldLabel}>Méret</span>
                         <input className={`${previewInput} w-full`} list="aif-size-options" value={valueString(n.size)} onChange={(e) => updateRowField(globalIndex, "size", e.target.value)} placeholder="OSFM" />
                       </label>
+                    </div>
+
+                    <div className={previewBottomGrid}>
+                      <div className="hidden lg:block" />
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} text-right whitespace-nowrap`}>Darab</span>
+                        <span className={compactFieldLabel}>Vonalkód</span>
+                        <input className={`${previewInput} w-full`} value={valueString((n as any).barcode)} onChange={(e) => updateRowField(globalIndex, "barcode", e.target.value)} />
+                      </label>
+                      <label className={previewField}>
+                        <span className={compactFieldLabel}>Fotó URL</span>
+                        <input className={`${previewInput} w-full`} value={valueString((n as any).imageUrl || (n as any).image_url)} onChange={(e) => updateRowField(globalIndex, "imageUrl", e.target.value)} title={valueString((n as any).imageUrl || (n as any).image_url)} />
+                      </label>
+                      <label className={previewField}>
+                        <span className={compactFieldLabel}>DESCRIERE / Leírás</span>
+                        <input
+                          className={`${previewInput} w-full`}
+                          value={valueString((n as any).descriptionRo || (n as any).description_ro)}
+                          onChange={(e) => updateRowField(globalIndex, "descriptionRo", e.target.value)}
+                          title={valueString((n as any).descriptionRo || (n as any).description_ro)}
+                        />
+                      </label>
+                      <label className={previewField}>
+                        <span className={compactFieldLabel}>Darab</span>
                         <input className={`${previewInput} w-full text-right`} value={valueString(n.qty)} onChange={(e) => updateRowField(globalIndex, "qty", e.target.value)} title={valueString(n.qty)} />
                       </label>
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} text-right whitespace-nowrap`}>Vételár</span>
+                        <span className={compactFieldLabel}>Vételár</span>
                         <input className={`${previewInput} w-full text-right`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} title={valueString(n.buyPrice)} />
                       </label>
                       <label className={previewField}>
-                        <span className={`${compactFieldLabel} text-right whitespace-nowrap`} title="Eladás RON">Eladás RON</span>
+                        <span className={compactFieldLabel} title="Eladás RON">Eladás RON</span>
                         <input className={`${previewInput} w-full text-right`} value={valueString(n.sellPrice)} onChange={(e) => updateRowField(globalIndex, "sellPrice", e.target.value)} title={valueString(n.sellPrice)} />
                       </label>
                       <div className={previewField}>
