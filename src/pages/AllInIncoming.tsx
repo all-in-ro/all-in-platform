@@ -405,14 +405,14 @@ const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md bo
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
 const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
-const compactFieldLabel = "text-[9px] uppercase tracking-[0.05em] text-white/45 whitespace-nowrap leading-3";
+const compactFieldLabel = "text-[10.5px] uppercase tracking-[0.04em] text-white/72 whitespace-nowrap leading-[13px]";
 const compactInput = "h-7 min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
 const compactSelect = `${compactInput} aif-native-select pr-6`;
 const previewField = "grid min-w-0 gap-0.5";
-const previewInput = "h-6 min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-1.5 text-[10px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
-const previewSelect = `${previewInput} aif-native-select pr-5`;
+const previewInput = "h-[28px] min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[12px] leading-[16px] text-white outline-none placeholder:text-white/44 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
+const previewSelect = `${previewInput} aif-native-select pr-6`;
 const previewTopGrid = "grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2.5fr)_minmax(0,1fr)_minmax(0,1.7fr)_minmax(0,1.9fr)] lg:items-end";
-const previewTopHeaderGrid = "hidden gap-1 bg-[#303b4e] px-2 py-2 text-[10px] uppercase tracking-[0.07em] text-white/62 lg:grid lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2.5fr)_minmax(0,1fr)_minmax(0,1.7fr)_minmax(0,1.9fr)]";
+const previewTopHeaderGrid = "hidden gap-1 bg-[#303b4e] px-2 py-2 text-[11.5px] uppercase tracking-[0.05em] text-white/72 lg:grid lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2.5fr)_minmax(0,1fr)_minmax(0,1.7fr)_minmax(0,1.9fr)]";
 const previewBottomGrid = "mt-1 grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,0.95fr)_minmax(0,1.4fr)_minmax(0,3fr)_minmax(0,0.65fr)_minmax(0,1fr)_minmax(0,0.68fr)_minmax(0,0.65fr)_minmax(0,0.66fr)_minmax(0,0.78fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.95fr)] lg:items-end";
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
@@ -4093,15 +4093,15 @@ export default function AllInIncoming(_props: Props) {
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
-                    className={errors.length ? "bg-red-500/10 px-2 py-1 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-1 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-1 hover:bg-[#4b596f]"}
+                    className={errors.length ? "bg-red-500/10 px-2 py-1.5 hover:bg-red-500/15" : approved ? "bg-[#208d8b]/18 px-2 py-1.5 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "bg-[#445064] px-2 py-1.5 hover:bg-[#4b596f]"}
                   >
                     <div className={previewTopGrid}>
-                      <div className="flex h-6 items-center justify-between gap-1 rounded-md border border-white/10 bg-black/10 px-1.5 lg:block lg:h-auto lg:border-0 lg:bg-transparent lg:px-0">
+                      <div className="flex h-[28px] items-center justify-between gap-1 rounded-md border border-white/10 bg-black/10 px-1.5 lg:block lg:h-auto lg:border-0 lg:bg-transparent lg:px-0">
                         <div className="flex items-center gap-1">
                           <input className="h-3.5 w-3.5 accent-[#208d8b]" type="checkbox" checked={approved} onChange={(e) => toggleApprovedRow(globalIndex, e.target.checked)} aria-label="Sor kijelölése importhoz" />
-                          <span className="text-[10px] text-white/55">#{r.rowNo || idx + 1}</span>
+                          <span className="text-[12px] text-white/65">#{r.rowNo || idx + 1}</span>
                         </div>
-                        <div className={errors.length ? "text-[9px] text-amber-100 lg:mt-1" : "text-[9px] text-emerald-100 lg:mt-1"}>{rowState}</div>
+                        <div className={errors.length ? "text-[11px] text-amber-100 lg:mt-1" : "text-[11px] text-emerald-100 lg:mt-1"}>{rowState}</div>
                       </div>
 
                       <label className={previewField}>
@@ -4179,7 +4179,7 @@ export default function AllInIncoming(_props: Props) {
                           {colorMissingHint ? (
                             <span className="group relative inline-flex">
                               <span
-                                className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-yellow-300 text-[10px] leading-none text-black shadow-sm ring-1 ring-yellow-100/70"
+                                className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-yellow-300 text-[11px] leading-none text-black shadow-sm ring-1 ring-yellow-100/70"
                                 title={`Nincs mapping: ${colorMissingHint}`}
                               >
                                 !
@@ -4210,19 +4210,19 @@ export default function AllInIncoming(_props: Props) {
                       </label>
                       <div className={previewField}>
                         <span className={compactFieldLabel}>Állapot</span>
-                        <div className={errors.length ? "h-6 truncate rounded-md border border-amber-200/25 bg-amber-400/10 px-1.5 py-1 text-[10px] leading-4 text-amber-50" : "h-6 truncate rounded-md border border-emerald-200/20 bg-emerald-400/10 px-1.5 py-1 text-[10px] leading-4 text-emerald-50"} title={rowMessage}>
+                        <div className={errors.length ? "h-[28px] truncate rounded-md border border-amber-200/25 bg-amber-400/10 px-2 py-1 text-[12px] leading-[18px] text-amber-50" : "h-[28px] truncate rounded-md border border-emerald-200/20 bg-emerald-400/10 px-2 py-1 text-[12px] leading-[18px] text-emerald-50"} title={rowMessage}>
                           {rowMessage}
                         </div>
                       </div>
                       <div className={previewField}>
                         <span className={compactFieldLabel}>Mentés</span>
                         <div className="grid grid-cols-[1fr_auto] gap-1">
-                          <div className={approved ? "h-6 truncate rounded-md border border-[#67d4d1]/35 bg-[#208d8b]/18 px-1.5 py-1 text-center text-[10px] leading-4 text-white" : "h-6 truncate rounded-md border border-white/10 bg-black/10 px-1.5 py-1 text-center text-[10px] leading-4 text-white/50"}>
+                          <div className={approved ? "h-[28px] truncate rounded-md border border-[#67d4d1]/35 bg-[#208d8b]/18 px-2 py-1 text-center text-[12px] leading-[18px] text-white" : "h-[28px] truncate rounded-md border border-white/10 bg-black/10 px-2 py-1 text-center text-[12px] leading-[18px] text-white/55"}>
                             {approved ? "Kijelölve" : "Kizárva"}
                           </div>
                           {approved && (
                             <button
-                              className="inline-flex h-6 items-center justify-center rounded-md border border-[#67d4d1]/45 bg-[#208d8b] px-1.5 text-[10px] text-white transition hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50"
+                              className="inline-flex h-[28px] items-center justify-center rounded-md border border-[#67d4d1]/45 bg-[#208d8b] px-2 text-[12px] text-white transition hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50"
                               onClick={saveDraft}
                               disabled={busy || !canSaveApprovedRows}
                               title={!canSaveApprovedRows ? "A mentéshez legyen kitöltve a receptió és ne legyen hibás kijelölt sor." : "Kijelölt sorok mentése"}
