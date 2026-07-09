@@ -806,9 +806,9 @@ function normMatchKey(value: unknown) {
 }
 
 const sourceCategoryAliases: Record<string, string[]> = {
-  apparel: ["imbracaminte", "îmbrăcăminte", "haine", "ruha", "clothing", "apparel"],
-  tricou: ["tricou", "tricouri", "trikó", "póló", "polo", "t shirt", "t-shirt", "tee", "training tee"],
-  tricouri: ["tricou", "tricouri", "trikó", "póló", "polo", "t shirt", "t-shirt", "tee"],
+  apparel: ["imbracaminte", "îmbrăcăminte", "haine", "ruhazat", "ruházat", "ruha", "clothing", "apparel"],
+  tricou: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees", "training tee"],
+  tricouri: ["tricou", "tricouri", "trikó", "triko", "póló", "polo", "poló", "polouri", "t shirt", "t-shirt", "tshirt", "t shirts", "t-shirts", "tee", "tees"],
   pantaloni: ["pantaloni", "nadrag", "nadrág", "pants", "trousers"],
   shorts: ["shorts", "pantaloni scurti", "pantaloni scurți", "rövidnadrág", "rovidnadrag"],
   hanorac: ["hanorac", "hoodie", "pulover", "sweatshirt", "kapucnis", "pulóver", "puloverek"],
@@ -822,12 +822,34 @@ const sourceCategoryAliases: Record<string, string[]> = {
   sosete: ["sosete", "șosete", "socks", "zokni"],
 };
 
+const sourceCategoryAliasIndex: Record<string, string[]> = (() => {
+  const index: Record<string, string[]> = {};
+  const addGroup = (key: string, aliases: string[]) => {
+    const group = Array.from(new Set([key, ...(aliases || [])].map(normMatchKey).filter(Boolean)));
+    for (const item of group) {
+      index[item] = Array.from(new Set([...(index[item] || []), ...group]));
+    }
+  };
+  Object.entries(sourceCategoryAliases).forEach(([key, aliases]) => addGroup(key, aliases));
+  return index;
+})();
+
+function categoryAliasPhraseMatches(raw: string, alias: string) {
+  if (!raw || !alias || alias.length < 4) return false;
+  const rawPhrase = ` ${raw} `;
+  const aliasPhrase = ` ${alias} `;
+  return rawPhrase.includes(aliasPhrase) || aliasPhrase.includes(rawPhrase);
+}
+
 function categorySearchKeys(value: unknown) {
   const raw = normMatchKey(value);
   if (!raw) return [];
-  const direct = sourceCategoryAliases[raw] || [];
-  const byToken = raw.split(" ").flatMap((token) => sourceCategoryAliases[token] || []);
-  return Array.from(new Set([raw, ...direct, ...byToken].map(normMatchKey).filter(Boolean)));
+  const direct = sourceCategoryAliasIndex[raw] || [];
+  const byToken = raw.split(" ").flatMap((token) => sourceCategoryAliasIndex[token] || []);
+  const byPhrase = Object.entries(sourceCategoryAliasIndex).flatMap(([alias, group]) =>
+    categoryAliasPhraseMatches(raw, alias) ? group : []
+  );
+  return Array.from(new Set([raw, ...direct, ...byToken, ...byPhrase].map(normMatchKey).filter(Boolean)));
 }
 
 function categoryMatches(c: AifCategoryOption, value: unknown) {
@@ -1736,8 +1758,12 @@ export default function AllInIncoming(_props: Props) {
       }
 
       const rowForMatching = { ...rowWithCode, normalized };
-      const mainMatch = findMainCategoryForRow(rowForMatching, activeCategories);
       const subMatch = findSubCategoryForRow(rowForMatching, activeCategories);
+      let mainMatch = findMainCategoryForRow(rowForMatching, activeCategories);
+      if (!mainMatch && subMatch) {
+        const parentId = categoryParentId(subMatch);
+        if (parentId) mainMatch = activeCategories.find((c) => String(c.id) === parentId) || null;
+      }
 
       if (mainMatch) {
         normalized.categoryCode = String(mainMatch.code || mainMatch.id);
@@ -1937,7 +1963,8 @@ export default function AllInIncoming(_props: Props) {
 
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
         if (field === "customsTariffCode") assignCustomsTariffCode(normalized as Record<string, any>, value);
-        return applyProductCodeAndBrandColor({ ...row, normalized });
+        const updatedRow = applyProductCodeAndBrandColor({ ...row, normalized });
+        return field === "productType" ? (normalizeImportedRowsWithMeta([updatedRow])[0] || updatedRow) : updatedRow;
       })
     );
   }
@@ -1957,7 +1984,9 @@ export default function AllInIncoming(_props: Props) {
     if (tariffCode) assignCustomsTariffCode(normalized, tariffCode);
     const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
     if (normalizedSize) normalized.size = normalizedSize;
-    return normalizeAifRowSize({ ...enrichedRow, normalized }) as AifParsedRow;
+
+    const rowWithCategoryMeta = normalizeImportedRowsWithMeta([{ ...enrichedRow, normalized } as AifParsedRow])[0] || { ...enrichedRow, normalized };
+    return normalizeAifRowSize(rowWithCategoryMeta) as AifParsedRow;
   }
 
   async function saveSalesTvaSettings() {
