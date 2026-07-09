@@ -27,13 +27,16 @@ import {
   X,
 } from "lucide-react";
 
-const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4 sm:py-7";
+const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
 const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
 const panelHead = "flex items-center justify-between gap-3 bg-[#404a5b] px-4 py-3";
 const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/20 bg-[#354153] px-3 text-xs text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const warehouseListIconButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] text-white/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[#7bd7d4]/45 hover:bg-[#2a8d8b]/22 hover:text-white focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50";
 const warehouseListDangerButton = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-[#d31126] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] transition hover:bg-[#b90f21] focus:outline-none focus:ring-2 focus:ring-rose-200/35 disabled:cursor-not-allowed disabled:opacity-50";
@@ -2384,6 +2387,8 @@ export default function AllInWarehouse() {
   const [subCategory, setSubCategory] = useState("all");
   const [gender, setGender] = useState("all");
   const [color, setColor] = useState("all");
+  const [colorFilterOpen, setColorFilterOpen] = useState(false);
+  const colorFilterRef = useRef<HTMLDivElement | null>(null);
   const [location, setLocation] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
@@ -3249,6 +3254,21 @@ export default function AllInWarehouse() {
     if (!valid) setSubCategory("all");
   }, [subCategory, subCategoryFilterOptions]);
 
+  useEffect(() => {
+    if (!filtersOpen && colorFilterOpen) setColorFilterOpen(false);
+  }, [filtersOpen, colorFilterOpen]);
+
+  useEffect(() => {
+    if (!colorFilterOpen) return;
+    const onColorFilterPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || colorFilterRef.current?.contains(target)) return;
+      setColorFilterOpen(false);
+    };
+    document.addEventListener("mousedown", onColorFilterPointerDown);
+    return () => document.removeEventListener("mousedown", onColorFilterPointerDown);
+  }, [colorFilterOpen]);
+
   const colorDisplay = (value: unknown, fallback?: unknown) => {
     return officialColorFromTypes(value, colorTypes) || String(fallback || "").trim() || "-";
   };
@@ -3295,16 +3315,18 @@ export default function AllInWarehouse() {
     const hex = colorHexForItem(item);
     const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
     return (
-      <span className="group relative inline-flex max-w-full items-center justify-center gap-1.5 align-middle">
+      <span
+        className="group relative inline-flex max-w-full items-center justify-center gap-1.5 rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 py-1 text-[11px] font-semibold leading-none text-[#cffffd] shadow-[0_0_0_1px_rgba(42,141,139,0.10)] align-middle"
+        tabIndex={code ? 0 : undefined}
+      >
         <span
           className="h-3 w-3 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
           style={hex ? { backgroundColor: hex } : undefined}
         />
-        <span className="min-w-0 truncate">{label}</span>
+        <span className="min-w-0 max-w-[86px] truncate">{label}</span>
         {code && (
-          <span className={`pointer-events-none absolute left-1/2 z-[9999] hidden -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl group-hover:block group-focus-within:block ${tooltipPosition}`}>
-            <span className="block text-[#cffffd]">Színkód</span>
-            <span className="mt-1 inline-flex rounded-full border border-[#67d4d1]/35 bg-[#208d8b]/28 px-2 py-0.5 text-[11px] font-semibold text-white">{code}</span>
+          <span className={`pointer-events-none absolute left-1/2 z-[9999] hidden -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-2.5 py-1.5 text-[11px] font-semibold leading-snug text-white shadow-2xl group-hover:block group-focus:block ${tooltipPosition}`}>
+            {code}
           </span>
         )}
       </span>
@@ -3405,6 +3427,7 @@ export default function AllInWarehouse() {
     setSubCategory("all");
     setGender("all");
     setColor("all");
+    setColorFilterOpen(false);
     setLocation("all");
     setStockFilter("all");
     setImageFilter("all");
@@ -3528,6 +3551,7 @@ export default function AllInWarehouse() {
     setSubCategory("all");
     setGender("all");
     setColor("all");
+    setColorFilterOpen(false);
     setLocation("all");
     setStockFilter("all");
     setImageFilter("all");
@@ -5555,33 +5579,37 @@ export default function AllInWarehouse() {
     );
   }
 
+
+  const selectedColorFilter = color === "all" ? null : findColorTypeByValue(colorTypes, color);
+  const selectedColorFilterLabel = selectedColorFilter ? colorTypeLabel(selectedColorFilter) : (color === "all" ? "Összes" : String(color || "-"));
+  const selectedColorFilterHex = selectedColorFilter?.hex || "";
+
   return (
     <main className={page}>
       <style id="aifWarehouseLabelPrintCss">{WAREHOUSE_LABEL_APP_CSS}</style>
       <div className={`${shell} aifWarehouseScreenContent`}>
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm text-white/60">AllInFashion</p>
-            <h1 className="text-2xl tracking-tight">Raktár</h1>
-            <p className="mt-1 max-w-3xl text-sm text-white/70">Termék- és készletközpont kereséssel, szűréssel, képekkel, készletértékkel és termékadat-szerkesztéssel.</p>
+        <header className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2">
+          <div className="min-w-[170px]">
+            <p className="text-[11px] leading-none text-white/50">AllInFashion</p>
+            <h1 className="mt-0.5 text-xl leading-tight tracking-tight">Raktár</h1>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="ml-auto flex flex-1 flex-row-reverse flex-wrap items-center justify-start gap-1.5">
             <button
-              className={buyPricesVisible ? primaryBtn : btnSoft}
+              className={buyPricesVisible ? headerPrimaryBtn : headerBtnSoft}
               onClick={() => setBuyPricesVisible((x) => !x)}
               type="button"
               title={buyPricesVisible ? "Vételár homályosítása" : "Vételár megjelenítése"}
             >
-              {buyPricesVisible ? <EyeOff size={16} /> : <Eye size={16} />} {buyPricesVisible ? "Vételár látszik" : "Vételár rejtve"}
+              {buyPricesVisible ? <EyeOff size={15} /> : <Eye size={15} />} {buyPricesVisible ? "Vételár látszik" : "Vételár rejtve"}
             </button>
-            <button className={primaryBtn} onClick={openNewProductModal} type="button"><Plus size={16} /> Új termék hozzáadása</button>
-            <button className={btnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={16} /> Törzsadatok</button>
-            {hasActiveWarehouseFilters && <button className={primaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={15} /> Minden termék</button>}
-            <button className={btnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
-              <PackageCheck size={16} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
+            <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
+            <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
+            {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
+            <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
+              <PackageCheck size={15} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
             </button>
-            <button className={btnSoft} onClick={load} disabled={busy}><RefreshCw size={16} /> Frissítés</button>
-            <button className={btn} onClick={goHome}><ArrowLeft size={16} /> Vissza</button>
+            <button className={headerBtnSoft} onClick={load} disabled={busy}><RefreshCw size={15} /> Frissítés</button>
+            <button className={headerBtn} onClick={goHome}><ArrowLeft size={15} /> Vissza</button>
           </div>
         </header>
 
@@ -5593,7 +5621,7 @@ export default function AllInWarehouse() {
           {colorTypes.map((c) => <option key={c.id} value={c.name_ro}>{c.name_hu || c.code}</option>)}
         </datalist>
 
-        <section className={panel}>
+        <section className={`${panel} overflow-visible`}>
           <div className={`${panelHead} ${filtersOpen ? "border-b border-white/12" : ""}`}>
             <div className="flex items-center gap-2"><Filter size={17} /><span>Szűrés és keresés</span></div>
             <button className={btnSoft} onClick={() => setFiltersOpen((x) => !x)}>{filtersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {filtersOpen ? "Bezárás" : "Megnyitás"}</button>
@@ -5651,34 +5679,57 @@ export default function AllInWarehouse() {
                   {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
                 </select>
               </label>
-              <div className={`${label} md:col-span-2`}>
+              <div ref={colorFilterRef} className={`${label} relative`}>
                 Szín
-                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-auto rounded-xl border border-white/12 bg-[#303a4c] p-2">
-                  <button
-                    type="button"
-                    className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2 text-[11px] transition ${color === "all" ? "border-[#7bd7d4]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white/70 hover:bg-white/[0.09]"}`}
-                    onClick={() => setColor("all")}
-                  >
-                    Összes
-                  </button>
-                  {colorTypes.map((c) => {
-                    const value = String(c.id || c.code || c.name_ro || "");
-                    const active = colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]);
-                    return (
-                      <button
-                        key={c.id || c.code}
-                        type="button"
-                        className={`inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-full border px-2 text-[11px] transition ${active ? "border-[#7bd7d4]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white/70 hover:bg-white/[0.09]"}`}
-                        onClick={() => setColor(value)}
-                        title={c.name_ro || c.name_hu || c.code}
-                      >
-                        <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
-                        <span className="truncate">{c.name_hu || c.name_ro || c.code}</span>
-                      </button>
-                    );
-                  })}
-                  {!colorTypes.length && <span className="px-2 py-1 text-[11px] text-white/45">Nincs szín törzsadat.</span>}
-                </div>
+                <button
+                  type="button"
+                  className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/25"
+                  onClick={() => setColorFilterOpen((x) => !x)}
+                  aria-haspopup="listbox"
+                  aria-expanded={colorFilterOpen}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10"
+                      style={selectedColorFilterHex ? { backgroundColor: selectedColorFilterHex } : undefined}
+                    />
+                    <span className="truncate">{selectedColorFilterLabel}</span>
+                  </span>
+                  <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${colorFilterOpen ? "rotate-180" : ""}`} />
+                </button>
+                {colorFilterOpen && (
+                  <div className="absolute left-0 right-0 top-full z-[60] mt-1 max-h-64 overflow-auto rounded-xl border border-[#7bd7d4]/30 bg-[#303a4c] p-1.5 shadow-2xl" role="listbox">
+                    <button
+                      type="button"
+                      className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs transition ${color === "all" ? "bg-[#2a8d8b] text-white" : "text-white/76 hover:bg-white/[0.08]"}`}
+                      onClick={() => { setColor("all"); setColorFilterOpen(false); }}
+                      role="option"
+                      aria-selected={color === "all"}
+                    >
+                      <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" />
+                      <span className="truncate">Összes</span>
+                    </button>
+                    {colorTypes.map((c) => {
+                      const value = String(c.id || c.code || c.name_ro || "");
+                      const active = colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]);
+                      return (
+                        <button
+                          key={c.id || c.code}
+                          type="button"
+                          className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs transition ${active ? "bg-[#2a8d8b] text-white" : "text-white/76 hover:bg-white/[0.08]"}`}
+                          onClick={() => { setColor(value); setColorFilterOpen(false); }}
+                          title={c.name_ro || c.name_hu || c.code}
+                          role="option"
+                          aria-selected={active}
+                        >
+                          <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                          <span className="truncate">{colorTypeLabel(c)}</span>
+                        </button>
+                      );
+                    })}
+                    {!colorTypes.length && <span className="block px-2 py-1 text-[11px] text-white/45">Nincs szín törzsadat.</span>}
+                  </div>
+                )}
               </div>
               <label className={label}>Cél hely
                 <select className={select} value={location} onChange={(e) => setLocation(e.target.value)}>
