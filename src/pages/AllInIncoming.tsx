@@ -30,6 +30,7 @@ import {
   AifBrandColorCode,
   AifColorType,
   apiAifCommitImportBatch,
+  apiAifAppendImportRows,
   apiAifDeleteImportBatchHistory,
   apiAifCreateCurrency,
   apiAifCreateFullImportBatch,
@@ -385,6 +386,70 @@ function applyAifColumnMappingWithSnCod(rows: AifParsedRow[], analysis: AifWorkb
     ),
     analysis
   );
+}
+
+const AIF_IMPORT_CHUNK_MAX_ROWS = 15;
+const AIF_IMPORT_CHUNK_TARGET_BYTES = 55_000;
+
+function aifJsonByteSize(value: unknown) {
+  const json = JSON.stringify(value ?? null);
+  if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(json).length;
+  return json.length;
+}
+
+function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
+  const normalized = row?.normalized && typeof row.normalized === "object" ? row.normalized : {};
+  const raw = row?.raw && typeof row.raw === "object" ? row.raw : {};
+  const keepKeys = [
+    "supplierProductCode", "supplier_product_code", "modelCode", "model_code", "productCode", "product_code",
+    "supplierVariantCode", "supplier_variant_code", "supplierColorCode", "supplier_color_code", "supplierSize", "supplier_size",
+    "snCod", "sn_cod", "customsTariffCode", "customs_tariff_code", "tariffCode", "tariff_code", "hsCode", "hs_code",
+    "titleRo", "title_ro", "productName", "product_name", "brandCode", "brand_code", "brandName", "brand_name",
+    "categoryCode", "category_code", "categoryName", "category_name", "parentCategoryCode", "parent_category_code", "parentCategoryName", "parent_category_name",
+    "subCategoryCode", "sub_category_code", "subcategoryCode", "subcategory_code", "subCategoryName", "sub_category_name", "subcategoryName", "subcategory_name",
+    "sourceCategory", "sourceCategoryCode", "sourceCategoryName", "sourceSubCategory", "sourceSubCategoryCode", "sourceSubCategoryName",
+    "gender", "genderRaw", "productType", "product_type", "season", "collection", "colectie",
+    "descriptionRo", "description_ro", "description", "material", "composition", "imageUrl", "image_url", "barcode", "supplierBarcode",
+    "colorCode", "color_code", "supplierColorCode", "colorName", "color_name", "colorHex", "color_hex", "brandColorCodeId", "colorTypeCode",
+    "size", "sizeTypeCode", "brandSizeCodeId", "qty", "quantity", "buyPrice", "buy_price", "sellPrice", "sell_price",
+    "sellPriceGrossRon", "sell_price_gross_ron", "sellPriceCurrency", "sell_price_currency", "sellPriceIsRon", "sell_price_is_ron",
+    "sellPriceIncludesTva", "sell_price_includes_tva", "salesPriceIncludesTva", "salesTvaRate", "sales_tva_rate", "saleTvaRate", "sale_tva_rate",
+    "compareAtPrice", "compare_at_price", "weightGrams", "weight_grams", "attributes"
+  ];
+  const nextNormalized: Record<string, unknown> = {};
+  for (const key of keepKeys) {
+    const value = (normalized as Record<string, unknown>)[key];
+    if (value === undefined || value === null || value === "") continue;
+    nextNormalized[key] = value;
+  }
+
+  const rawRowNo = (raw as Record<string, unknown>).__rowNo || (raw as Record<string, unknown>).rowNo || row.rowNo;
+  return {
+    rowNo: row.rowNo,
+    raw: {
+      source: "aif_compact_import",
+      __rowNo: rawRowNo,
+    },
+    normalized: nextNormalized,
+  };
+}
+
+function buildAifImportRowChunks(rows: AifParsedRow[]) {
+  const chunks: AifParsedRow[][] = [];
+  let current: AifParsedRow[] = [];
+  for (const row of rows) {
+    const candidate = [...current, row];
+    const tooManyRows = candidate.length > AIF_IMPORT_CHUNK_MAX_ROWS;
+    const tooLarge = aifJsonByteSize({ rows: candidate }) > AIF_IMPORT_CHUNK_TARGET_BYTES;
+    if (current.length && (tooManyRows || tooLarge)) {
+      chunks.push(current);
+      current = [row];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
@@ -2432,7 +2497,16 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const payload: any = {
+      const rowsForSave = approvedRowList
+        .map(rowWithSalesMeta)
+        .map(compactAifImportRowForSave);
+      const chunks = buildAifImportRowChunks(rowsForSave);
+      if (!chunks.length) {
+        setMessage("Nincs menthető terméksor. Jelölj ki legalább egy hibátlan sort.");
+        return;
+      }
+
+      const basePayload: any = {
         supplierId,
         targetLocationId: locationId,
         sourceFileName: fileName || "Manuális bevételezés",
@@ -2458,10 +2532,22 @@ export default function AllInIncoming(_props: Props) {
           salesPriceIncludesTva,
           sellPriceCurrency: "RON",
         },
-        rows: approvedRowList.map(rowWithSalesMeta),
       };
-      if (selectedReceptionId) payload.receptionId = selectedReceptionId;
-      const saved = await apiAifCreateFullImportBatch(payload);
+      if (selectedReceptionId) basePayload.receptionId = selectedReceptionId;
+
+      setMessage(`Mentés folyamatban: ${approvedCount} sor ${chunks.length} kisebb csomagban.`);
+      const saved = await apiAifCreateFullImportBatch({ ...basePayload, rows: chunks[0] });
+      let savedRowCount = Number(saved.rowCount || chunks[0].length);
+      let savedErrorCount = Number(saved.errorCount || 0);
+
+      for (let chunkIndex = 1; chunkIndex < chunks.length; chunkIndex++) {
+        const alreadySent = chunks.slice(0, chunkIndex).reduce((sum, chunk) => sum + chunk.length, 0);
+        setMessage(`Mentés folyamatban: ${alreadySent} / ${approvedCount} sor elküldve. Csomag ${chunkIndex + 1} / ${chunks.length}.`);
+        const part = await apiAifAppendImportRows(saved.id, chunks[chunkIndex]);
+        savedRowCount = Number(part.rowCount || savedRowCount + chunks[chunkIndex].length);
+        savedErrorCount = Number(part.errorCount || 0);
+      }
+
       clearImportedRows();
       resetManualRowForm();
       await Promise.all([loadBatches(), loadReceptions()]);
@@ -2470,9 +2556,12 @@ export default function AllInIncoming(_props: Props) {
         const detail = await apiAifGetReception(savedReceptionId);
         fillReceptionHeader(detail, { clearDraftRows: false });
       }
-      setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${saved.rowCount} kijelölt sor, ellenőrzendő sor: ${saved.errorCount}. Kizárt sorok: ${excludedCount}.`);
+      setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${savedRowCount} kijelölt sor, ellenőrzendő sor: ${savedErrorCount}. Kizárt sorok: ${excludedCount}. ${chunks.length > 1 ? `${chunks.length} kisebb csomagban mentve.` : ""}`);
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült menteni az importot.");
+      const isPayloadTooLarge = Number(e?.status || e?.statusCode || 0) === 413 || /413|payload too large|túl nagy|tul nagy/i.test(String(e?.message || ""));
+      setMessage(isPayloadTooLarge
+        ? "A mentés még így is túl nagy csomagot ért el. A sorok már darabolva mennek, ezért ilyenkor jellemzően egy extrém hosszú leírás vagy beágyazott adat okozza. Próbáld a problémás sort javítani vagy szólj, és tovább szűkítjük a csomagméretet."
+        : e.message || "Nem sikerült menteni az importot.");
     } finally {
       setBusy(false);
     }
