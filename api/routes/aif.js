@@ -2369,7 +2369,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `INSERT INTO aif_color_types (code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active)
          VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,true)
          ON CONFLICT (code) DO UPDATE SET
-           parent_id=EXCLUDED.parent_id,
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
            name_en=EXCLUDED.name_en,
@@ -2682,7 +2681,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `INSERT INTO aif_material_types (code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active)
          VALUES ($1,$2,$3,$4,$5,$6::text[],$7,true)
          ON CONFLICT (code) DO UPDATE SET
-           parent_id=EXCLUDED.parent_id,
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
            name_en=EXCLUDED.name_en,
