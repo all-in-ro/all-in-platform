@@ -3279,7 +3279,10 @@ export default function AllInWarehouse() {
   };
 
   const colorHexForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
-    return String(item.color_hex || colorTypeForItem(item)?.hex || "").trim();
+    const visibleColorName = colorDisplay(item.color_name, item.color_code);
+    const visibleColorType = findColorTypeByValue(colorTypes, visibleColorName);
+    const directColorType = colorTypeForItem(item);
+    return String(visibleColorType?.hex || directColorType?.hex || item.color_hex || "").trim();
   };
 
   const colorCodeForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
