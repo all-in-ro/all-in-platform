@@ -547,7 +547,13 @@ async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const msg = (data && (data.error || data.message)) || `${res.status} ${res.statusText}`;
-    throw new Error(String(msg));
+    const error = new Error(String(msg));
+    (error as Error & { status?: number; statusCode?: number; code?: string }).status = res.status;
+    (error as Error & { status?: number; statusCode?: number; code?: string }).statusCode = res.status;
+    if (data && typeof data === "object" && data.code) {
+      (error as Error & { status?: number; statusCode?: number; code?: string }).code = String(data.code);
+    }
+    throw error;
   }
 
   return data as T;
@@ -633,11 +639,21 @@ export function apiAifCreateFullImportBatch(input: {
 }
 
 export function apiAifReplaceImportRows(batchId: string, rows: AifParsedRow[]) {
-  return fetchAifJSON<{ ok: true; rowCount: number; errorCount: number }>(
+  return fetchAifJSON<{ ok: true; rowCount: number; errorCount: number; addedRows?: number }>(
     `/import-batches/${encodeURIComponent(batchId)}/rows`,
     {
       method: "POST",
       body: JSON.stringify({ rows }),
+    }
+  );
+}
+
+export function apiAifAppendImportRows(batchId: string, rows: AifParsedRow[]) {
+  return fetchAifJSON<{ ok: true; rowCount: number; errorCount: number; addedRows?: number }>(
+    `/import-batches/${encodeURIComponent(batchId)}/rows`,
+    {
+      method: "POST",
+      body: JSON.stringify({ rows, append: true }),
     }
   );
 }
