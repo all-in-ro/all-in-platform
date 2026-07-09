@@ -4076,7 +4076,7 @@ export default function AllInIncoming(_props: Props) {
               <div>Főkategória</div>
               <div>Alkat. / típus</div>
             </div>
-            <div className="space-y-[2px] bg-[#303b4e]/25 p-[2px]">
+            <div className="space-y-[3px] bg-[#303b4e]/35 p-[3px]">
               {preview.map((r, idx) => {
                 const globalIndex = idx;
                 const n = r.normalized || {};
@@ -4091,10 +4091,22 @@ export default function AllInIncoming(_props: Props) {
                 const subCategoryHint = importedSubCategoryHint(r);
                 const colorMissingHint = brandColorMissingHint(r);
                 const rowMessage = errors.length ? errors.join(" ") : rowState;
+                const isDimmedPreviewRow = idx % 2 === 1;
+                const previewRowClass = errors.length
+                  ? isDimmedPreviewRow
+                    ? "rounded-md border border-red-300/[0.10] bg-red-500/[0.075] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.02),inset_0_0_0_9999px_rgba(0,0,0,0.025)] transition-colors hover:bg-red-500/[0.12]"
+                    : "rounded-md border border-red-300/20 bg-red-500/10 px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition-colors hover:bg-red-500/20"
+                  : approved
+                    ? isDimmedPreviewRow
+                      ? "rounded-md border border-[#67d4d1]/[0.13] bg-[#208d8b]/[0.12] px-2 py-1 ring-1 ring-inset ring-[#67d4d1]/[0.14] shadow-[inset_0_1px_0_rgba(255,255,255,0.02),inset_0_0_0_9999px_rgba(0,0,0,0.025)] transition-colors hover:bg-[#208d8b]/[0.18]"
+                      : "rounded-md border border-[#67d4d1]/20 bg-[#208d8b]/18 px-2 py-1 ring-1 ring-inset ring-[#67d4d1]/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition-colors hover:bg-[#208d8b]/[0.24]"
+                    : isDimmedPreviewRow
+                      ? "rounded-md border border-white/[0.07] bg-[#3f4a5d] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.018),inset_0_0_0_9999px_rgba(0,0,0,0.025)] transition-colors hover:bg-[#465368]"
+                      : "rounded-md border border-white/[0.10] bg-[#465267] px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition-colors hover:bg-[#4b596f]";
                 return (
                   <div
                     key={`${r.rowNo || idx}-${idx}`}
-                    className={errors.length ? "rounded-md border border-red-300/14 bg-red-500/10 px-2 py-1 hover:bg-red-500/15" : approved ? "rounded-md border border-[#67d4d1]/20 bg-[#208d8b]/18 px-2 py-1 ring-1 ring-inset ring-[#67d4d1]/25 hover:bg-[#208d8b]/24" : "rounded-md border border-white/8 bg-[#445064] px-2 py-1 hover:bg-[#4b596f]"}
+                    className={previewRowClass}
                   >
                     <div className={previewTopGrid}>
                       <div className="flex h-[28px] items-center justify-between gap-1 rounded-md border border-white/10 bg-black/10 px-1.5 lg:block lg:h-auto lg:border-0 lg:bg-transparent lg:px-0">
