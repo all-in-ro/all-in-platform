@@ -15,6 +15,7 @@ import {
   EyeOff,
   FileText,
   Filter,
+  Home,
   ImagePlus,
   Minus,
   MoreVertical,
@@ -5588,28 +5589,31 @@ export default function AllInWarehouse() {
     <main className={page}>
       <style id="aifWarehouseLabelPrintCss">{WAREHOUSE_LABEL_APP_CSS}</style>
       <div className={`${shell} aifWarehouseScreenContent`}>
-        <header className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2">
-          <div className="min-w-[170px]">
-            <p className="text-[11px] leading-none text-white/50">AllInFashion</p>
-            <h1 className="mt-0.5 text-xl leading-tight tracking-tight">Raktár</h1>
-          </div>
-          <div className="ml-auto flex flex-1 flex-row-reverse flex-wrap items-center justify-start gap-1.5">
-            <button
-              className={buyPricesVisible ? headerPrimaryBtn : headerBtnSoft}
-              onClick={() => setBuyPricesVisible((x) => !x)}
-              type="button"
-              title={buyPricesVisible ? "Vételár homályosítása" : "Vételár megjelenítése"}
-            >
-              {buyPricesVisible ? <EyeOff size={15} /> : <Eye size={15} />} {buyPricesVisible ? "Vételár látszik" : "Vételár rejtve"}
-            </button>
-            <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
-            <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
-            {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
-            <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
-              <PackageCheck size={15} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
-            </button>
-            <button className={headerBtnSoft} onClick={load} disabled={busy}><RefreshCw size={15} /> Frissítés</button>
-            <button className={headerBtn} onClick={goHome}><ArrowLeft size={15} /> Vissza</button>
+        <header className="rounded-2xl border border-white/20 bg-[#303a4c] px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05]">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
+              <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Raktár</h1>
+              <p className="mt-0.5 text-[11px] leading-snug text-white/52">Termék- és készletközpont</p>
+            </div>
+            <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+              <button
+                className={buyPricesVisible ? headerPrimaryBtn : headerBtnSoft}
+                onClick={() => setBuyPricesVisible((x) => !x)}
+                type="button"
+                title={buyPricesVisible ? "Vételár homályosítása" : "Vételár megjelenítése"}
+              >
+                {buyPricesVisible ? <EyeOff size={15} /> : <Eye size={15} />} {buyPricesVisible ? "Vételár látszik" : "Vételár rejtve"}
+              </button>
+              <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
+              <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
+              {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
+              <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
+                <PackageCheck size={15} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
+              </button>
+              <button className={headerBtnSoft} onClick={load} disabled={busy}><RefreshCw size={15} /> Frissítés</button>
+              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap"><Home size={15} /> Kezdőlap</button>
+            </div>
           </div>
         </header>
 
@@ -5698,10 +5702,10 @@ export default function AllInWarehouse() {
                   <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${colorFilterOpen ? "rotate-180" : ""}`} />
                 </button>
                 {colorFilterOpen && (
-                  <div className="absolute left-0 right-0 top-full z-[60] mt-1 max-h-64 overflow-auto rounded-xl border border-[#7bd7d4]/30 bg-[#303a4c] p-1.5 shadow-2xl" role="listbox">
+                  <div className="absolute left-0 right-0 top-full z-[60] mt-1 max-h-64 overflow-auto rounded-xl border border-white/18 bg-[#293344] py-1 shadow-2xl" role="listbox">
                     <button
                       type="button"
-                      className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs transition ${color === "all" ? "bg-[#2a8d8b] text-white" : "text-white/76 hover:bg-white/[0.08]"}`}
+                      className={`flex h-8 w-full items-center gap-2 px-3 text-left text-xs transition ${color === "all" ? "bg-white/[0.10] text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
                       onClick={() => { setColor("all"); setColorFilterOpen(false); }}
                       role="option"
                       aria-selected={color === "all"}
@@ -5709,14 +5713,15 @@ export default function AllInWarehouse() {
                       <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" />
                       <span className="truncate">Összes</span>
                     </button>
+                    <div className="my-1 h-px bg-white/10" />
                     {colorTypes.map((c) => {
                       const value = String(c.id || c.code || c.name_ro || "");
-                      const active = colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]);
+                      const active = color !== "all" && (colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]));
                       return (
                         <button
                           key={c.id || c.code}
                           type="button"
-                          className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs transition ${active ? "bg-[#2a8d8b] text-white" : "text-white/76 hover:bg-white/[0.08]"}`}
+                          className={`flex h-8 w-full items-center gap-2 px-3 text-left text-xs transition ${active ? "bg-white/[0.10] text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
                           onClick={() => { setColor(value); setColorFilterOpen(false); }}
                           title={c.name_ro || c.name_hu || c.code}
                           role="option"
@@ -5727,7 +5732,7 @@ export default function AllInWarehouse() {
                         </button>
                       );
                     })}
-                    {!colorTypes.length && <span className="block px-2 py-1 text-[11px] text-white/45">Nincs szín törzsadat.</span>}
+                    {!colorTypes.length && <span className="block px-3 py-1 text-[11px] text-white/45">Nincs szín törzsadat.</span>}
                   </div>
                 )}
               </div>
