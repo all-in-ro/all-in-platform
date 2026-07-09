@@ -852,8 +852,19 @@ function normalizeAifSizeValue(value: unknown) {
   if (/^\d+XL$/.test(key)) return key;
   if (["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"].includes(key)) return key;
   if (/^\d+(?:[.,]5)?$/.test(raw)) return raw.replace(",", ".");
-  const slashParts = raw.split(/[\s-]*\/[\s-]*/).map((part) => normalizeAifSizeValue(part)).filter(Boolean);
-  if (slashParts.length >= 2) return slashParts.join("/");
+
+  // Csak tényleges perjeles méretnél bontunk részekre.
+  // Korábban minden ismeretlen értéknél lefutott a split+rekurzió, ami például
+  // egy sima, törzsadatból jövő új méretnél ugyanazzal az értékkel hívta újra magát.
+  // Ennek lett az eredménye: Maximum call stack size exceeded.
+  if (raw.includes("/")) {
+    const slashParts = raw
+      .split(/[\s-]*\/[\s-]*/)
+      .map((part) => normalizeAifSizeValue(part))
+      .filter(Boolean);
+    if (slashParts.length >= 2) return slashParts.join("/");
+  }
+
   return raw.toUpperCase();
 }
 
