@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   FileText,
   Download,
+  Home,
   MapPin,
   Plus,
   RefreshCw,
@@ -510,7 +511,7 @@ function buildAifImportRowChunks(rows: AifParsedRow[]) {
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
 const wrap = "mx-auto max-w-7xl space-y-4";
-const topCard = "rounded-2xl border border-white/24 bg-[#465164] px-4 py-3 shadow-lg shadow-slate-950/10";
+const topCard = "sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur";
 const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-3 shadow-lg shadow-slate-950/15 sm:p-4 font-normal";
 const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20 font-normal";
 const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/86 font-normal";
@@ -521,6 +522,9 @@ const mutedOptionStyle = { backgroundColor: "#303b4e", color: "#a9b3c7" };
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = `${btnBase} border-[#67d4d1]/45 bg-[#208d8b] shadow-sm shadow-[#208d8b]/20 hover:bg-[#249b99] active:bg-[#1a7270]`;
 const compactPrimaryBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-[#67d4d1]/45 bg-[#208d8b] px-2 text-[11px] text-white shadow-sm shadow-[#208d8b]/20 transition hover:bg-[#249b99] active:bg-[#1a7270] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
 const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[11px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
@@ -3897,15 +3901,23 @@ export default function AllInIncoming(_props: Props) {
 
       <div className={wrap}>
         <header className={topCard}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.12em] text-emerald-100/82">AllInFashion</p>
-              <h1 className="mt-1 text-2xl font-normal tracking-tight text-white sm:text-3xl">Áru bevételezés</h1>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-white/78">Beszállító kiválasztás, XLS előnézet és AIF import.</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
+              <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Áru bevételezés</h1>
+              <p className="mt-0.5 text-[11px] leading-snug text-white/52">Beszállító, receptió, XLS import és készletre vétel</p>
             </div>
-            <button className={neutralBtn} onClick={goHome} type="button">
-              <ArrowLeft size={15} /> Vissza
-            </button>
+            <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+              <button className={headerPrimaryBtn} onClick={() => startNewEmptyReception()} disabled={busy} type="button">
+                <Plus size={15} /> Új üres
+              </button>
+              <button className={headerBtnSoft} onClick={reloadAll} disabled={busy} type="button">
+                <RefreshCw size={15} /> Frissítés
+              </button>
+              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap">
+                <Home size={15} /> Kezdőlap
+              </button>
+            </div>
           </div>
         </header>
 
