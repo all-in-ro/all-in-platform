@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
   BarChart3,
   Building2,
   CalendarRange,
@@ -8,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Edit3,
+  Home,
   Plus,
   Power,
   RefreshCw,
@@ -79,6 +79,9 @@ const btnBase =
 const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
 const neutralBtn = `${btnBase} border-white/28 bg-[#2d3748] hover:bg-[#374457]`;
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
+const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const tinyBtn =
   "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-white/28 bg-[#2d3748] px-2 text-xs text-white/92 transition hover:bg-[#374457] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const tinyDangerBtn =
@@ -1043,23 +1046,27 @@ export default function AllInSuppliers() {
       )}
 
       <div className={wrap}>
-        <header className="rounded-2xl border border-white/26 bg-[#465164] px-4 py-3 shadow-lg shadow-slate-950/10">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.12em] text-emerald-100/82">
-                AllInFashion
-              </p>
-              <h1 className="mt-1 text-2xl font-normal tracking-tight text-white sm:text-3xl">
-                Beszállítók
-              </h1>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-white/82">
-                Beszállítói törzsadatok, import alapadatok és vásárlási
-                kimutatások kezelése.
-              </p>
+        <header className="sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
+              <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Beszállítók</h1>
+              <p className="mt-0.5 text-[11px] leading-snug text-white/52">Beszállítói törzsadatok és vásárlási kimutatások</p>
             </div>
-            <button className={neutralBtn} onClick={goHome} type="button">
-              <ArrowLeft size={15} /> Vissza
-            </button>
+            <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+              <button className={headerPrimaryBtn} onClick={() => setCreateOpen(true)} type="button">
+                <Plus size={15} /> Új beszállító
+              </button>
+              <button className={headerBtnSoft} onClick={() => setBrandsOpen(true)} type="button">
+                <Building2 size={15} /> Márkák
+              </button>
+              <button className={headerBtnSoft} onClick={() => load()} disabled={busy} type="button">
+                <RefreshCw size={15} /> Frissítés
+              </button>
+              <button className={`${headerBtn} ml-2 border-white/30 bg-[#263246] px-3`} onClick={goHome} type="button" title="Kezdőlap">
+                <Home size={15} /> Kezdőlap
+              </button>
+            </div>
           </div>
         </header>
 
