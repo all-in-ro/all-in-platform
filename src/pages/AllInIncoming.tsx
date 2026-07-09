@@ -74,7 +74,7 @@ function notifyWarehouseShowAllAfterIncoming(detail: Record<string, unknown> = {
   try {
     window.localStorage.setItem(warehouseShowAllAfterIncomingStorageKey, JSON.stringify(payload));
   } catch {
-    // Nem állítjuk meg a készletre vételt attól, hogy a böngésző épp papírsárkánynak képzeli a localStorage-ot.
+    // A localStorage hiba nem akadályozza a készletre vételt.
   }
   try {
     window.dispatchEvent(new CustomEvent(warehouseShowAllAfterIncomingEventName, { detail: payload }));
@@ -116,6 +116,7 @@ const BARCODE_FIELD = "barcode" as AifColumnField;
 const MATERIAL_FIELD = "material" as AifColumnField;
 const TITLE_RO_FIELD = "titleRo" as AifColumnField;
 const PRODUCT_TYPE_FIELD = "productType" as AifColumnField;
+const SUB_CATEGORY_FIELD = "subCategoryCode" as AifColumnField;
 const BUY_PRICE_FIELD = "buyPrice" as AifColumnField;
 const SELL_PRICE_FIELD = "sellPrice" as AifColumnField;
 const SN_COD_HEADER_KEYS = new Set([
@@ -142,6 +143,7 @@ const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VO
 const MATERIAL_HEADER_ALIASES = ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ANYAG", "ÖSSZETÉTEL", "OSSZETETEL"];
 const TITLE_HEADER_ALIASES = ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "TITLE", "NÉV", "NEV", "MEGNEVEZÉS", "MEGNEVEZES"];
 const PRODUCT_TYPE_HEADER_ALIASES = ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "MODEL TYPE"];
+const SUBCATEGORY_HEADER_ALIASES = ["COLECTIE", "COLECȚIE", "COLECTIA", "COLECȚIA", "COLECTIE PRODUS", "COLECȚIE PRODUS", "COLLECTION", "PRODUCT COLLECTION", "SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALCATEGORIA", "ALKATEGORIA", "ALKATEGÓRIA"];
 const BUY_PRICE_HEADER_ALIASES = ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PRET CUMPARARE", "PREȚ CUMPĂRARE", "PURCHASE PRICE", "BUY PRICE", "COST PRICE", "VÉTELÁR", "VETELAR"];
 const SELL_PRICE_HEADER_ALIASES = ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "PRET VANZARE TVA", "PRET VANZARE CU TVA", "SELL PRICE", "SALE PRICE", "SHOPIFY PRICE", "PRICE RON", "PRET RON", "ELADÁSI ÁR", "ELADASI AR"];
 const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
@@ -160,6 +162,7 @@ const AIF_COLUMN_FIELD_OPTIONS_WITH_SN = (() => {
   ensureOption(DESCRIPTION_FIELD, "Leírás / DESCRIERE");
   ensureOption(MATERIAL_FIELD, "Összetétel");
   ensureOption(PRODUCT_TYPE_FIELD, "Import terméktípus / RODESCR");
+  ensureOption(SUB_CATEGORY_FIELD, "Alkategória / terméktípus");
   ensureOption(BUY_PRICE_FIELD, "Vételár");
   ensureOption(SELL_PRICE_FIELD, "Eladási ár");
   return out;
@@ -217,6 +220,10 @@ function isTitleHeader(value: unknown) {
 function isProductTypeHeader(value: unknown) {
   const key = snCodHeaderKey(value);
   return headerMatchesAny(value, PRODUCT_TYPE_HEADER_ALIASES) || key === "rodescr" || key.includes("product_type") || key.includes("tip_produs");
+}
+function isSubCategoryHeader(value: unknown) {
+  const key = snCodHeaderKey(value);
+  return headerMatchesAny(value, SUBCATEGORY_HEADER_ALIASES) || key === "colectie" || key === "colectia" || key === "colectie_produs" || key === "collection" || key === "product_collection";
 }
 function isBuyPriceHeader(value: unknown) {
   const key = snCodHeaderKey(value);
@@ -276,6 +283,7 @@ function withSnCodWorkbookAnalysis(analysis: AifWorkbookAnalysis): AifWorkbookAn
       if (isSellPriceHeader(col.header)) return { ...col, field: SELL_PRICE_FIELD, label: "Eladási ár", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isBarcodeHeader(col.header)) return { ...col, field: BARCODE_FIELD, label: "Vonalkód", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isImageUrlHeader(col.header)) return { ...col, field: IMAGE_URL_FIELD, label: "Fotó URL", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
+      if (isSubCategoryHeader(col.header)) return { ...col, field: SUB_CATEGORY_FIELD, label: "Alkategória / terméktípus", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isProductTypeHeader(col.header)) return { ...col, field: PRODUCT_TYPE_FIELD, label: "Import terméktípus / RODESCR", confidence: Math.max(Number(col.confidence || 0), 100), warnings: [] };
       if (isDescriptionHeader(col.header)) return { ...col, field: DESCRIPTION_FIELD, label: "Leírás / DESCRIERE", confidence: Math.max(Number(col.confidence || 0), 96), warnings: [] };
       if (isMaterialHeader(col.header)) return { ...col, field: MATERIAL_FIELD, label: "Összetétel", confidence: Math.max(Number(col.confidence || 0), 92), warnings: [] };
@@ -308,6 +316,7 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
   const columns = analysis?.columns || [];
   const fieldByHeader = (field: AifColumnField) => columns.find((col) => String(col.field) === String(field));
   const titleColumn = fieldByHeader(TITLE_RO_FIELD);
+  const subCategoryColumn = fieldByHeader(SUB_CATEGORY_FIELD);
   const productTypeColumn = fieldByHeader(PRODUCT_TYPE_FIELD);
   const buyPriceColumn = fieldByHeader(BUY_PRICE_FIELD);
   const sellPriceColumn = fieldByHeader(SELL_PRICE_FIELD);
@@ -315,7 +324,7 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
   const imageColumn = fieldByHeader(IMAGE_URL_FIELD);
   const descriptionColumn = fieldByHeader(DESCRIPTION_FIELD);
   const materialColumn = fieldByHeader(MATERIAL_FIELD);
-  if (!titleColumn && !productTypeColumn && !buyPriceColumn && !sellPriceColumn && !barcodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
+  if (!titleColumn && !subCategoryColumn && !productTypeColumn && !buyPriceColumn && !sellPriceColumn && !barcodeColumn && !imageColumn && !descriptionColumn && !materialColumn) return rows;
   return rows.map((row) => {
     const raw = (row.raw || {}) as Record<string, unknown>;
     const normalized = { ...(row.normalized || {}) } as Record<string, any>;
@@ -323,13 +332,22 @@ function applyExtraManualImportColumnMapping(rows: AifParsedRow[], analysis: Aif
       const value = rawValueByExactHeader(raw, titleColumn.header);
       if (value) { normalized.titleRo = value; normalized.productName = value; }
     }
+    if (subCategoryColumn) {
+      const value = rawValueByExactHeader(raw, subCategoryColumn.header);
+      if (value) {
+        normalized.subCategoryCode = normalized.subCategoryCode || value;
+        normalized.subcategoryCode = normalized.subcategoryCode || value;
+        normalized.subCategoryName = normalized.subCategoryName || value;
+        normalized.subcategoryName = normalized.subcategoryName || value;
+        normalized.sourceSubCategory = normalized.sourceSubCategory || value;
+      }
+    }
     if (productTypeColumn) {
       const value = rawValueByExactHeader(raw, productTypeColumn.header);
       if (value) {
         normalized.productType = value;
         normalized.product_type = value;
-        normalized.sourceSubCategory = normalized.sourceSubCategory || value;
-        normalized.subCategoryName = normalized.subCategoryName || value;
+        normalized.sourceProductType = normalized.sourceProductType || value;
       }
     }
     if (buyPriceColumn) {
@@ -765,8 +783,11 @@ function rawValueByHeader(row: any, headers: string[]) {
 
 const AIF_DESCRIPTION_HEADERS = ["DESCRIERE", "DESCRIERE RO", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "DESCR", "DESCR_RO", "DESCRIPTION", "LONG DESCRIPTION", "PRODUCT DESCRIPTION", "TERMÉK LEÍRÁS", "TERMEK LEIRAS", "LEÍRÁS", "LEIRAS"];
 const AIF_IMAGE_HEADERS = ["FOTO", "FOTÓ", "FOTO URL", "LINK FOTO", "URL FOTO", "POZA", "POZĂ", "POZA URL", "LINK POZA", "URL POZA", "PHOTO", "PHOTO URL", "IMAGE", "IMAGE URL", "IMAGE LINK", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG"];
-const AIF_SUBCATEGORY_HEADERS = ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "RODESCR", "RO DESCR", "RO_DESCR"];
-const AIF_PRODUCT_TYPE_HEADERS = ["TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "RODESCR", "RO DESCR", "RO_DESCR"];
+const AIF_COLLECTION_SUBCATEGORY_HEADERS = ["COLECTIE", "COLECȚIE", "COLECTIA", "COLECȚIA", "COLECTIE PRODUS", "COLECȚIE PRODUS", "COLLECTION", "PRODUCT COLLECTION"];
+const AIF_EXPLICIT_SUBCATEGORY_HEADERS = ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE"];
+const AIF_RODESCR_HEADERS = ["RODESCR", "RO DESCR", "RO_DESCR"];
+const AIF_SUBCATEGORY_HEADERS = [...AIF_COLLECTION_SUBCATEGORY_HEADERS, ...AIF_EXPLICIT_SUBCATEGORY_HEADERS, ...AIF_RODESCR_HEADERS];
+const AIF_PRODUCT_TYPE_HEADERS = ["TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", ...AIF_RODESCR_HEADERS];
 
 function rawDescriptionValue(row: any) {
   return firstNonEmptyText(rawValueByHeader(row, AIF_DESCRIPTION_HEADERS));
@@ -777,7 +798,11 @@ function rawImageValue(row: any) {
 }
 
 function rawSubCategoryValue(row: any) {
-  return firstNonEmptyText(rawValueByHeader(row, AIF_SUBCATEGORY_HEADERS));
+  return firstNonEmptyText(
+    rawValueByHeader(row, AIF_COLLECTION_SUBCATEGORY_HEADERS),
+    rawValueByHeader(row, AIF_EXPLICIT_SUBCATEGORY_HEADERS),
+    rawValueByHeader(row, AIF_RODESCR_HEADERS)
+  );
 }
 
 function rawProductTypeValue(row: any) {
@@ -786,9 +811,23 @@ function rawProductTypeValue(row: any) {
 
 const AIF_SIZE_OPTIONS = [
   "XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "6XL",
-  "OSFM", "OSFA", "OS", "ONE SIZE", "UNI",
+  "XXS/XS", "XS/S", "S/M", "M/L", "L/XL", "XL/XXL", "XXL/XXXL", "XXL/3XL", "2XL/3XL", "3XL/4XL",
+  "OSF", "OSFM", "OSFA", "OS", "ONE SIZE", "UNI",
   "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48",
 ];
+const AIF_SIZE_COMBO_BY_KEY: Record<string, string> = {
+  XSS: "XS/S",
+  SM: "S/M",
+  ML: "M/L",
+  LXL: "L/XL",
+  XLXXL: "XL/XXL",
+  XXLXXXL: "XXL/XXXL",
+  XXL3XL: "XXL/3XL",
+  TWOXL3XL: "2XL/3XL",
+  _2XL3XL: "2XL/3XL",
+  THREEXL4XL: "3XL/4XL",
+  _3XL4XL: "3XL/4XL",
+};
 
 const AIF_ACCEPTED_SIZE_CODES = new Set(AIF_SIZE_OPTIONS.map((x) => String(x).toUpperCase()));
 
@@ -805,13 +844,16 @@ function normalizeAifSizeValue(value: unknown) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
   const key = normalizeAifSizeKey(raw);
-  if (["OSFM", "ONESIZEFITSMOST", "ONESIZEFITMOST", "ONESIZEFM"].includes(key)) return "OSFM";
+  if (["OSF", "OSFM", "ONESIZEFITSMOST", "ONESIZEFITMOST", "ONESIZEFM"].includes(key)) return "OSFM";
   if (["OSFA", "ONESIZEFITSALL", "ONESIZEFITALL"].includes(key)) return "OSFA";
+  if (AIF_SIZE_COMBO_BY_KEY[key]) return AIF_SIZE_COMBO_BY_KEY[key];
   if (["ONESIZE", "UNIVERSAL", "UNIVERSALA", "UNIVERZALIS", "UNISEXONESIZE"].includes(key)) return "ONE SIZE";
   if (["UNI", "UNIV", "UNISIZE"].includes(key)) return "UNI";
   if (/^\d+XL$/.test(key)) return key;
   if (["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"].includes(key)) return key;
   if (/^\d+(?:[.,]5)?$/.test(raw)) return raw.replace(",", ".");
+  const slashParts = raw.split(/[\s-]*\/[\s-]*/).map((part) => normalizeAifSizeValue(part)).filter(Boolean);
+  if (slashParts.length >= 2) return slashParts.join("/");
   return raw.toUpperCase();
 }
 
@@ -846,11 +888,29 @@ function normalizeAifRowSize<T extends any>(row: T): T {
   };
 }
 
-function isAcceptedAifSize(value: unknown) {
+type AifSizeTypeLike = { id?: string; code?: string | null; name?: string | null; name_hu?: string | null; aliases?: string[] | null; is_active?: boolean };
+type AifBrandSizeCodeLike = { id?: string; brand_id?: string | null; brand_code?: string | null; brand_name?: string | null; size_code?: string | null; size_name?: string | null; size_type_code?: string | null; is_active?: boolean };
+
+function sizeTypeValues(size: AifSizeTypeLike) {
+  return [size.code, size.name, size.name_hu, ...(Array.isArray(size.aliases) ? size.aliases : [])].filter(Boolean);
+}
+
+function brandSizeCodeValues(item: AifBrandSizeCodeLike) {
+  return [item.size_code, item.size_name, item.size_type_code].filter(Boolean);
+}
+
+function isAcceptedAifSize(value: unknown, sizeTypes: AifSizeTypeLike[] = [], brandSizeCodes: AifBrandSizeCodeLike[] = []) {
   const normalized = normalizeAifSizeValue(value);
   if (!normalized) return false;
-  if (AIF_ACCEPTED_SIZE_CODES.has(String(normalized).toUpperCase())) return true;
-  return /^\d+(?:\.5)?$/.test(String(normalized));
+  const upper = String(normalized).toUpperCase();
+  const key = normalizeAifSizeKey(normalized);
+  if (AIF_ACCEPTED_SIZE_CODES.has(upper)) return true;
+  if (/^\d+(?:\.5)?$/.test(String(normalized))) return true;
+  const parts = upper.split("/").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2 && parts.every((part) => AIF_ACCEPTED_SIZE_CODES.has(part) || /^\d+(?:\.5)?$/.test(part))) return true;
+  if ((sizeTypes || []).filter((item) => item?.is_active !== false).some((item) => sizeTypeValues(item).some((candidate) => normalizeAifSizeKey(candidate) === key))) return true;
+  if ((brandSizeCodes || []).filter((item) => item?.is_active !== false).some((item) => brandSizeCodeValues(item).some((candidate) => normalizeAifSizeKey(candidate) === key))) return true;
+  return false;
 }
 
 function isSizeValidationError(error: unknown) {
@@ -861,10 +921,10 @@ function isSizeValidationError(error: unknown) {
   return /\b(size|marime|meret)\b/.test(text);
 }
 
-function aifRowErrors(row: AifParsedRow): string[] {
+function aifRowErrors(row: AifParsedRow, sizeTypes: AifSizeTypeLike[] = [], brandSizeCodes: AifBrandSizeCodeLike[] = []): string[] {
   const normalizedRow = normalizeAifRowSize(row) as AifParsedRow;
   const errors = (baseAifRowErrors(normalizedRow) || []) as string[];
-  if (!isAcceptedAifSize(sizeValueForRow(normalizedRow))) return errors;
+  if (!isAcceptedAifSize(sizeValueForRow(normalizedRow), sizeTypes, brandSizeCodes)) return errors;
   return errors.filter((error: unknown) => !isSizeValidationError(error));
 }
 
@@ -882,33 +942,92 @@ function savedRowRawObject(row: any) {
   return { ...rawMeta, ...raw };
 }
 
-function categoryCandidatesForRow(row: any) {
-  const normalized = row?.normalized || row || {};
-  return [
-    (normalized as any).subCategoryCode,
-    (normalized as any).subcategoryCode,
-    (normalized as any).subCategoryName,
-    (normalized as any).subcategoryName,
-    (normalized as any).sourceSubCategory,
-    (normalized as any).sourceSubCategoryCode,
-    (normalized as any).sourceSubCategoryName,
-    rawSubCategoryValue(row),
-    (normalized as any).categoryCode,
-    (normalized as any).categoryName,
-    (normalized as any).sourceCategory,
-    (normalized as any).sourceCategoryCode,
-    (normalized as any).sourceCategoryName,
-    rawValueByHeader(row, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]),
-  ].filter((x) => String(x ?? "").trim());
+function mainCategoryRawValue(row: any) {
+  return firstNonEmptyText(rawValueByHeader(row, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]));
 }
 
-function findCategoryForRow(row: any, categories: AifCategoryOption[]) {
-  const candidates = categoryCandidatesForRow(row);
+function categoryParentId(c?: AifCategoryOption | null) {
+  return String((c as any)?.parent_id || (c as any)?.parentId || "").trim();
+}
+
+function isSubcategoryOption(c: AifCategoryOption) {
+  return Boolean(categoryParentId(c));
+}
+
+function findCategoryByCandidates(candidates: unknown[], categories: AifCategoryOption[]) {
   for (const candidate of candidates) {
+    if (!String(candidate ?? "").trim()) continue;
     const found = categories.find((c) => categoryMatches(c, candidate));
     if (found) return found;
   }
   return null;
+}
+
+function mainCategoryCandidatesForRow(row: any) {
+  const normalized = row?.normalized || row || {};
+  return [
+    (normalized as any).parentCategoryCode,
+    (normalized as any).parent_category_code,
+    (normalized as any).parentCategoryName,
+    (normalized as any).parent_category_name,
+    (normalized as any).sourceCategory,
+    (normalized as any).sourceCategoryCode,
+    (normalized as any).sourceCategoryName,
+    mainCategoryRawValue(row),
+    (normalized as any).categoryCode,
+    (normalized as any).categoryName,
+  ].filter((x) => String(x ?? "").trim());
+}
+
+function subCategoryCandidatesForRow(row: any) {
+  const normalized = row?.normalized || row || {};
+  return [
+    (normalized as any).subCategoryCode,
+    (normalized as any).subcategoryCode,
+    (normalized as any).sub_category_code,
+    (normalized as any).subCategoryName,
+    (normalized as any).subcategoryName,
+    (normalized as any).sub_category_name,
+    (normalized as any).sourceSubCategory,
+    (normalized as any).sourceSubCategoryCode,
+    (normalized as any).sourceSubCategoryName,
+    rawSubCategoryValue(row),
+    (normalized as any).productType,
+    (normalized as any).product_type,
+    rawProductTypeValue(row),
+    // Régi előnézeti sorból jöhetett alkategória a categoryCode alatt, ezt még felismerjük, de csak alkategóriák között.
+    (normalized as any).categoryCode,
+    (normalized as any).categoryName,
+  ].filter((x) => String(x ?? "").trim());
+}
+
+function categoryCandidatesForRow(row: any) {
+  return [...subCategoryCandidatesForRow(row), ...mainCategoryCandidatesForRow(row)];
+}
+
+function findMainCategoryForRow(row: any, categories: AifCategoryOption[]) {
+  const mainCategories = categories.filter((c) => !isSubcategoryOption(c));
+  const subCategories = categories.filter(isSubcategoryOption);
+  const directMain = findCategoryByCandidates(mainCategoryCandidatesForRow(row), mainCategories);
+  if (directMain) return directMain;
+
+  const subMatch = findCategoryByCandidates(subCategoryCandidatesForRow(row), subCategories);
+  const parentId = categoryParentId(subMatch);
+  if (parentId) return categories.find((c) => String(c.id) === parentId) || null;
+  return null;
+}
+
+function findSubCategoryForRow(row: any, categories: AifCategoryOption[]) {
+  const subCategories = categories.filter(isSubcategoryOption);
+  const main = findMainCategoryForRow(row, categories);
+  const mainId = main?.id ? String(main.id) : "";
+  const candidates = subCategoryCandidatesForRow(row);
+  const scoped = mainId ? subCategories.filter((c) => categoryParentId(c) === mainId) : subCategories;
+  return findCategoryByCandidates(candidates, scoped) || findCategoryByCandidates(candidates, subCategories);
+}
+
+function findCategoryForRow(row: any, categories: AifCategoryOption[]) {
+  return findSubCategoryForRow(row, categories) || findMainCategoryForRow(row, categories);
 }
 
 function categoryDisplay(value: unknown, categories: AifCategoryOption[]) {
@@ -987,6 +1106,8 @@ export default function AllInIncoming(_props: Props) {
   const [supplierBrands, setSupplierBrands] = useState<AifSupplierBrandLink[]>([]);
   const [brandColorCodes, setBrandColorCodes] = useState<AifBrandColorCode[]>([]);
   const [colorTypes, setColorTypes] = useState<AifColorType[]>([]);
+  const [sizeTypes, setSizeTypes] = useState<AifSizeTypeLike[]>([]);
+  const [brandSizeCodes, setBrandSizeCodes] = useState<AifBrandSizeCodeLike[]>([]);
   const [defaultBrandCode, setDefaultBrandCode] = useState("");
   const [defaultCategoryCode, setDefaultCategoryCode] = useState("");
   const [defaultGender, setDefaultGender] = useState("");
@@ -1100,6 +1221,22 @@ export default function AllInIncoming(_props: Props) {
     });
   }, [activeCategories, subCategories, manualCategoryCode, defaultCategoryCode]);
   const activeGenderTypes = useMemo(() => genderTypes.filter((g) => g.is_active !== false), [genderTypes]);
+  const sizeDatalistOptions = useMemo(() => {
+    const values = new Set<string>();
+    const add = (value: unknown) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) return;
+      values.add(normalizeAifSizeValue(raw) || raw);
+    };
+    AIF_SIZE_OPTIONS.forEach(add);
+    sizeTypes.filter((item) => item.is_active !== false).forEach((item) => {
+      sizeTypeValues(item).forEach(add);
+    });
+    brandSizeCodes.filter((item) => item.is_active !== false).forEach((item) => {
+      brandSizeCodeValues(item).forEach(add);
+    });
+    return Array.from(values).filter(Boolean).sort((a, b) => a.localeCompare(b, "hu", { numeric: true, sensitivity: "base" }));
+  }, [sizeTypes, brandSizeCodes]);
   const brandOptionsForSupplier = useMemo(() => {
     if (!supplierId) return activeBrands;
     const linkedBrandIds = new Set(
@@ -1118,7 +1255,7 @@ export default function AllInIncoming(_props: Props) {
 
   const loadedReceptionRows = useMemo(
     () => (loadedReception?.rows || []).map((row: any) => savedReceptionRowWithLatestMeta(row)),
-    [loadedReception, activeBrands, activeCategories, activeGenderTypes, brandColorCodes, colorTypes]
+    [loadedReception, activeBrands, activeCategories, activeGenderTypes, brandColorCodes, brandSizeCodes, colorTypes, sizeTypes]
   );
   const loadedReceptionRowTotals = useMemo(() => {
     return loadedReceptionRows.reduce(
@@ -1207,6 +1344,17 @@ export default function AllInIncoming(_props: Props) {
     ) || null;
   }
 
+  function brandSizeCodeForNormalized(n: Record<string, unknown>) {
+    const brand = brandForNormalized(n);
+    const sizeCode = String((n as any).supplierSize || (n as any).supplier_size || (n as any).size || "").trim();
+    if (!brand || !sizeCode) return null;
+    return brandSizeCodes.find((item: any) =>
+      item.is_active !== false &&
+      String(item.brand_id) === String(brand.id) &&
+      sameLoose(item.size_code, sizeCode)
+    ) || null;
+  }
+
   function applyProductCodeAndBrandColor(row: AifParsedRow) {
     const normalized = { ...(row.normalized || {}) } as any;
     const rawProductCode = rawValueByHeader(row, ["CODPRODUS", "COD PRODUS", "COD_PRODUS", "Cod produs", "product code"]);
@@ -1255,9 +1403,17 @@ export default function AllInIncoming(_props: Props) {
         normalized.colorTypeCode = found.code || normalized.colorTypeCode || "";
       }
     }
+    const sourceSize = firstNonEmptyText(normalized.supplierSize, normalized.supplier_size, normalized.size, (row as any).supplier_size);
+    const brandSize = brandSizeCodeForNormalized({ ...normalized, size: sourceSize, supplierSize: sourceSize }) as any;
+    if (brandSize?.size_name) {
+      normalized.supplierSize = normalized.supplierSize || sourceSize;
+      normalized.size = normalizeAifSizeValue(brandSize.size_name);
+      normalized.brandSizeCodeId = brandSize.id;
+      normalized.sizeTypeCode = brandSize.size_type_code || normalized.sizeTypeCode || "";
+    }
     const tariffCode = customsTariffCodeFromRow({ ...row, normalized });
     if (tariffCode) assignCustomsTariffCode(normalized, tariffCode);
-    const normalizedSize = normalizeAifSizeValue(normalized.size || (row as any).supplier_size);
+    const normalizedSize = normalizeAifSizeValue(normalized.size || sourceSize || (row as any).supplier_size);
     if (normalizedSize) normalized.size = normalizedSize;
     return { ...row, normalized };
   }
@@ -1273,18 +1429,13 @@ export default function AllInIncoming(_props: Props) {
 
 
   function loadedRowCategoryText(row: any) {
+    const main = findMainCategoryForRow(row, activeCategories);
+    const sub = findSubCategoryForRow(row, activeCategories);
+    if (main && sub) return `${categoryLabel(main)} / ${categoryLabel(sub)}`;
+    if (main) return categoryLabel(main);
+    if (sub) return categoryLabel(sub);
     const n = row?.normalized || {};
-    return categoryDisplay(
-      firstNonEmptyText(
-        n.categoryCode,
-        n.categoryName,
-        n.sourceCategory,
-        n.sourceCategoryCode,
-        n.sourceCategoryName,
-        rawValueByHeader({ raw: savedRowRawObject(row) }, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE", "CATEGORIE", "CATEGORY"])
-      ),
-      activeCategories
-    );
+    return categoryDisplay(firstNonEmptyText(n.categoryCode, n.categoryName, n.sourceCategory, mainCategoryRawValue({ raw: savedRowRawObject(row) })), activeCategories);
   }
 
   function loadedRowColorText(row: any) {
@@ -1354,9 +1505,25 @@ export default function AllInIncoming(_props: Props) {
       row?.categoryCode,
       row?.category_name,
       row?.categoryName,
-      rawValueByHeader({ raw }, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALKATEGORIA", "ALKATEGÓRIA", "ALCATEGORIE", "PRODUCT TYPE", "CATEGORIE", "CATEGORY"])
+      rawValueByHeader({ raw }, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"])
     );
     if (sourceCategory) normalized.sourceCategory = sourceCategory;
+
+    const sourceSubCategory = firstNonEmptyText(
+      normalized.sourceSubCategory,
+      normalized.sourceSubCategoryCode,
+      normalized.sourceSubCategoryName,
+      normalized.subCategoryCode,
+      normalized.subcategoryCode,
+      normalized.subCategoryName,
+      normalized.subcategoryName,
+      rawSubCategoryValue({ raw })
+    );
+    if (sourceSubCategory) {
+      normalized.sourceSubCategory = sourceSubCategory;
+      normalized.subCategoryName = normalized.subCategoryName || sourceSubCategory;
+      normalized.subcategoryName = normalized.subcategoryName || sourceSubCategory;
+    }
 
     const gender = firstNonEmptyText(normalized.gender, row?.gender, row?.gender_code, row?.genderCode, rawValueByHeader({ raw }, ["GEN", "GENDER", "NEM", "SEX"]));
     if (gender) normalized.gender = gender;
@@ -1432,14 +1599,32 @@ export default function AllInIncoming(_props: Props) {
     return match ? String(match.code || match.id) : raw;
   }
 
-  function categoryValueForRow(rowOrNormalized: AifParsedRow | Record<string, unknown>) {
+  function mainCategoryValueForRow(rowOrNormalized: AifParsedRow | Record<string, unknown>) {
     const row = (rowOrNormalized as any)?.normalized ? rowOrNormalized : { normalized: rowOrNormalized };
-    const match = findCategoryForRow(row, activeCategories);
+    const match = findMainCategoryForRow(row, activeCategories);
     return match ? String(match.code || match.id) : "";
   }
 
-  function importedCategoryHint(row: AifParsedRow) {
-    const raw = categoryCandidatesForRow(row).find((x) => String(x ?? "").trim());
+  function subCategoryValueForRow(rowOrNormalized: AifParsedRow | Record<string, unknown>) {
+    const row = (rowOrNormalized as any)?.normalized ? rowOrNormalized : { normalized: rowOrNormalized };
+    const match = findSubCategoryForRow(row, activeCategories);
+    return match ? String(match.code || match.id) : "";
+  }
+
+  function subCategoriesForParentValue(parentValue: string) {
+    const parent = activeCategories.find((c) => String(c.code || c.id) === String(parentValue) || String(c.id) === String(parentValue));
+    const parentId = parent?.id ? String(parent.id) : "";
+    if (!parentId) return subCategories;
+    return subCategories.filter((c) => categoryParentId(c) === parentId);
+  }
+
+  function importedMainCategoryHint(row: AifParsedRow) {
+    const raw = mainCategoryCandidatesForRow(row).find((x) => String(x ?? "").trim());
+    return String(raw ?? "").trim();
+  }
+
+  function importedSubCategoryHint(row: AifParsedRow) {
+    const raw = subCategoryCandidatesForRow(row).find((x) => String(x ?? "").trim());
     return String(raw ?? "").trim();
   }
 
@@ -1450,23 +1635,58 @@ export default function AllInIncoming(_props: Props) {
       const normalized = { ...(rowWithCode.normalized || {}) } as any;
       const nextSize = normalizeAifSizeValue(normalized.size || (rowWithCode as any).supplier_size);
       if (nextSize) normalized.size = nextSize;
-      const mainCategoryRaw = firstNonEmptyText(
-        rawValueByHeader(rowWithCode, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]),
-        normalized.parentCategoryCode,
-        normalized.parentCategoryName
-      );
-      if (mainCategoryRaw) normalized.parentCategoryName = normalized.parentCategoryName || mainCategoryRaw;
-      const match = findCategoryForRow({ ...rowWithCode, normalized }, activeCategories);
-      if (match) {
-        normalized.categoryCode = String(match.code || match.id);
-        normalized.categoryName = categoryLabel(match);
-        const parentId = String((match as any).parent_id || (match as any).parentId || "").trim();
-        if (parentId) normalized.parentCategoryId = parentId;
+
+      const mainCategoryRaw = firstNonEmptyText(mainCategoryRawValue(rowWithCode), normalized.parentCategoryCode, normalized.parentCategoryName);
+      if (mainCategoryRaw) {
+        normalized.sourceCategory = normalized.sourceCategory || mainCategoryRaw;
+        normalized.parentCategoryName = normalized.parentCategoryName || mainCategoryRaw;
+      }
+
+      const subCategoryRaw = firstNonEmptyText(rawSubCategoryValue(rowWithCode), normalized.sourceSubCategory, normalized.subCategoryName, normalized.subcategoryName, normalized.productType, normalized.product_type);
+      if (subCategoryRaw) {
+        normalized.sourceSubCategory = normalized.sourceSubCategory || subCategoryRaw;
+        normalized.sourceSubCategoryName = normalized.sourceSubCategoryName || subCategoryRaw;
+        normalized.subCategoryName = normalized.subCategoryName || subCategoryRaw;
+        normalized.subcategoryName = normalized.subcategoryName || subCategoryRaw;
+        normalized.productType = normalized.productType || subCategoryRaw;
+        normalized.product_type = normalized.product_type || subCategoryRaw;
+      }
+
+      const rowForMatching = { ...rowWithCode, normalized };
+      const mainMatch = findMainCategoryForRow(rowForMatching, activeCategories);
+      const subMatch = findSubCategoryForRow(rowForMatching, activeCategories);
+
+      if (mainMatch) {
+        normalized.categoryCode = String(mainMatch.code || mainMatch.id);
+        normalized.categoryName = categoryLabel(mainMatch);
+        normalized.parentCategoryCode = String(mainMatch.code || mainMatch.id);
+        normalized.parentCategoryName = categoryLabel(mainMatch);
       } else if (String(normalized.categoryCode || normalized.categoryName || "").trim()) {
         normalized.sourceCategory = normalized.sourceCategory || normalized.categoryCode || normalized.categoryName;
         normalized.categoryCode = "";
         normalized.categoryName = "";
       }
+
+      if (subMatch) {
+        normalized.subCategoryCode = String(subMatch.code || subMatch.id);
+        normalized.subcategoryCode = String(subMatch.code || subMatch.id);
+        normalized.subCategoryName = categoryLabel(subMatch);
+        normalized.subcategoryName = categoryLabel(subMatch);
+        normalized.productType = normalized.productType || categoryLabel(subMatch);
+        normalized.product_type = normalized.product_type || categoryLabel(subMatch);
+        const parentId = categoryParentId(subMatch);
+        if (parentId) {
+          normalized.parentCategoryId = parentId;
+          const parent = activeCategories.find((c) => String(c.id) === parentId);
+          if (parent) {
+            normalized.categoryCode = String(parent.code || parent.id);
+            normalized.categoryName = categoryLabel(parent);
+            normalized.parentCategoryCode = String(parent.code || parent.id);
+            normalized.parentCategoryName = categoryLabel(parent);
+          }
+        }
+      }
+
       return normalizeAifRowSize({ ...rowWithCode, normalized }) as AifParsedRow;
     });
   }
@@ -1474,12 +1694,12 @@ export default function AllInIncoming(_props: Props) {
   useEffect(() => {
     if (!rows.length) return;
     setRows((current) => normalizeImportedRowsWithMeta(current));
-  }, [activeBrands, activeCategories, activeGenderTypes, brandColorCodes, colorTypes]);
+  }, [activeBrands, activeCategories, activeGenderTypes, brandColorCodes, brandSizeCodes, colorTypes, sizeTypes]);
 
   const preview = useMemo(() => rows.slice(0, previewLimit), [rows, previewLimit]);
-  const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r).length > 0).length, [rows]);
+  const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r, sizeTypes, brandSizeCodes).length > 0).length, [rows, sizeTypes, brandSizeCodes]);
   const approvedRowList = useMemo(() => rows.filter((row, index) => approvedRows[rowKey(row, index)]), [rows, approvedRows]);
-  const approvedProblems = useMemo(() => approvedRowList.filter((r) => aifRowErrors(r).length > 0).length, [approvedRowList]);
+  const approvedProblems = useMemo(() => approvedRowList.filter((r) => aifRowErrors(r, sizeTypes, brandSizeCodes).length > 0).length, [approvedRowList, sizeTypes, brandSizeCodes]);
   const approvedCount = approvedRowList.length;
   const excludedCount = Math.max(0, rows.length - approvedCount);
   const approvedGoodsValue = useMemo(() => approvedRowList.reduce((sum, row) => {
@@ -1572,38 +1792,66 @@ export default function AllInIncoming(_props: Props) {
     setRows((current) =>
       current.map((row, rowIndex) => {
         if (rowIndex !== index) return row;
-        const normalized = { ...(row.normalized || {}) };
+        const normalized = { ...(row.normalized || {}) } as any;
         if (field === "qty") normalized[field] = value === "" ? null : Number(value);
         else if (field === "buyPrice" || field === "sellPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
         else if (field === "size") normalized[field] = normalizeAifSizeValue(value);
         else normalized[field] = value;
+
         if (field === "brandCode") {
           const brand = activeBrands.find((b) => (b.code || b.id) === value);
           normalized.brandName = brand?.name || "";
         }
-        if (field === "categoryCode" || field === "subCategoryCode") {
-          const category = activeCategories.find((c) => (c.code || c.id) === value);
-          normalized.categoryCode = value;
-          normalized.categoryName = category ? categoryLabel(category) : "";
-          if (field === "subCategoryCode") {
-            normalized.subCategoryCode = value;
-            normalized.subCategoryName = category ? categoryLabel(category) : "";
-            const parent = activeCategories.find((c) => String(c.id) === String((category as any)?.parent_id || (category as any)?.parentId || ""));
+
+        if (field === "categoryCode") {
+          const category = mainCategories.find((c) => (c.code || c.id) === value) || activeCategories.find((c) => (c.code || c.id) === value);
+          if (value && category) {
+            normalized.categoryCode = String(category.code || category.id);
+            normalized.categoryName = categoryLabel(category);
+            normalized.parentCategoryCode = String(category.code || category.id);
+            normalized.parentCategoryName = categoryLabel(category);
+          } else {
+            normalized.categoryCode = "";
+            normalized.categoryName = "";
+            normalized.parentCategoryCode = "";
+            normalized.parentCategoryName = "";
+          }
+
+          const currentSub = activeCategories.find((c) => (c.code || c.id) === normalized.subCategoryCode || (c.code || c.id) === normalized.subcategoryCode);
+          const parentId = category?.id ? String(category.id) : "";
+          if (currentSub && parentId && categoryParentId(currentSub) && categoryParentId(currentSub) !== parentId) {
+            normalized.subCategoryCode = "";
+            normalized.subcategoryCode = "";
+            normalized.subCategoryName = "";
+            normalized.subcategoryName = "";
+          }
+        }
+
+        if (field === "subCategoryCode") {
+          const subCategory = subCategories.find((c) => (c.code || c.id) === value) || activeCategories.find((c) => (c.code || c.id) === value);
+          if (value && subCategory) {
+            normalized.subCategoryCode = String(subCategory.code || subCategory.id);
+            normalized.subcategoryCode = String(subCategory.code || subCategory.id);
+            normalized.subCategoryName = categoryLabel(subCategory);
+            normalized.subcategoryName = categoryLabel(subCategory);
+            normalized.sourceSubCategory = normalized.sourceSubCategory || categoryLabel(subCategory);
+            if (!String(normalized.productType || normalized.product_type || "").trim()) normalized.productType = categoryLabel(subCategory);
+
+            const parent = activeCategories.find((c) => String(c.id) === categoryParentId(subCategory));
             if (parent) {
-              normalized.parentCategoryCode = parent.code || parent.id;
+              normalized.categoryCode = String(parent.code || parent.id);
+              normalized.categoryName = categoryLabel(parent);
+              normalized.parentCategoryCode = String(parent.code || parent.id);
               normalized.parentCategoryName = categoryLabel(parent);
             }
+          } else {
+            normalized.subCategoryCode = "";
+            normalized.subcategoryCode = "";
+            normalized.subCategoryName = "";
+            normalized.subcategoryName = "";
           }
         }
-        if (field === "subCategoryCode") {
-          const subCategory = activeCategories.find((c) => (c.code || c.id) === value);
-          normalized.subCategoryCode = value;
-          normalized.subCategoryName = subCategory ? categoryLabel(subCategory) : "";
-          if (value) {
-            normalized.categoryCode = value;
-            normalized.categoryName = subCategory ? categoryLabel(subCategory) : "";
-          }
-        }
+
         if (field === "supplierProductCode") normalized.modelCode = value || normalized.modelCode;
         if (field === "customsTariffCode") assignCustomsTariffCode(normalized as Record<string, any>, value);
         return applyProductCodeAndBrandColor({ ...row, normalized });
@@ -1718,7 +1966,7 @@ export default function AllInIncoming(_props: Props) {
     let problemCount = 0;
     rows.forEach((row, index) => {
       next[rowKey(row, index)] = true;
-      if (aifRowErrors(row).length > 0) problemCount += 1;
+      if (aifRowErrors(row, sizeTypes, brandSizeCodes).length > 0) problemCount += 1;
     });
     setApprovedRows(next);
     setPreviewLimit((current) => Math.max(current, rows.length));
@@ -1736,7 +1984,7 @@ export default function AllInIncoming(_props: Props) {
     }
     const next: Record<string, boolean> = {};
     rows.forEach((row, index) => {
-      if (aifRowErrors(row).length === 0) next[rowKey(row, index)] = true;
+      if (aifRowErrors(row, sizeTypes, brandSizeCodes).length === 0) next[rowKey(row, index)] = true;
     });
     setApprovedRows(next);
     setPreviewLimit((current) => Math.max(current, rows.length));
@@ -1995,7 +2243,7 @@ export default function AllInIncoming(_props: Props) {
     };
 
     const mappedManualRow = rowWithSalesMeta(applyProductCodeAndBrandColor(manualRow));
-    const errors = aifRowErrors(mappedManualRow);
+    const errors = aifRowErrors(mappedManualRow, sizeTypes, brandSizeCodes);
     const rowIndex = rows.length;
     const key = rowKey(mappedManualRow, rowIndex);
     setRows((current) => [...current, mappedManualRow]);
@@ -2029,6 +2277,8 @@ export default function AllInIncoming(_props: Props) {
     setSupplierBrands((meta as any).supplierBrands || []);
     setBrandColorCodes((meta as any).brandColorCodes || []);
     setColorTypes((meta as any).colorTypes || []);
+    setSizeTypes((meta as any).sizeTypes || []);
+    setBrandSizeCodes((meta as any).brandSizeCodes || []);
     setNewLocationType((current) => {
       if (current && activeTypes.some((t) => t.code === current)) return current;
       return activeTypes[0]?.code || "warehouse";
@@ -3078,7 +3328,7 @@ export default function AllInIncoming(_props: Props) {
         }
       `}</style>
       <datalist id="aif-size-options">
-        {AIF_SIZE_OPTIONS.map((size) => <option key={size} value={size} />)}
+        {sizeDatalistOptions.map((size) => <option key={size} value={size} />)}
       </datalist>
       {salesTvaModalOpen && (
         <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
@@ -3808,12 +4058,15 @@ export default function AllInIncoming(_props: Props) {
               {preview.map((r, idx) => {
                 const globalIndex = idx;
                 const n = r.normalized || {};
-                const errors = aifRowErrors(r);
+                const errors = aifRowErrors(r, sizeTypes, brandSizeCodes);
                 const key = rowKey(r, globalIndex);
                 const approved = Boolean(approvedRows[key]);
                 const rowState = errors.length ? "Ellenőrizni" : "Rendben";
-                const categoryValue = categoryValueForRow(r);
-                const categoryHint = importedCategoryHint(r);
+                const mainCategoryValue = mainCategoryValueForRow(r);
+                const subCategoryValue = subCategoryValueForRow(r);
+                const subCategoryOptions = subCategoriesForParentValue(mainCategoryValue);
+                const mainCategoryHint = importedMainCategoryHint(r);
+                const subCategoryHint = importedSubCategoryHint(r);
                 const colorMissingHint = brandColorMissingHint(r);
                 return (
                   <div
@@ -3870,7 +4123,7 @@ export default function AllInIncoming(_props: Props) {
                         {errors.length ? <p className="rounded-md border border-amber-200/20 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-50">{errors.join(" ")}</p> : null}
                       </div>
 
-                      <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-[0.85fr_minmax(160px,1.45fr)_0.65fr]">
+                      <div className="grid gap-1.5 sm:grid-cols-4 lg:grid-cols-[0.72fr_minmax(110px,0.92fr)_minmax(135px,1.1fr)_0.56fr]">
                         <label className="grid min-w-0 gap-1">
                           <span className={`${compactFieldLabel} whitespace-nowrap`}>Márka</span>
                           <select className={`${compactSelect} w-full`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
@@ -3879,12 +4132,20 @@ export default function AllInIncoming(_props: Props) {
                           </select>
                         </label>
                         <label className="grid min-w-0 gap-1">
-                          <span className={`${compactFieldLabel} whitespace-nowrap`} title="Főkategória / alkategória">Főkat. / alkat.</span>
-                          <select className={`${compactSelect} w-full min-w-0 truncate`} value={categoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)} title={categoryValue || categoryHint || "Főkategória / alkategória"}>
+                          <span className={`${compactFieldLabel} whitespace-nowrap`} title="Főkategória">Főkategória</span>
+                          <select className={`${compactSelect} w-full min-w-0 truncate`} value={mainCategoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)} title={mainCategoryValue || mainCategoryHint || "Főkategória"}>
                             <option style={mutedOptionStyle} value="">Nincs</option>
-                            {activeCategories.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{(c.parent_id || c.parentId) ? `↳ ${categoryLabel(c)}` : categoryLabel(c)}</option>)}
+                            {(mainCategories.length ? mainCategories : activeCategories.filter((c) => !isSubcategoryOption(c))).map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
                           </select>
-                          {categoryHint && !categoryValue ? <span className="text-[9px] text-amber-100">XLS: {categoryHint}</span> : null}
+                          {mainCategoryHint && !mainCategoryValue ? <span className="text-[9px] text-amber-100">XLS: {mainCategoryHint}</span> : null}
+                        </label>
+                        <label className="grid min-w-0 gap-1">
+                          <span className={`${compactFieldLabel} whitespace-nowrap`} title="Alkategória / terméktípus">Alkat. / típus</span>
+                          <select className={`${compactSelect} w-full min-w-0 truncate`} value={subCategoryValue} onChange={(e) => updateRowField(globalIndex, "subCategoryCode", e.target.value)} title={subCategoryValue || subCategoryHint || "Alkategória / terméktípus"}>
+                            <option style={mutedOptionStyle} value="">Nincs</option>
+                            {subCategoryOptions.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
+                          </select>
+                          {subCategoryHint && !subCategoryValue ? <span className="text-[9px] text-amber-100">XLS: {subCategoryHint}</span> : null}
                         </label>
                         <label className="grid min-w-0 gap-1">
                           <span className={`${compactFieldLabel} whitespace-nowrap`}>Nem</span>
