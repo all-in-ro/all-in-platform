@@ -7,6 +7,7 @@ import {
   Barcode,
   Boxes,
   ClipboardList,
+  Clock3,
   PackageCheck,
   ChevronDown,
   ChevronUp,
@@ -705,6 +706,64 @@ type DetailResponse = {
   stock: any[];
   supplierCodes: any[];
   movements: any[];
+};
+
+type VariantHistoryEvent = {
+  id: string;
+  created_at?: string | null;
+  event_type?: string | null;
+  direction?: "in" | "out" | "adjust" | string | null;
+  movement_type?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  qty_delta?: number | string | null;
+  qty_before?: number | string | null;
+  qty_after?: number | string | null;
+  actor?: string | null;
+  raw?: Record<string, any> | null;
+  location_name?: string | null;
+  from_location_name?: string | null;
+  to_location_name?: string | null;
+  import_qty?: number | string | null;
+  buy_price?: number | string | null;
+  buy_price_ron?: number | string | null;
+  sell_price?: number | string | null;
+  sell_price_ron?: number | string | null;
+  effective_buy_price?: number | string | null;
+  effective_sell_price?: number | string | null;
+  import_batch_id?: string | null;
+  source_file_name?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  reception_date?: string | null;
+  currency_code?: string | null;
+  supplier_name?: string | null;
+  sales_tva_rate?: number | string | null;
+};
+
+type VariantHistorySummary = {
+  currentQty?: number | string | null;
+  reservedQty?: number | string | null;
+  availableQty?: number | string | null;
+  stockLocationCount?: number | string | null;
+  totalIncomingQty?: number | string | null;
+  totalOutgoingQty?: number | string | null;
+  totalTransferredQty?: number | string | null;
+  netMovementQty?: number | string | null;
+  movementCount?: number | string | null;
+  totalPurchasedQty?: number | string | null;
+  avgBuyPrice?: number | string | null;
+  lastBuyPrice?: number | string | null;
+  lastSellPrice?: number | string | null;
+  lastIncomingAt?: string | null;
+  marginWithoutTva?: number | string | null;
+};
+
+type VariantHistoryResponse = {
+  item?: InventoryItem & Record<string, any>;
+  stock?: StockItem[];
+  summary?: VariantHistorySummary;
+  events?: VariantHistoryEvent[];
 };
 
 type EditForm = {
@@ -1856,6 +1915,196 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
   );
 }
 
+
+function historyDateTime(value?: string | null) {
+  if (!value) return "-";
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function historyPercent(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return "-";
+  const x = Number(value);
+  if (!Number.isFinite(x)) return "-";
+  const sign = x > 0 ? "+" : "";
+  return `${sign}${x.toLocaleString("hu-HU", { maximumFractionDigits: 0 })}%`;
+}
+
+function historyQty(value: unknown, signed = false) {
+  const x = n(value);
+  const sign = signed && x > 0 ? "+" : "";
+  return `${sign}${Math.trunc(x).toLocaleString("hu-HU")} db`;
+}
+
+function historyEventMeta(event: VariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const direction = String(event.direction || "").toLowerCase();
+  if (type === "transfer") return { label: direction === "out" ? "Áthelyezés ki" : direction === "in" ? "Áthelyezés be" : "Áthelyezés", cls: "border-sky-300/30 bg-sky-500/14 text-sky-50", dot: "bg-sky-300" };
+  if (type === "inventory") return { label: "Leltár", cls: "border-violet-300/30 bg-violet-500/14 text-violet-50", dot: "bg-violet-300" };
+  if (type === "incoming" || direction === "in") return { label: "Bevételezés", cls: "border-[#7bd7d4]/35 bg-[#2a8d8b]/22 text-[#d7fffd]", dot: "bg-[#7bd7d4]" };
+  if (type === "outgoing" || direction === "out") return { label: "Kimenő", cls: "border-rose-300/30 bg-rose-500/14 text-rose-50", dot: "bg-rose-300" };
+  return { label: "Korrekció", cls: "border-amber-300/30 bg-amber-500/14 text-amber-50", dot: "bg-amber-300" };
+}
+
+function historySourceLabel(event: VariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const source = String(event.source_type || "").toLowerCase();
+  const reason = String(event.raw?.reason || "").toLowerCase();
+  if (type === "transfer" || source.includes("transfer") || reason.includes("transfer")) return "Készletmozgatás";
+  if (type === "inventory" || source.includes("inventory")) return "Leltár";
+  if (source.includes("import_batch") || reason.includes("import_batch")) return "Bevételezés";
+  if (source.includes("manual_stock_correction")) return "Kézi készletkorrekció";
+  if (source.includes("manual_stock_redistribution")) return "Kézi áthelyezés";
+  if (source.includes("sale")) return "Eladás";
+  return event.movement_type || event.source_type || "Mozgás";
+}
+
+function HistoryMiniCard({ label: labelText, value, hint }: { label: string; value: React.ReactNode; hint?: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-white/12 bg-white/[0.06] p-3">
+      <p className="text-[10px] uppercase tracking-[0.08em] text-white/42">{labelText}</p>
+      <p className="mt-1 text-lg leading-none text-white">{value}</p>
+      {hint ? <p className="mt-1 text-[11px] text-white/46">{hint}</p> : null}
+    </div>
+  );
+}
+
+function VariantHistoryPanel({
+  target,
+  history,
+  loading,
+  error,
+  pricesVisible,
+  onClose,
+  onReload,
+}: {
+  target: InventoryItem | null;
+  history: VariantHistoryResponse | null;
+  loading: boolean;
+  error: string;
+  pricesVisible: boolean;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  if (!target) return null;
+  const item = { ...(target as any), ...(history?.item || {}) } as InventoryItem & Record<string, any>;
+  const summary = history?.summary || {};
+  const events = history?.events || [];
+  const stockRows = history?.stock || [];
+  const lastBuy = pricesVisible ? money(summary.lastBuyPrice ?? item.buy_price) : "••••";
+  const avgBuy = pricesVisible ? money(summary.avgBuyPrice) : "••••";
+  const margin = pricesVisible ? historyPercent(summary.marginWithoutTva) : "••••";
+
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/70 backdrop-blur-sm">
+      <div className="h-full w-full max-w-5xl overflow-auto border-l border-white/18 bg-[#4b5362] shadow-2xl">
+        <div className="sticky top-0 z-10 border-b border-white/12 bg-[#303a4c]/98 px-4 py-3 backdrop-blur">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 gap-3">
+              <WarehouseProductImage src={item.image_url} alt={item.title_ro || ""} thumbClassName="h-16 w-16 rounded-2xl" iconSize={20} />
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">Termék életút</p>
+                <h2 className="mt-1 line-clamp-2 text-xl leading-tight text-white">{item.title_ro || item.shopify_title || "Névtelen termék"}</h2>
+                <p className="mt-1 text-xs text-white/58">
+                  {item.brand_name || "Márka nélkül"} • {itemMainCategoryLabel(item)}{itemSubCategoryLabel(item) ? ` / ${itemSubCategoryLabel(item)}` : ""} • {displayColorName(item.color_name, item.color_code)} • {item.size || "-"}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="rounded-full border border-[#5bd0cc]/30 bg-[#203f49] px-2 py-1 text-[11px] text-[#cffffd]">Termékkód: {itemProductCode(item) || "-"}</span>
+                  {visibleWarehouseBarcode(item) ? <span className="rounded-full border border-white/12 bg-white/[0.07] px-2 py-1 text-[11px] text-white/70">Vonalkód: {visibleWarehouseBarcode(item)}</span> : null}
+                </div>
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button className={btnSoft} onClick={onReload} disabled={loading} type="button"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+              <button className={btnSoft} onClick={onClose} type="button"><X size={15} /> Bezárás</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4 p-4">
+          {error ? <div className="rounded-2xl border border-rose-300/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50">{error}</div> : null}
+          {loading && !history ? <div className="rounded-2xl border border-white/12 bg-white/[0.06] p-6 text-center text-white/62">Termékéletút betöltése...</div> : null}
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <HistoryMiniCard label="Jelenlegi készlet" value={historyQty(summary.currentQty ?? item.total_qty)} hint={`${historyQty(summary.availableQty ?? item.available_qty)} elérhető`} />
+            <HistoryMiniCard label="Összes bejött" value={historyQty(summary.totalIncomingQty)} hint={`${historyQty(summary.totalPurchasedQty)} importból`} />
+            <HistoryMiniCard label="Összes kiment" value={historyQty(summary.totalOutgoingQty)} hint="Eladás / kivétel / leltár" />
+            <HistoryMiniCard label="Átmozgatva" value={historyQty(summary.totalTransferredQty)} hint="Üzletek / raktár között" />
+            <HistoryMiniCard label="Utolsó vételár" value={lastBuy} hint="Utolsó bevételezés alapján" />
+            <HistoryMiniCard label="Átlag vételár" value={avgBuy} hint="Súlyozott import átlag" />
+            <HistoryMiniCard label="Utolsó eladási ár" value={money(summary.lastSellPrice ?? item.sell_price)} hint="TVA-val" />
+            <HistoryMiniCard label="Haszonkulcs" value={margin} hint="TVA nélkül számolva" />
+          </div>
+
+          {stockRows.length ? (
+            <div className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
+              <div className="mb-2 flex items-center gap-2 text-sm text-white"><Boxes size={15} /> Készlet helyenként</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {stockRows.map((row) => (
+                  <div key={`${row.location_id || row.location_code}`} className="rounded-xl border border-white/10 bg-[#303a4c] px-3 py-2 text-xs">
+                    <div className="truncate text-white/76">{row.location_name || row.location_code || "Hely"}</div>
+                    <div className="mt-1 text-lg text-white">{historyQty(row.qty)} <span className="text-[11px] text-white/45">/ foglalt {historyQty(row.reserved_qty)}</span></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="rounded-2xl border border-white/12 bg-white/[0.05]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-white/42">Idővonal</p>
+                <h3 className="mt-1 text-base text-white">Teljes termékmozgás</h3>
+              </div>
+              <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/62">{events.length} esemény</span>
+            </div>
+            <div className="divide-y divide-white/10">
+              {events.map((event) => {
+                const meta = historyEventMeta(event);
+                const transferText = event.from_location_name || event.to_location_name
+                  ? `${event.from_location_name || event.location_name || "-"} → ${event.to_location_name || event.location_name || "-"}`
+                  : event.location_name || "-";
+                const invoice = event.invoice_number ? `Számla: ${event.invoice_number}` : "";
+                const supplier = event.supplier_name ? `Beszállító: ${event.supplier_name}` : "";
+                const file = event.source_file_name ? `Forrás: ${event.source_file_name}` : "";
+                return (
+                  <div key={event.id} className="grid gap-3 px-4 py-3 md:grid-cols-[150px,1fr,150px] md:items-start">
+                    <div className="text-xs text-white/55">{historyDateTime(event.created_at)}</div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
+                        <span className="text-sm text-white">{historyQty(event.qty_delta, true)}</span>
+                        <span className="text-xs text-white/48">{historySourceLabel(event)}</span>
+                      </div>
+                      <div className="mt-2 grid gap-1 text-xs text-white/62 sm:grid-cols-2">
+                        <div>Hely: <span className="text-white/82">{transferText}</span></div>
+                        <div>Előtte / utána: <span className="text-white/82">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
+                        {supplier ? <div>{supplier}</div> : null}
+                        {invoice ? <div>{invoice}</div> : null}
+                        {event.reception_date ? <div>Receptió: {dateShort(event.reception_date)}</div> : null}
+                        {file ? <div className="truncate" title={file}>{file}</div> : null}
+                      </div>
+                      {(event.raw?.note || event.raw?.title) ? <p className="mt-2 text-xs text-white/45">{event.raw?.title || event.raw?.note}</p> : null}
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-[#303a4c] px-3 py-2 text-xs text-white/62">
+                      <div>Vételár: <span className="text-white">{pricesVisible ? money(event.effective_buy_price) : "••••"}</span></div>
+                      <div className="mt-1">Eladási: <span className="text-white">{money(event.effective_sell_price)}</span></div>
+                      <div className="mt-1">TVA nélküli haszon: <span className="text-[#cffffd]">{pricesVisible ? priceMarkupPercentText(event.effective_buy_price, event.effective_sell_price) || "-" : "••••"}</span></div>
+                    </div>
+                  </div>
+                );
+              })}
+              {!events.length && !loading ? <div className="px-4 py-10 text-center text-sm text-white/55">Még nincs naplózott esemény ennél a terméknél.</div> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function itemMatchesScannedBarcode(it: InventoryItem, scannedBarcode: unknown) {
   const q = normalizeSearch(cleanScannedBarcode(scannedBarcode));
   if (!q) return false;
@@ -2180,6 +2429,10 @@ async function apiImportBatchInventory(batchId: string) {
 
 async function apiVariantDetail(id: string) {
   return fetchJSON<DetailResponse>(`/api/aif/variants/${encodeURIComponent(id)}`);
+}
+
+async function apiVariantHistory(id: string) {
+  return fetchJSON<VariantHistoryResponse>(`/api/aif/variants/${encodeURIComponent(id)}/history?limit=700`);
 }
 
 async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
@@ -2526,6 +2779,10 @@ export default function AllInWarehouse() {
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "subCategory" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<InventoryItem | null>(null);
+  const [variantHistory, setVariantHistory] = useState<VariantHistoryResponse | null>(null);
+  const [variantHistoryBusy, setVariantHistoryBusy] = useState(false);
+  const [variantHistoryError, setVariantHistoryError] = useState("");
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
@@ -2999,6 +3256,28 @@ export default function AllInWarehouse() {
     setStockEditorRows(next);
     setStockEditorAllowTotalChange(false);
     setStockEditorWarning("");
+  }
+
+  async function openProductHistory(item: InventoryItem) {
+    const id = String(item.variant_id || (item as any).id || "").trim();
+    if (!id) return;
+    setHistoryTarget(item);
+    setVariantHistory(null);
+    setVariantHistoryError("");
+    setVariantHistoryBusy(true);
+    try {
+      const data = await apiVariantHistory(id);
+      setVariantHistory(data);
+    } catch (error: any) {
+      setVariantHistoryError(error?.message || "A terméktörténet betöltése nem sikerült.");
+    } finally {
+      setVariantHistoryBusy(false);
+    }
+  }
+
+  async function reloadProductHistory() {
+    if (!historyTarget) return;
+    await openProductHistory(historyTarget);
   }
 
   function closeStockEditor() {
@@ -6113,7 +6392,7 @@ export default function AllInWarehouse() {
                     <col style={{ width: "88px" }} />
                     <col style={{ width: "92px" }} />
                     <col style={{ width: "62px" }} />
-                    <col style={{ width: "86px" }} />
+                    <col style={{ width: "116px" }} />
                   </colgroup>
                   <thead className="bg-[#2f3a4c] text-[10px] uppercase tracking-[0.08em] text-white/72">
                     <tr>
@@ -6191,6 +6470,7 @@ export default function AllInWarehouse() {
                         <td className="px-2 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
                         <td className="px-2 py-2.5 text-center align-middle">
                           <div className="flex items-center justify-center gap-1.5">
+                            <button className={warehouseListIconButton} onClick={() => openProductHistory(it)} title="Termék életút" aria-label="Termék életút" type="button"><Clock3 size={15} /></button>
                             <button className={warehouseListIconButton} onClick={() => openDetail(it.variant_id)} title="Részletek" aria-label="Részletek" type="button"><Edit3 size={15} /></button>
                             <button className={warehouseListDangerButton} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                           </div>
@@ -6242,6 +6522,7 @@ export default function AllInWarehouse() {
                       </div>
                     </div>
                     <div className="mt-3 flex justify-end gap-2">
+                      <button className={`${warehouseListIconButton} h-9 w-9`} onClick={() => openProductHistory(it)} title="Termék életút" aria-label={`Termék életút: ${it.title_ro || "termék"}`} type="button"><Clock3 size={15} /></button>
                       <button className={`${warehouseListIconButton} h-9 w-9`} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={15} /></button>
                       <button className={`${warehouseListDangerButton} h-9 w-9`} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={15} /></button>
                     </div>
@@ -7115,6 +7396,18 @@ export default function AllInWarehouse() {
             </div>
           </div>
         </div>
+      )}
+
+      {historyTarget && (
+        <VariantHistoryPanel
+          target={historyTarget}
+          history={variantHistory}
+          loading={variantHistoryBusy}
+          error={variantHistoryError}
+          pricesVisible={buyPricesVisible}
+          onReload={reloadProductHistory}
+          onClose={() => { setHistoryTarget(null); setVariantHistory(null); setVariantHistoryError(""); }}
+        />
       )}
 
       {productDeleteTarget && (
