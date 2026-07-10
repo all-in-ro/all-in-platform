@@ -10,13 +10,11 @@ import {
   Filter,
   Home,
   ImagePlus,
-  MapPin,
   PackageCheck,
   Plus,
   RefreshCw,
   Save,
   Search,
-  Trash2,
   X,
 } from "lucide-react";
 
@@ -150,7 +148,6 @@ type EditForm = {
   variantStatus: string;
 };
 
-type NewProductForm = EditForm & { supplierId: string; supplierVariantCode: string; supplierColorCode: string; supplierSize: string };
 
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "incoming_desc" | "missing";
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
@@ -164,13 +161,81 @@ const select = `${input} pr-8`;
 const label = "grid gap-1.5 text-[11px] uppercase tracking-[0.06em] text-white/62";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs font-medium text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-white/16 bg-white/[0.08] px-3 text-xs font-medium text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
-const dangerBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-rose-300/35 bg-[#d31126] px-3 text-xs font-medium text-white shadow-[0_10px_24px_rgba(211,17,38,0.22)] transition hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50";
 const iconBtn = "inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/16 bg-white/[0.08] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
+const WAREHOUSE_BARCODE_SCAN_FORMATS = [
+  "code_128",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "code_39",
+  "code_93",
+  "itf",
+  "codabar",
+  "qr_code",
+  "data_matrix",
+];
+const WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS: MediaStreamConstraints = {
+  video: {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+  },
+  audio: false,
+};
+const WAREHOUSE_ZXING_BROWSER_CDN = "https://unpkg.com/@zxing/browser@0.1.5";
+let warehouseZxingBrowserPromise: Promise<any | null> | null = null;
+
+function cleanScannedBarcode(value: unknown) {
+  return String(value ?? "").replace(/[\r\n\t]+/g, "").trim();
+}
+
+function zxingResultText(result: unknown) {
+  const r = result as any;
+  if (!r) return "";
+  if (typeof r.getText === "function") return cleanScannedBarcode(r.getText());
+  return cleanScannedBarcode(r.text || r.rawValue || "");
+}
+
+function loadWarehouseZxingBrowser(): Promise<any | null> {
+  if (typeof window === "undefined" || typeof document === "undefined") return Promise.resolve(null);
+  const existingGlobal = (window as any).ZXingBrowser;
+  if (existingGlobal?.BrowserMultiFormatReader || existingGlobal?.BrowserMultiFormatOneDReader) return Promise.resolve(existingGlobal);
+  if (warehouseZxingBrowserPromise) return warehouseZxingBrowserPromise;
+
+  warehouseZxingBrowserPromise = new Promise((resolve) => {
+    const finish = () => resolve((window as any).ZXingBrowser || null);
+    const existing = document.querySelector<HTMLScriptElement>('script[data-aif-zxing-browser="true"]');
+    if (existing) {
+      if (existing.dataset.loaded === "true") {
+        finish();
+        return;
+      }
+      existing.addEventListener("load", finish, { once: true });
+      existing.addEventListener("error", () => resolve(null), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = WAREHOUSE_ZXING_BROWSER_CDN;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.dataset.aifZxingBrowser = "true";
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      finish();
+    };
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+
+  return warehouseZxingBrowserPromise;
+}
 
 function n(value: unknown) {
   const parsed = Number(String(value ?? "").replace(",", "."));
@@ -316,6 +381,32 @@ function visibleWarehouseBarcode(item: Partial<InventoryItem> | Record<string, a
   return raw;
 }
 
+function itemMatchesScannedBarcode(item: InventoryItem, scannedBarcode: unknown) {
+  const q = normalizeSearch(cleanScannedBarcode(scannedBarcode));
+  if (!q) return false;
+  const values = [
+    visibleWarehouseBarcode(item),
+    item.barcode,
+    item.display_barcode,
+    item.internal_sku,
+    item.model_code,
+    itemProductCode(item),
+    item.supplier_product_code,
+    item.supplierProductCode,
+    item.product_code,
+    item.productCode,
+    item.sn_cod,
+    item.snCod,
+    itemCustomsTariffCode(item),
+    item.supplier_codes,
+    ...splitCsv(item.supplier_codes),
+  ];
+  return values
+    .map((value) => normalizeSearch(cleanScannedBarcode(value)))
+    .filter(Boolean)
+    .some((value) => value === q);
+}
+
 function itemCustomsTariffCode(item: Partial<InventoryItem> | Record<string, any> | null | undefined) {
   const source = (item || {}) as Record<string, any>;
   const attrs = source.attributes && typeof source.attributes === "object" ? source.attributes as Record<string, unknown> : {};
@@ -421,13 +512,6 @@ function goHome() {
   window.location.hash = "#allin";
 }
 
-function goBarcodeManager(variantId?: string, barcode?: string, title?: string) {
-  const params = new URLSearchParams();
-  if (variantId) params.set("variant", variantId);
-  if (barcode) params.set("barcode", barcode);
-  if (title) params.set("title", title);
-  window.location.hash = `#allinbarcodes${params.toString() ? `?${params.toString()}` : ""}`;
-}
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -488,9 +572,6 @@ function emptyForm(): EditForm {
   };
 }
 
-function emptyNewProduct(): NewProductForm {
-  return { ...emptyForm(), supplierId: "", supplierVariantCode: "", supplierColorCode: "", supplierSize: "" };
-}
 
 function fieldValue(value: unknown) {
   return value === null || value === undefined ? "" : String(value);
@@ -560,7 +641,6 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const aifBase = `${apiBase.replace(/\/$/, "")}/aif`;
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
-  const [suppliers, setSuppliers] = useState<MetaItem[]>([]);
   const [brands, setBrands] = useState<MetaItem[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
   const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
@@ -586,19 +666,23 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [newProductOpen, setNewProductOpen] = useState(false);
-  const [newProduct, setNewProduct] = useState<NewProductForm>(() => emptyNewProduct());
-  const [newProductStockRows, setNewProductStockRows] = useState<Record<string, string>>({});
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorAllowTotalChange, setStockEditorAllowTotalChange] = useState(false);
   const [stockEditorWarning, setStockEditorWarning] = useState("");
   const [imagePreview, setImagePreview] = useState<{ src: string; title: string } | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
   const [focusVariantIds, setFocusVariantIds] = useState<string[]>([]);
   const [focusLabel, setFocusLabel] = useState("");
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
+  const [barcodeScannerOpen, setBarcodeScannerOpen] = useState(false);
+  const [barcodeScannerStatus, setBarcodeScannerStatus] = useState("");
+  const [barcodeScannerManualValue, setBarcodeScannerManualValue] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const barcodeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const barcodeStreamRef = useRef<MediaStream | null>(null);
+  const barcodeZxingControlsRef = useRef<any | null>(null);
+  const barcodeScanRafRef = useRef<number | null>(null);
+  const barcodeScannerHandlingRef = useRef(false);
 
   async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const method = String(init?.method || "GET").toUpperCase();
@@ -643,13 +727,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<{ ok: true }>(`/variants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
-  async function apiVariantDelete(id: string) {
-    return fetchAifJSON<{ ok: true; mode?: string }>(`/variants/${encodeURIComponent(id)}?force=1&_=${Date.now()}`, { method: "DELETE" });
-  }
 
-  async function apiCreateManualProduct(payload: Record<string, unknown>) {
-    return fetchAifJSON<{ ok: true; variantId?: string; modelId?: string | null }>(`/manual-products`, { method: "POST", body: JSON.stringify(payload) });
-  }
 
   async function apiVariantStockUpdate(id: string, rows: Array<{ locationId?: string; locationCode?: string; qty: number; reservedQty?: number }>, allowTotalChange: boolean) {
     return fetchAifJSON<{ ok: true; stock?: StockItem[] }>(`/variants/${encodeURIComponent(id)}/stock`, {
@@ -720,7 +798,6 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     setMessage("");
     try {
       const [meta, inventory, stock] = await Promise.all([apiMeta(), apiInventory(), apiStock()]);
-      setSuppliers((meta.suppliers || []).filter((x) => x.is_active !== false));
       setBrands((meta.brands || []).filter((x) => x.is_active !== false));
       setCategories((meta.categories || []).filter((x) => x.is_active !== false));
       setGenderTypes((meta.genderTypes || []).filter((x) => x.is_active !== false));
@@ -770,6 +847,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       window.removeEventListener(warehouseShowAllAfterIncomingEventName, onIncoming as EventListener);
       window.removeEventListener("storage", onStorage);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    return () => stopBarcodeScanner(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1085,109 +1167,9 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     }
   }
 
-  function openNewProductModal() {
-    const next = emptyNewProduct();
-    if (brand !== "all") next.brandCode = brand;
-    if (category !== "all") next.categoryCode = category;
-    if (gender !== "all") next.gender = gender;
-    setNewProduct(next);
-    const stockDraft = stockLocationRows.reduce<Record<string, string>>((acc, loc) => { acc[locationKey(loc)] = "0"; return acc; }, {});
-    if (stockLocationRows[0]) stockDraft[locationKey(stockLocationRows[0])] = "1";
-    setNewProductStockRows(stockDraft);
-    setNewProductOpen(true);
-  }
 
-  function newProductTotalQty() {
-    return stockLocationRows.reduce((sum, loc) => sum + Math.max(0, Math.floor(n(newProductStockRows[locationKey(loc)]))), 0);
-  }
 
-  async function saveNewProduct() {
-    if (!newProduct.titleRo.trim()) {
-      setMessage("A terméknév kötelező.");
-      return;
-    }
-    if (!newProduct.size.trim()) {
-      setMessage("A méret kötelező.");
-      return;
-    }
-    const totalQty = newProductTotalQty();
-    if (totalQty <= 0) {
-      setMessage("Legalább egy célhelyre adj készletet.");
-      return;
-    }
-    setSaving(true);
-    setMessage("");
-    try {
-      const stockRowsPayload = stockLocationRows
-        .map((loc) => ({ locationId: String(loc.id || ""), locationCode: String(loc.code || ""), qty: Math.max(0, Math.floor(n(newProductStockRows[locationKey(loc)]))) }))
-        .filter((row) => row.qty > 0);
-      const payload = {
-        titleRo: newProduct.titleRo,
-        titleHu: newProduct.titleHu,
-        descriptionRo: newProduct.descriptionRo,
-        brandCode: newProduct.brandCode || null,
-        categoryCode: newProduct.categoryCode || null,
-        parentCategoryCode: newProduct.categoryCode || null,
-        subCategoryCode: newProduct.subCategoryCode || null,
-        subcategoryCode: newProduct.subCategoryCode || null,
-        gender: newProduct.gender || "unisex",
-        productType: newProduct.productType,
-        season: newProduct.season,
-        material: newProduct.material,
-        shopifyTitle: newProduct.shopifyTitle || newProduct.titleRo,
-        modelStatus: newProduct.modelStatus || "active",
-        barcode: newProduct.barcode,
-        snCod: newProduct.snCod,
-        customsTariffCode: newProduct.customsTariffCode,
-        colorCode: newProduct.colorCode,
-        colorName: normalizeColor(newProduct.colorName),
-        size: normalizeSize(newProduct.size),
-        buyPrice: newProduct.buyPrice,
-        sellPrice: newProduct.sellPrice,
-        compareAtPrice: newProduct.compareAtPrice,
-        imageUrl: newProduct.imageUrl,
-        status: newProduct.variantStatus || "active",
-        supplierId: newProduct.supplierId || null,
-        supplierProductCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
-        supplierVariantCode: newProduct.supplierVariantCode,
-        supplierColorCode: newProduct.supplierColorCode || newProduct.colorCode,
-        supplierSize: newProduct.supplierSize || newProduct.size,
-        modelCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
-        qty: totalQty,
-        stockRows: stockRowsPayload,
-      };
-      const created = await apiCreateManualProduct(payload);
-      notifyStockMovesChanged({ variantId: created.variantId, source: "warehouse_mobile_manual_product_create" });
-      setNewProductOpen(false);
-      setNewProduct(emptyNewProduct());
-      setNewProductStockRows({});
-      resetFilters(false);
-      await load(false);
-      if (created.variantId) setSearch(newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo);
-      setMessage(`Új termék rögzítve ${totalQty} db készlettel.`);
-    } catch (error: any) {
-      setMessage(error?.message || "Nem sikerült létrehozni a terméket.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
-  async function confirmDeleteProduct() {
-    if (!deleteTarget?.variant_id) return;
-    setSaving(true);
-    try {
-      await apiVariantDelete(deleteTarget.variant_id);
-      notifyStockMovesChanged({ variantId: deleteTarget.variant_id, source: "warehouse_mobile_variant_delete" });
-      setDeleteTarget(null);
-      setDetailOpen(false);
-      await load(false);
-      setMessage("Termék törölve vagy archiválva.");
-    } catch (error: any) {
-      setMessage(error?.message || "Nem sikerült törölni a terméket.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   function toggleSelected(item: InventoryItem) {
     const id = String(item.variant_id || "");
@@ -1200,7 +1182,144 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     });
   }
 
-  const selectedCount = Object.values(selectedVariants).filter(Boolean).length;
+
+  function stopBarcodeScanner(clearStatus = true) {
+    if (barcodeScanRafRef.current !== null) {
+      window.cancelAnimationFrame(barcodeScanRafRef.current);
+      barcodeScanRafRef.current = null;
+    }
+    if (barcodeZxingControlsRef.current?.stop) {
+      try { barcodeZxingControlsRef.current.stop(); } catch {}
+      barcodeZxingControlsRef.current = null;
+    }
+    if (barcodeStreamRef.current) {
+      barcodeStreamRef.current.getTracks().forEach((track) => track.stop());
+      barcodeStreamRef.current = null;
+    }
+    if (barcodeVideoRef.current) barcodeVideoRef.current.srcObject = null;
+    setBarcodeScannerOpen(false);
+    if (clearStatus) setBarcodeScannerStatus("");
+  }
+
+  function applyScannedBarcode(rawCode: unknown, _source: "camera" | "manual" = "camera") {
+    const code = cleanScannedBarcode(rawCode);
+    if (!code) return;
+    if (barcodeScannerHandlingRef.current) return;
+    barcodeScannerHandlingRef.current = true;
+    window.setTimeout(() => { barcodeScannerHandlingRef.current = false; }, 700);
+
+    const exactMatches = items.filter((item) => itemMatchesScannedBarcode(item, code));
+    setSearch(code);
+    setVisibleCount(40);
+    setFocusVariantIds([]);
+    setFocusLabel("");
+    setBarcodeScannerManualValue("");
+    setMessage(exactMatches.length
+      ? `Vonalkód beolvasva: ${code} • ${exactMatches.length} találat.`
+      : `Vonalkód beolvasva: ${code}. Ha nincs találat, ellenőrizd a kódot vagy a törzsadatot.`
+    );
+    stopBarcodeScanner(false);
+    window.setTimeout(() => searchInputRef.current?.focus(), 120);
+  }
+
+  async function startBarcodeScanner() {
+    setBarcodeScannerOpen(true);
+    setBarcodeScannerStatus("Kamera indítása...");
+    setBarcodeScannerManualValue("");
+
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setBarcodeScannerStatus("Ezen a böngészőn nem érhető el a kamera. Írd be kézzel vagy használj bluetooth olvasót.");
+      return;
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 90));
+    const video = barcodeVideoRef.current;
+    if (!video) {
+      setBarcodeScannerStatus("A kamera nézet még nem készült el. Zárd be és indítsd újra a scannert.");
+      return;
+    }
+
+    const BarcodeDetectorCtor = (window as any).BarcodeDetector;
+    if (BarcodeDetectorCtor) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS);
+        barcodeStreamRef.current = stream;
+        video.srcObject = stream;
+        video.setAttribute("playsinline", "true");
+        await video.play().catch(() => undefined);
+
+        let detector: any;
+        try {
+          detector = new BarcodeDetectorCtor({ formats: WAREHOUSE_BARCODE_SCAN_FORMATS });
+        } catch {
+          detector = new BarcodeDetectorCtor();
+        }
+
+        const tick = async () => {
+          if (!barcodeStreamRef.current || !barcodeVideoRef.current || !detector) return;
+          if (barcodeVideoRef.current.readyState >= 2 && !barcodeScannerHandlingRef.current) {
+            try {
+              const detected = await detector.detect(barcodeVideoRef.current);
+              const first = detected?.[0];
+              const raw = first?.rawValue || first?.raw_value || first?.displayValue;
+              if (raw) {
+                applyScannedBarcode(raw, "camera");
+                return;
+              }
+            } catch {
+              // Egy kamera frame hibája nem ok arra, hogy feladjuk. Sajnos ezt is nekünk kell elviselni.
+            }
+          }
+          barcodeScanRafRef.current = window.requestAnimationFrame(tick);
+        };
+
+        barcodeScanRafRef.current = window.requestAnimationFrame(tick);
+        setBarcodeScannerStatus("Kamera aktív. Irányítsd a vonalkódra, a keresés automatikusan indul.");
+        return;
+      } catch (error: any) {
+        setBarcodeScannerStatus(error?.message || "A kamera indítása nem sikerült. Próbáld kézi beírással.");
+        return;
+      }
+    }
+
+    const zxing = await loadWarehouseZxingBrowser();
+    const Reader = zxing?.BrowserMultiFormatReader || zxing?.BrowserMultiFormatOneDReader;
+    if (Reader) {
+      try {
+        const reader = new Reader();
+        const controls = await reader.decodeFromConstraints(
+          WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS,
+          video,
+          (result: unknown, _error: unknown, controlsFromCallback?: any) => {
+            if (controlsFromCallback && !barcodeZxingControlsRef.current) barcodeZxingControlsRef.current = controlsFromCallback;
+            const text = zxingResultText(result);
+            if (text) applyScannedBarcode(text, "camera");
+          }
+        );
+        if (controls) barcodeZxingControlsRef.current = controls;
+        setBarcodeScannerStatus("Kamera aktív. Irányítsd a vonalkódra, a keresés automatikusan indul.");
+        return;
+      } catch (error: any) {
+        setBarcodeScannerStatus(error?.message || "A kamera scanner nem indult el. Írd be kézzel vagy használj bluetooth olvasót.");
+        return;
+      }
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS);
+      barcodeStreamRef.current = stream;
+      video.srcObject = stream;
+      video.setAttribute("playsinline", "true");
+      await video.play().catch(() => undefined);
+      setBarcodeScannerStatus("A kamera megy, de ez a böngésző nem ad automata vonalkódolvasót. Írd be kézzel vagy használj bluetooth olvasót.");
+    } catch (error: any) {
+      setBarcodeScannerStatus(error?.message || "A kamera indítása nem sikerült. Próbáld kézi beírással.");
+    }
+  }
+
+  function submitManualBarcode() {
+    applyScannedBarcode(barcodeScannerManualValue, "manual");
+  }
 
   function PriceDetails({ item }: { item: Partial<InventoryItem> }) {
     const sellNet = sellPriceWithoutTva(item.sell_price);
@@ -1241,11 +1360,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
             <button className={buyPricesVisible ? "inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/45 bg-[#2a8d8b] text-white" : iconBtn} onClick={() => setBuyPricesVisible((x) => !x)} type="button" aria-label="Vételár mutatása">
               {buyPricesVisible ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
-            <button className={iconBtn} onClick={() => setFiltersOpen(true)} type="button" aria-label="Szűrők"><Filter size={18} /></button>
             <button className={iconBtn} onClick={goHome} type="button" aria-label="Kezdőlap"><Home size={18} /></button>
           </div>
 
-          <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+          <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" size={17} />
               <input
@@ -1257,6 +1375,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               />
               {search && <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-white/45 hover:bg-white/10 hover:text-white" type="button" onClick={() => setSearch("")}><X size={15} /></button>}
             </div>
+            <button className={softBtn} onClick={() => void startBarcodeScanner()} type="button" aria-label="Vonalkód scanner"><Barcode size={16} /></button>
             <button className={primaryBtn} onClick={() => load(true)} disabled={busy} type="button"><RefreshCw size={16} className={busy ? "animate-spin" : ""} /></button>
           </div>
 
@@ -1264,7 +1383,6 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
             <MiniStat label="Készlet" value={qty(totals.qty)} hint={`${qty(totals.available)} elérhető`} tone="green" />
             <MiniStat label="Érték" value={buyPricesVisible ? `${money(totals.value)} RON` : <span className="blur-[3px]">{money(totals.value)}</span>} hint="vételáron" />
             <MiniStat label="Hibás" value={qty(totals.missing)} hint="javítandó adat" tone={totals.missing ? "red" : "neutral"} />
-            <MiniStat label="Kijelölve" value={qty(selectedCount)} hint="címkéhez / munkához" />
           </div>
         </div>
       </header>
@@ -1279,17 +1397,16 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 <p className="font-semibold">Aktív nézet</p>
                 <p className="mt-0.5 text-[#d7fffd]/72">{focusLabel || "Szűrők / keresés alapján szűrt lista"}</p>
               </div>
-              <button className="shrink-0 rounded-xl border border-white/14 bg-white/[0.08] px-2 py-1" onClick={() => resetFilters()} type="button">Törlés</button>
+              <button className="shrink-0 rounded-xl border border-white/14 bg-white/[0.08] px-2 py-1" onClick={() => resetFilters()} type="button">Szűrők törlése</button>
             </div>
           </div>
         )}
 
         <div className="grid gap-3">
           {pageItems.map((item) => {
-            const selected = Boolean(selectedVariants[item.variant_id]);
             const markup = buyPricesVisible ? priceMarkupPercentText(item.buy_price, item.sell_price) : "";
             return (
-              <article key={item.variant_id} className={`rounded-[24px] border p-3 shadow-lg shadow-slate-950/12 ${selected ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/16" : "border-white/14 bg-white/[0.07]"}`}>
+              <article key={item.variant_id} className="rounded-[24px] border border-white/14 bg-white/[0.07] p-3 shadow-lg shadow-slate-950/12">
                 <div className="flex gap-3">
                   <ProductImage src={item.image_url} alt={itemTitle(item)} onPreview={() => setImagePreview({ src: String(item.image_url), title: itemTitle(item) })} />
                   <div className="min-w-0 flex-1">
@@ -1298,9 +1415,6 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                         <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-[#9fe5e2]">{item.brand_name || item.brand_code || "Márka nélkül"}</p>
                         <h2 className="mt-1 line-clamp-2 text-base leading-tight text-white">{itemTitle(item)}</h2>
                       </div>
-                      <button type="button" onClick={() => toggleSelected(item)} className={`grid h-8 w-8 shrink-0 place-items-center rounded-2xl border ${selected ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.06] text-white/52"}`} aria-label="Kijelölés">
-                        {selected ? <CheckCircle2 size={17} /> : <Plus size={17} />}
-                      </button>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <span className="rounded-full border border-[#5bd0cc]/30 bg-[#203f49] px-2 py-1 text-[11px] text-[#cffffd]">Termékkód: {itemProductCode(item) || "-"}</span>
@@ -1337,11 +1451,9 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                   </div>
                 ) : null}
 
-                <div className="mt-3 grid grid-cols-4 gap-2">
-                  <button className={softBtn} onClick={() => openDetail(item)} type="button"><Edit3 size={15} /><span className="sr-only">Adatok</span></button>
-                  <button className={softBtn} onClick={() => goBarcodeManager(item.variant_id, visibleWarehouseBarcode(item), itemTitle(item))} type="button"><Barcode size={15} /><span className="sr-only">Címke</span></button>
-                  <button className={softBtn} onClick={() => openStockEditor(item)} type="button"><Boxes size={15} /><span className="sr-only">Készlet</span></button>
-                  <button className={dangerBtn} onClick={() => setDeleteTarget(item)} type="button"><Trash2 size={15} /><span className="sr-only">Törlés</span></button>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button className={softBtn} onClick={() => openDetail(item)} type="button"><Edit3 size={15} /> Adatok</button>
+                  <button className={softBtn} onClick={() => openStockEditor(item)} type="button"><Boxes size={15} /> Készlet</button>
                 </div>
               </article>
             );
@@ -1362,11 +1474,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/12 bg-[#263246]/96 px-3 pb-3 pt-2 shadow-[0_-16px_34px_rgba(15,23,42,0.38)] backdrop-blur">
-        <div className="grid grid-cols-4 gap-2">
-          <button className={primaryBtn} onClick={openNewProductModal} type="button"><Plus size={16} /><span className="hidden min-[380px]:inline">Új</span></button>
-          <button className={softBtn} onClick={() => setFiltersOpen(true)} type="button"><Filter size={16} /><span className="hidden min-[380px]:inline">Szűrő</span></button>
-          <button className={softBtn} onClick={() => focusLatestIncoming(true)} disabled={busy} type="button"><PackageCheck size={16} /><span className="hidden min-[380px]:inline">Utolsó</span></button>
-          <button className={softBtn} onClick={() => { searchInputRef.current?.focus(); }} type="button"><Search size={16} /><span className="hidden min-[380px]:inline">Keresés</span></button>
+        <div className="grid grid-cols-3 gap-2">
+          <button className={softBtn} onClick={() => setFiltersOpen(true)} type="button"><Filter size={16} /> Szűrő</button>
+          <button className={softBtn} onClick={() => focusLatestIncoming(true)} disabled={busy} type="button"><PackageCheck size={16} /> Utolsó</button>
+          <button className={softBtn} onClick={() => { searchInputRef.current?.focus(); }} type="button"><Search size={16} /> Keresés</button>
         </div>
       </nav>
 
@@ -1458,9 +1569,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 <label className={label}>Modell állapot<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="active">Aktív</option><option value="draft">Előkészítés</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
                 <label className={label}>Variáns állapot<select className={select} value={edit.variantStatus} onChange={(e) => setEdit((x) => ({ ...x, variantStatus: e.target.value }))}><option value="active">Aktív</option><option value="draft">Előkészítés</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
               </div>
-              <div className="grid grid-cols-2 gap-2 pt-1">
+              <div className="grid gap-2 pt-1">
                 <button className={softBtn} onClick={() => detail?.item && openStockEditor(detail.item)} type="button"><Boxes size={15} /> Készlet</button>
-                <button className={dangerBtn} onClick={() => detail?.item && setDeleteTarget(detail.item)} type="button"><Trash2 size={15} /> Törlés</button>
               </div>
               <button className={`${primaryBtn} h-12`} onClick={saveDetail} disabled={saving || detailBusy} type="button"><Save size={16} /> {saving ? "Mentés..." : "Mentés"}</button>
             </div>
@@ -1509,26 +1619,37 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         </>
       )}
 
-      {newProductOpen && (
+      {barcodeScannerOpen && (
         <>
-          <MobileBackdrop onClose={() => setNewProductOpen(false)} />
+          <MobileBackdrop onClose={() => stopBarcodeScanner()} />
           <div className={sheetPanel}>
             <div className="mb-3 flex items-start justify-between gap-3">
-              <div><p className="text-[11px] uppercase tracking-[0.16em] text-[#cffffd]/70">Új termék</p><h2 className="text-lg text-white">Manuális rögzítés</h2></div>
-              <button className={iconBtn} onClick={() => setNewProductOpen(false)} type="button"><X size={18} /></button>
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-[#cffffd]/70">Vonalkód scanner</p>
+                <h2 className="text-lg text-white">Keresés telefon kamerával</h2>
+                <p className="mt-1 text-xs leading-5 text-white/58">Olvasás után a kód automatikusan bekerül a keresőbe.</p>
+              </div>
+              <button className={iconBtn} onClick={() => stopBarcodeScanner()} type="button"><X size={18} /></button>
             </div>
-            <div className="grid gap-3">
-              <label className={label}>Terméknév<input className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value }))} /></label>
-              <label className={label}>Beszállító<select className={select} value={newProduct.supplierId} onChange={(e) => setNewProduct((x) => ({ ...x, supplierId: e.target.value }))}><option value="">Nincs</option>{suppliers.map((row) => <option key={row.id} value={row.id}>{row.name || row.code}</option>)}</select></label>
-              <label className={label}>Márka<select className={select} value={newProduct.brandCode} onChange={(e) => setNewProduct((x) => ({ ...x, brandCode: e.target.value }))}><option value="">Nincs</option>{brands.map((row) => <option key={row.id} value={row.code || row.id}>{row.name || row.name_ro || row.code}</option>)}</select></label>
-              <div className="grid grid-cols-2 gap-2"><label className={label}>Főkategória<select className={select} value={newProduct.categoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}><option value="">Nincs</option>{categoryOptions.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label><label className={label}>Alkategória<select className={select} value={newProduct.subCategoryCode} onChange={(e) => setNewProduct((x) => ({ ...x, subCategoryCode: e.target.value }))}><option value="">Nincs</option>{subCategories.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label></div>
-              <div className="grid grid-cols-2 gap-2"><label className={label}>Szín<input className={input} value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} list="warehouse-mobile-color-options" /></label><label className={label}>Méret<input className={input} value={newProduct.size} onChange={(e) => setNewProduct((x) => ({ ...x, size: e.target.value }))} list="warehouse-mobile-size-options" /></label></div>
-              <div className="grid grid-cols-2 gap-2"><label className={label}>Vételár<input className={input} value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} inputMode="decimal" /></label><label className={label}>Eladási ár<input className={input} value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} inputMode="decimal" /></label></div>
-              <div className="grid grid-cols-2 gap-2"><label className={label}>Termékkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} /></label><label className={label}>Vonalkód<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label></div>
-              <label className={label}>Fotó URL<input className={input} value={newProduct.imageUrl} onChange={(e) => setNewProduct((x) => ({ ...x, imageUrl: e.target.value }))} /></label>
-              <div className="rounded-2xl border border-white/12 bg-white/[0.06] p-3"><p className="mb-2 text-xs uppercase tracking-[0.08em] text-white/58">Kezdő készlet: {qty(newProductTotalQty())} db</p><div className="grid gap-2">{stockLocationRows.map((loc) => <label key={locationKey(loc)} className="grid grid-cols-[1fr_86px] items-center gap-2 text-sm text-white/78"><span className="truncate">{loc.name || loc.code}</span><input className={`${input} h-10 text-center`} value={newProductStockRows[locationKey(loc)] || "0"} inputMode="numeric" onChange={(e) => setNewProductStockRows((rows) => ({ ...rows, [locationKey(loc)]: e.target.value.replace(/[^0-9]/g, "") }))} /></label>)}</div></div>
-              <button className={`${primaryBtn} h-12`} onClick={saveNewProduct} disabled={saving} type="button"><Save size={16} /> Új termék mentése</button>
+
+            <div className="overflow-hidden rounded-[24px] border border-white/14 bg-black/35">
+              <video ref={barcodeVideoRef} className="aspect-video w-full bg-black object-cover" muted playsInline />
+              <div className="border-t border-white/10 px-3 py-2 text-xs text-white/58">Tartsd stabilan a kamerát, és igazítsd a vonalkódot a kép közepére. Igen, a technika ennyit kér az emberiségtől.</div>
             </div>
+
+            {barcodeScannerStatus ? <div className="mt-3 rounded-2xl border border-[#7bd7d4]/25 bg-[#203f49] px-3 py-2 text-sm text-[#d7fffd]">{barcodeScannerStatus}</div> : null}
+
+            <form className="mt-3 grid grid-cols-[1fr_auto] gap-2" onSubmit={(event) => { event.preventDefault(); submitManualBarcode(); }}>
+              <input
+                className={input}
+                value={barcodeScannerManualValue}
+                onChange={(event) => setBarcodeScannerManualValue(event.target.value)}
+                placeholder="Kézi / bluetooth vonalkód"
+                inputMode="numeric"
+                autoComplete="off"
+              />
+              <button className={primaryBtn} disabled={!barcodeScannerManualValue.trim()} type="submit"><Search size={16} /> Keres</button>
+            </form>
           </div>
         </>
       )}
@@ -1540,18 +1661,6 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
             <div className="mt-2 flex items-center justify-between gap-2"><p className="line-clamp-2 text-sm text-slate-800">{imagePreview.title}</p><button className="rounded-xl bg-slate-900 px-3 py-2 text-xs text-white" onClick={() => setImagePreview(null)} type="button">Bezárás</button></div>
           </div>
         </div>
-      )}
-
-      {deleteTarget && (
-        <>
-          <MobileBackdrop onClose={() => setDeleteTarget(null)} />
-          <div className="fixed inset-x-3 bottom-5 z-[75] rounded-[26px] border border-rose-300/30 bg-[#303a4c] p-4 shadow-2xl">
-            <p className="text-lg text-white">Termék törlése</p>
-            <p className="mt-2 text-sm leading-6 text-white/68">Biztosan törlöd vagy archiválod ezt a terméket? A rendszer megpróbálja kitakarítani a kapcsolódó adatokat is.</p>
-            <div className="mt-3 rounded-2xl border border-white/12 bg-white/[0.06] p-3 text-sm text-white">{itemTitle(deleteTarget)}</div>
-            <div className="mt-4 grid grid-cols-2 gap-2"><button className={softBtn} onClick={() => setDeleteTarget(null)} type="button">Mégse</button><button className={dangerBtn} onClick={confirmDeleteProduct} disabled={saving} type="button"><Trash2 size={15} /> Törlés</button></div>
-          </div>
-        </>
       )}
 
       <datalist id="warehouse-mobile-size-options">{sizeTypes.map((row) => <option key={row.id} value={row.name || row.code}>{row.name_hu || row.code}</option>)}</datalist>
