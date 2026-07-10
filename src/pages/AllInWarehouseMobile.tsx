@@ -162,6 +162,8 @@ const label = "grid gap-1.5 text-[11px] uppercase tracking-[0.06em] text-white/6
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs font-medium text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-white/16 bg-white/[0.08] px-3 text-xs font-medium text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
 const iconBtn = "inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/16 bg-white/[0.08] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
+const headerIconBtn = "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/16 bg-white/[0.08] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
+const headerIconBtnActive = "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
@@ -604,17 +606,6 @@ function formFromItem(item: Partial<InventoryItem> & Record<string, any>): EditF
     imageUrl: fieldValue(item.image_url),
     variantStatus: fieldValue(item.variant_status || item.status || "active"),
   };
-}
-
-function MiniStat({ label: labelText, value, hint, tone = "neutral" }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: "neutral" | "green" | "red" }) {
-  const cls = tone === "green" ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/22" : tone === "red" ? "border-rose-300/35 bg-rose-500/14" : "border-white/14 bg-white/[0.07]";
-  return (
-    <div className={`min-w-[118px] rounded-2xl border px-3 py-2 ${cls}`}>
-      <p className="text-[10px] uppercase tracking-[0.08em] text-white/50">{labelText}</p>
-      <p className="mt-1 text-lg leading-none text-white">{value}</p>
-      {hint ? <p className="mt-1 truncate text-[10px] text-white/46">{hint}</p> : null}
-    </div>
-  );
 }
 
 function ProductImage({ src, alt, onPreview, size = "normal" }: { src?: string | null; alt?: string; onPreview?: () => void; size?: "normal" | "large" }) {
@@ -1349,21 +1340,26 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
   return (
     <main className={page}>
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-[#303a4c]/96 px-3 pb-3 pt-2 shadow-[0_16px_34px_rgba(15,23,42,0.32)] backdrop-blur">
-        <div className="rounded-b-[26px] border border-white/12 bg-[#303a4c]/92 p-3 shadow-inner shadow-white/[0.03]">
+      <header className="sticky top-0 z-50 bg-[#303a4c]/96 px-3 pb-2 pt-2 shadow-[0_14px_28px_rgba(15,23,42,0.28)] backdrop-blur">
+        <div className="rounded-b-[22px] border border-white/12 bg-[#303a4c]/92 p-2.5 shadow-inner shadow-white/[0.03]">
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1 border-l-4 border-[#7bd7d4] pl-3">
               <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/70">AllInFashion</p>
               <h1 className="mt-0.5 truncate text-lg leading-tight text-white">Raktár mobil</h1>
-              <p className="mt-0.5 text-[11px] text-white/48">{filteredItems.length} találat • {qty(totals.qty)} db</p>
+              <p className="mt-0.5 text-[11px] text-white/58">{filteredItems.length} találat • {qty(totals.qty)} db</p>
             </div>
-            <button className={buyPricesVisible ? "inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/45 bg-[#2a8d8b] text-white" : iconBtn} onClick={() => setBuyPricesVisible((x) => !x)} type="button" aria-label="Vételár mutatása">
-              {buyPricesVisible ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-            <button className={iconBtn} onClick={goHome} type="button" aria-label="Kezdőlap"><Home size={18} /></button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button className={buyPricesVisible ? headerIconBtnActive : headerIconBtn} onClick={() => setBuyPricesVisible((x) => !x)} type="button" aria-label="Vételár mutatása">
+                {buyPricesVisible ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+              <button className={headerIconBtnActive} onClick={() => load(true)} disabled={busy} type="button" aria-label="Frissítés">
+                <RefreshCw size={17} className={busy ? "animate-spin" : ""} />
+              </button>
+              <button className={headerIconBtn} onClick={goHome} type="button" aria-label="Kezdőlap"><Home size={17} /></button>
+            </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
+          <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" size={17} />
               <input
@@ -1375,14 +1371,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               />
               {search && <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-white/45 hover:bg-white/10 hover:text-white" type="button" onClick={() => setSearch("")}><X size={15} /></button>}
             </div>
-            <button className={softBtn} onClick={() => void startBarcodeScanner()} type="button" aria-label="Vonalkód scanner"><Barcode size={16} /></button>
-            <button className={primaryBtn} onClick={() => load(true)} disabled={busy} type="button"><RefreshCw size={16} className={busy ? "animate-spin" : ""} /></button>
-          </div>
-
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5">
-            <MiniStat label="Készlet" value={qty(totals.qty)} hint={`${qty(totals.available)} elérhető`} tone="green" />
-            <MiniStat label="Érték" value={buyPricesVisible ? `${money(totals.value)} RON` : <span className="blur-[3px]">{money(totals.value)}</span>} hint="vételáron" />
-            <MiniStat label="Hibás" value={qty(totals.missing)} hint="javítandó adat" tone={totals.missing ? "red" : "neutral"} />
+            <button className={headerIconBtn} onClick={() => void startBarcodeScanner()} type="button" aria-label="Vonalkód scanner"><Barcode size={17} /></button>
           </div>
         </div>
       </header>
