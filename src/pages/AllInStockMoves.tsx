@@ -121,6 +121,47 @@ type AifStockMoveTotals = {
   net_qty?: number | string;
 };
 
+type AifVariantHistoryEvent = {
+  id: string;
+  created_at?: string | null;
+  event_type?: string | null;
+  direction?: "in" | "out" | "adjust" | string | null;
+  movement_type?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  qty_delta?: number | string | null;
+  qty_before?: number | string | null;
+  qty_after?: number | string | null;
+  raw?: any;
+  location_name?: string | null;
+  from_location_name?: string | null;
+  to_location_name?: string | null;
+  effective_buy_price?: number | string | null;
+  effective_sell_price?: number | string | null;
+  invoice_number?: string | null;
+  source_file_name?: string | null;
+  supplier_name?: string | null;
+};
+
+type AifVariantHistorySummary = {
+  currentQty?: number | string | null;
+  availableQty?: number | string | null;
+  totalIncomingQty?: number | string | null;
+  totalOutgoingQty?: number | string | null;
+  totalTransferredQty?: number | string | null;
+  avgBuyPrice?: number | string | null;
+  lastBuyPrice?: number | string | null;
+  lastSellPrice?: number | string | null;
+  marginWithoutTva?: number | string | null;
+};
+
+type AifVariantHistoryResponse = {
+  item?: (AifStockItem | AifStockMoveItem) & Record<string, any>;
+  stock?: AifStockItem[];
+  summary?: AifVariantHistorySummary;
+  events?: AifVariantHistoryEvent[];
+};
+
 type RangePreset = "today" | "yesterday" | "last7" | "month" | "year" | "all" | "custom";
 type DirectionFilter = "all" | "in" | "out" | "adjust";
 type TabKey = "moves" | "stock";
@@ -319,6 +360,138 @@ function directionMeta(item: AifStockMoveItem) {
     cls: "border-amber-300/30 bg-amber-500/16 text-amber-50",
     dot: "bg-amber-300",
   };
+}
+
+
+function formatMoney(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return "-";
+  const num = Number(String(value).replace(",", "."));
+  if (!Number.isFinite(num)) return String(value);
+  return num.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function priceNumber(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const num = Number(String(value).replace(",", "."));
+  return Number.isFinite(num) ? num : null;
+}
+
+function sellWithoutTva(value: unknown, rate = 21) {
+  const gross = priceNumber(value);
+  if (gross === null) return null;
+  return gross / (1 + rate / 100);
+}
+
+function markupWithoutTva(buyPrice: unknown, sellPrice: unknown) {
+  const buy = priceNumber(buyPrice);
+  const sellNet = sellWithoutTva(sellPrice);
+  if (!buy || buy <= 0 || sellNet === null) return "-";
+  const pct = ((sellNet - buy) / buy) * 100;
+  return `${pct > 0 ? "+" : ""}${pct.toLocaleString("hu-HU", { maximumFractionDigits: 0 })}%`;
+}
+
+function historyEventBadge(event: AifVariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const direction = String(event.direction || "").toLowerCase();
+  if (type === "transfer") return { label: "Áthelyezés", cls: "border-sky-300/30 bg-sky-500/14 text-sky-50" };
+  if (type === "inventory") return { label: "Leltár", cls: "border-violet-300/30 bg-violet-500/14 text-violet-50" };
+  if (type === "incoming" || direction === "in") return { label: "Bevételezés", cls: "border-[#2a8d8b]/45 bg-[#2a8d8b]/22 text-[#d7fffd]" };
+  if (type === "outgoing" || direction === "out") return { label: "Kimenő", cls: "border-red-300/30 bg-red-500/14 text-red-50" };
+  return { label: "Korrekció", cls: "border-amber-300/30 bg-amber-500/14 text-amber-50" };
+}
+
+function ProductHistoryOverlay({
+  target,
+  history,
+  loading,
+  error,
+  onClose,
+  onReload,
+}: {
+  target: AifStockItem | AifStockMoveItem | null;
+  history: AifVariantHistoryResponse | null;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  if (!target) return null;
+  const item = { ...(target as any), ...(history?.item || {}) } as AifStockItem & AifStockMoveItem & Record<string, any>;
+  const summary = history?.summary || {};
+  const events = history?.events || [];
+  const openVariantHistory = useCallback(async (item: AifStockItem | AifStockMoveItem) => {
+    const id = String(item.variant_id || "").trim();
+    if (!id) return;
+    setHistoryTarget(item);
+    setVariantHistory(null);
+    setVariantHistoryError(null);
+    setVariantHistoryLoading(true);
+    try {
+      const data = await fetchAifJSON<AifVariantHistoryResponse>(`/variants/${encodeURIComponent(id)}/history?limit=700`);
+      setVariantHistory(data);
+    } catch (e: any) {
+      setVariantHistoryError(e.message || "A terméktörténet betöltése nem sikerült.");
+    } finally {
+      setVariantHistoryLoading(false);
+    }
+  }, []);
+
+  const reloadVariantHistory = useCallback(() => {
+    if (historyTarget) void openVariantHistory(historyTarget);
+  }, [historyTarget, openVariantHistory]);
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm lg:items-center">
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
+        <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-[#303a4c]/98 px-4 py-3 backdrop-blur">
+          <div className="flex min-w-0 gap-3">
+            <ProductThumb item={item} />
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/65">Termék életút</p>
+              <h2 className="mt-1 line-clamp-2 text-lg text-white">{displayName(item)}</h2>
+              <p className="mt-1 text-xs text-white/55">{item.brand_name || "-"} • {item.color_name || "-"} • {item.size || "-"}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onReload} disabled={loading} className={btnSoft}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+            <button type="button" onClick={onClose} className={btnSoft}><X size={15} /> Bezárás</button>
+          </div>
+        </div>
+        <div className="space-y-3 p-4">
+          {error ? <div className="rounded-xl border border-red-200/20 bg-red-500/12 px-3 py-2 text-sm text-red-50">{error}</div> : null}
+          <div className="grid gap-2 sm:grid-cols-4">
+            <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Készlet</p><p className="mt-1 text-xl text-white">{formatQty(summary.currentQty || 0)}</p></div>
+            <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Bejött</p><p className="mt-1 text-xl text-white">{formatQty(summary.totalIncomingQty || 0)}</p></div>
+            <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Kiment</p><p className="mt-1 text-xl text-white">{formatQty(summary.totalOutgoingQty || 0)}</p></div>
+            <div className="rounded-xl border border-white/12 bg-white/[0.06] p-3"><p className="text-xs text-white/45">Átmozgatva</p><p className="mt-1 text-xl text-white">{formatQty(summary.totalTransferredQty || 0)}</p></div>
+          </div>
+          {loading && !history ? <div className="rounded-xl border border-white/12 bg-white/[0.05] p-6 text-center text-white/55">Betöltés...</div> : null}
+          <div className="divide-y divide-white/10 rounded-2xl border border-white/12 bg-white/[0.05]">
+            {events.map((event) => {
+              const badge = historyEventBadge(event);
+              const route = event.from_location_name || event.to_location_name ? `${event.from_location_name || event.location_name || "-"} → ${event.to_location_name || event.location_name || "-"}` : event.location_name || "-";
+              return (
+                <div key={event.id} className="grid gap-3 px-4 py-3 md:grid-cols-[128px,1fr,150px]">
+                  <div className="text-xs text-white/55">{formatDateTime(event.created_at)}</div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full border px-2 py-1 text-xs ${badge.cls}`}>{badge.label}</span><span className="text-sm text-white">{n(event.qty_delta) > 0 ? "+" : ""}{formatQty(event.qty_delta)}</span></div>
+                    <p className="mt-2 text-xs text-white/60">{route}</p>
+                    {event.supplier_name || event.invoice_number || event.source_file_name ? <p className="mt-1 truncate text-xs text-white/42">{[event.supplier_name, event.invoice_number, event.source_file_name].filter(Boolean).join(" • ")}</p> : null}
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-[#303a4c] px-3 py-2 text-xs text-white/62">
+                    <div>Vételár: <span className="text-white">{formatMoney(event.effective_buy_price)}</span></div>
+                    <div className="mt-1">Eladási: <span className="text-white">{formatMoney(event.effective_sell_price)}</span></div>
+                    <div className="mt-1">Haszon: <span className="text-[#cffffd]">{markupWithoutTva(event.effective_buy_price, event.effective_sell_price)}</span></div>
+                  </div>
+                </div>
+              );
+            })}
+            {!events.length && !loading ? <div className="px-4 py-10 text-center text-sm text-white/55">Nincs naplózott esemény.</div> : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function reportTitle(kind: "in" | "out") {
@@ -529,6 +702,10 @@ export default function AllInStockMoves() {
   const [deleteCandidate, setDeleteCandidate] = useState<AifStockMoveItem | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [exportingDirection, setExportingDirection] = useState<"in" | "out" | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<AifStockItem | AifStockMoveItem | null>(null);
+  const [variantHistory, setVariantHistory] = useState<AifVariantHistoryResponse | null>(null);
+  const [variantHistoryLoading, setVariantHistoryLoading] = useState(false);
+  const [variantHistoryError, setVariantHistoryError] = useState<string | null>(null);
   const refreshInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -950,16 +1127,27 @@ export default function AllInStockMoves() {
                         <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
                         <td className="px-4 py-3 text-white/70">{sourceLabel(row)}</td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setDeleteCandidate(row)}
-                            disabled={deletingId === row.id}
-                            className={tinyDangerBtn}
-                            title="Naplóbejegyzés végleges törlése"
-                            aria-label="Naplóbejegyzés végleges törlése"
-                          >
-                            <Trash2 size={15} className="shrink-0" /> Törlés
-                          </button>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openVariantHistory(row)}
+                              className={btnSoft}
+                              title="Termék életút"
+                              aria-label="Termék életút"
+                            >
+                              <Clock3 size={15} className="shrink-0" /> Történet
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteCandidate(row)}
+                              disabled={deletingId === row.id}
+                              className={tinyDangerBtn}
+                              title="Naplóbejegyzés végleges törlése"
+                              aria-label="Naplóbejegyzés végleges törlése"
+                            >
+                              <Trash2 size={15} className="shrink-0" /> Törlés
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -990,14 +1178,23 @@ export default function AllInStockMoves() {
                     </div>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/62">
                       <span>Forrás: {sourceLabel(row)}</span>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteCandidate(row)}
-                        disabled={deletingId === row.id}
-                        className={tinyDangerBtn}
-                      >
-                        <Trash2 size={15} className="shrink-0" /> Törlés
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openVariantHistory(row)}
+                          className={btnSoft}
+                        >
+                          <Clock3 size={15} className="shrink-0" /> Történet
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteCandidate(row)}
+                          disabled={deletingId === row.id}
+                          className={tinyDangerBtn}
+                        >
+                          <Trash2 size={15} className="shrink-0" /> Törlés
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1078,6 +1275,17 @@ export default function AllInStockMoves() {
           A PDF export az aktuális dátum-, helyszín- és keresési szűrést használja, külön bejövőre és kimenőre.
         </div>
       </div>
+
+      {historyTarget && (
+        <ProductHistoryOverlay
+          target={historyTarget}
+          history={variantHistory}
+          loading={variantHistoryLoading}
+          error={variantHistoryError}
+          onReload={reloadVariantHistory}
+          onClose={() => { setHistoryTarget(null); setVariantHistory(null); setVariantHistoryError(null); }}
+        />
+      )}
 
       {deleteCandidate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
