@@ -525,6 +525,78 @@ export type AifStockMovementTotals = {
   net_qty: number | string;
 };
 
+
+export type AifVariantHistoryEventType = "incoming" | "outgoing" | "transfer" | "inventory" | "adjustment" | string;
+
+export type AifVariantHistoryEvent = {
+  id: string;
+  created_at: string;
+  event_type: AifVariantHistoryEventType;
+  direction: "in" | "out" | "adjust";
+  movement_type?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  qty_delta: number | string;
+  qty_before?: number | string | null;
+  qty_after?: number | string | null;
+  actor?: string | null;
+  raw?: Record<string, unknown> | null;
+  location_id?: string | null;
+  location_code?: string | null;
+  location_name?: string | null;
+  from_location_id?: string | null;
+  from_location_code?: string | null;
+  from_location_name?: string | null;
+  to_location_id?: string | null;
+  to_location_code?: string | null;
+  to_location_name?: string | null;
+  import_row_id?: string | null;
+  import_row_no?: number | string | null;
+  import_qty?: number | string | null;
+  buy_price?: number | string | null;
+  buy_price_ron?: number | string | null;
+  sell_price?: number | string | null;
+  sell_price_ron?: number | string | null;
+  effective_buy_price?: number | string | null;
+  effective_sell_price?: number | string | null;
+  import_batch_id?: string | null;
+  source_file_name?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  reception_date?: string | null;
+  currency_code?: string | null;
+  supplier_id?: string | null;
+  supplier_name?: string | null;
+  reception_id?: string | null;
+  sales_tva_rate?: number | string | null;
+  sell_price_includes_tva?: boolean | null;
+};
+
+export type AifVariantHistorySummary = {
+  currentQty: number;
+  reservedQty: number;
+  availableQty: number;
+  stockLocationCount: number;
+  totalIncomingQty: number;
+  totalOutgoingQty: number;
+  totalTransferredQty: number;
+  netMovementQty: number;
+  movementCount: number;
+  totalPurchasedQty: number;
+  avgBuyPrice?: number | string | null;
+  lastBuyPrice?: number | string | null;
+  lastSellPrice?: number | string | null;
+  lastIncomingAt?: string | null;
+  marginWithoutTva?: number | string | null;
+};
+
+export type AifVariantHistoryResponse = {
+  item: AifInventoryItem & Record<string, unknown>;
+  stock: AifStockItem[];
+  summary: AifVariantHistorySummary;
+  events: AifVariantHistoryEvent[];
+};
+
 const AIF_BASE = "/api/aif";
 
 async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
@@ -813,6 +885,14 @@ export function apiAifStockMovements(options?: {
   if (options?.limit) q.set("limit", String(options.limit));
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<{ items: AifStockMovementItem[]; totals: AifStockMovementTotals }>(`/stock-movements${suffix}`);
+}
+
+
+export function apiAifVariantHistory(variantId: string, limit = 500) {
+  const q = new URLSearchParams();
+  if (limit) q.set("limit", String(limit));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<AifVariantHistoryResponse>(`/variants/${encodeURIComponent(variantId)}/history${suffix}`);
 }
 
 export function apiAifDeleteStockMovement(id: string) {
