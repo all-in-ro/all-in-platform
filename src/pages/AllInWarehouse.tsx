@@ -56,6 +56,7 @@ const chip = "rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 te
 const selectBox = "h-4 w-4 rounded border-white/30 bg-[#303a4c] accent-[#2a8d8b] focus:ring-2 focus:ring-[#2a8d8b]/45";
 const WAREHOUSE_PRODUCTS_PER_PAGE = 50;
 const WAREHOUSE_PRODUCTS_PER_PAGE_OPTIONS = [50, 100, 150, 200];
+const WAREHOUSE_SALES_TVA_RATE_PERCENT = 21;
 const modalWrap = "fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:items-center";
 const modal = "max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/16 bg-[#4b5362] shadow-2xl";
 const taxonomyModal = "max-h-[92vh] w-full max-w-[1140px] overflow-auto rounded-[26px] border border-white/20 bg-[#4b5362] shadow-2xl";
@@ -771,12 +772,25 @@ function priceNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function priceMarkupPercentText(buyPrice: unknown, sellPrice: unknown) {
+function sellPriceWithoutTva(value: unknown, tvaRatePercent = WAREHOUSE_SALES_TVA_RATE_PERCENT) {
+  const gross = priceNumber(value);
+  if (gross === null) return null;
+  const divisor = 1 + Math.max(0, Number(tvaRatePercent) || 0) / 100;
+  const net = gross / divisor;
+  return Number.isFinite(net) ? net : null;
+}
+
+function priceMarkupPercentValue(buyPrice: unknown, sellPrice: unknown) {
   const buy = priceNumber(buyPrice);
-  const sell = priceNumber(sellPrice);
-  if (!buy || buy <= 0 || sell === null) return "";
-  const percent = ((sell - buy) / buy) * 100;
-  if (!Number.isFinite(percent)) return "";
+  const sellNet = sellPriceWithoutTva(sellPrice);
+  if (!buy || buy <= 0 || sellNet === null) return null;
+  const percent = ((sellNet - buy) / buy) * 100;
+  return Number.isFinite(percent) ? percent : null;
+}
+
+function priceMarkupPercentText(buyPrice: unknown, sellPrice: unknown) {
+  const percent = priceMarkupPercentValue(buyPrice, sellPrice);
+  if (percent === null) return "";
   const sign = percent > 0 ? "+" : "";
   return `${sign}${percent.toLocaleString("hu-HU", { maximumFractionDigits: 0 })}%`;
 }
@@ -1296,7 +1310,7 @@ function warehouseStockTransferPrintDocumentHtml(options: {
     .productCell { display: flex; align-items: center; gap: 8px; min-width: 0; }
     .productCell strong { display: block; font-size: 12px; line-height: 1.2; }
     .productCell small { display: block; margin-top: 2px; color: #4b5563; font-size: 10px; line-height: 1.2; }
-    .aifTransferImg { width: 34px; height: 42px; border: 1px solid #d1d5db; border-radius: 8px; object-fit: cover; background: #f3f4f6; flex: 0 0 auto; }
+    .aifTransferImg { width: 34px; height: 42px; border: 1px solid #d1d5db; border-radius: 8px; object-fit: contain; background: #fff; flex: 0 0 auto; }
     .aifTransferImg.empty { display: inline-block; }
     .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 20mm; page-break-inside: avoid; }
     .sig { border-top: 1px solid #111827; padding-top: 6px; text-align: center; font-size: 12px; color: #374151; }
@@ -1465,6 +1479,92 @@ function MissingDataIndicator({ item, openUp = false }: { item: InventoryItem; o
       </span>
     </span>
   );
+}
+
+function WarehouseProductImage({
+  src,
+  alt = "",
+  thumbClassName = "h-11 w-11 rounded-lg",
+  iconSize = 17,
+}: {
+  src?: string | null;
+  alt?: string;
+  thumbClassName?: string;
+  iconSize?: number;
+}) {
+  const thumbRef = useRef<HTMLSpanElement | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewStyle, setPreviewStyle] = useState<React.CSSProperties>({});
+  const cleanSrc = String(src || "").trim();
+
+  function updatePreviewPosition() {
+    if (!cleanSrc || typeof window === "undefined") return;
+    const thumb = thumbRef.current;
+    if (!thumb) return;
+    const rect = thumb.getBoundingClientRect();
+    const previewWidth = 248;
+    const previewHeight = 300;
+    const gap = 12;
+    const padding = 10;
+    let left = rect.right + gap;
+    if (left + previewWidth > window.innerWidth - padding) left = rect.left - previewWidth - gap;
+    if (left < padding) left = Math.min(Math.max(padding, rect.left + rect.width / 2 - previewWidth / 2), Math.max(padding, window.innerWidth - previewWidth - padding));
+    const maxTop = Math.max(padding, window.innerHeight - previewHeight - padding);
+    const top = Math.min(Math.max(padding, rect.top + rect.height / 2 - previewHeight / 2), maxTop);
+    setPreviewStyle({ position: "fixed", left, top, width: previewWidth });
+  }
+
+  function openPreview() {
+    if (!cleanSrc) return;
+    updatePreviewPosition();
+    setPreviewOpen(true);
+  }
+
+  useEffect(() => {
+    if (!previewOpen || !cleanSrc) return;
+    updatePreviewPosition();
+    const onMove = () => updatePreviewPosition();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [previewOpen, cleanSrc]);
+
+  const thumb = (
+    <span
+      ref={thumbRef}
+      className={`inline-flex shrink-0 items-center justify-center overflow-hidden border border-white/18 bg-white text-slate-400 shadow-sm ${thumbClassName}`}
+      onMouseEnter={openPreview}
+      onMouseLeave={() => setPreviewOpen(false)}
+      onFocus={openPreview}
+      onBlur={() => setPreviewOpen(false)}
+      tabIndex={cleanSrc ? 0 : undefined}
+      aria-label={cleanSrc ? "Termékkép nagyítása" : "Nincs termékkép"}
+    >
+      {cleanSrc ? (
+        <img src={cleanSrc} alt={alt} className="h-full w-full object-contain p-0.5" loading="lazy" />
+      ) : (
+        <ImagePlus size={iconSize} />
+      )}
+    </span>
+  );
+
+  const preview = cleanSrc && previewOpen && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          className="pointer-events-none z-[9999] rounded-2xl border border-white/80 bg-white p-2 shadow-2xl shadow-black/45"
+          style={previewStyle}
+          role="tooltip"
+        >
+          <img src={cleanSrc} alt="" className="max-h-[280px] w-full rounded-xl bg-white object-contain" />
+        </div>,
+        document.body
+      )
+    : null;
+
+  return <>{thumb}{preview}</>;
 }
 
 function normalizeSearch(v: unknown) {
@@ -3296,12 +3396,87 @@ export default function AllInWarehouse() {
     return <span className="inline-block select-none rounded-md bg-white/10 px-2 py-0.5 text-white/65 blur-[3px]" title="Vételár homályosítva">{text}</span>;
   }
 
-  function SellPriceWithMarkup({ sellPrice, buyPrice }: { sellPrice: unknown; buyPrice: unknown }) {
+  function SellPriceWithMarkup({ sellPrice, buyPrice, openUp = false }: { sellPrice: unknown; buyPrice: unknown; openUp?: boolean }) {
+    const tooltipRef = useRef<HTMLDivElement | null>(null);
+    const [tooltipOpen, setTooltipOpen] = useState(false);
+    const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
     const percentText = buyPricesVisible ? priceMarkupPercentText(buyPrice, sellPrice) : "";
+    const buy = priceNumber(buyPrice);
+    const sellGross = priceNumber(sellPrice);
+    const sellNet = sellPriceWithoutTva(sellPrice);
+    const canShowTooltip = buyPricesVisible && buy !== null && sellGross !== null && sellNet !== null;
+
+    function updateTooltipPosition() {
+      if (typeof window === "undefined") return;
+      const node = tooltipRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const tooltipWidth = 252;
+      const sidePadding = 12;
+      const left = Math.min(
+        Math.max(sidePadding, rect.left + rect.width / 2 - tooltipWidth / 2),
+        Math.max(sidePadding, window.innerWidth - tooltipWidth - sidePadding)
+      );
+      const shouldOpenUp = openUp || rect.bottom + 168 > window.innerHeight;
+      setTooltipStyle({
+        position: "fixed",
+        left,
+        top: shouldOpenUp ? rect.top - 8 : rect.bottom + 8,
+        transform: shouldOpenUp ? "translateY(-100%)" : "none",
+        width: tooltipWidth,
+      });
+    }
+
+    function showTooltip() {
+      if (!canShowTooltip) return;
+      updateTooltipPosition();
+      setTooltipOpen(true);
+    }
+
+    useEffect(() => {
+      if (!tooltipOpen) return;
+      updateTooltipPosition();
+      const onMove = () => updateTooltipPosition();
+      window.addEventListener("scroll", onMove, true);
+      window.addEventListener("resize", onMove);
+      return () => {
+        window.removeEventListener("scroll", onMove, true);
+        window.removeEventListener("resize", onMove);
+      };
+    }, [tooltipOpen, openUp, canShowTooltip]);
+
+    const tooltip = canShowTooltip && tooltipOpen && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="pointer-events-none z-[9999] rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-3 py-2 text-left text-[11px] leading-snug text-white shadow-2xl shadow-black/35"
+            style={tooltipStyle}
+            role="tooltip"
+          >
+            <span className="block text-[#cffffd]">Árképzés</span>
+            <span className="mt-2 block space-y-1">
+              <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1"><span className="text-white/62">Vételi ár:</span><span className="tabular-nums text-white">{money(buy)}</span></span>
+              <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1"><span className="text-white/62">Eladási ár TVA nélkül:</span><span className="tabular-nums text-white">{money(sellNet)}</span></span>
+              <span className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1"><span className="text-white/62">Eladási ár TVA-val:</span><span className="tabular-nums text-white">{money(sellGross)}</span></span>
+              <span className="flex items-center justify-between gap-3 rounded-lg bg-[#2a8d8b]/18 px-2 py-1"><span className="text-[#cffffd]">Haszonkulcs TVA nélkül:</span><span className="tabular-nums font-semibold text-white">{percentText || "-"}</span></span>
+            </span>
+          </div>,
+          document.body
+        )
+      : null;
+
     return (
-      <div className="leading-tight">
+      <div
+        ref={tooltipRef}
+        className="relative inline-block leading-tight"
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={showTooltip}
+        onBlur={() => setTooltipOpen(false)}
+        tabIndex={canShowTooltip ? 0 : undefined}
+      >
         <div>{money(sellPrice)}</div>
-        {percentText && <div className="mt-0.5 text-[10px] font-semibold text-[#cffffd]">{percentText}</div>}
+        {percentText && <div className="mt-0.5 text-[10px] font-semibold text-[#cffffd]" title="Haszonkulcs TVA nélkül">{percentText}</div>}
+        {tooltip}
       </div>
     );
   }
@@ -5987,7 +6162,7 @@ export default function AllInWarehouse() {
                           />
                         </td>
                         <td className="px-2 py-2.5 text-center align-middle">
-                          {it.image_url ? <img src={it.image_url} alt="" className="mx-auto h-11 w-11 rounded-lg object-cover" /> : <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={17} /></div>}
+                          <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="mx-auto h-11 w-11 rounded-lg" iconSize={17} />
                         </td>
                         <td className="truncate px-2 py-2.5 text-left align-middle" title={it.brand_name || ""}>{it.brand_name || "-"}</td>
                         <td className="relative min-w-0 overflow-visible px-2 py-2.5 text-left align-middle">
@@ -6012,7 +6187,7 @@ export default function AllInWarehouse() {
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><MaskedBuyPrice value={it.buy_price} /></td>
-                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><SellPriceWithMarkup sellPrice={it.sell_price} buyPrice={it.buy_price} /></td>
+                        <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><SellPriceWithMarkup sellPrice={it.sell_price} buyPrice={it.buy_price} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
                         <td className="px-2 py-2.5 text-center align-middle">
                           <div className="flex items-center justify-center gap-1.5">
@@ -6054,7 +6229,7 @@ export default function AllInWarehouse() {
                       {isSelected && <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/22 px-2 py-0.5 text-[11px] text-white">Kijelölve</span>}
                     </div>
                     <div className="flex gap-3">
-                      {it.image_url ? <img src={it.image_url} alt="" className="h-20 w-20 rounded-xl object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={20} /></div>}
+                      <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-20 w-20 rounded-xl" iconSize={20} />
                       <div className="min-w-0 flex-1">
                         <button className="block max-w-full truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
@@ -6124,7 +6299,7 @@ export default function AllInWarehouse() {
                       />
                     </div>
                     <div>
-                      {it.image_url ? <img src={it.image_url} alt="" className="h-10 w-10 rounded-lg object-cover" /> : <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={16} /></div>}
+                      <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-10 w-10 rounded-lg" iconSize={16} />
                     </div>
                     <div className="min-w-0">
                       <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
@@ -6481,7 +6656,7 @@ export default function AllInWarehouse() {
                             />
                           </div>
                           <div className="flex xl:justify-center">
-                            {it.image_url ? <img src={it.image_url} alt="" className="h-8 w-8 rounded-md object-cover" /> : <div className="flex h-8 w-8 items-center justify-center rounded-md bg-black/20 text-white/35"><ImagePlus size={14} /></div>}
+                            <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-8 w-8 rounded-md" iconSize={14} />
                           </div>
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-1.5">
@@ -6556,7 +6731,7 @@ export default function AllInWarehouse() {
                         />
                       </div>
                       <div>
-                        {it.image_url ? <img src={it.image_url} alt="" className="h-12 w-12 rounded-lg object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                        <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-12 w-12 rounded-lg" iconSize={18} />
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
@@ -6769,7 +6944,7 @@ export default function AllInWarehouse() {
                     {newProductBarcodeMatches.map((it) => (
                       <div key={it.variant_id} className="grid gap-3 rounded-xl border border-white/14 bg-[#3f4959] p-3 md:grid-cols-[56px,1fr,auto] md:items-center">
                         <div>
-                          {it.image_url ? <img src={it.image_url} alt="" className="h-14 w-14 rounded-lg object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-black/20 text-white/35"><ImagePlus size={18} /></div>}
+                          <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-14 w-14 rounded-lg" iconSize={18} />
                         </div>
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
@@ -6818,7 +6993,7 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
-                  {newProduct.imageUrl ? <img src={newProduct.imageUrl} alt="" className="aspect-square w-full rounded-xl object-cover" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={32} /></div>}
+                  {newProduct.imageUrl ? <img src={newProduct.imageUrl} alt="" className="aspect-square w-full rounded-xl bg-white object-contain p-2" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-white text-slate-400"><ImagePlus size={32} /></div>}
                   <label className={label}>Kép URL
                     <input className={input} value={newProduct.imageUrl} onChange={(e) => setNewProduct((x) => ({ ...x, imageUrl: e.target.value }))} placeholder="https://..." />
                   </label>
@@ -7567,7 +7742,7 @@ export default function AllInWarehouse() {
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
-                  {edit.imageUrl ? <img src={edit.imageUrl} alt="" className="aspect-square w-full rounded-xl object-cover" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-black/20 text-white/35"><ImagePlus size={32} /></div>}
+                  {edit.imageUrl ? <img src={edit.imageUrl} alt="" className="aspect-square w-full rounded-xl bg-white object-contain p-2" /> : <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-white text-slate-400"><ImagePlus size={32} /></div>}
                   <label className={label}>Kép feltöltése
                     <input type="file" accept="image/*" className="text-xs text-white/70" onChange={(e) => onImageSelected(e.target.files?.[0] || null)} />
                   </label>
