@@ -5,6 +5,7 @@ import AllInHome from "./pages/AllInHome";
 import AllInIncoming from "./pages/AllInIncoming";
 import AllInOrderHistory from "./pages/AllInOrderHistory";
 import AllInWarehouse from "./pages/AllInWarehouse";
+import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
@@ -58,13 +59,12 @@ function normalizeHash(raw: string): string {
 
 function isNonLoginHash(hash: string) {
   const key = normalizeHash(hash);
-  return key.length > 0; // anything non-empty is a "real" screen in our app
+  return key.length > 0;
 }
 
 function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
-  // canonical
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
@@ -82,7 +82,6 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "cars") return { name: "cars" };
   if (key === "carexpenses" || key === "car-expenses") return { name: "carexpenses" };
 
-  // ALL IN aliases used by buttons/pages
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
@@ -104,23 +103,43 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "admincarexpenses") return { name: "carexpenses" };
   if (key === "adminextras") return { name: "admin" };
 
-  // empty/unknown -> login
   return { name: "login" };
 }
 
 function go(name: ScreenName) {
   if (name === "login") window.location.hash = "";
-  else window.location.hash = name; // canonical hashes
+  else window.location.hash = name;
+}
+
+function useIsWarehouseMobile() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(max-width: 820px), (pointer: coarse) and (max-width: 920px)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 820px), (pointer: coarse) and (max-width: 920px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
+  return isMobile;
 }
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>(() => hashToScreen(window.location.hash));
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo(() => "/api", []);
-
+  const warehouseMobile = useIsWarehouseMobile();
   const restoredRef = useRef(false);
 
-  // Restore last hash on hard refresh (mobile pull-to-refresh can sometimes reset to base URL)
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
@@ -135,7 +154,6 @@ export default function App() {
     }
   }, []);
 
-  // hash router + remember last visited screen (so refresh does NOT drop to start)
   useEffect(() => {
     const onHash = () => {
       const h = window.location.hash || "";
@@ -147,7 +165,6 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // session check: NEVER force home if user is on a deeper screen
   useEffect(() => {
     fetch(`${api}/auth/me`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
@@ -155,7 +172,6 @@ export default function App() {
         if (data?.session) {
           setSession(data.session);
 
-          // If we are on login (empty hash), prefer last saved hash, otherwise go home.
           const current = hashToScreen(window.location.hash);
           if (current.name === "login") {
             const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
@@ -170,7 +186,6 @@ export default function App() {
   const logout = async () => {
     await fetch(`${api}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
     setSession(null);
-    // Clear saved hash so we don't "jump back" after logout
     sessionStorage.removeItem(LAST_HASH_KEY);
     go("login");
   };
@@ -181,7 +196,6 @@ export default function App() {
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
-          // after login: go back to last page if it exists, else home
           const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
           if (last && isNonLoginHash(last)) window.location.hash = last;
           else go("home");
@@ -195,7 +209,7 @@ export default function App() {
     actor: session.actor,
     role: session.role,
     shopId: session.role === "shop" ? session.shopId : undefined,
-    onLogout: logout
+    onLogout: logout,
   };
 
   return (
@@ -203,7 +217,7 @@ export default function App() {
       {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
-      {screen.name === "warehouse" && <AllInWarehouse {...(commonProps as any)} />}
+      {screen.name === "warehouse" && (warehouseMobile ? <AllInWarehouseMobile {...(commonProps as any)} /> : <AllInWarehouse {...(commonProps as any)} />)}
 
       {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
       {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
@@ -220,4 +234,4 @@ export default function App() {
       {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
     </>
   );
-} 
+}
