@@ -5975,6 +5975,208 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  router.get("/variants/:id/history", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 500)));
+    if (!id) return res.status(400).json({ error: "variant id required" });
+
+    try {
+      await ensureSnCodSchema(pool);
+      const variant = await pool.query(
+        `SELECT
+           v.id, v.model_id, v.internal_sku, v.barcode, v.sn_cod, v.color_code, v.color_name, v.color_hex,
+           v.size, v.buy_price, v.sell_price, v.compare_at_price, v.weight_grams, v.image_url,
+           v.images, v.attributes,
+           ${customsTariffSql('v')} AS customs_tariff_code,
+           ${customsTariffSql('v')} AS "customsTariffCode",
+           v.status, v.created_at, v.updated_at,
+           m.model_code, m.title_ro, m.title_hu, m.description_ro, m.gender, m.product_type,
+           m.season, m.material, m.shopify_title, m.shopify_handle, m.status AS model_status,
+           b.id AS brand_id, b.name AS brand_name, b.code AS brand_code,
+           c.id AS category_id, c.name_ro AS category_name_ro, c.name_hu AS category_name_hu, c.code AS category_code,
+           subc.id AS subcategory_id, subc.name_ro AS subcategory_name_ro, subc.name_hu AS subcategory_name_hu, subc.code AS subcategory_code,
+           sc.supplier_id AS supplier_id,
+           sc.supplier_product_code AS supplier_product_code,
+           sc.supplier_product_code AS "supplierProductCode",
+           sc.supplier_variant_code AS supplier_variant_code,
+           sc.supplier_variant_code AS "supplierVariantCode",
+           sc.supplier_color_code AS supplier_color_code,
+           sc.supplier_color_code AS "supplierColorCode",
+           sc.supplier_size AS supplier_size,
+           sc.supplier_size AS "supplierSize",
+           sc.supplier_barcode AS supplier_barcode,
+           sc.supplier_sku AS supplier_sku,
+           sup.name AS supplier_name
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id = v.model_id
+         LEFT JOIN aif_brands b ON b.id = m.brand_id
+         LEFT JOIN aif_categories c ON c.id = m.category_id
+         LEFT JOIN aif_categories subc ON subc.id = m.subcategory_id
+         LEFT JOIN LATERAL (
+           SELECT sc.supplier_id, sc.supplier_product_code, sc.supplier_variant_code,
+                  sc.supplier_color_code, sc.supplier_size, sc.supplier_barcode, sc.supplier_sku
+           FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
+         LEFT JOIN aif_suppliers sup ON sup.id=sc.supplier_id
+         WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1 OR sc.supplier_barcode=$1 OR sc.supplier_sku=$1 OR sc.supplier_product_code=$1
+         LIMIT 1`,
+        [id]
+      );
+
+      if (!variant.rowCount) return res.status(404).json({ error: "variant not found" });
+
+      const variantId = variant.rows[0].id;
+      const stock = await pool.query(
+        `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
+                l.location_type, s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
+         FROM aif_stock s
+         JOIN aif_locations l ON l.id=s.location_id
+         WHERE s.variant_id=$1
+         ORDER BY l.name ASC`,
+        [variantId]
+      );
+
+      const movementTotals = await pool.query(
+        `SELECT
+           COALESCE(sum(CASE WHEN sm.qty_delta > 0 AND NOT (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer') THEN sm.qty_delta ELSE 0 END),0)::numeric AS total_incoming_qty,
+           COALESCE(sum(CASE WHEN sm.qty_delta < 0 AND NOT (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer') THEN abs(sm.qty_delta) ELSE 0 END),0)::numeric AS total_outgoing_qty,
+           COALESCE(sum(CASE WHEN (sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer') AND sm.qty_delta < 0 THEN abs(sm.qty_delta) ELSE 0 END),0)::numeric AS total_transferred_qty,
+           COALESCE(sum(sm.qty_delta),0)::numeric AS net_movement_qty,
+           count(*)::int AS movement_count
+         FROM aif_stock_movements sm
+         WHERE sm.variant_id=$1`,
+        [variantId]
+      );
+
+      const importStats = await pool.query(
+        `WITH committed_rows AS (
+           SELECT rw.*, COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) AS event_at
+           FROM aif_import_rows rw
+           JOIN aif_import_batches b ON b.id=rw.batch_id
+           WHERE rw.variant_id=$1
+             AND rw.status='committed'
+         )
+         SELECT
+           COALESCE(sum(COALESCE(qty,0)),0)::numeric AS total_purchased_qty,
+           CASE WHEN COALESCE(sum(COALESCE(qty,0)),0) > 0
+             THEN round(sum(COALESCE(buy_price_ron, buy_price, 0) * COALESCE(qty,0)) / NULLIF(sum(COALESCE(qty,0)),0), 2)
+             ELSE NULL
+           END AS avg_buy_price,
+           (array_agg(COALESCE(buy_price_ron, buy_price) ORDER BY event_at DESC NULLS LAST, row_no DESC NULLS LAST) FILTER (WHERE COALESCE(buy_price_ron, buy_price) IS NOT NULL))[1] AS last_buy_price,
+           (array_agg(COALESCE(sell_price_ron, sell_price) ORDER BY event_at DESC NULLS LAST, row_no DESC NULLS LAST) FILTER (WHERE COALESCE(sell_price_ron, sell_price) IS NOT NULL))[1] AS last_sell_price,
+           max(event_at) AS last_incoming_at
+         FROM committed_rows`,
+        [variantId]
+      );
+
+      const events = await pool.query(
+        `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
+                sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
+                CASE
+                  WHEN sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer' THEN 'transfer'
+                  WHEN sm.source_type='inventory_count' OR sm.raw->>'reason'='inventory_count_commit' THEN 'inventory'
+                  WHEN sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit' THEN 'incoming'
+                  WHEN sm.source_type ILIKE '%manual%' OR sm.movement_type IN ('manual_adjustment','adjustment') THEN 'adjustment'
+                  WHEN sm.qty_delta > 0 THEN 'incoming'
+                  WHEN sm.qty_delta < 0 THEN 'outgoing'
+                  ELSE 'adjustment'
+                END AS event_type,
+                CASE WHEN sm.qty_delta > 0 THEN 'in' WHEN sm.qty_delta < 0 THEN 'out' ELSE 'adjust' END AS direction,
+                l.id AS location_id, l.code AS location_code, l.name AS location_name,
+                sm.raw->>'fromLocationId' AS from_location_id,
+                sm.raw->>'fromLocationCode' AS from_location_code,
+                sm.raw->>'fromLocationName' AS from_location_name,
+                sm.raw->>'toLocationId' AS to_location_id,
+                sm.raw->>'toLocationCode' AS to_location_code,
+                sm.raw->>'toLocationName' AS to_location_name,
+                im.import_row_id, im.import_row_no, im.import_qty, im.buy_price, im.buy_price_ron,
+                im.sell_price, im.sell_price_ron, im.import_batch_id, im.source_file_name,
+                im.invoice_number, im.invoice_date, im.reception_date, im.currency_code,
+                im.supplier_id, im.supplier_name, im.reception_id,
+                im.sales_tva_rate, im.sell_price_includes_tva,
+                COALESCE(im.buy_price_ron, im.buy_price, v.buy_price) AS effective_buy_price,
+                COALESCE(im.sell_price_ron, im.sell_price, v.sell_price) AS effective_sell_price
+         FROM aif_stock_movements sm
+         JOIN aif_locations l ON l.id=sm.location_id
+         JOIN aif_product_variants v ON v.id=sm.variant_id
+         LEFT JOIN LATERAL (
+           SELECT rw.id AS import_row_id, rw.row_no AS import_row_no,
+                  rw.qty AS import_qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron,
+                  b.id AS import_batch_id, b.source_file_name,
+                  COALESCE(r.invoice_number, b.invoice_number) AS invoice_number,
+                  r.invoice_date, r.reception_date,
+                  COALESCE(r.currency_code, b.currency_code) AS currency_code,
+                  sup.id AS supplier_id, sup.name AS supplier_name,
+                  r.id AS reception_id,
+                  COALESCE(NULLIF(rw.normalized->>'salesTvaRate','')::numeric, NULLIF(rw.normalized->>'saleTvaRate','')::numeric, NULLIF(r.raw_meta->>'salesTvaRate','')::numeric, r.tva_rate) AS sales_tva_rate,
+                  COALESCE(NULLIF(rw.normalized->>'sellPriceIncludesTva','')::boolean, NULLIF(rw.normalized->>'salesPriceIncludesTva','')::boolean, true) AS sell_price_includes_tva
+           FROM aif_import_rows rw
+           JOIN aif_import_batches b ON b.id=rw.batch_id
+           LEFT JOIN aif_receptions r ON r.id=b.reception_id
+           LEFT JOIN aif_suppliers sup ON sup.id=COALESCE(r.supplier_id, b.supplier_id)
+           WHERE rw.variant_id=sm.variant_id
+             AND (
+               rw.id::text = COALESCE(sm.raw->>'rowId','')
+               OR b.id::text = sm.source_id
+               OR b.id::text = COALESCE(sm.raw->>'importBatchId','')
+             )
+           ORDER BY
+             CASE WHEN rw.id::text = COALESCE(sm.raw->>'rowId','') THEN 0 ELSE 1 END,
+             COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) DESC NULLS LAST,
+             rw.row_no DESC NULLS LAST
+           LIMIT 1
+         ) im ON true
+         WHERE sm.variant_id=$1
+         ORDER BY sm.created_at DESC, sm.id DESC
+         LIMIT $2`,
+        [variantId, limit]
+      );
+
+      const stockRows = stock.rows || [];
+      const movement = movementTotals.rows[0] || {};
+      const imports = importStats.rows[0] || {};
+      const currentQty = stockRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+      const reservedQty = stockRows.reduce((sum, row) => sum + Number(row.reserved_qty || 0), 0);
+      const availableQty = stockRows.reduce((sum, row) => sum + Number(row.available_qty || 0), 0);
+      const lastBuyPrice = imports.last_buy_price ?? variant.rows[0].buy_price ?? null;
+      const lastSellPrice = imports.last_sell_price ?? variant.rows[0].sell_price ?? null;
+      const sellNet = lastSellPrice === null || lastSellPrice === undefined ? null : Number(lastSellPrice) / 1.21;
+      const marginWithoutTva = lastBuyPrice && Number(lastBuyPrice) > 0 && sellNet !== null
+        ? ((sellNet - Number(lastBuyPrice)) / Number(lastBuyPrice)) * 100
+        : null;
+
+      res.json({
+        item: variant.rows[0],
+        stock: stockRows,
+        summary: {
+          currentQty,
+          reservedQty,
+          availableQty,
+          stockLocationCount: stockRows.filter((row) => Number(row.qty || 0) > 0).length,
+          totalIncomingQty: Number(movement.total_incoming_qty || 0),
+          totalOutgoingQty: Number(movement.total_outgoing_qty || 0),
+          totalTransferredQty: Number(movement.total_transferred_qty || 0),
+          netMovementQty: Number(movement.net_movement_qty || 0),
+          movementCount: Number(movement.movement_count || 0),
+          totalPurchasedQty: Number(imports.total_purchased_qty || 0),
+          avgBuyPrice: imports.avg_buy_price ?? null,
+          lastBuyPrice,
+          lastSellPrice,
+          lastIncomingAt: imports.last_incoming_at || null,
+          marginWithoutTva,
+        },
+        events: events.rows,
+      });
+    } catch (e) {
+      console.error("AIF variant history failed", e);
+      res.status(500).json({ error: e?.message || "A terméktörténet betöltése nem sikerült.", code: e?.code || null });
+    }
+  });
+
   router.get("/variants/:id", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     if (!id) return res.status(400).json({ error: "variant id required" });
