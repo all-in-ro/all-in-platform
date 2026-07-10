@@ -10,6 +10,7 @@ import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
 import AllInInventory from "./pages/AllInInventory";
+import AllInInventoryMobile from "./pages/AllInInventoryMobile";
 import AllInSuppliers from "./pages/AllInSuppliers";
 import AllInReceptions from "./pages/AllInReceptions";
 import AllInBarcodes from "./pages/AllInBarcodes";
@@ -138,6 +139,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo(() => "/api", []);
   const warehouseMobile = useIsWarehouseMobile();
+  const inventoryMobile = warehouseMobile;
   const restoredRef = useRef(false);
 
   useEffect(() => {
@@ -221,7 +223,7 @@ export default function App() {
 
       {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
       {screen.name === "stockmoves" && <AllInStockMoves {...(commonProps as any)} />}
-      {screen.name === "inventory" && <AllInInventory {...(commonProps as any)} />}
+      {screen.name === "inventory" && (inventoryMobile ? <AllInInventoryMobile {...(commonProps as any)} /> : <AllInInventory {...(commonProps as any)} />)}
       {screen.name === "suppliers" && <AllInSuppliers {...(commonProps as any)} />}
       {screen.name === "receptions" && <AllInReceptions {...(commonProps as any)} />}
       {screen.name === "barcodes" && <AllInBarcodes {...(commonProps as any)} />}
