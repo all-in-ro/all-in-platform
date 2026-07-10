@@ -543,8 +543,8 @@ const previewBottomGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:gri
 const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
 const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
 const wizardStepBase = "rounded-2xl border px-3 py-3 transition shadow-sm";
-const wizardStepActive = `${wizardStepBase} border-[#67d4d1]/55 bg-[#208d8b]/18 shadow-[#208d8b]/10`;
-const wizardStepDone = `${wizardStepBase} border-emerald-200/30 bg-emerald-400/10`;
+const wizardStepActive = `${wizardStepBase} border-[#67d4d1]/65 bg-[#208d8b]/22 text-white shadow-[#208d8b]/10`;
+const wizardStepDone = `${wizardStepBase} border-[#7bd7d4]/90 bg-[#208d8b] text-white shadow-[0_0_0_1px_rgba(123,215,212,0.28),0_14px_30px_rgba(32,141,139,0.32)] ring-1 ring-[#7bd7d4]/35 hover:bg-[#249b99]`;
 const wizardStepIdle = `${wizardStepBase} border-white/14 bg-[#354153]`;
 const wizardStepLocked = `${wizardStepBase} border-white/10 bg-[#303b4e]/60 opacity-70`;
 const sourceChoiceCard = "group rounded-2xl border border-white/16 bg-[#354153] p-4 text-left shadow-sm transition hover:border-[#67d4d1]/55 hover:bg-[#3b485c] disabled:cursor-not-allowed disabled:opacity-55";
@@ -2698,6 +2698,7 @@ export default function AllInIncoming(_props: Props) {
         const detail = await apiAifGetReception(savedReceptionId);
         fillReceptionHeader(detail, { clearDraftRows: false });
       }
+      setIncomingStep("review");
       setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${savedRowCount} kijelölt sor, ellenőrzendő sor: ${savedErrorCount}. Kizárt sorok: ${excludedCount}. ${chunks.length > 1 ? `${chunks.length} kisebb csomagban mentve.` : ""}`);
     } catch (e: any) {
       const isPayloadTooLarge = Number(e?.status || e?.statusCode || 0) === 413 || /413|payload too large|túl nagy|tul nagy/i.test(String(e?.message || ""));
@@ -2723,6 +2724,7 @@ export default function AllInIncoming(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
+      const committedReceptionId = String((batch as any).reception_id || (batch as any).receptionId || selectedReceptionId || receptionPickerId || "").trim();
       const result = await apiAifCommitImportBatch(batch.id);
       const committedRows = Array.isArray((result as any).committedRowResults)
         ? (result as any).committedRowResults
@@ -2747,6 +2749,15 @@ export default function AllInIncoming(_props: Props) {
         totalQty: committedTotalQty || null,
       });
       await Promise.all([loadBatches(), loadReceptions()]);
+      if (committedReceptionId) {
+        try {
+          const detail = await apiAifGetReception(committedReceptionId);
+          fillReceptionHeader(detail, { clearDraftRows: false });
+          setIncomingStep("review");
+        } catch {
+          // A készletre vétel már sikerült. Ha a friss részletlista nem jön vissza, a következő frissítés behozza.
+        }
+      }
       const failedCount = Number((result as any).failedCount || (result as any).failedRows?.length || 0);
       if (failedCount > 0) {
         const firstError = (result as any).failedRows?.[0]?.error || (result as any).warning || "Néhány sor nem került készletre.";
@@ -3151,21 +3162,73 @@ export default function AllInIncoming(_props: Props) {
 
   function workflowStepCard(step: IncomingWorkflowStep, done = false, locked = false) {
     if (locked) return wizardStepLocked;
-    if (incomingStep === step) return wizardStepActive;
     if (done) return wizardStepDone;
+    if (incomingStep === step) return wizardStepActive;
     return wizardStepIdle;
   }
 
   function workflowStepBadge(step: IncomingWorkflowStep, done = false, locked = false) {
     if (locked) return "border-white/12 bg-white/5 text-white/45";
-    if (done) return "border-emerald-200/45 bg-emerald-300/18 text-emerald-50";
+    if (done) return "border-white/80 bg-white text-[#208d8b] font-semibold shadow-[0_0_12px_rgba(255,255,255,0.28)]";
     if (incomingStep === step) return "border-[#67d4d1]/60 bg-[#208d8b] text-white";
     return "border-white/18 bg-[#303b4e] text-white/70";
   }
 
+  function workflowStepTitleClass(done = false, locked = false) {
+    if (locked) return "mt-2 text-sm uppercase tracking-[0.08em] text-white/45";
+    return `mt-2 text-sm uppercase tracking-[0.08em] ${done ? "text-white font-semibold" : "text-white"}`;
+  }
+
+  function workflowStepDescriptionClass(done = false, locked = false) {
+    if (locked) return "mt-1 text-xs leading-5 text-white/42";
+    return `mt-1 text-xs leading-5 ${done ? "text-white/90" : "text-white/62"}`;
+  }
+
+  function workflowStepStatusClass(done = false, locked = false, warning = false) {
+    if (locked) return "mt-2 text-xs text-white/42";
+    if (done) return "mt-2 text-xs font-semibold text-white";
+    if (warning) return "mt-2 text-xs text-red-100";
+    return "mt-2 text-xs text-white/58";
+  }
+
   function renderWorkflowWizard() {
-    const sourceDone = incomingInputMode === "import" || incomingInputMode === "manual";
-    const rowsDone = rows.length > 0;
+    const summary: any = selectedReceptionSummary || {};
+    const currentReceptionId = String(selectedReceptionId || summary.id || "").trim();
+    const currentReceptionBatches = currentReceptionId
+      ? batches.filter((batch: any) => String(batch.reception_id || batch.receptionId || "") === currentReceptionId)
+      : [];
+    const savedRowsInReception = Number(loadedReceptionRowTotals.total || 0);
+    const committedRowsInReception = Number(loadedReceptionRowTotals.committed || 0);
+    const summarySavedRows = Number(summary.line_count || summary.import_rows || summary.row_count || 0);
+    const summaryCommittedRows = Number(summary.committed_rows || 0);
+    const currentBatchRows = currentReceptionBatches.reduce((sum: number, batch: any) => sum + Number(batch.row_count || 0), 0);
+    const currentCommittedBatchRows = currentReceptionBatches.reduce((sum: number, batch: any) =>
+      String(batch.status || "").toLowerCase() === "committed" ? sum + Number(batch.row_count || 0) : sum,
+      0
+    );
+    const savedRowsDone = savedRowsInReception > 0 || summarySavedRows > 0 || currentBatchRows > 0;
+    const committedRowsDone = committedRowsInReception > 0 || summaryCommittedRows > 0 || currentCommittedBatchRows > 0 || String(summary.status || "").toLowerCase() === "committed";
+    const sourceDone = incomingInputMode === "import" || incomingInputMode === "manual" || rows.length > 0 || savedRowsDone;
+    const rowsDone = rows.length > 0 || savedRowsDone;
+    const reviewDone = savedRowsDone || committedRowsDone;
+    const rowsStepTarget: IncomingWorkflowStep = incomingInputMode === "manual" ? "manual" : incomingInputMode === "import" ? "import" : "review";
+    const savedRowsCount = savedRowsInReception || summarySavedRows || currentBatchRows;
+    const committedRowsCount = committedRowsInReception || summaryCommittedRows || currentCommittedBatchRows;
+    const sourceStatus = incomingInputMode === "import" ? "XLS import" : incomingInputMode === "manual" ? "Manuális bevitel" : savedRowsDone ? "Mentett terméksorok" : "Nincs kiválasztva";
+    const rowsStatus = rows.length
+      ? `${rows.length} sor előnézetben`
+      : committedRowsDone
+        ? `${committedRowsCount || savedRowsCount} sor készletre véve`
+        : savedRowsDone
+          ? `${savedRowsCount} mentett sor`
+          : "Még nincs sor";
+    const reviewStatus = committedRowsDone
+      ? `${committedRowsCount || savedRowsCount} sor készletre véve`
+      : savedRowsDone
+        ? `${savedRowsCount} mentett sor`
+        : approvedCount
+          ? `${approvedCount} kijelölt sor`
+          : "Nincs kijelölt sor";
     return (
       <section className={card}>
         <SectionTitle
@@ -3177,32 +3240,32 @@ export default function AllInIncoming(_props: Props) {
         <div className="mt-3 grid gap-3 lg:grid-cols-4">
           <button className={`${workflowStepCard("reception", receptionHeaderReady)} text-left`} onClick={goToReceptionStep} type="button">
             <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("reception", receptionHeaderReady)}`}>1</span>
-            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Receptió adatai</p>
-            <p className="mt-1 text-xs leading-5 text-white/62">Beszállító, cél hely, számla, pénznem és TVA.</p>
-            <p className={receptionHeaderReady ? "mt-2 text-xs text-emerald-100" : "mt-2 text-xs text-red-100"}>
+            <p className={workflowStepTitleClass(receptionHeaderReady)}>Receptió adatai</p>
+            <p className={workflowStepDescriptionClass(receptionHeaderReady)}>Beszállító, cél hely, számla, pénznem és TVA.</p>
+            <p className={workflowStepStatusClass(receptionHeaderReady, false, !receptionHeaderReady)}>
               {receptionHeaderReady ? "Kitöltve" : `${missingReceptionFieldLabels.length} mező hiányzik`}
             </p>
           </button>
 
           <button className={`${workflowStepCard("source", sourceDone, !receptionHeaderReady)} text-left`} onClick={goToSourceStep} disabled={!receptionHeaderReady} type="button">
             <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("source", sourceDone, !receptionHeaderReady)}`}>2</span>
-            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Sorforrás</p>
-            <p className="mt-1 text-xs leading-5 text-white/62">Választás: XLS import vagy kézi terméksor.</p>
-            <p className="mt-2 text-xs text-white/58">{incomingInputMode === "import" ? "XLS import" : incomingInputMode === "manual" ? "Manuális bevitel" : "Nincs kiválasztva"}</p>
+            <p className={workflowStepTitleClass(sourceDone, !receptionHeaderReady)}>Sorforrás</p>
+            <p className={workflowStepDescriptionClass(sourceDone, !receptionHeaderReady)}>Választás: XLS import vagy kézi terméksor.</p>
+            <p className={workflowStepStatusClass(sourceDone, !receptionHeaderReady)}>{sourceStatus}</p>
           </button>
 
-          <button className={`${workflowStepCard(incomingInputMode === "manual" ? "manual" : "import", rowsDone, !receptionHeaderReady || !sourceDone)} text-left`} onClick={() => sourceDone ? setIncomingStep(incomingInputMode || "source") : goToSourceStep()} disabled={!receptionHeaderReady} type="button">
-            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge(incomingInputMode === "manual" ? "manual" : "import", rowsDone, !receptionHeaderReady || !sourceDone)}`}>3</span>
-            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Terméksorok</p>
-            <p className="mt-1 text-xs leading-5 text-white/62">Oszloptársítás, kézi sor, előnézet és kijelölés.</p>
-            <p className="mt-2 text-xs text-white/58">{rows.length ? `${rows.length} sor előnézetben` : "Még nincs sor"}</p>
+          <button className={`${workflowStepCard(rowsStepTarget, rowsDone, !receptionHeaderReady || !sourceDone)} text-left`} onClick={() => sourceDone ? setIncomingStep(rowsStepTarget) : goToSourceStep()} disabled={!receptionHeaderReady || !sourceDone} type="button">
+            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge(rowsStepTarget, rowsDone, !receptionHeaderReady || !sourceDone)}`}>3</span>
+            <p className={workflowStepTitleClass(rowsDone, !receptionHeaderReady || !sourceDone)}>Terméksorok</p>
+            <p className={workflowStepDescriptionClass(rowsDone, !receptionHeaderReady || !sourceDone)}>Oszloptársítás, kézi sor, előnézet és kijelölés.</p>
+            <p className={workflowStepStatusClass(rowsDone, !receptionHeaderReady || !sourceDone)}>{rowsStatus}</p>
           </button>
 
-          <button className={`${workflowStepCard("review", approvedCount > 0, !rows.length)} text-left`} onClick={() => rows.length ? setIncomingStep("review") : undefined} disabled={!rows.length} type="button">
-            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("review", approvedCount > 0, !rows.length)}`}>4</span>
-            <p className="mt-2 text-sm uppercase tracking-[0.08em] text-white">Mentés</p>
-            <p className="mt-1 text-xs leading-5 text-white/62">Csak kijelölt, hibátlan sorok kerülnek receptióba.</p>
-            <p className="mt-2 text-xs text-white/58">{approvedCount ? `${approvedCount} kijelölt sor` : "Nincs kijelölt sor"}</p>
+          <button className={`${workflowStepCard("review", reviewDone, !rowsDone)} text-left`} onClick={() => rowsDone ? setIncomingStep("review") : undefined} disabled={!rowsDone} type="button">
+            <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs ${workflowStepBadge("review", reviewDone, !rowsDone)}`}>4</span>
+            <p className={workflowStepTitleClass(reviewDone, !rowsDone)}>Mentés</p>
+            <p className={workflowStepDescriptionClass(reviewDone, !rowsDone)}>Csak kijelölt, hibátlan sorok kerülnek receptióba.</p>
+            <p className={workflowStepStatusClass(reviewDone, !rowsDone)}>{reviewStatus}</p>
           </button>
         </div>
 
