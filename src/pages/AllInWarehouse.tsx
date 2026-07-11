@@ -80,6 +80,7 @@ const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
+const warehouseLocalPriceHistoryStorageKey = "allinfashion:warehouse:localPriceHistory:v1";
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -739,6 +740,14 @@ type VariantHistoryEvent = {
   currency_code?: string | null;
   supplier_name?: string | null;
   sales_tva_rate?: number | string | null;
+  old_buy_price?: number | string | null;
+  new_buy_price?: number | string | null;
+  old_sell_price?: number | string | null;
+  new_sell_price?: number | string | null;
+  old_compare_at_price?: number | string | null;
+  new_compare_at_price?: number | string | null;
+  price_change_fields?: string[] | null;
+  local_only?: boolean | null;
 };
 
 type VariantHistorySummary = {
@@ -1937,15 +1946,185 @@ function historyQty(value: unknown, signed = false) {
   return `${sign}${Math.trunc(x).toLocaleString("hu-HU")} db`;
 }
 
+const WAREHOUSE_PRICE_HISTORY_ATTR_KEY = "aifPriceHistory";
+const WAREHOUSE_PRICE_HISTORY_LIMIT = 150;
+
+type WarehousePriceHistoryEntry = {
+  id: string;
+  createdAt: string;
+  source: "warehouse_detail_edit";
+  actor?: string | null;
+  variantId?: string | null;
+  title?: string | null;
+  buyPriceBefore?: string | number | null;
+  buyPriceAfter?: string | number | null;
+  sellPriceBefore?: string | number | null;
+  sellPriceAfter?: string | number | null;
+  compareAtPriceBefore?: string | number | null;
+  compareAtPriceAfter?: string | number | null;
+  changedFields?: string[];
+};
+
+function warehousePriceComparable(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return "";
+  const parsed = priceNumber(value);
+  return parsed === null ? String(value).trim() : parsed.toFixed(2);
+}
+
+function warehousePriceValueForHistory(value: unknown) {
+  const parsed = priceNumber(value);
+  if (parsed === null) return null;
+  return Number(parsed.toFixed(2));
+}
+
+function warehousePriceChanged(before: unknown, after: unknown) {
+  return warehousePriceComparable(before) !== warehousePriceComparable(after);
+}
+
+function warehousePriceHistoryId() {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `price:${Date.now().toString(36)}:${random}`;
+}
+
+function normalizeWarehousePriceHistory(value: unknown): WarehousePriceHistoryEntry[] {
+  const source = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).items)
+      ? ((value as Record<string, unknown>).items as unknown[])
+      : [];
+  return source
+    .map((entry) => entry && typeof entry === "object" ? entry as WarehousePriceHistoryEntry : null)
+    .filter((entry): entry is WarehousePriceHistoryEntry => Boolean(entry?.createdAt || entry?.id))
+    .map((entry) => ({
+      ...entry,
+      id: String(entry.id || warehousePriceHistoryId()),
+      createdAt: String(entry.createdAt || new Date().toISOString()),
+      source: "warehouse_detail_edit",
+    }));
+}
+
+function warehousePriceHistoryFromAttributes(attributes: unknown) {
+  const attrs = attributes && typeof attributes === "object" && !Array.isArray(attributes)
+    ? attributes as Record<string, unknown>
+    : {};
+  return normalizeWarehousePriceHistory(attrs[WAREHOUSE_PRICE_HISTORY_ATTR_KEY] || attrs.priceHistory);
+}
+
+function makeWarehousePriceHistoryEntry(args: { variantId: string; before: EditForm; after: EditForm; item?: Record<string, any> | null }) {
+  const changedFields: string[] = [];
+  if (warehousePriceChanged(args.before.buyPrice, args.after.buyPrice)) changedFields.push("Vételár");
+  if (warehousePriceChanged(args.before.sellPrice, args.after.sellPrice)) changedFields.push("Eladási ár");
+  if (warehousePriceChanged(args.before.compareAtPrice, args.after.compareAtPrice)) changedFields.push("Akciós / összehasonlító ár");
+  if (!changedFields.length) return null;
+
+  return {
+    id: warehousePriceHistoryId(),
+    createdAt: new Date().toISOString(),
+    source: "warehouse_detail_edit" as const,
+    actor: "AllInWarehouse",
+    variantId: args.variantId,
+    title: firstWarehouseText(args.item?.title_ro, args.item?.shopify_title, args.after.titleRo),
+    buyPriceBefore: warehousePriceValueForHistory(args.before.buyPrice),
+    buyPriceAfter: warehousePriceValueForHistory(args.after.buyPrice),
+    sellPriceBefore: warehousePriceValueForHistory(args.before.sellPrice),
+    sellPriceAfter: warehousePriceValueForHistory(args.after.sellPrice),
+    compareAtPriceBefore: warehousePriceValueForHistory(args.before.compareAtPrice),
+    compareAtPriceAfter: warehousePriceValueForHistory(args.after.compareAtPrice),
+    changedFields,
+  } satisfies WarehousePriceHistoryEntry;
+}
+
+function appendWarehousePriceHistory(attributes: unknown, entry: WarehousePriceHistoryEntry) {
+  const current = warehousePriceHistoryFromAttributes(attributes);
+  const next = [...current.filter((item) => String(item.id) !== String(entry.id)), entry]
+    .sort((a, b) => dateTimeMs(a.createdAt) - dateTimeMs(b.createdAt))
+    .slice(-WAREHOUSE_PRICE_HISTORY_LIMIT);
+  return next;
+}
+
+function historyIsPriceEvent(event: VariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const source = String(event.source_type || "").toLowerCase();
+  const movement = String(event.movement_type || "").toLowerCase();
+  return type === "price" || type === "price_change" || source.includes("price") || movement.includes("price") || event.raw?.source === "warehouse_detail_edit";
+}
+
+function priceHistoryEventsFromItem(item?: (InventoryItem & Record<string, any>) | null): VariantHistoryEvent[] {
+  const entries = warehousePriceHistoryFromAttributes(item?.attributes);
+  return entries.map((entry) => {
+    const priceChanges = [
+      { key: "buyPrice", label: "Vételár", oldValue: entry.buyPriceBefore, newValue: entry.buyPriceAfter },
+      { key: "sellPrice", label: "Eladási ár", oldValue: entry.sellPriceBefore, newValue: entry.sellPriceAfter },
+      { key: "compareAtPrice", label: "Akció előtti ár", oldValue: entry.compareAtPriceBefore, newValue: entry.compareAtPriceAfter },
+    ].filter((row) => warehousePriceComparable(row.oldValue) !== warehousePriceComparable(row.newValue));
+    return {
+      id: entry.id,
+      created_at: entry.createdAt,
+      event_type: "price",
+      direction: "adjust",
+      movement_type: "price_change",
+      source_type: "price_change",
+      source_id: entry.id,
+      qty_delta: 0,
+      qty_before: null,
+      qty_after: null,
+      actor: entry.actor || null,
+      location_name: null,
+      old_buy_price: entry.buyPriceBefore ?? null,
+      new_buy_price: entry.buyPriceAfter ?? null,
+      old_sell_price: entry.sellPriceBefore ?? null,
+      new_sell_price: entry.sellPriceAfter ?? null,
+      old_compare_at_price: entry.compareAtPriceBefore ?? null,
+      new_compare_at_price: entry.compareAtPriceAfter ?? null,
+      price_change_fields: entry.changedFields || priceChanges.map((row) => row.label),
+      effective_buy_price: entry.buyPriceAfter ?? entry.buyPriceBefore ?? null,
+      effective_sell_price: entry.sellPriceAfter ?? entry.sellPriceBefore ?? null,
+      raw: {
+        ...entry,
+        title: "Árváltozás",
+        reason: "warehouse_price_edit",
+        priceChanges,
+      },
+    };
+  });
+}
+
+function mergeVariantHistoryPriceEvents(data: VariantHistoryResponse): VariantHistoryResponse {
+  const priceEvents = priceHistoryEventsFromItem(data.item || null);
+  if (!priceEvents.length) return data;
+  const seen = new Set<string>();
+  const events = [...(data.events || []), ...priceEvents]
+    .filter((event) => {
+      const id = String(event.id || `${event.source_type || ""}:${event.created_at || ""}`);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
+  return { ...data, events };
+}
+
 function historyEventMeta(event: VariantHistoryEvent) {
   const type = String(event.event_type || "").toLowerCase();
   const direction = String(event.direction || "").toLowerCase();
   const source = String(event.source_type || "").toLowerCase();
   const reason = String(event.raw?.reason || "").toLowerCase();
+  const movement = String(event.movement_type || "").toLowerCase();
+  const isPrice = type === "price" || source.includes("price") || movement.includes("price");
   const isTransfer = type === "transfer" || source.includes("transfer") || reason.includes("transfer") || source.includes("redistribution");
   const isInventory = type === "inventory" || source.includes("inventory");
   const isIncoming = type === "incoming" || direction === "in";
   const isOutgoing = type === "outgoing" || direction === "out";
+
+  if (isPrice) {
+    return {
+      label: "Árváltozás",
+      cls: "border-amber-300/80 bg-amber-100 text-amber-900",
+      dot: "bg-amber-500",
+      stripe: "bg-amber-400",
+      card: "bg-amber-50/90 border-amber-200",
+    };
+  }
 
   if (isTransfer) {
     return {
@@ -1997,6 +2176,7 @@ function historySourceLabel(event: VariantHistoryEvent) {
   const source = String(event.source_type || "").toLowerCase();
   const reason = String(event.raw?.reason || "").toLowerCase();
   const movement = String(event.movement_type || "").toLowerCase();
+  if (historyIsPriceEvent(event)) return "Ár módosítása";
   if (type === "transfer" || source.includes("transfer") || reason.includes("transfer")) return "Üzletek közti átvitel";
   if (source.includes("manual_stock_redistribution")) return "Készlet átrendezés";
   if (type === "inventory" || source.includes("inventory")) return "Leltár rendezés";
@@ -2010,6 +2190,7 @@ function historySourceLabel(event: VariantHistoryEvent) {
 }
 
 function historyEventNote(event: VariantHistoryEvent) {
+  if (historyIsPriceEvent(event)) return "Árváltozás rögzítve a termékadatlapon.";
   const note = firstWarehouseText(event.raw?.title, event.raw?.note);
   const key = normalizeSearch(note);
   if (!note) return "";
@@ -2043,7 +2224,57 @@ function HistoryMiniCard({ label: labelText, value, hint, tone = "default" }: { 
   );
 }
 
+function priceChangeRowsForHistory(event: VariantHistoryEvent): WarehousePriceChangeRow[] {
+  const rawRows = Array.isArray(event.raw?.priceChanges) ? event.raw?.priceChanges : [];
+  if (rawRows.length) {
+    return rawRows
+      .map((row: any) => ({
+        key: String(row?.key || "sellPrice") as WarehousePriceChangeRow["key"],
+        label: String(row?.label || "Ár"),
+        oldValue: priceDisplayValue(row?.oldValue),
+        newValue: priceDisplayValue(row?.newValue),
+      }))
+      .filter((row: WarehousePriceChangeRow) => row.label && (row.oldValue !== "-" || row.newValue !== "-"));
+  }
+  const raw = event.raw || {};
+  const oldBuy = event.old_buy_price ?? raw.buyPriceBefore ?? raw.oldBuyPrice;
+  const newBuy = event.new_buy_price ?? raw.buyPriceAfter ?? raw.newBuyPrice;
+  const oldSell = event.old_sell_price ?? raw.sellPriceBefore ?? raw.oldSellPrice;
+  const newSell = event.new_sell_price ?? raw.sellPriceAfter ?? raw.newSellPrice;
+  const oldCompare = event.old_compare_at_price ?? raw.compareAtPriceBefore ?? raw.oldCompareAtPrice;
+  const newCompare = event.new_compare_at_price ?? raw.compareAtPriceAfter ?? raw.newCompareAtPrice;
+  const rows: WarehousePriceChangeRow[] = [];
+  if (priceComparableValue(oldBuy) !== priceComparableValue(newBuy)) {
+    rows.push({ key: "buyPrice", label: "Vételár", oldValue: priceDisplayValue(oldBuy), newValue: priceDisplayValue(newBuy) });
+  }
+  if (priceComparableValue(oldSell) !== priceComparableValue(newSell)) {
+    rows.push({ key: "sellPrice", label: "Eladási ár", oldValue: priceDisplayValue(oldSell), newValue: priceDisplayValue(newSell) });
+  }
+  if (priceComparableValue(oldCompare) !== priceComparableValue(newCompare)) {
+    rows.push({ key: "compareAtPrice", label: "Akció előtti ár", oldValue: priceDisplayValue(oldCompare), newValue: priceDisplayValue(newCompare) });
+  }
+  return rows;
+}
+
 function HistoryPriceBox({ event, pricesVisible }: { event: VariantHistoryEvent; pricesVisible: boolean }) {
+  const isPriceEvent = historyIsPriceEvent(event);
+  if (isPriceEvent) {
+    const rows = priceChangeRowsForHistory(event);
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-white px-3 py-2 text-[12px] leading-snug text-slate-600 shadow-sm">
+        <div className="mb-1.5 text-[10px] uppercase tracking-[0.09em] text-amber-700">Árváltozás</div>
+        {rows.length ? rows.map((row) => {
+          const hideValue = row.key === "buyPrice" && !pricesVisible;
+          return (
+            <div key={row.key} className="mt-1.5 flex items-center justify-between gap-3 border-t border-slate-200 pt-1.5 first:mt-0 first:border-t-0 first:pt-0">
+              <span className="text-slate-500">{row.label}</span>
+              <span className="whitespace-nowrap tabular-nums text-slate-900">{hideValue ? "••••" : money(row.oldValue)} → {hideValue ? "••••" : money(row.newValue)}</span>
+            </div>
+          );
+        }) : <div className="text-slate-500">Ár módosítva.</div>}
+      </div>
+    );
+  }
   return (
     <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[12px] leading-snug text-slate-600 shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-1.5">
@@ -2180,6 +2411,8 @@ function VariantHistoryPanel({
                 const supplier = event.supplier_name ? `Beszállító: ${event.supplier_name}` : "";
                 const file = event.source_file_name ? `Forrás: ${event.source_file_name}` : "";
                 const note = historyEventNote(event);
+                const isPriceEvent = historyIsPriceEvent(event);
+                const priceChangedFields = priceChangeRowsForHistory(event).map((row) => row.label).join(", ");
                 return (
                   <div key={event.id} className={`relative overflow-hidden rounded-2xl border p-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ${meta.card}`}>
                     <span className={`absolute left-0 top-0 h-full w-1 ${meta.stripe}`} />
@@ -2191,12 +2424,21 @@ function VariantHistoryPanel({
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
-                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{historyQty(event.qty_delta, true)}</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : historyQty(event.qty_delta, true)}</span>
                           <span className="rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
                         </div>
                         <div className="mt-2 grid gap-1.5 text-[12px] leading-snug text-slate-600 sm:grid-cols-2">
-                          <div className="rounded-xl bg-white px-3 py-2">Hely: <span className="text-slate-800">{transferText}</span></div>
-                          <div className="rounded-xl bg-white px-3 py-2">Előtte / utána: <span className="text-slate-800">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
+                          {isPriceEvent ? (
+                            <>
+                              <div className="rounded-xl bg-white px-3 py-2">Módosított mező: <span className="text-slate-800">{priceChangedFields || "Ár"}</span></div>
+                              <div className="rounded-xl bg-white px-3 py-2">Művelet: <span className="text-slate-800">Ár módosítás</span></div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="rounded-xl bg-white px-3 py-2">Hely: <span className="text-slate-800">{transferText}</span></div>
+                              <div className="rounded-xl bg-white px-3 py-2">Előtte / utána: <span className="text-slate-800">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
+                            </>
+                          )}
                           {supplier ? <div className="rounded-xl bg-white px-3 py-2 text-slate-700">{supplier}</div> : null}
                           {invoice ? <div className="rounded-xl bg-white px-3 py-2 text-slate-700">{invoice}</div> : null}
                           {event.reception_date ? <div className="rounded-xl bg-white px-3 py-2">Receptió: <span className="text-slate-800">{dateShort(event.reception_date)}</span></div> : null}
@@ -2546,7 +2788,8 @@ async function apiVariantDetail(id: string) {
 }
 
 async function apiVariantHistory(id: string) {
-  return fetchJSON<VariantHistoryResponse>(`/api/aif/variants/${encodeURIComponent(id)}/history?limit=700`);
+  const data = await fetchJSON<VariantHistoryResponse>(`/api/aif/variants/${encodeURIComponent(id)}/history?limit=700`);
+  return mergeVariantHistoryPriceEvents(data);
 }
 
 async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
@@ -2820,6 +3063,131 @@ function cleanEditComparableValue(value: unknown) {
 
 function editFormsEqual(a: EditForm, b: EditForm) {
   return editFormComparableKeys.every((key) => cleanEditComparableValue(a[key]) === cleanEditComparableValue(b[key]));
+}
+
+type WarehousePriceChangeRow = {
+  key: "buyPrice" | "sellPrice" | "compareAtPrice";
+  label: string;
+  oldValue: string;
+  newValue: string;
+};
+
+function priceComparableValue(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const parsed = Number(raw.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed.toFixed(4) : raw;
+}
+
+function priceDisplayValue(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return raw ? raw : "-";
+}
+
+function editPriceChanges(before: EditForm, after: EditForm): WarehousePriceChangeRow[] {
+  const rows: WarehousePriceChangeRow[] = [];
+  const add = (key: WarehousePriceChangeRow["key"], labelText: string) => {
+    if (priceComparableValue(before[key]) === priceComparableValue(after[key])) return;
+    rows.push({ key, label: labelText, oldValue: priceDisplayValue(before[key]), newValue: priceDisplayValue(after[key]) });
+  };
+  add("buyPrice", "Vételár");
+  add("sellPrice", "Eladási ár");
+  add("compareAtPrice", "Akció előtti ár");
+  return rows;
+}
+
+function localPriceHistoryId(variantId: string) {
+  return String(variantId || "").trim();
+}
+
+function readLocalPriceHistoryMap(): Record<string, VariantHistoryEvent[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(warehouseLocalPriceHistoryStorageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.entries(parsed).reduce<Record<string, VariantHistoryEvent[]>>((acc, [variantId, rows]) => {
+      if (!variantId || !Array.isArray(rows)) return acc;
+      acc[variantId] = rows.filter((row) => row && typeof row === "object") as VariantHistoryEvent[];
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalPriceHistoryMap(map: Record<string, VariantHistoryEvent[]>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(warehouseLocalPriceHistoryStorageKey, JSON.stringify(map));
+  } catch {
+    // A localStorage nem kritikus. A szerveres mentés ettől még megtörtént.
+  }
+}
+
+function localPriceHistoryRows(variantId: string) {
+  const id = localPriceHistoryId(variantId);
+  if (!id) return [] as VariantHistoryEvent[];
+  return readLocalPriceHistoryMap()[id] || [];
+}
+
+function saveLocalPriceHistoryRow(variantId: string, event: VariantHistoryEvent | null) {
+  const id = localPriceHistoryId(variantId);
+  if (!id || !event) return;
+  const map = readLocalPriceHistoryMap();
+  const rows = [event, ...(map[id] || [])]
+    .filter((row, index, all) => row?.id && all.findIndex((x) => x.id === row.id) === index)
+    .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at))
+    .slice(0, 80);
+  map[id] = rows;
+  saveLocalPriceHistoryMap(map);
+}
+
+function buildLocalPriceHistoryEvent(variantId: string, item: Record<string, any> | null | undefined, before: EditForm, after: EditForm): VariantHistoryEvent | null {
+  const changes = editPriceChanges(before, after);
+  if (!changes.length) return null;
+  const createdAt = new Date().toISOString();
+  return {
+    id: `local-price-${variantId}-${Date.now()}`,
+    created_at: createdAt,
+    event_type: "price",
+    direction: "adjust",
+    movement_type: "price_change",
+    source_type: "warehouse_price_edit",
+    source_id: `warehouse_price_edit:${variantId}:${Date.now()}`,
+    qty_delta: null,
+    qty_before: null,
+    qty_after: null,
+    actor: "Felhasználó",
+    location_name: null,
+    old_buy_price: before.buyPrice || null,
+    new_buy_price: after.buyPrice || null,
+    old_sell_price: before.sellPrice || null,
+    new_sell_price: after.sellPrice || null,
+    old_compare_at_price: before.compareAtPrice || null,
+    new_compare_at_price: after.compareAtPrice || null,
+    effective_buy_price: after.buyPrice || null,
+    effective_sell_price: after.sellPrice || null,
+    price_change_fields: changes.map((row) => row.label),
+    local_only: true,
+    raw: {
+      title: "Árváltozás",
+      reason: "warehouse_price_edit",
+      productTitle: firstWarehouseText(item?.title_ro, item?.shopify_title, item?.title_hu),
+      priceChanges: changes,
+    },
+  };
+}
+
+function withLocalPriceHistory(history: VariantHistoryResponse | null, variantId: string): VariantHistoryResponse {
+  const localRows = localPriceHistoryRows(variantId);
+  const base = history || {};
+  if (!localRows.length) return { ...base, events: base.events || [] };
+  const combined = [...localRows, ...(base.events || [])]
+    .filter((row, index, all) => row?.id && all.findIndex((x) => x.id === row.id) === index)
+    .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
+  return { ...base, events: combined };
 }
 
 
@@ -3382,7 +3750,7 @@ export default function AllInWarehouse() {
     setVariantHistoryBusy(true);
     try {
       const data = await apiVariantHistory(id);
-      setVariantHistory(data);
+      setVariantHistory(withLocalPriceHistory(mergeVariantHistoryPriceEvents(data), id));
     } catch (error: any) {
       setVariantHistoryError(error?.message || "A Termék History betöltése nem sikerült.");
     } finally {
@@ -6001,6 +6369,7 @@ export default function AllInWarehouse() {
         size: normalizeSize(edit.size),
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
+        compareAtPrice: edit.compareAtPrice,
         imageUrl: edit.imageUrl,
         status: edit.variantStatus,
       });
