@@ -3932,6 +3932,12 @@ export default function AllInWarehouse() {
     setEditBaseline(emptyForm());
   }
 
+  function discardDetailChangesAndClose() {
+    if (saving || detailBusy) return;
+    closeDetailImmediately();
+    setMessage("A módosítások mentés nélkül eldobva.");
+  }
+
   function requestCloseDetail() {
     if (!detail) return;
     if (saving || detailBusy) return;
