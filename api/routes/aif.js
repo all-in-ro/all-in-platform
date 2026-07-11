@@ -6073,10 +6073,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [variantId]
       );
 
+      const priceStats = await pool.query(
+        `SELECT
+           (array_agg(NULLIF(sm.raw->>'buyPriceAfter','')::numeric ORDER BY sm.created_at DESC, sm.id DESC)
+             FILTER (WHERE NULLIF(sm.raw->>'buyPriceAfter','') IS NOT NULL))[1] AS last_buy_price,
+           (array_agg(NULLIF(sm.raw->>'sellPriceAfter','')::numeric ORDER BY sm.created_at DESC, sm.id DESC)
+             FILTER (WHERE NULLIF(sm.raw->>'sellPriceAfter','') IS NOT NULL))[1] AS last_sell_price,
+           max(sm.created_at) AS last_price_change_at
+         FROM aif_stock_movements sm
+         WHERE sm.variant_id=$1
+           AND (sm.source_type='price_change' OR sm.raw->>'reason'='price_change')`,
+        [variantId]
+      );
+
       const events = await pool.query(
         `SELECT sm.id, sm.created_at, sm.movement_type, sm.source_type, sm.source_id,
                 sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
                 CASE
+                  WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN 'price_change'
                   WHEN sm.source_type='stock_transfer' OR sm.raw->>'reason'='stock_transfer' THEN 'transfer'
                   WHEN sm.source_type='inventory_count' OR sm.raw->>'reason'='inventory_count_commit' THEN 'inventory'
                   WHEN sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit' THEN 'incoming'
@@ -6098,8 +6112,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 im.invoice_number, im.invoice_date, im.reception_date, im.currency_code,
                 im.supplier_id, im.supplier_name, im.reception_id,
                 im.sales_tva_rate, im.sell_price_includes_tva,
-                COALESCE(im.buy_price_ron, im.buy_price, v.buy_price) AS effective_buy_price,
-                COALESCE(im.sell_price_ron, im.sell_price, v.sell_price) AS effective_sell_price
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'buyPriceBefore','')::numeric ELSE NULL END AS old_buy_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'buyPriceAfter','')::numeric ELSE NULL END AS new_buy_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'sellPriceBefore','')::numeric ELSE NULL END AS old_sell_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'sellPriceAfter','')::numeric ELSE NULL END AS new_sell_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'compareAtPriceBefore','')::numeric ELSE NULL END AS old_compare_at_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN NULLIF(sm.raw->>'compareAtPriceAfter','')::numeric ELSE NULL END AS new_compare_at_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change' THEN sm.raw->'changedFields' ELSE NULL END AS price_change_fields,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
+                  THEN COALESCE(NULLIF(sm.raw->>'buyPriceAfter','')::numeric, v.buy_price)
+                  ELSE COALESCE(im.buy_price_ron, im.buy_price, v.buy_price)
+                END AS effective_buy_price,
+                CASE WHEN sm.source_type='price_change' OR sm.raw->>'reason'='price_change'
+                  THEN COALESCE(NULLIF(sm.raw->>'sellPriceAfter','')::numeric, v.sell_price)
+                  ELSE COALESCE(im.sell_price_ron, im.sell_price, v.sell_price)
+                END AS effective_sell_price
          FROM aif_stock_movements sm
          JOIN aif_locations l ON l.id=sm.location_id
          JOIN aif_product_variants v ON v.id=sm.variant_id
@@ -6139,11 +6166,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const stockRows = stock.rows || [];
       const movement = movementTotals.rows[0] || {};
       const imports = importStats.rows[0] || {};
+      const priceHistory = priceStats.rows[0] || {};
       const currentQty = stockRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
       const reservedQty = stockRows.reduce((sum, row) => sum + Number(row.reserved_qty || 0), 0);
       const availableQty = stockRows.reduce((sum, row) => sum + Number(row.available_qty || 0), 0);
-      const lastBuyPrice = imports.last_buy_price ?? variant.rows[0].buy_price ?? null;
-      const lastSellPrice = imports.last_sell_price ?? variant.rows[0].sell_price ?? null;
+      const lastBuyPrice = priceHistory.last_buy_price ?? imports.last_buy_price ?? variant.rows[0].buy_price ?? null;
+      const lastSellPrice = priceHistory.last_sell_price ?? imports.last_sell_price ?? variant.rows[0].sell_price ?? null;
       const sellNet = lastSellPrice === null || lastSellPrice === undefined ? null : Number(lastSellPrice) / 1.21;
       const marginWithoutTva = lastBuyPrice && Number(lastBuyPrice) > 0 && sellNet !== null
         ? ((sellNet - Number(lastBuyPrice)) / Number(lastBuyPrice)) * 100
@@ -6301,7 +6329,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
       const current = await client.query(
-        `SELECT v.id, v.model_id
+        `SELECT v.id, v.model_id, v.buy_price, v.sell_price, v.compare_at_price
          FROM aif_product_variants v
          WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
          FOR UPDATE`,
@@ -6315,6 +6343,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const variantId = current.rows[0].id;
       const modelId = current.rows[0].model_id;
+      const previousBuyPrice = current.rows[0].buy_price;
+      const previousSellPrice = current.rows[0].sell_price;
+      const previousCompareAtPrice = current.rows[0].compare_at_price;
+      const buyPriceProvided = body.buyPrice !== undefined || body.buy_price !== undefined;
+      const sellPriceProvided = body.sellPrice !== undefined || body.sell_price !== undefined;
+      const compareAtPriceProvided = body.compareAtPrice !== undefined || body.compare_at_price !== undefined;
+      const nextBuyPrice = buyPriceProvided ? toMoney(body.buyPrice ?? body.buy_price) : previousBuyPrice;
+      const nextSellPrice = sellPriceProvided ? toMoney(body.sellPrice ?? body.sell_price) : previousSellPrice;
+      const nextCompareAtPrice = compareAtPriceProvided ? toMoney(body.compareAtPrice ?? body.compare_at_price) : previousCompareAtPrice;
+      const moneyChanged = (before, after) => {
+        const b = before === null || before === undefined || String(before).trim() === "" ? null : Number(before);
+        const a = after === null || after === undefined || String(after).trim() === "" ? null : Number(after);
+        if (b === null && a === null) return false;
+        if (b === null || a === null) return true;
+        if (!Number.isFinite(b) || !Number.isFinite(a)) return String(before ?? "") !== String(after ?? "");
+        return Math.round(b * 100) !== Math.round(a * 100);
+      };
+      const changedPriceFields = [];
+      if (buyPriceProvided && moneyChanged(previousBuyPrice, nextBuyPrice)) changedPriceFields.push("buy_price");
+      if (sellPriceProvided && moneyChanged(previousSellPrice, nextSellPrice)) changedPriceFields.push("sell_price");
+      if (compareAtPriceProvided && moneyChanged(previousCompareAtPrice, nextCompareAtPrice)) changedPriceFields.push("compare_at_price");
 
       const variantSets = [];
       const variantArgs = [];
@@ -6354,9 +6403,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
         addVariant("size", await normalizeSizeValue(client, size));
       }
-      if (body.buyPrice !== undefined || body.buy_price !== undefined) addVariant("buy_price", toMoney(body.buyPrice ?? body.buy_price));
-      if (body.sellPrice !== undefined || body.sell_price !== undefined) addVariant("sell_price", toMoney(body.sellPrice ?? body.sell_price));
-      if (body.compareAtPrice !== undefined || body.compare_at_price !== undefined) addVariant("compare_at_price", toMoney(body.compareAtPrice ?? body.compare_at_price));
+      if (buyPriceProvided) addVariant("buy_price", nextBuyPrice);
+      if (sellPriceProvided) addVariant("sell_price", nextSellPrice);
+      if (compareAtPriceProvided) addVariant("compare_at_price", nextCompareAtPrice);
       if (body.weightGrams !== undefined || body.weight_grams !== undefined) addVariant("weight_grams", toInt(body.weightGrams ?? body.weight_grams));
       if (body.imageUrl !== undefined || body.image_url !== undefined) addVariant("image_url", emptyToNull(body.imageUrl ?? body.image_url));
       if (body.status !== undefined) {
@@ -6558,6 +6607,50 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               ]
             );
           }
+        }
+      }
+
+      if (changedPriceFields.length) {
+        const stockLocation = await client.query(
+          `SELECT location_id, qty
+           FROM aif_stock
+           WHERE variant_id=$1
+           ORDER BY COALESCE(qty,0) DESC, updated_at DESC NULLS LAST
+           LIMIT 1`,
+          [variantId]
+        );
+        const priceChangeLocationId = stockLocation.rows[0]?.location_id || await getDefaultLocationId(client);
+        const currentQtyForLocation = Number(stockLocation.rows[0]?.qty || 0);
+        if (priceChangeLocationId) {
+          await insertStockMovementSafe(client, {
+            movementType: "price_change",
+            sourceType: "price_change",
+            sourcePrefix: "price",
+            fallbackSourceType: "manual_stock_edit",
+            locationId: priceChangeLocationId,
+            variantId,
+            qtyDelta: 0,
+            qtyBefore: currentQtyForLocation,
+            qtyAfter: currentQtyForLocation,
+            actor: actorFrom(req),
+            raw: {
+              reason: "price_change",
+              title: "Árváltozás",
+              changedFields: changedPriceFields,
+              priceChanges: [
+                ...(changedPriceFields.includes("buy_price") ? [{ key: "buyPrice", label: "Vételár", oldValue: previousBuyPrice, newValue: nextBuyPrice }] : []),
+                ...(changedPriceFields.includes("sell_price") ? [{ key: "sellPrice", label: "Eladási ár", oldValue: previousSellPrice, newValue: nextSellPrice }] : []),
+                ...(changedPriceFields.includes("compare_at_price") ? [{ key: "compareAtPrice", label: "Akció előtti ár", oldValue: previousCompareAtPrice, newValue: nextCompareAtPrice }] : []),
+              ],
+              buyPriceBefore: previousBuyPrice,
+              buyPriceAfter: nextBuyPrice,
+              sellPriceBefore: previousSellPrice,
+              sellPriceAfter: nextSellPrice,
+              compareAtPriceBefore: previousCompareAtPrice,
+              compareAtPriceAfter: nextCompareAtPrice,
+              source: "variant_detail_edit",
+            },
+          });
         }
       }
 
