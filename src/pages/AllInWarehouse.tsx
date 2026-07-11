@@ -2079,7 +2079,20 @@ function VariantHistoryPanel({
   onClose: () => void;
   onReload: () => void;
 }) {
+  useEffect(() => {
+    if (!target) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [target, onClose]);
+
   if (!target) return null;
+  const historyReloadButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white shadow-sm transition hover:bg-[#237f7d] disabled:cursor-not-allowed disabled:opacity-60";
+  const historyCloseButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-400/45 bg-[#303a4c] px-3 text-xs text-white shadow-sm transition hover:bg-[#263246] disabled:cursor-not-allowed disabled:opacity-60";
   const item = { ...(target as any), ...(history?.item || {}) } as InventoryItem & Record<string, any>;
   const summary = history?.summary || {};
   const events = history?.events || [];
@@ -2111,8 +2124,8 @@ function VariantHistoryPanel({
               </div>
             </div>
             <div className="flex shrink-0 gap-2">
-              <button className={`${btnSoft} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`} onClick={onReload} disabled={loading} type="button"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
-              <button className={`${btnSoft} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`} onClick={onClose} type="button"><X size={15} /> Bezárás</button>
+              <button className={historyReloadButton} onClick={onReload} disabled={loading} type="button"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+              <button className={historyCloseButton} onClick={onClose} type="button"><X size={15} /> Bezárás</button>
             </div>
           </div>
         </div>
