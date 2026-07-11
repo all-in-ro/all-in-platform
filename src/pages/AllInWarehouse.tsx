@@ -2873,6 +2873,7 @@ export default function AllInWarehouse() {
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
   const [editBaseline, setEditBaseline] = useState<EditForm>(emptyForm());
+  const [detailCloseConfirmOpen, setDetailCloseConfirmOpen] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newProductOpen, setNewProductOpen] = useState(false);
@@ -3922,6 +3923,46 @@ export default function AllInWarehouse() {
 
   const detailHasChanges = useMemo(() => Boolean(detail?.item?.id) && !editFormsEqual(edit, editBaseline), [detail?.item?.id, edit, editBaseline]);
   const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
+
+  function closeDetailImmediately() {
+    setDetailCloseConfirmOpen(false);
+    setDetail(null);
+    setDetailBusy(false);
+    setEdit(emptyForm());
+    setEditBaseline(emptyForm());
+  }
+
+  function requestCloseDetail() {
+    if (!detail) return;
+    if (saving || detailBusy) return;
+    if (detailHasChanges) {
+      setDetailCloseConfirmOpen(true);
+      return;
+    }
+    closeDetailImmediately();
+  }
+
+  async function saveDetailAndClose() {
+    const ok = await saveDetail({ closeAfterSave: true });
+    if (ok) setDetailCloseConfirmOpen(false);
+  }
+
+  useEffect(() => {
+    if (!detail) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (barcodeScanner || saving || detailBusy) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (detailCloseConfirmOpen) {
+        setDetailCloseConfirmOpen(false);
+        return;
+      }
+      requestCloseDetail();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [detail, detailHasChanges, detailCloseConfirmOpen, barcodeScanner, saving, detailBusy]);
 
   const canSaveCategoryForm = Boolean(categoryForm.nameRo.trim());
   const canSaveSubCategoryForm = Boolean(subCategoryForm.parentId && subCategoryForm.nameRo.trim());
@@ -5531,6 +5572,7 @@ export default function AllInWarehouse() {
   }
 
   async function openDetail(id: string) {
+    setDetailCloseConfirmOpen(false);
     setDetailBusy(true);
     setMessage("");
     try {
@@ -5823,6 +5865,8 @@ export default function AllInWarehouse() {
     setNewProductStockRows({});
   }
 
+
+
   function newProductTotalQty(rows: Record<string, string> = newProductStockRows) {
     return stockLocationRows.reduce((sum, loc) => sum + Math.max(0, Math.floor(n(rows[locationKey(loc)]))), 0);
   }
@@ -5916,8 +5960,13 @@ export default function AllInWarehouse() {
     }
   }
 
-  async function saveDetail() {
-    if (!detail?.item?.id || !detailHasChanges) return;
+  async function saveDetail(options: { closeAfter?: boolean; closeAfterSave?: boolean } = {}) {
+    const shouldCloseAfter = Boolean(options.closeAfter || options.closeAfterSave);
+    if (!detail?.item?.id) return false;
+    if (!detailHasChanges) {
+      if (shouldCloseAfter) closeDetailImmediately();
+      return true;
+    }
     const detailId = String(detail.item.id || detail.item.variant_id || "");
     const wasActivationWorkView = stockFilter === "watch" || Boolean(incomingFocus?.batchId);
     setSaving(true);
@@ -5961,8 +6010,9 @@ export default function AllInWarehouse() {
         } : current);
       }
       if (wasActivationWorkView && resolvedActivation) {
-        setDetail(null);
-        setEditBaseline(emptyForm());
+        closeDetailImmediately();
+      } else if (shouldCloseAfter) {
+        closeDetailImmediately();
       } else {
         const savedForm = formFromDetail(d);
         if (!savedForm.brandCode) {
@@ -5982,10 +6032,12 @@ export default function AllInWarehouse() {
         setHighlightProductId((current) => current === detailId ? "" : current);
         setPendingProductJumpId((current) => current === detailId ? "" : current);
       } else {
-        setMessage("A termékadatok mentése megtörtént.");
+        setMessage(shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.");
       }
+      return true;
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a termékadatokat.");
+      return false;
     } finally {
       setSaving(false);
     }
@@ -8123,6 +8175,36 @@ export default function AllInWarehouse() {
         </div>
       )}
 
+      {detailCloseConfirmOpen && detail && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-[#7bd7d4]/45 bg-[#f7fbfd] text-slate-900 shadow-2xl shadow-slate-950/35">
+            <div className="border-b border-[#7bd7d4]/35 bg-[#e9faf8] px-5 py-4">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[#208d8b]">Nem mentett módosítás</p>
+              <h2 className="mt-1 text-2xl leading-tight text-slate-900">Elmented a Változtatást?</h2>
+              <p className="mt-1 text-sm leading-snug text-slate-600">A termékadatlap módosult. Zárás előtt válaszd ki, hogy mentjük vagy eldobjuk a változást.</p>
+            </div>
+            <div className="flex flex-col gap-2 p-4 sm:flex-row sm:justify-end">
+              <button
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                disabled={saving}
+                onClick={discardDetailChangesAndClose}
+              >
+                Nem
+              </button>
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-4 text-sm text-white shadow-[0_10px_22px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                disabled={saving}
+                onClick={() => { void saveDetailAndClose(); }}
+              >
+                <Save size={15} /> {saving ? "Mentés..." : "Igen"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {detail && (
         <div className={modalWrap}>
           <div className={modal}>
@@ -8141,7 +8223,7 @@ export default function AllInWarehouse() {
                 >
                   <Barcode size={16} /> Vonalkód / címke
                 </button>
-                <button className={btnSoft} onClick={() => setDetail(null)}><X size={16} /> Bezárás</button>
+                <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Bezárás</button>
               </div>
             </div>
             <div className="space-y-4 p-4">
@@ -8264,8 +8346,8 @@ export default function AllInWarehouse() {
               </div>
 
               <div className="flex flex-wrap justify-end gap-2 border-t border-white/12 pt-4">
-                <button className={btnSoft} onClick={() => setDetail(null)}><X size={16} /> Mégse</button>
-                <button className={detailSaveButtonClass} onClick={saveDetail} disabled={saving || !detailHasChanges} title={!detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése"}><Save size={16} /> Mentés</button>
+                <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Mégse</button>
+                <button className={detailSaveButtonClass} onClick={() => void saveDetail()} disabled={saving || !detailHasChanges} title={!detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése"}><Save size={16} /> Mentés</button>
               </div>
             </div>
           </div>
