@@ -1940,43 +1940,55 @@ function historyQty(value: unknown, signed = false) {
 function historyEventMeta(event: VariantHistoryEvent) {
   const type = String(event.event_type || "").toLowerCase();
   const direction = String(event.direction || "").toLowerCase();
-  if (type === "transfer") {
+  const source = String(event.source_type || "").toLowerCase();
+  const reason = String(event.raw?.reason || "").toLowerCase();
+  const isTransfer = type === "transfer" || source.includes("transfer") || reason.includes("transfer") || source.includes("redistribution");
+  const isInventory = type === "inventory" || source.includes("inventory");
+  const isIncoming = type === "incoming" || direction === "in";
+  const isOutgoing = type === "outgoing" || direction === "out";
+
+  if (isTransfer) {
     return {
-      label: direction === "out" ? "Áthelyezés ki" : direction === "in" ? "Áthelyezés be" : "Áthelyezés",
-      cls: "border-sky-300/55 bg-sky-500/28 text-white shadow-[0_0_16px_rgba(56,189,248,0.16)]",
-      dot: "bg-sky-200",
-      stripe: "bg-sky-300",
+      label: direction === "out" ? "Átvitel ki" : direction === "in" ? "Átvitel be" : "Átvitel",
+      cls: "border-sky-300/70 bg-sky-100 text-sky-800",
+      dot: "bg-sky-500",
+      stripe: "bg-sky-400",
+      card: "bg-sky-50/90 border-sky-200",
     };
   }
-  if (type === "inventory") {
+  if (isInventory) {
     return {
       label: "Leltár",
-      cls: "border-violet-300/55 bg-violet-500/28 text-white shadow-[0_0_16px_rgba(167,139,250,0.16)]",
-      dot: "bg-violet-200",
-      stripe: "bg-violet-300",
+      cls: "border-violet-300/70 bg-violet-100 text-violet-800",
+      dot: "bg-violet-500",
+      stripe: "bg-violet-400",
+      card: "bg-violet-50/90 border-violet-200",
     };
   }
-  if (type === "incoming" || direction === "in") {
+  if (isIncoming) {
     return {
       label: "Bevételezés",
-      cls: "border-[#9cf4f0]/60 bg-[#208d8b] text-white shadow-[0_0_18px_rgba(42,141,139,0.22)]",
-      dot: "bg-[#d7fffd]",
-      stripe: "bg-[#7bd7d4]",
+      cls: "border-[#8be1dd] bg-[#e7faf8] text-[#187876]",
+      dot: "bg-[#208d8b]",
+      stripe: "bg-[#2a8d8b]",
+      card: "bg-[#effbf9] border-[#b9ece9]",
     };
   }
-  if (type === "outgoing" || direction === "out") {
+  if (isOutgoing) {
     return {
       label: "Kimenő",
-      cls: "border-rose-200/55 bg-rose-600/82 text-white shadow-[0_0_16px_rgba(244,63,94,0.18)]",
-      dot: "bg-rose-100",
-      stripe: "bg-rose-300",
+      cls: "border-rose-300/70 bg-rose-100 text-rose-800",
+      dot: "bg-rose-500",
+      stripe: "bg-rose-400",
+      card: "bg-rose-50/90 border-rose-200",
     };
   }
   return {
     label: "Korrekció",
-    cls: "border-amber-200/55 bg-amber-500/28 text-white shadow-[0_0_16px_rgba(251,191,36,0.14)]",
-    dot: "bg-amber-100",
-    stripe: "bg-amber-300",
+    cls: "border-amber-300/80 bg-amber-100 text-amber-900",
+    dot: "bg-amber-500",
+    stripe: "bg-amber-400",
+    card: "bg-amber-50/90 border-amber-200",
   };
 }
 
@@ -1984,48 +1996,67 @@ function historySourceLabel(event: VariantHistoryEvent) {
   const type = String(event.event_type || "").toLowerCase();
   const source = String(event.source_type || "").toLowerCase();
   const reason = String(event.raw?.reason || "").toLowerCase();
-  if (type === "transfer" || source.includes("transfer") || reason.includes("transfer")) return "Készletmozgatás";
-  if (type === "inventory" || source.includes("inventory")) return "Leltár";
-  if (source.includes("import_batch") || reason.includes("import_batch")) return "Bevételezés";
+  const movement = String(event.movement_type || "").toLowerCase();
+  if (type === "transfer" || source.includes("transfer") || reason.includes("transfer")) return "Üzletek közti átvitel";
+  if (source.includes("manual_stock_redistribution")) return "Készlet átrendezés";
+  if (type === "inventory" || source.includes("inventory")) return "Leltár rendezés";
+  if (source.includes("import_batch") || reason.includes("import_batch")) return "Import / bevételezés";
   if (source.includes("manual_stock_correction")) return "Kézi készletkorrekció";
-  if (source.includes("manual_stock_redistribution")) return "Kézi áthelyezés";
   if (source.includes("sale")) return "Eladás";
-  return event.movement_type || event.source_type || "Mozgás";
+  if (movement.includes("manual") || movement.includes("adjustment") || source.includes("manual")) return "Kézi készletmódosítás";
+  if (type === "incoming") return "Bejövő mozgás";
+  if (type === "outgoing") return "Kimenő mozgás";
+  return "Egyéb készletmozgás";
+}
+
+function historyEventNote(event: VariantHistoryEvent) {
+  const note = firstWarehouseText(event.raw?.title, event.raw?.note);
+  const key = normalizeSearch(note);
+  if (!note) return "";
+  if (
+    (key.includes("manual") && key.includes("adjustment")) ||
+    key.includes("manual_stock") ||
+    key.includes("stock_transfer") ||
+    key.includes("transfer_out") ||
+    key.includes("transfer_in") ||
+    key.includes("import_batch")
+  ) return "";
+  return note;
 }
 
 function HistoryMiniCard({ label: labelText, value, hint, tone = "default" }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: "default" | "green" | "blue" | "red" | "gold" }) {
   const toneClass = tone === "green"
-    ? "border-[#7bd7d4]/38 bg-[#203f49]"
+    ? "border-[#9be2df] bg-[#effbf9]"
     : tone === "blue"
-      ? "border-sky-300/25 bg-sky-500/12"
+      ? "border-sky-200 bg-sky-50"
       : tone === "red"
-        ? "border-rose-300/25 bg-rose-500/12"
+        ? "border-rose-200 bg-rose-50"
         : tone === "gold"
-          ? "border-amber-200/25 bg-amber-400/12"
-          : "border-white/16 bg-[#303a4c]";
+          ? "border-amber-200 bg-amber-50"
+          : "border-slate-200 bg-white";
   return (
-    <div className={`rounded-2xl border p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] ${toneClass}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#cffffd]/78">{labelText}</p>
-      <p className="mt-1.5 text-2xl font-semibold leading-none tracking-tight text-white">{value}</p>
-      {hint ? <p className="mt-1.5 text-[11px] leading-snug text-white/72">{hint}</p> : null}
+    <div className={`rounded-2xl border px-3 py-2.5 ${toneClass}`}>
+      <p className="text-[10px] uppercase tracking-[0.09em] text-slate-500">{labelText}</p>
+      <p className="mt-1 text-[22px] leading-none tracking-tight text-slate-900">{value}</p>
+      {hint ? <p className="mt-1 text-[11px] leading-snug text-slate-500">{hint}</p> : null}
     </div>
   );
 }
 
 function HistoryPriceBox({ event, pricesVisible }: { event: VariantHistoryEvent; pricesVisible: boolean }) {
   return (
-    <div className="rounded-2xl border border-white/14 bg-[#202838] p-3 text-[12px] leading-snug shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-      <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-1.5">
-        <span className="text-white/70">Vételár</span>
-        <span className="font-semibold tabular-nums text-white">{pricesVisible ? money(event.effective_buy_price) : "••••"}</span>
+    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[12px] leading-snug text-slate-600 shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-1.5">
+        <span className="text-slate-500">Vételár</span>
+        <span className="tabular-nums text-slate-900">{pricesVisible ? money(event.effective_buy_price) : "••••"}</span>
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-3 border-b border-white/10 pb-1.5">
-        <span className="text-white/70">Eladási ár</span>
-        <span className="font-semibold tabular-nums text-white">{money(event.effective_sell_price)}</span>
+      <div className="mt-1.5 flex items-center justify-between gap-3 border-b border-slate-200 pb-1.5">
+        <span className="text-slate-500">Eladási ár</span>
+        <span className="tabular-nums text-slate-900">{money(event.effective_sell_price)}</span>
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-3">
-        <span className="text-[#cffffd]/80">TVA nélküli haszon</span>
-        <span className="font-semibold tabular-nums text-[#cffffd]">{pricesVisible ? priceMarkupPercentText(event.effective_buy_price, event.effective_sell_price) || "-" : "••••"}</span>
+        <span className="text-slate-500">TVA nélküli haszon</span>
+        <span className="tabular-nums text-[#187876]">{pricesVisible ? priceMarkupPercentText(event.effective_buy_price, event.effective_sell_price) || "-" : "••••"}</span>
       </div>
     </div>
   );
@@ -2060,37 +2091,37 @@ function VariantHistoryPanel({
   const availableQtyText = historyQty(summary.availableQty ?? item.available_qty);
 
   return createPortal(
-    <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/76 backdrop-blur-sm">
-      <div className="h-full w-full max-w-[1120px] overflow-auto border-l border-[#7bd7d4]/28 bg-[#263246] text-white shadow-2xl shadow-black/55">
-        <div className="sticky top-0 z-10 border-b border-[#7bd7d4]/22 bg-[#202838]/98 px-4 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.22)] backdrop-blur">
+    <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/42 backdrop-blur-[2px]">
+      <div className="h-full w-full max-w-[1040px] overflow-auto border-l border-slate-200 bg-[#edf2f6] text-slate-900 shadow-2xl shadow-slate-950/30">
+        <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#f8fbfd]/96 px-4 py-3 backdrop-blur">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 gap-3">
-              <WarehouseProductImage src={item.image_url} alt={item.title_ro || ""} thumbClassName="h-16 w-16 rounded-2xl" iconSize={20} />
-              <div className="min-w-0 border-l-4 border-[#7bd7d4]/70 pl-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#cffffd]/82">Termék History</p>
-                <h2 className="mt-1 line-clamp-2 text-2xl font-semibold leading-tight text-white">{item.title_ro || item.shopify_title || "Névtelen termék"}</h2>
-                <p className="mt-1 text-[13px] leading-snug text-white/76">
+              <WarehouseProductImage src={item.image_url} alt={item.title_ro || ""} thumbClassName="h-14 w-14 rounded-2xl bg-white" iconSize={18} />
+              <div className="min-w-0 border-l-4 border-[#2a8d8b] pl-3">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-[#187876]">Termék History</p>
+                <h2 className="mt-0.5 line-clamp-2 text-[26px] leading-tight tracking-tight text-slate-900">{item.title_ro || item.shopify_title || "Névtelen termék"}</h2>
+                <p className="mt-1 text-[13px] leading-snug text-slate-600">
                   {item.brand_name || "Márka nélkül"} • {itemMainCategoryLabel(item)}{itemSubCategoryLabel(item) ? ` / ${itemSubCategoryLabel(item)}` : ""} • {displayColorName(item.color_name, item.color_code)} • {item.size || "-"}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <span className="rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2.5 py-1 text-[11px] font-semibold text-[#cffffd]">Termékkód: {itemProductCode(item) || "-"}</span>
-                  {visibleWarehouseBarcode(item) ? <span className="rounded-full border border-white/18 bg-white/[0.08] px-2.5 py-1 text-[11px] text-white/82">Vonalkód: {visibleWarehouseBarcode(item)}</span> : null}
-                  <span className="rounded-full border border-white/18 bg-white/[0.08] px-2.5 py-1 text-[11px] text-white/82">Készlet: {currentQtyText}</span>
+                  <span className="rounded-full border border-[#8edbd7] bg-[#effbf9] px-2.5 py-1 text-[11px] text-[#187876]">Termékkód: {itemProductCode(item) || "-"}</span>
+                  {visibleWarehouseBarcode(item) ? <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600">Vonalkód: {visibleWarehouseBarcode(item)}</span> : null}
+                  <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600">Készlet: {currentQtyText}</span>
                 </div>
               </div>
             </div>
             <div className="flex shrink-0 gap-2">
-              <button className={`${btnSoft} border-white/24 bg-white/[0.10] text-white`} onClick={onReload} disabled={loading} type="button"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
-              <button className={`${btnSoft} border-white/24 bg-white/[0.10] text-white`} onClick={onClose} type="button"><X size={15} /> Bezárás</button>
+              <button className={`${btnSoft} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`} onClick={onReload} disabled={loading} type="button"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+              <button className={`${btnSoft} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`} onClick={onClose} type="button"><X size={15} /> Bezárás</button>
             </div>
           </div>
         </div>
 
-        <div className="space-y-4 p-4">
-          {error ? <div className="rounded-2xl border border-rose-300/35 bg-rose-500/18 px-3 py-2 text-sm font-semibold text-rose-50">{error}</div> : null}
-          {loading && !history ? <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#303a4c] p-6 text-center text-sm text-white/78">Termék History betöltése...</div> : null}
+        <div className="space-y-3 p-3.5">
+          {error ? <div className="rounded-2xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+          {loading && !history ? <div className="rounded-2xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-600">Termék History betöltése...</div> : null}
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
             <HistoryMiniCard tone="green" label="Jelenlegi készlet" value={currentQtyText} hint={`${availableQtyText} elérhető`} />
             <HistoryMiniCard tone="green" label="Összes bejött" value={historyQty(summary.totalIncomingQty)} hint={`${historyQty(summary.totalPurchasedQty)} importból`} />
             <HistoryMiniCard tone="red" label="Összes kiment" value={historyQty(summary.totalOutgoingQty)} hint="Eladás / kivétel / leltár" />
@@ -2102,31 +2133,31 @@ function VariantHistoryPanel({
           </div>
 
           {stockRows.length ? (
-            <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#303a4c] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-sm font-semibold text-white"><Boxes size={16} /> Készlet helyenként</div>
-                <span className="rounded-full border border-white/14 bg-white/[0.08] px-2 py-0.5 text-[11px] text-white/68">{stockRows.length} hely</span>
+            <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+              <div className="mb-2.5 flex items-center justify-between gap-2 text-slate-800">
+                <div className="flex items-center gap-2 text-sm"><Boxes size={16} /> Készlet helyenként</div>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">{stockRows.length} hely</span>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {stockRows.map((row) => (
-                  <div key={`${row.location_id || row.location_code}`} className="rounded-xl border border-white/14 bg-[#202838] px-3 py-2.5 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                    <div className="truncate font-semibold text-white/86">{row.location_name || row.location_code || "Hely"}</div>
-                    <div className="mt-1.5 text-2xl font-semibold leading-none text-white">{historyQty(row.qty)} <span className="text-[11px] font-normal text-white/58">/ foglalt {historyQty(row.reserved_qty)}</span></div>
+                  <div key={`${row.location_id || row.location_code}`} className="rounded-xl border border-slate-200 bg-[#f8fafc] px-3 py-2 text-xs">
+                    <div className="truncate text-slate-600">{row.location_name || row.location_code || "Hely"}</div>
+                    <div className="mt-1 text-[24px] leading-none text-slate-900">{historyQty(row.qty)} <span className="text-[11px] text-slate-500">/ foglalt {historyQty(row.reserved_qty)}</span></div>
                   </div>
                 ))}
               </div>
             </div>
           ) : null}
 
-          <div className="overflow-hidden rounded-2xl border border-[#7bd7d4]/24 bg-[#303a4c] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/12 bg-[#202838] px-4 py-3">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white/92 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-[#f8fbfd] px-3.5 py-3">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#cffffd]/72">History idővonal</p>
-                <h3 className="mt-1 text-lg font-semibold text-white">Teljes termékmozgás</h3>
+                <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Mozgási napló</p>
+                <h3 className="mt-0.5 text-[18px] text-slate-900">Teljes terméktörténet</h3>
               </div>
-              <span className="rounded-full border border-[#7bd7d4]/30 bg-[#203f49] px-3 py-1 text-xs font-semibold text-[#cffffd]">{events.length} esemény</span>
+              <span className="rounded-full border border-[#8edbd7] bg-[#effbf9] px-2.5 py-1 text-[11px] text-[#187876]">{events.length} esemény</span>
             </div>
-            <div className="space-y-2 p-3">
+            <div className="space-y-2.5 p-3">
               {events.map((event) => {
                 const meta = historyEventMeta(event);
                 const transferText = event.from_location_name || event.to_location_name
@@ -2135,36 +2166,37 @@ function VariantHistoryPanel({
                 const invoice = event.invoice_number ? `Számla: ${event.invoice_number}` : "";
                 const supplier = event.supplier_name ? `Beszállító: ${event.supplier_name}` : "";
                 const file = event.source_file_name ? `Forrás: ${event.source_file_name}` : "";
+                const note = historyEventNote(event);
                 return (
-                  <div key={event.id} className="relative overflow-hidden rounded-2xl border border-white/12 bg-[#263246] p-3 shadow-[0_10px_22px_rgba(15,23,42,0.18)]">
+                  <div key={event.id} className={`relative overflow-hidden rounded-2xl border p-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ${meta.card}`}>
                     <span className={`absolute left-0 top-0 h-full w-1 ${meta.stripe}`} />
-                    <div className="grid gap-3 pl-2 lg:grid-cols-[176px,1fr,230px] lg:items-start">
-                      <div className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-[0.12em] text-white/50">Dátum</p>
-                        <p className="mt-1 text-[13px] font-semibold leading-snug text-white">{historyDateTime(event.created_at)}</p>
+                    <div className="grid gap-2.5 pl-2 lg:grid-cols-[148px,1fr,188px] lg:items-start">
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-[0.10em] text-slate-400">Dátum</p>
+                        <p className="mt-1 text-[13px] leading-snug text-slate-800">{historyDateTime(event.created_at)}</p>
                       </div>
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
-                          <span className="rounded-full border border-white/14 bg-white/[0.08] px-2.5 py-1 text-sm font-semibold text-white">{historyQty(event.qty_delta, true)}</span>
-                          <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[#cffffd]/72">{historySourceLabel(event)}</span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{historyQty(event.qty_delta, true)}</span>
+                          <span className="rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
                         </div>
-                        <div className="mt-3 grid gap-2 text-[12px] leading-snug text-white/76 sm:grid-cols-2">
-                          <div className="rounded-xl bg-white/[0.05] px-3 py-2">Hely: <span className="font-semibold text-white">{transferText}</span></div>
-                          <div className="rounded-xl bg-white/[0.05] px-3 py-2">Előtte / utána: <span className="font-semibold text-white">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
-                          {supplier ? <div className="rounded-xl bg-white/[0.05] px-3 py-2 text-white/84">{supplier}</div> : null}
-                          {invoice ? <div className="rounded-xl bg-white/[0.05] px-3 py-2 text-white/84">{invoice}</div> : null}
-                          {event.reception_date ? <div className="rounded-xl bg-white/[0.05] px-3 py-2">Receptió: <span className="font-semibold text-white">{dateShort(event.reception_date)}</span></div> : null}
-                          {file ? <div className="truncate rounded-xl bg-white/[0.05] px-3 py-2 text-white/74" title={file}>{file}</div> : null}
+                        <div className="mt-2 grid gap-1.5 text-[12px] leading-snug text-slate-600 sm:grid-cols-2">
+                          <div className="rounded-xl bg-white px-3 py-2">Hely: <span className="text-slate-800">{transferText}</span></div>
+                          <div className="rounded-xl bg-white px-3 py-2">Előtte / utána: <span className="text-slate-800">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</span></div>
+                          {supplier ? <div className="rounded-xl bg-white px-3 py-2 text-slate-700">{supplier}</div> : null}
+                          {invoice ? <div className="rounded-xl bg-white px-3 py-2 text-slate-700">{invoice}</div> : null}
+                          {event.reception_date ? <div className="rounded-xl bg-white px-3 py-2">Receptió: <span className="text-slate-800">{dateShort(event.reception_date)}</span></div> : null}
+                          {file ? <div className="truncate rounded-xl bg-white px-3 py-2 text-slate-500" title={file}>{file}</div> : null}
                         </div>
-                        {(event.raw?.note || event.raw?.title) ? <p className="mt-2 rounded-xl bg-white/[0.04] px-3 py-2 text-xs leading-snug text-white/64">{event.raw?.title || event.raw?.note}</p> : null}
+                        {note ? <p className="mt-1.5 rounded-xl bg-white/75 px-3 py-2 text-xs leading-snug text-slate-500">{note}</p> : null}
                       </div>
                       <HistoryPriceBox event={event} pricesVisible={pricesVisible} />
                     </div>
                   </div>
                 );
               })}
-              {!events.length && !loading ? <div className="px-4 py-10 text-center text-sm text-white/68">Még nincs naplózott esemény ennél a terméknél.</div> : null}
+              {!events.length && !loading ? <div className="px-4 py-8 text-center text-sm text-slate-500">Még nincs naplózott esemény ennél a terméknél.</div> : null}
             </div>
           </div>
         </div>
