@@ -2396,7 +2396,7 @@ function VariantHistoryPanel({
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white/92 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-[#f8fbfd] px-3.5 py-3">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Mozgási napló</p>
+                <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Termék History</p>
                 <h3 className="mt-0.5 text-[18px] text-slate-900">Teljes terméktörténet</h3>
               </div>
               <span className="rounded-full border border-[#8edbd7] bg-[#effbf9] px-2.5 py-1 text-[11px] text-[#187876]">{events.length} esemény</span>
@@ -6342,11 +6342,21 @@ export default function AllInWarehouse() {
       return true;
     }
     const detailId = String(detail.item.id || detail.item.variant_id || "");
+    const priceHistoryEntry = makeWarehousePriceHistoryEntry({
+      variantId: detailId,
+      before: editBaseline,
+      after: edit,
+      item: detail?.item || null,
+    });
+    const localPriceHistoryEvent = buildLocalPriceHistoryEvent(detailId, detail?.item || null, editBaseline, edit);
+    const priceHistoryAttributes = priceHistoryEntry
+      ? { [WAREHOUSE_PRICE_HISTORY_ATTR_KEY]: appendWarehousePriceHistory(detail?.item?.attributes, priceHistoryEntry) }
+      : undefined;
     const wasActivationWorkView = stockFilter === "watch" || Boolean(incomingFocus?.batchId);
     setSaving(true);
     setMessage("");
     try {
-      await apiVariantUpdate(detail.item.id, {
+      const variantUpdatePayload: Record<string, unknown> = {
         titleRo: edit.titleRo,
         titleHu: edit.titleHu,
         descriptionRo: edit.descriptionRo,
@@ -6372,7 +6382,15 @@ export default function AllInWarehouse() {
         compareAtPrice: edit.compareAtPrice,
         imageUrl: edit.imageUrl,
         status: edit.variantStatus,
-      });
+      };
+      if (priceHistoryAttributes) variantUpdatePayload.attributes = priceHistoryAttributes;
+      await apiVariantUpdate(detail.item.id, variantUpdatePayload);
+      if (localPriceHistoryEvent) {
+        saveLocalPriceHistoryRow(detailId, localPriceHistoryEvent);
+        setVariantHistory((current) => current && historyTarget && String(historyTarget.variant_id || (historyTarget as any).id || "") === detailId
+          ? withLocalPriceHistory(mergeVariantHistoryPriceEvents(current), detailId)
+          : current);
+      }
       const d = await apiVariantDetail(detail.item.id);
       const formResolvedActivation = String(edit.modelStatus || "").toLowerCase() === "active" && String(edit.variantStatus || "").toLowerCase() === "active";
       const resolvedActivation = formResolvedActivation || !needsWarehouseActivation(d.item as InventoryItem);
@@ -6407,7 +6425,10 @@ export default function AllInWarehouse() {
         setHighlightProductId((current) => current === detailId ? "" : current);
         setPendingProductJumpId((current) => current === detailId ? "" : current);
       } else {
-        setMessage(shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.");
+        setMessage(priceHistoryEntry
+          ? (shouldCloseAfter ? "A változtatások mentve, az árváltozás bekerült a Termék History-ba." : "A termékadatok mentve, az árváltozás bekerült a Termék History-ba.")
+          : (shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.")
+        );
       }
       return true;
     } catch (e: any) {
