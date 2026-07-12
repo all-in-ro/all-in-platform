@@ -6183,6 +6183,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ? ((sellNet - Number(lastBuyPrice)) / Number(lastBuyPrice)) * 100
         : null;
 
+      const priceKeyValue = (value) => {
+        if (value === null || value === undefined || String(value).trim() === "") return "";
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed.toFixed(2) : text(value);
+      };
+      const historyEvents = [];
+      const seenHistoryEvents = new Set();
+      for (const row of events.rows || []) {
+        const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+        const isPrice = row.event_type === "price_change" || row.source_type === "price_change" || raw.reason === "price_change";
+        const key = isPrice
+          ? [
+              "price",
+              row.created_at ? Math.floor(new Date(row.created_at).getTime() / 60000) : "",
+              JSON.stringify(row.price_change_fields || raw.changedFields || []),
+              priceKeyValue(row.old_buy_price ?? raw.buyPriceBefore),
+              priceKeyValue(row.new_buy_price ?? raw.buyPriceAfter),
+              priceKeyValue(row.old_sell_price ?? raw.sellPriceBefore),
+              priceKeyValue(row.new_sell_price ?? raw.sellPriceAfter),
+              priceKeyValue(row.old_compare_at_price ?? raw.compareAtPriceBefore),
+              priceKeyValue(row.new_compare_at_price ?? raw.compareAtPriceAfter),
+            ].join("|")
+          : `event:${row.id}`;
+        if (seenHistoryEvents.has(key)) continue;
+        seenHistoryEvents.add(key);
+        historyEvents.push(row);
+      }
+
       res.json({
         item: variant.rows[0],
         stock: stockRows,
@@ -6203,7 +6231,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           lastIncomingAt: imports.last_incoming_at || null,
           marginWithoutTva,
         },
-        events: events.rows,
+        events: historyEvents,
       });
     } catch (e) {
       console.error("AIF variant history failed", e);
@@ -6628,35 +6656,52 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const priceChangeLocationId = stockLocation.rows[0]?.location_id || await getDefaultLocationId(client);
         const currentQtyForLocation = Number(stockLocation.rows[0]?.qty || 0);
         if (priceChangeLocationId) {
-          await insertStockMovementSafe(client, {
-            movementType: "manual_adjustment",
-            sourceType: "price_change",
-            sourcePrefix: "price",
-            fallbackSourceType: "manual_stock_edit",
-            locationId: priceChangeLocationId,
-            variantId,
-            qtyDelta: 0,
-            qtyBefore: currentQtyForLocation,
-            qtyAfter: currentQtyForLocation,
-            actor: actorFrom(req),
-            raw: {
-              reason: "price_change",
-              title: "Árváltozás",
-              changedFields: changedPriceFields,
-              priceChanges: [
-                ...(changedPriceFields.includes("buy_price") ? [{ key: "buyPrice", label: "Vételár", oldValue: previousBuyPrice, newValue: nextBuyPrice }] : []),
-                ...(changedPriceFields.includes("sell_price") ? [{ key: "sellPrice", label: "Eladási ár", oldValue: previousSellPrice, newValue: nextSellPrice }] : []),
-                ...(changedPriceFields.includes("compare_at_price") ? [{ key: "compareAtPrice", label: "Akció előtti ár", oldValue: previousCompareAtPrice, newValue: nextCompareAtPrice }] : []),
-              ],
-              buyPriceBefore: previousBuyPrice,
-              buyPriceAfter: nextBuyPrice,
-              sellPriceBefore: previousSellPrice,
-              sellPriceAfter: nextSellPrice,
-              compareAtPriceBefore: previousCompareAtPrice,
-              compareAtPriceAfter: nextCompareAtPrice,
-              source: "variant_detail_edit",
-            },
-          });
+          const duplicatePriceChange = await client.query(
+            `SELECT id
+             FROM aif_stock_movements
+             WHERE variant_id=$1
+               AND (source_type='price_change' OR raw->>'reason'='price_change')
+               AND created_at > now() - interval '30 seconds'
+               AND NULLIF(raw->>'buyPriceBefore','')::numeric IS NOT DISTINCT FROM $2::numeric
+               AND NULLIF(raw->>'buyPriceAfter','')::numeric IS NOT DISTINCT FROM $3::numeric
+               AND NULLIF(raw->>'sellPriceBefore','')::numeric IS NOT DISTINCT FROM $4::numeric
+               AND NULLIF(raw->>'sellPriceAfter','')::numeric IS NOT DISTINCT FROM $5::numeric
+               AND NULLIF(raw->>'compareAtPriceBefore','')::numeric IS NOT DISTINCT FROM $6::numeric
+               AND NULLIF(raw->>'compareAtPriceAfter','')::numeric IS NOT DISTINCT FROM $7::numeric
+             LIMIT 1`,
+            [variantId, previousBuyPrice, nextBuyPrice, previousSellPrice, nextSellPrice, previousCompareAtPrice, nextCompareAtPrice]
+          );
+          if (!duplicatePriceChange.rowCount) {
+            await insertStockMovementSafe(client, {
+              movementType: "manual_adjustment",
+              sourceType: "price_change",
+              sourcePrefix: "price",
+              fallbackSourceType: "manual_stock_edit",
+              locationId: priceChangeLocationId,
+              variantId,
+              qtyDelta: 0,
+              qtyBefore: currentQtyForLocation,
+              qtyAfter: currentQtyForLocation,
+              actor: actorFrom(req),
+              raw: {
+                reason: "price_change",
+                title: "Árváltozás",
+                changedFields: changedPriceFields,
+                priceChanges: [
+                  ...(changedPriceFields.includes("buy_price") ? [{ key: "buyPrice", label: "Vételár", oldValue: previousBuyPrice, newValue: nextBuyPrice }] : []),
+                  ...(changedPriceFields.includes("sell_price") ? [{ key: "sellPrice", label: "Eladási ár", oldValue: previousSellPrice, newValue: nextSellPrice }] : []),
+                  ...(changedPriceFields.includes("compare_at_price") ? [{ key: "compareAtPrice", label: "Akció előtti ár", oldValue: previousCompareAtPrice, newValue: nextCompareAtPrice }] : []),
+                ],
+                buyPriceBefore: previousBuyPrice,
+                buyPriceAfter: nextBuyPrice,
+                sellPriceBefore: previousSellPrice,
+                sellPriceAfter: nextSellPrice,
+                compareAtPriceBefore: previousCompareAtPrice,
+                compareAtPriceAfter: nextCompareAtPrice,
+                source: "variant_detail_edit",
+              },
+            });
+          }
         }
       }
 
