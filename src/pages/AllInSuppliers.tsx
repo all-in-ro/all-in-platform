@@ -552,15 +552,6 @@ export default function AllInSuppliers() {
     totalPurchaseValue > 0
       ? (selectedPurchaseValue / totalPurchaseValue) * 100
       : 0;
-  const selectedAvgReceipt =
-    Number(selectedReport?.purchase_batches || 0) > 0
-      ? selectedPurchaseValue / Number(selectedReport?.purchase_batches || 1)
-      : 0;
-  const selectedAvgQtyValue =
-    Number(selectedReport?.purchase_qty || 0) > 0
-      ? selectedPurchaseValue / Number(selectedReport?.purchase_qty || 1)
-      : 0;
-
   const activeCompareLabel = comparisonLabel(compareMode, from, to);
 
   async function load(next?: {
@@ -1353,18 +1344,6 @@ export default function AllInSuppliers() {
                       <p className="mt-1">
                         {numberFmt(selectedReport?.purchase_batches)}
                       </p>
-                    </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
-                      <p className="text-xs uppercase tracking-[0.06em] text-white/72">
-                        Átlag / bevételezés
-                      </p>
-                      <p className="mt-1">{money(selectedAvgReceipt)}</p>
-                    </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
-                      <p className="text-xs uppercase tracking-[0.06em] text-white/72">
-                        Átlag / darab
-                      </p>
-                      <p className="mt-1">{money(selectedAvgQtyValue)}</p>
                     </div>
                     <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
