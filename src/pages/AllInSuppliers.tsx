@@ -58,43 +58,43 @@ type CompareMode =
   | "previous_year";
 
 const page =
-  "min-h-screen bg-[#37404f] px-3 py-3 text-white font-normal sm:px-5 sm:py-4";
+  "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const wrap = "mx-auto max-w-7xl space-y-4";
 const card =
-  "rounded-2xl border border-white/34 bg-[#485467] p-3 shadow-lg shadow-slate-950/20 sm:p-4";
+  "rounded-2xl border border-white/14 bg-white/[0.07] p-3 shadow-lg shadow-slate-950/20 sm:p-4";
 const compactCard =
-  "rounded-2xl border border-white/26 bg-[#435064] p-3 shadow-lg shadow-slate-950/15 sm:p-4";
+  "rounded-2xl border border-white/14 bg-white/[0.07] p-3 shadow-lg shadow-slate-950/15 sm:p-4";
 const sectionHeader =
-  "flex w-full items-center justify-between gap-3 rounded-xl border border-white/30 border-l-4 border-l-emerald-300 bg-[#111a28] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20";
+  "flex w-full items-center justify-between gap-3 rounded-xl border border-white/30 border-l-4 border-l-[#7bd7d4]/70 bg-[#404a5b] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20";
 const sectionTitle =
   "flex items-center gap-2 text-sm uppercase tracking-[0.12em] text-white";
 const sectionHint = "hidden text-xs text-white/72 sm:inline";
-const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/94";
+const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/70";
 const input =
-  "h-8 rounded-lg border border-white/38 !bg-[#303b4e] px-3 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-emerald-300/35 focus:border-emerald-200/90 focus:ring-1 focus:ring-emerald-200/35 [color-scheme:dark] font-normal";
+  "h-8 rounded-lg border border-white/18 !bg-[#3f4959] px-3 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-[#7bd7d4]/35 focus:border-[#7bd7d4]/90 focus:ring-1 focus:ring-[#7bd7d4]/35 [color-scheme:dark] font-normal";
 const textarea =
-  "min-h-[68px] rounded-lg border border-white/38 !bg-[#303b4e] px-3 py-2 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-emerald-300/35 focus:border-emerald-200/90 focus:ring-1 focus:ring-emerald-200/35 font-normal";
+  "min-h-[68px] rounded-lg border border-white/18 !bg-[#3f4959] px-3 py-2 text-sm !text-white caret-white outline-none transition placeholder:text-white/55 selection:bg-[#7bd7d4]/35 focus:border-[#7bd7d4]/90 focus:ring-1 focus:ring-[#7bd7d4]/35 font-normal";
 const btnBase =
   "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] hover:bg-[#2d735f]`;
-const neutralBtn = `${btnBase} border-white/28 bg-[#2d3748] hover:bg-[#374457]`;
-const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
+const primaryBtn = `${btnBase} border-[#2a8d8b]/55 bg-[#2a8d8b] hover:bg-[#319c99]`;
+const neutralBtn = `${btnBase} border-white/28 bg-[#354153] hover:bg-[#3e4d63]`;
+const dangerBtn = `${btnBase} border-red-300/24 bg-[#d31126] hover:bg-[#b90f21]`;
 const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const tinyBtn =
-  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-white/28 bg-[#2d3748] px-2 text-xs text-white/92 transition hover:bg-[#374457] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-white/28 bg-[#354153] px-2 text-xs text-white/92 transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const tinyDangerBtn =
-  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-red-300/24 bg-[#c90d22] px-2 text-xs text-white transition hover:bg-[#a90c1d] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border border-red-300/24 bg-[#d31126] px-2 text-xs text-white transition hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const chip =
   "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-normal";
 const statCard =
-  "rounded-xl border border-white/24 bg-[#374254] px-3 py-2.5 shadow-sm shadow-slate-950/15";
-const focusPanel = "rounded-2xl border border-white/20 bg-[#343f51] p-3";
+  "rounded-xl border border-white/24 bg-[#3f4959] px-3 py-2.5 shadow-sm shadow-slate-950/15";
+const focusPanel = "rounded-2xl border border-white/20 bg-[#404a5b] p-3";
 const modalBackdrop =
-  "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
+  "fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm";
 const modalCard =
-  "w-full max-w-sm rounded-2xl border border-white/24 bg-[#4b5566] p-4 text-white shadow-2xl";
+  "w-full max-w-sm rounded-2xl border border-white/24 bg-[#4b5362] p-4 text-white shadow-2xl";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -361,13 +361,13 @@ function ComparisonMiniCard(props: {
   const format = props.type === "money" ? money : numberFmt;
 
   return (
-    <div className="rounded-xl border border-white/16 bg-[#3b4659] p-3">
+    <div className="rounded-xl border border-white/16 bg-[#404a5b] p-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs uppercase tracking-[0.06em] text-white/72">
           {props.title}
         </p>
         <span
-          className={`rounded-full border px-2 py-0.5 text-xs ${diff == null ? "border-white/16 text-white/62" : diff >= 0 ? "border-emerald-300/34 text-emerald-100" : "border-red-300/34 text-red-100"}`}
+          className={`rounded-full border px-2 py-0.5 text-xs ${diff == null ? "border-white/16 text-white/62" : diff >= 0 ? "border-[#7bd7d4]/34 text-[#cffffd]" : "border-red-300/34 text-red-100"}`}
         >
           {diff == null ? "-" : `${diff >= 0 ? "+" : ""}${percentFmt(diff)}`}
         </span>
@@ -380,7 +380,7 @@ function ComparisonMiniCard(props: {
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-slate-950/40">
             <div
-              className="h-full rounded-full bg-emerald-300/80"
+              className="h-full rounded-full bg-[#7bd7d4]/80"
               style={{ width: `${clampWidth(props.current, max)}%` }}
             />
           </div>
@@ -1062,7 +1062,7 @@ export default function AllInSuppliers() {
         </header>
 
         {message && (
-          <div className="rounded-xl border border-emerald-200/34 bg-emerald-400/12 px-3 py-2 text-sm text-white/92">
+          <div className="rounded-xl border border-[#7bd7d4]/34 bg-[#2a8d8b]/18 px-3 py-2 text-sm text-white/92">
             {message}
           </div>
         )}
@@ -1112,12 +1112,12 @@ export default function AllInSuppliers() {
                       onChange={(e) => setTo(e.target.value)}
                     />
                   </label>
-                  <label className="flex h-8 items-center gap-2 self-end rounded-lg border border-white/18 bg-[#303b4e] px-3 text-sm text-white/78">
+                  <label className="flex h-8 items-center gap-2 self-end rounded-lg border border-white/18 bg-[#3f4959] px-3 text-sm text-white/78">
                     <input
                       type="checkbox"
                       checked={includeInactive}
                       onChange={(e) => setIncludeInactive(e.target.checked)}
-                      className="h-4 w-4 accent-emerald-600"
+                      className="h-4 w-4 accent-[#2a8d8b]"
                     />
                     Inaktívak is
                   </label>
@@ -1190,7 +1190,7 @@ export default function AllInSuppliers() {
                   </select>
                 </label>
               </div>
-              <div className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#303b4e]/70 px-3 py-2 text-xs text-white/72">
+              <div className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#3f4959]/70 px-3 py-2 text-xs text-white/72">
                 <CalendarRange size={14} />
                 <span>
                   {from && to
@@ -1304,7 +1304,7 @@ export default function AllInSuppliers() {
                     </p>
                     {selectedSupplier && (
                       <span
-                        className={`${chip} ${selectedSupplier.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}
+                        className={`${chip} ${selectedSupplier.is_active ? "border-[#7bd7d4]/35 text-[#cffffd]" : "border-white/18 text-white/66"}`}
                       >
                         {selectedSupplier.is_active ? "Aktív" : "Inaktív"}
                       </span>
@@ -1315,7 +1315,7 @@ export default function AllInSuppliers() {
                   </p>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                    <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
                         Vásárlási érték
                       </p>
@@ -1323,13 +1323,13 @@ export default function AllInSuppliers() {
                         {money(selectedReport?.purchase_value)}
                       </p>
                     </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                    <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
                         Részesedés
                       </p>
                       <p className="mt-1">{percentFmt(selectedShare)}</p>
                     </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                    <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
                         Darab
                       </p>
@@ -1337,7 +1337,7 @@ export default function AllInSuppliers() {
                         {numberFmt(selectedReport?.purchase_qty)}
                       </p>
                     </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                    <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
                         Bevételezések
                       </p>
@@ -1345,7 +1345,7 @@ export default function AllInSuppliers() {
                         {numberFmt(selectedReport?.purchase_batches)}
                       </p>
                     </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                    <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
                         Ár nélküli terméksor
                       </p>
@@ -1353,7 +1353,7 @@ export default function AllInSuppliers() {
                         {numberFmt(selectedReport?.rows_without_buy_price)}
                       </p>
                     </div>
-                    <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                    <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                       <p className="text-xs uppercase tracking-[0.06em] text-white/72">
                         Utolsó vásárlás
                       </p>
@@ -1363,7 +1363,7 @@ export default function AllInSuppliers() {
                     </div>
                   </div>
 
-                  <div className="mt-3 rounded-xl border border-white/12 bg-[#3b4659] p-3">
+                  <div className="mt-3 rounded-xl border border-white/12 bg-[#404a5b] p-3">
                     <p className="mb-2 text-xs uppercase tracking-[0.06em] text-white/72">
                       Kiválasztott beszállító összehasonlítás
                     </p>
@@ -1395,7 +1395,7 @@ export default function AllInSuppliers() {
                       return (
                         <button
                           key={r.id}
-                          className={`rounded-lg border px-3 py-2 text-left transition ${active ? "border-emerald-300/50 bg-emerald-400/12" : "border-white/14 bg-[#414c5f] hover:bg-[#485468]"}`}
+                          className={`rounded-lg border px-3 py-2 text-left transition ${active ? "border-[#7bd7d4]/50 bg-[#2a8d8b]/18" : "border-white/14 bg-[#566171] hover:bg-[#617084]"}`}
                           onClick={() => setSelectedSupplierId(r.id)}
                           type="button"
                         >
@@ -1410,7 +1410,7 @@ export default function AllInSuppliers() {
                           <div className="mt-2 grid gap-1">
                             <div className="h-1.5 overflow-hidden rounded-full bg-slate-950/38">
                               <div
-                                className="h-full rounded-full bg-emerald-300/70"
+                                className="h-full rounded-full bg-[#7bd7d4]/70"
                                 style={{
                                   width: `${clampWidth(value, maxReportValue)}%`,
                                 }}
@@ -1438,7 +1438,7 @@ export default function AllInSuppliers() {
                       );
                     })}
                     {!sortedReport.length && (
-                      <p className="rounded-xl border border-white/14 bg-[#414c5f] px-3 py-6 text-center text-sm text-white/78">
+                      <p className="rounded-xl border border-white/14 bg-[#566171] px-3 py-6 text-center text-sm text-white/78">
                         Nincs vásárlási adat a kiválasztott időszakban.
                       </p>
                     )}
@@ -1501,7 +1501,7 @@ export default function AllInSuppliers() {
           />
           {brandsOpen && (
             <div className="mt-3 grid gap-3 xl:grid-cols-[0.95fr_1.05fr]">
-              <div className="rounded-2xl border border-white/18 bg-[#343f51] p-3">
+              <div className="rounded-2xl border border-white/18 bg-[#404a5b] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm text-white/88">Márkatörzs</p>
                   <span className={chip + " border-white/18 text-white/70"}>{brands.length} márka</span>
@@ -1531,7 +1531,7 @@ export default function AllInSuppliers() {
                     return (
                       <div
                         key={brand.id}
-                        className={`rounded-xl border p-2.5 ${linkedToCurrentSupplier ? "border-emerald-300/38 bg-[#3d505c]" : "border-white/14 bg-[#414c5f]"}`}
+                        className={`rounded-xl border p-2.5 ${linkedToCurrentSupplier ? "border-[#7bd7d4]/38 bg-[#2a8d8b]/18" : "border-white/14 bg-[#566171]"}`}
                       >
                         {editing ? (
                           <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
@@ -1551,7 +1551,7 @@ export default function AllInSuppliers() {
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="min-w-0">
                               <p className="text-sm text-white">{brand.name}</p>
-                              <span className={`${chip} mt-1 ${brand.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
+                              <span className={`${chip} mt-1 ${brand.is_active ? "border-[#7bd7d4]/35 text-[#cffffd]" : "border-white/18 text-white/66"}`}>
                                 {brand.is_active ? "Aktív" : "Inaktív"}
                               </span>
                               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1559,7 +1559,7 @@ export default function AllInSuppliers() {
                                   activeBrandLinks.map((link) => (
                                     <button
                                       key={link.id}
-                                      className={`${chip} ${link.supplier_id === currentBrandSupplierId ? "border-emerald-300/42 bg-emerald-300/10 text-emerald-50" : "border-white/18 bg-slate-950/18 text-white/72"}`}
+                                      className={`${chip} ${link.supplier_id === currentBrandSupplierId ? "border-[#7bd7d4]/42 bg-[#2a8d8b]/18 text-[#cffffd]" : "border-white/18 bg-slate-950/18 text-white/72"}`}
                                       onClick={() => focusSupplierBrandLinks(link.supplier_id)}
                                       type="button"
                                       title="Beszállító kiválasztása"
@@ -1589,14 +1589,14 @@ export default function AllInSuppliers() {
                     );
                   })}
                   {!brands.length && (
-                    <p className="rounded-xl border border-white/14 bg-[#414c5f] px-3 py-5 text-center text-sm text-white/74">
+                    <p className="rounded-xl border border-white/14 bg-[#566171] px-3 py-5 text-center text-sm text-white/74">
                       Nincs rögzített márka.
                     </p>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/18 bg-[#343f51] p-3">
+              <div className="rounded-2xl border border-white/18 bg-[#404a5b] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm text-white/88">Beszállítóhoz rendelt márkák</p>
                   <span className={chip + " border-white/18 text-white/70"}>{selectedSupplierBrandLinks.length} kapcsolt márka</span>
@@ -1639,15 +1639,15 @@ export default function AllInSuppliers() {
                       placeholder="pl. hivatalos forgalmazás, szezonális, külön árlista"
                     />
                   </label>
-                  <div className="rounded-lg border border-emerald-300/28 bg-emerald-300/10 px-3 py-2 text-sm text-white/86 lg:col-span-2">
+                  <div className="rounded-lg border border-[#7bd7d4]/28 bg-[#2a8d8b]/18 px-3 py-2 text-sm text-white/86 lg:col-span-2">
                     Kapcsolás: {currentBrandSupplierName} → {availableBrandsForSelectedSupplier.find((brand) => brand.id === brandId)?.name || "nincs kiválasztott márka"}
                   </div>
-                  <label className="flex h-8 items-center gap-2 rounded-lg border border-white/18 bg-[#303b4e] px-3 text-sm text-white/78">
+                  <label className="flex h-8 items-center gap-2 rounded-lg border border-white/18 bg-[#3f4959] px-3 text-sm text-white/78">
                     <input
                       type="checkbox"
                       checked={linkPreferred}
                       onChange={(e) => setLinkPreferred(e.target.checked)}
-                      className="h-4 w-4 accent-emerald-600"
+                      className="h-4 w-4 accent-[#2a8d8b]"
                     />
                     Elsődleges márka ennél a beszállítónál
                   </label>
@@ -1658,13 +1658,13 @@ export default function AllInSuppliers() {
 
                 <div className="mt-3 grid gap-2">
                   {selectedSupplierBrandLinks.map((link) => (
-                    <div key={link.id} className="rounded-xl border border-white/14 bg-[#414c5f] p-2.5">
+                    <div key={link.id} className="rounded-xl border border-white/14 bg-[#566171] p-2.5">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                           <p className="text-sm text-white">{link.brand_name}</p>
                           <div className="mt-1 flex flex-wrap gap-1.5">
-                            {link.is_preferred && <span className={`${chip} border-emerald-300/35 text-emerald-100`}>Elsődleges</span>}
-                            <span className={`${chip} ${link.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}>
+                            {link.is_preferred && <span className={`${chip} border-[#7bd7d4]/35 text-[#cffffd]`}>Elsődleges</span>}
+                            <span className={`${chip} ${link.is_active ? "border-[#7bd7d4]/35 text-[#cffffd]" : "border-white/18 text-white/66"}`}>
                               {link.is_active ? "Aktív" : "Inaktív"}
                             </span>
                           </div>
@@ -1687,7 +1687,7 @@ export default function AllInSuppliers() {
                     </div>
                   ))}
                   {!selectedSupplierBrandLinks.length && (
-                    <p className="rounded-xl border border-white/14 bg-[#414c5f] px-3 py-5 text-center text-sm text-white/74">
+                    <p className="rounded-xl border border-white/14 bg-[#566171] px-3 py-5 text-center text-sm text-white/74">
                       Ehhez a beszállítóhoz még nincs márka kapcsolva.
                     </p>
                   )}
@@ -1715,7 +1715,7 @@ export default function AllInSuppliers() {
                   return (
                     <div
                       key={s.id}
-                      className="rounded-2xl border border-white/18 bg-[#343f51] p-3"
+                      className="rounded-2xl border border-white/18 bg-[#404a5b] p-3"
                     >
                       {editing ? (
                         <div className="grid gap-2.5">
@@ -1770,7 +1770,7 @@ export default function AllInSuppliers() {
                               </p>
                             </button>
                             <span
-                              className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}
+                              className={`${chip} ${s.is_active ? "border-[#7bd7d4]/35 text-[#cffffd]" : "border-white/18 text-white/66"}`}
                             >
                               {s.is_active ? "Aktív" : "Inaktív"}
                             </span>
@@ -1781,25 +1781,25 @@ export default function AllInSuppliers() {
                             </p>
                           )}
                           <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                            <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                            <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                               <p className="text-xs uppercase tracking-[0.06em] text-white/68">
                                 Bevételezések
                               </p>
                               <p>{numberFmt(r?.purchase_batches)}</p>
                             </div>
-                            <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                            <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                               <p className="text-xs uppercase tracking-[0.06em] text-white/68">
                                 Darab
                               </p>
                               <p>{numberFmt(r?.purchase_qty)}</p>
                             </div>
-                            <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                            <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                               <p className="text-xs uppercase tracking-[0.06em] text-white/68">
                                 Vásárlási érték
                               </p>
                               <p>{money(r?.purchase_value)}</p>
                             </div>
-                            <div className="rounded-xl border border-white/12 bg-[#414c5f] p-2.5">
+                            <div className="rounded-xl border border-white/12 bg-[#566171] p-2.5">
                               <p className="text-xs uppercase tracking-[0.06em] text-white/68">
                                 Utolsó
                               </p>
@@ -1853,7 +1853,7 @@ export default function AllInSuppliers() {
 
               <div className="hidden overflow-auto rounded-xl border border-white/18 md:block">
                 <table className="min-w-full text-left text-sm">
-                  <thead className="bg-[#151f2d] text-xs uppercase tracking-[0.09em] text-white/92">
+                  <thead className="bg-[#263246] text-xs uppercase tracking-[0.09em] text-white/92">
                     <tr>
                       <th className="px-3 py-2 font-normal">Beszállító</th>
                       <th className="px-3 py-2 font-normal">Státusz</th>
@@ -1879,7 +1879,7 @@ export default function AllInSuppliers() {
                       return (
                         <tr
                           key={s.id}
-                          className="bg-[#4a5669] align-top hover:bg-[#536176]"
+                          className="bg-[#566171] align-top hover:bg-[#617084]"
                         >
                           <td className="px-3 py-2.5">
                             {editing ? (
@@ -1896,7 +1896,7 @@ export default function AllInSuppliers() {
                             ) : (
                               <div>
                                 <button
-                                  className="text-left font-normal text-white hover:text-emerald-100"
+                                  className="text-left font-normal text-white hover:text-[#cffffd]"
                                   onClick={() => setSelectedSupplierId(s.id)}
                                   type="button"
                                 >
@@ -1912,7 +1912,7 @@ export default function AllInSuppliers() {
                           </td>
                           <td className="px-3 py-2.5">
                             <span
-                              className={`${chip} ${s.is_active ? "border-emerald-300/35 text-emerald-100" : "border-white/18 text-white/66"}`}
+                              className={`${chip} ${s.is_active ? "border-[#7bd7d4]/35 text-[#cffffd]" : "border-white/18 text-white/66"}`}
                             >
                               {s.is_active ? "Aktív" : "Inaktív"}
                             </span>
