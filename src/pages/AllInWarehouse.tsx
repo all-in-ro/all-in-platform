@@ -4192,15 +4192,51 @@ export default function AllInWarehouse() {
     return findColorTypeByValue(colorTypes, item.color_name) || findColorTypeByValue(colorTypes, item.color_code);
   };
 
-  const colorHexForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
-    const visibleColorName = colorDisplay(item.color_name, item.color_code);
-    const visibleColorType = findColorTypeByValue(colorTypes, visibleColorName);
-    const directColorType = colorTypeForItem(item);
-    return String(visibleColorType?.hex || directColorType?.hex || item.color_hex || "").trim();
-  };
-
   const colorCodeForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
     return firstWarehouseText(item.color_code, (item as any).supplier_color_code, (item as any).supplierColorCode);
+  };
+
+  const brandColorForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    const code = colorCodeForItem(item);
+    const codeKey = colorKey(code);
+    if (!codeKey) return null;
+    const brandRow = metaItemByValue(brands, (item as any).brand_id || item.brand_code || item.brand_name || (item as any).brand);
+    const brandKeys = [
+      (item as any).brand_id,
+      item.brand_code,
+      item.brand_name,
+      (item as any).brand,
+      brandRow?.id,
+      brandRow?.code,
+      brandRow?.name,
+      brandRow?.name_ro,
+      brandRow?.name_hu,
+    ].map(normalizeSearch).filter(Boolean);
+    const sameCodeRows = (brandColorCodes || []).filter((row) => colorKey(row.color_code) === codeKey);
+    if (!sameCodeRows.length) return null;
+    const byBrand = sameCodeRows.find((row) => {
+      const rowKeys = [row.brand_id, row.brand_code, row.brand_name].map(normalizeSearch).filter(Boolean);
+      return rowKeys.some((key) => brandKeys.includes(key));
+    });
+    if (byBrand) return byBrand;
+    return brandKeys.length ? null : (sameCodeRows.length === 1 ? sameCodeRows[0] : null);
+  };
+
+  const standardColorTypeForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    const visibleColorName = colorDisplay(item.color_name, item.color_code);
+    const mappedBrandColor = brandColorForItem(item);
+    return findColorTypeByValue(colorTypes, visibleColorName)
+      || colorTypeForItem(item)
+      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_type_id)
+      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_type_code)
+      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_name_ro)
+      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_name_hu);
+  };
+
+  const colorHexForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    const standardColorType = standardColorTypeForItem(item);
+    const mappedBrandColor = brandColorForItem(item);
+    return String(standardColorType?.hex || mappedBrandColor?.color_hex || item.color_hex || "").trim();
   };
 
   function MaskedBuyPrice({ value }: { value: unknown }) {
@@ -4303,25 +4339,150 @@ export default function AllInWarehouse() {
   }
 
   function ColorNameWithCode({ item, openUp = false }: { item: Partial<InventoryItem> | Record<string, any>; openUp?: boolean }) {
+    const tooltipRef = useRef<HTMLSpanElement | null>(null);
+    const [tooltipOpen, setTooltipOpen] = useState(false);
+    const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
     const code = colorCodeForItem(item);
     const label = colorDisplay(item.color_name, item.color_code);
     const hex = colorHexForItem(item);
-    const tooltipPosition = openUp ? "bottom-full mb-2" : "top-full mt-2";
+    const standardColor = standardColorTypeForItem(item);
+    const brandColor = brandColorForItem(item);
+    const standardName = firstWarehouseText(
+      standardColor?.name_hu,
+      standardColor?.name_ro,
+      standardColor?.name_en,
+      standardColor?.name_de,
+      brandColor?.color_name_hu,
+      brandColor?.color_name_ro,
+      label,
+    );
+    const fullName = firstWarehouseText(
+      label,
+      standardColor?.name_hu,
+      standardColor?.name_ro,
+      brandColor?.color_name_hu,
+      brandColor?.color_name_ro,
+      code,
+    );
+    const officialNames = [
+      standardColor?.name_hu ? `HU: ${standardColor.name_hu}` : "",
+      standardColor?.name_ro ? `RO: ${standardColor.name_ro}` : "",
+      standardColor?.name_en ? `EN: ${standardColor.name_en}` : "",
+      standardColor?.name_de ? `DE: ${standardColor.name_de}` : "",
+    ].filter(Boolean).join(" • ");
+    const brandColorText = brandColor
+      ? `${brandColor.brand_name || brandColor.brand_code || item.brand_name || item.brand_code || "Márka"} / ${brandColor.color_code || code} → ${brandColor.color_name_hu || brandColor.color_name_ro || brandColor.color_type_code || standardName || "-"}`
+      : "Nincs márkához rendelve";
+
+    function updateTooltipPosition() {
+      if (typeof window === "undefined") return;
+      const node = tooltipRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const tooltipWidth = 326;
+      const sidePadding = 12;
+      const left = Math.min(
+        Math.max(sidePadding, rect.left + rect.width / 2 - tooltipWidth / 2),
+        Math.max(sidePadding, window.innerWidth - tooltipWidth - sidePadding)
+      );
+      const shouldOpenUp = openUp || rect.bottom + 178 > window.innerHeight;
+      setTooltipStyle({
+        position: "fixed",
+        left,
+        top: shouldOpenUp ? rect.top - 8 : rect.bottom + 8,
+        transform: shouldOpenUp ? "translateY(-100%)" : "none",
+        width: tooltipWidth,
+      });
+    }
+
+    function showTooltip() {
+      updateTooltipPosition();
+      setTooltipOpen(true);
+    }
+
+    useEffect(() => {
+      if (!tooltipOpen) return;
+      updateTooltipPosition();
+      const onMove = () => updateTooltipPosition();
+      window.addEventListener("scroll", onMove, true);
+      window.addEventListener("resize", onMove);
+      return () => {
+        window.removeEventListener("scroll", onMove, true);
+        window.removeEventListener("resize", onMove);
+      };
+    }, [tooltipOpen, openUp, fullName, code, standardColor?.id, brandColor?.id]);
+
+    const tooltip = tooltipOpen && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="pointer-events-none z-[9999] rounded-xl border border-[#5bd0cc]/30 bg-[#202838] p-2.5 text-left text-[11px] leading-snug text-white shadow-2xl shadow-black/40"
+            style={tooltipStyle}
+            role="tooltip"
+          >
+            <div className="mb-2 flex items-center gap-2 border-b border-white/10 pb-2">
+              <span
+                className="h-4 w-4 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.04)]"
+                style={hex ? { backgroundColor: hex } : undefined}
+              />
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-[#cffffd]/70">Szín részletek</div>
+                <div className="truncate text-[12px] text-white">{fullName || "-"}</div>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-[112px,1fr] overflow-hidden rounded-lg bg-white/[0.06]">
+                <div className="px-2 py-1.5 text-white/58">Teljes név</div>
+                <div className="px-2 py-1.5 text-white">{fullName || "-"}</div>
+              </div>
+              <div className="grid grid-cols-[112px,1fr] overflow-hidden rounded-lg bg-white/[0.06]">
+                <div className="px-2 py-1.5 text-white/58">Színkód</div>
+                <div className="px-2 py-1.5 text-white">{code || "-"}</div>
+              </div>
+              <div className="grid grid-cols-[112px,1fr] overflow-hidden rounded-lg bg-white/[0.06]">
+                <div className="px-2 py-1.5 text-white/58">Standard szín</div>
+                <div className="px-2 py-1.5">
+                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${standardColor ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/24 text-[#cffffd]" : "border-white/12 bg-white/[0.05] text-white/55"}`}>
+                    {standardColor ? "Igen" : "Nem"}
+                  </span>
+                  {standardColor ? <span className="ml-2 text-white/78">{standardName}{standardColor.code ? ` • ${standardColor.code}` : ""}</span> : null}
+                </div>
+              </div>
+              <div className="grid grid-cols-[112px,1fr] overflow-hidden rounded-lg bg-white/[0.06]">
+                <div className="px-2 py-1.5 text-white/58">Márka szín</div>
+                <div className="px-2 py-1.5">
+                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${brandColor ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/24 text-[#cffffd]" : "border-white/12 bg-white/[0.05] text-white/55"}`}>
+                    {brandColor ? "Igen" : "Nem"}
+                  </span>
+                  <span className="ml-2 text-white/78">{brandColorText}</span>
+                </div>
+              </div>
+              {officialNames ? (
+                <div className="rounded-lg bg-[#2a8d8b]/12 px-2 py-1.5 text-[10px] leading-snug text-[#cffffd]/82">
+                  {officialNames}
+                </div>
+              ) : null}
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
     return (
       <span
-        className="group relative inline-flex max-w-full items-center justify-center gap-1.5 rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 py-1 text-[11px] font-semibold leading-none text-[#cffffd] shadow-[0_0_0_1px_rgba(42,141,139,0.10)] align-middle"
-        tabIndex={code ? 0 : undefined}
+        ref={tooltipRef}
+        className="relative inline-flex max-w-full items-center justify-center gap-1.5 rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 py-1 text-[11px] font-semibold leading-none text-[#cffffd] shadow-[0_0_0_1px_rgba(42,141,139,0.10)] align-middle"
+        tabIndex={0}
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={showTooltip}
+        onBlur={() => setTooltipOpen(false)}
       >
         <span
           className="h-3 w-3 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
           style={hex ? { backgroundColor: hex } : undefined}
         />
         <span className="min-w-0 max-w-[86px] truncate">{label}</span>
-        {code && (
-          <span className={`pointer-events-none absolute left-1/2 z-[9999] hidden -translate-x-1/2 rounded-xl border border-[#5bd0cc]/30 bg-[#202838] px-2.5 py-1.5 text-[11px] font-semibold leading-snug text-white shadow-2xl group-hover:block group-focus:block ${tooltipPosition}`}>
-            {code}
-          </span>
-        )}
+        {tooltip}
       </span>
     );
   }
