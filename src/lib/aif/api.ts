@@ -526,7 +526,7 @@ export type AifStockMovementTotals = {
 };
 
 
-export type AifVariantHistoryEventType = "incoming" | "outgoing" | "transfer" | "inventory" | "adjustment" | string;
+export type AifVariantHistoryEventType = "incoming" | "outgoing" | "transfer" | "inventory" | "adjustment" | "price" | "price_change" | string;
 
 export type AifVariantHistoryEvent = {
   id: string;
@@ -570,6 +570,14 @@ export type AifVariantHistoryEvent = {
   reception_id?: string | null;
   sales_tva_rate?: number | string | null;
   sell_price_includes_tva?: boolean | null;
+  old_buy_price?: number | string | null;
+  new_buy_price?: number | string | null;
+  old_sell_price?: number | string | null;
+  new_sell_price?: number | string | null;
+  old_compare_at_price?: number | string | null;
+  new_compare_at_price?: number | string | null;
+  price_change_fields?: string[] | null;
+  local_only?: boolean | null;
 };
 
 export type AifVariantHistorySummary = {
