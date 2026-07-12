@@ -28,6 +28,7 @@ const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07
 const panelHead = "flex flex-col gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3 sm:flex-row sm:items-center sm:justify-between";
 const btnSoft = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.08] px-3 text-xs text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const historyBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/65 bg-[#2a8d8b] px-3 text-xs text-white shadow-[0_8px_18px_rgba(42,141,139,0.18)] transition hover:bg-[#319c99] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/35 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -419,27 +420,6 @@ function ProductHistoryOverlay({
   const item = { ...(target as any), ...(history?.item || {}) } as AifStockItem & AifStockMoveItem & Record<string, any>;
   const summary = history?.summary || {};
   const events = history?.events || [];
-  const openVariantHistory = useCallback(async (item: AifStockItem | AifStockMoveItem) => {
-    const id = String(item.variant_id || "").trim();
-    if (!id) return;
-    setHistoryTarget(item);
-    setVariantHistory(null);
-    setVariantHistoryError(null);
-    setVariantHistoryLoading(true);
-    try {
-      const data = await fetchAifJSON<AifVariantHistoryResponse>(`/variants/${encodeURIComponent(id)}/history?limit=700`);
-      setVariantHistory(data);
-    } catch (e: any) {
-      setVariantHistoryError(e.message || "A terméktörténet betöltése nem sikerült.");
-    } finally {
-      setVariantHistoryLoading(false);
-    }
-  }, []);
-
-  const reloadVariantHistory = useCallback(() => {
-    if (historyTarget) void openVariantHistory(historyTarget);
-  }, [historyTarget, openVariantHistory]);
-
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm lg:items-center">
       <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
@@ -447,7 +427,7 @@ function ProductHistoryOverlay({
           <div className="flex min-w-0 gap-3">
             <ProductThumb item={item} />
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/65">Termék életút</p>
+              <p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/65">Termék History</p>
               <h2 className="mt-1 line-clamp-2 text-lg text-white">{displayName(item)}</h2>
               <p className="mt-1 text-xs text-white/55">{item.brand_name || "-"} • {item.color_name || "-"} • {item.size || "-"}</p>
             </div>
@@ -707,6 +687,59 @@ export default function AllInStockMoves() {
   const [variantHistoryLoading, setVariantHistoryLoading] = useState(false);
   const [variantHistoryError, setVariantHistoryError] = useState<string | null>(null);
   const refreshInFlightRef = useRef(false);
+
+  const closeVariantHistory = useCallback(() => {
+    setHistoryTarget(null);
+    setVariantHistory(null);
+    setVariantHistoryError(null);
+    setVariantHistoryLoading(false);
+  }, []);
+
+  const openVariantHistory = useCallback(async (item: AifStockItem | AifStockMoveItem) => {
+    const id = String(item?.variant_id || "").trim();
+    if (!id) {
+      setMessageTone("error");
+      setMessage("Ehhez a sorhoz nincs termékazonosító, ezért a Termék History nem nyitható meg.");
+      return;
+    }
+    setHistoryTarget(item);
+    setVariantHistory(null);
+    setVariantHistoryError(null);
+    setVariantHistoryLoading(true);
+    try {
+      const data = await fetchAifJSON<AifVariantHistoryResponse>(`/variants/${encodeURIComponent(id)}/history?limit=700`);
+      setVariantHistory(data);
+    } catch (e: any) {
+      setVariantHistoryError(e?.message || "A Termék History betöltése nem sikerült.");
+    } finally {
+      setVariantHistoryLoading(false);
+    }
+  }, []);
+
+  const reloadVariantHistory = useCallback(() => {
+    if (historyTarget) void openVariantHistory(historyTarget);
+  }, [historyTarget, openVariantHistory]);
+
+  useEffect(() => {
+    if (!historyTarget) return;
+    const onHistoryEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setHistoryTarget(null);
+      setVariantHistory(null);
+      setVariantHistoryError(null);
+    };
+    window.addEventListener("keydown", onHistoryEscape);
+    return () => window.removeEventListener("keydown", onHistoryEscape);
+  }, [historyTarget]);
+
+  useEffect(() => {
+    if (!historyTarget) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeVariantHistory();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [historyTarget, closeVariantHistory]);
 
   useEffect(() => {
     let alive = true;
@@ -1131,9 +1164,9 @@ export default function AllInStockMoves() {
                             <button
                               type="button"
                               onClick={() => openVariantHistory(row)}
-                              className={btnSoft}
-                              title="Termék életút"
-                              aria-label="Termék életút"
+                              className={primaryBtn}
+                              title="Termék History"
+                              aria-label="Termék History"
                             >
                               <Clock3 size={15} className="shrink-0" /> Történet
                             </button>
@@ -1182,7 +1215,9 @@ export default function AllInStockMoves() {
                         <button
                           type="button"
                           onClick={() => openVariantHistory(row)}
-                          className={btnSoft}
+                          className={primaryBtn}
+                          title="Termék History"
+                          aria-label="Termék History"
                         >
                           <Clock3 size={15} className="shrink-0" /> Történet
                         </button>
@@ -1223,6 +1258,7 @@ export default function AllInStockMoves() {
                     <th className="px-4 py-3 text-center">Foglalt</th>
                     <th className="px-4 py-3 text-center">Elérhető</th>
                     <th className="px-4 py-3 text-left">Frissítve</th>
+                    <th className="px-4 py-3 text-right">Műv.</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1242,10 +1278,21 @@ export default function AllInStockMoves() {
                         <span className="inline-flex min-w-12 justify-center rounded-full border border-[#2a8d8b]/35 bg-[#2a8d8b]/18 px-3 py-1 text-white">{formatQty(row.available_qty)}</span>
                       </td>
                       <td className="px-4 py-3 text-white/60">{formatDateTime(row.updated_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => openVariantHistory(row)}
+                          className={primaryBtn}
+                          title="Termék History"
+                          aria-label="Termék History"
+                        >
+                          <Clock3 size={15} className="shrink-0" /> Történet
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {!stockRows.length && (
-                    <tr><td colSpan={7} className="px-4 py-12 text-center text-white/55">Nincs készlet a szűrés alapján.</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-12 text-center text-white/55">Nincs készlet a szűrés alapján.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1262,6 +1309,17 @@ export default function AllInStockMoves() {
                     <div className="rounded-xl bg-[#354153] px-2 py-2"><span className="block text-white/48">Készlet</span><span className="mt-1 block text-base text-white">{formatQty(row.qty)}</span></div>
                     <div className="rounded-xl bg-[#354153] px-2 py-2"><span className="block text-white/48">Foglalt</span><span className="mt-1 block text-base text-white">{formatQty(row.reserved_qty)}</span></div>
                     <div className="rounded-xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/16 px-2 py-2"><span className="block text-white/60">Elérhető</span><span className="mt-1 block text-base text-white">{formatQty(row.available_qty)}</span></div>
+                  </div>
+                  <div className="mt-3 border-t border-white/10 pt-3">
+                    <button
+                      type="button"
+                      onClick={() => openVariantHistory(row)}
+                      className={primaryBtn}
+                      title="Termék History"
+                      aria-label="Termék History"
+                    >
+                      <Clock3 size={15} className="shrink-0" /> Történet
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1283,7 +1341,7 @@ export default function AllInStockMoves() {
           loading={variantHistoryLoading}
           error={variantHistoryError}
           onReload={reloadVariantHistory}
-          onClose={() => { setHistoryTarget(null); setVariantHistory(null); setVariantHistoryError(null); }}
+          onClose={closeVariantHistory}
         />
       )}
 
