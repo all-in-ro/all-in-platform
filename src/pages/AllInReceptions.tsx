@@ -159,15 +159,15 @@ const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4
 const wrap = "mx-auto max-w-7xl space-y-3";
 const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-2.5 shadow-lg shadow-slate-950/15 sm:p-3 font-normal";
 const headerCard = "sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur";
-const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2 text-left shadow-sm shadow-slate-950/20 font-normal";
+const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-[#2a8d8b] bg-[#303b4e] px-3 py-2 text-left shadow-sm shadow-slate-950/20 font-normal";
 const label = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-white/86 font-normal";
-const input = "h-8 rounded-lg border border-white/24 bg-[#303b4e] px-2.5 text-xs text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/30 [color-scheme:dark] font-normal";
+const input = "h-8 rounded-lg border border-white/24 bg-[#303b4e] px-2.5 text-xs text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-[#2a8d8b]/35 focus:border-[#2a8d8b]/80 focus:ring-1 focus:ring-[#2a8d8b]/30 [color-scheme:dark] font-normal";
 const select = `${input} pr-8`;
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const primaryBtn = `${btnBase} border-emerald-300/24 bg-[#276454] text-white hover:bg-[#2d735f]`;
+const primaryBtn = `${btnBase} border-[#2a8d8b]/55 bg-[#2a8d8b] text-white hover:bg-[#319c99]`;
 const neutralBtn = `${btnBase} border-white/24 bg-[#354153] text-white hover:bg-[#3e4d63]`;
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const tinyBtn = "inline-flex h-6 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[10.5px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
@@ -175,14 +175,14 @@ const tinyDangerBtn = "inline-flex h-6 items-center justify-center gap-1 rounded
 const statCard = "rounded-xl border border-white/18 bg-[#354153] px-2.5 py-1.5";
 const lightPanel = "rounded-xl border border-slate-200 bg-white p-3 text-slate-900 shadow-lg shadow-slate-950/10";
 const lightLabel = "grid gap-1 text-[11px] uppercase tracking-[0.05em] text-slate-600 font-normal";
-const lightInput = "h-8 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-emerald-200/70 focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
+const lightInput = "h-8 rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-900 caret-slate-900 outline-none transition placeholder:text-slate-400 selection:bg-[#2a8d8b]/35 focus:border-[#2a8d8b]/80 focus:ring-1 focus:ring-[#2a8d8b]/20 disabled:bg-slate-100 disabled:text-slate-500 font-normal";
 const lightSelect = `${lightInput} pr-8`;
 const rowLabel = "grid gap-1 text-[10px] uppercase tracking-[0.05em] text-white font-normal";
-const rowInput = "h-7 w-full rounded-md border border-white/18 bg-[#253146] px-2 text-[11px] text-white caret-white outline-none transition placeholder:text-white/40 selection:bg-emerald-300/35 focus:border-emerald-200/80 focus:ring-1 focus:ring-emerald-200/25 disabled:bg-[#3a4556] disabled:text-white/55 font-normal";
+const rowInput = "h-7 w-full rounded-md border border-white/18 bg-[#253146] px-2 text-[11px] text-white caret-white outline-none transition placeholder:text-white/40 selection:bg-[#2a8d8b]/35 focus:border-[#2a8d8b]/80 focus:ring-1 focus:ring-[#2a8d8b]/25 disabled:bg-[#3a4556] disabled:text-white/55 font-normal";
 const rowRead = "flex h-7 items-center justify-end rounded-md border border-white/14 bg-[#253146] px-2 text-[11px] text-white font-normal";
 const rowStatusPill = "inline-flex h-7 min-w-[104px] items-center justify-center rounded-full border border-white/16 bg-white/[0.08] px-2 text-[11px] text-white font-normal";
 const rowActionBtn = "inline-flex h-8 w-[112px] items-center justify-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const rowPrimaryBtn = `${rowActionBtn} border-emerald-300/28 bg-[#276454] text-white hover:bg-[#2d735f]`;
+const rowPrimaryBtn = `${rowActionBtn} border-[#2a8d8b]/55 bg-[#2a8d8b] text-white hover:bg-[#319c99]`;
 const rowNeutralBtn = `${rowActionBtn} border-white/18 bg-[#3a4556] text-white hover:bg-[#445267]`;
 const rowDangerBtn = `${rowActionBtn} border-rose-300/26 bg-[#b9182a] text-white hover:bg-[#971423]`;
 
@@ -262,15 +262,15 @@ function receptionBalance(item: any, rows: any[], drafts: Record<string, Record<
   const isMissing = diff > 0;
   const status = isOk ? "Egyezik" : isMissing ? "Hiányzik a sorokból" : "Túllépés";
   const className = isOk
-    ? "border-emerald-200/45 bg-emerald-300/10"
+    ? "border-[#2a8d8b]/55 bg-[#2a8d8b]/10"
     : "border-red-300/55 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.18),0_0_24px_rgba(239,68,68,0.24)]";
   const badgeClassName = isOk
-    ? "border-emerald-200/35 bg-emerald-400/14 text-emerald-50"
+    ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/14 text-white"
     : "border-red-200/35 bg-red-500/18 text-red-50 shadow-[0_0_12px_rgba(239,68,68,0.35)]";
   const amountClassName = isOk ? "text-white" : "text-red-100";
   const labelClassName = isOk ? "text-white/72" : "text-red-100/88";
   const ledClassName = isOk
-    ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.85)]"
+    ? "bg-[#2a8d8b] shadow-[0_0_10px_rgba(42,141,139,0.85)]"
     : "bg-red-400 shadow-[0_0_12px_rgba(248,113,113,1),0_0_24px_rgba(239,68,68,0.8)] animate-pulse";
 
   return {
@@ -1278,8 +1278,8 @@ export default function AllInReceptions(_props: Props) {
       <div className={wrap}>
         <header className={headerCard}>
           <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
-              <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
+            <div className="min-w-[220px] border-l-4 border-[#2a8d8b]/70 pl-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-white/70">AllInFashion</p>
               <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Receptiók</h1>
               <p className="mt-0.5 text-[11px] leading-snug text-white/52">Számlás bevételezések, export és részletezés.</p>
             </div>
@@ -1356,7 +1356,7 @@ export default function AllInReceptions(_props: Props) {
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Darab</p><p className="mt-0.5 text-lg text-white">{totals.qty}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Törölhető</p><p className="mt-0.5 text-lg text-white">{totals.deletable}</p></div>
             <div className={statCard}><p className="text-xs uppercase tracking-[0.06em] text-white/62">Összes érték</p><p className="mt-0.5 text-lg text-white">{money(totals.value)}</p></div>
-            <div className="rounded-xl border border-emerald-300/28 bg-[#276454] px-2.5 py-1.5"><p className="text-xs uppercase tracking-[0.06em] text-white/72">Eladási TVA</p><p className="mt-0.5 text-lg text-white">{salesTvaText}</p></div>
+            <div className="rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 py-1.5"><p className="text-xs uppercase tracking-[0.06em] text-white/72">Eladási TVA</p><p className="mt-0.5 text-lg text-white">{salesTvaText}</p></div>
           </div>
         </section>
 
@@ -1414,7 +1414,7 @@ export default function AllInReceptions(_props: Props) {
                       <p className="text-xs text-white">{cell(r.invoice_number)}</p>
                       <p className="mt-1 text-xs text-white/62">{cell(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
-                    <span className="rounded-full border border-emerald-200/30 bg-emerald-300/10 px-2 py-1 text-xs text-emerald-50">{statusText(r.status)}</span>
+                    <span className="rounded-full border border-[#2a8d8b]/40 bg-[#2a8d8b]/10 px-2 py-1 text-xs text-white">{statusText(r.status)}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Dátum</p><p>{dateText(r.reception_date)}</p></div>
@@ -1496,7 +1496,7 @@ export default function AllInReceptions(_props: Props) {
                 </div>
               )}
 
-              <div className="rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-white shadow-lg shadow-slate-950/10">
+              <div className="rounded-xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/10 px-3 py-2 text-white shadow-lg shadow-slate-950/10">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-xs uppercase tracking-[0.1em] text-white/70">Eladási ár / TVA</p>
@@ -1576,13 +1576,13 @@ export default function AllInReceptions(_props: Props) {
                     const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
                     const sellPriceRonPreview = rowSellPriceRon(r, draft);
                     const rowClass = r.status === "committed"
-                      ? "border-emerald-300/35 bg-[#303b4e] text-white"
+                      ? "border-[#2a8d8b]/45 bg-[#303b4e] text-white"
                       : r.status === "ignored"
                         ? "border-white/10 bg-[#3a4352] opacity-70"
                         : r.status === "error" || (r.error_messages || []).length
                           ? "border-rose-300/45 bg-[#4b2f3c] text-white"
                           : checked
-                            ? "border-emerald-300/45 bg-[#2f4053] text-white"
+                            ? "border-[#2a8d8b]/55 bg-[#2f4053] text-white"
                             : "border-white/14 bg-[#303b4e] text-white";
                     return (
                       <div key={r.id} className={`rounded-xl border p-2.5 text-white shadow-sm shadow-slate-950/20 ${rowClass}`}>
@@ -1591,7 +1591,7 @@ export default function AllInReceptions(_props: Props) {
                             <label className="inline-flex items-center gap-2 text-[11px] text-white">
                               <input
                                 type="checkbox"
-                                className="h-4 w-4 accent-emerald-500"
+                                className="h-4 w-4 accent-[#2a8d8b]"
                                 checked={checked}
                                 disabled={!canCommitOrMove || r.status === "error"}
                                 onChange={() => toggleRow(r.id)}
@@ -1651,11 +1651,11 @@ export default function AllInReceptions(_props: Props) {
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label className={label}>Eladási TVA %<input className={`${input} w-full`} value={salesTvaRate} onChange={(e) => setSalesTvaRate(e.target.value)} placeholder="pl. 21" /></label>
               <label className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/82">
-                <input className="h-4 w-4 accent-[#208d8b]" type="checkbox" checked={salesPriceIncludesTva} onChange={(e) => setSalesPriceIncludesTva(e.target.checked)} />
+                <input className="h-4 w-4 accent-[#2a8d8b]" type="checkbox" checked={salesPriceIncludesTva} onChange={(e) => setSalesPriceIncludesTva(e.target.checked)} />
                 Az eladási ár TVA-val együtt értendő
               </label>
             </div>
-            <div className="mt-3 rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-sm text-white/82">
+            <div className="mt-3 rounded-xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/10 px-3 py-2 text-sm text-white/82">
               A receptió sorain az eladási ár RON-ban van. A PDF és a készletre vétel ezt a központi TVA szabályt használja.
               {salesTvaUpdatedAt && <span className="mt-1 block text-white/45">Utolsó központi mentés: {String(salesTvaUpdatedAt).slice(0, 16).replace("T", " ")}{salesTvaUpdatedBy ? ` • ${salesTvaUpdatedBy}` : ""}</span>}
             </div>
