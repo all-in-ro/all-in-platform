@@ -484,7 +484,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   async function getDefaultLocationId(client) {
-    const r = await client.query(`SELECT id FROM aif_locations WHERE code='main_warehouse' LIMIT 1`);
+    const r = await client.query(`
+      SELECT id
+      FROM aif_locations
+      WHERE code='main_warehouse' OR COALESCE(is_active,true)=true
+      ORDER BY CASE WHEN code='main_warehouse' THEN 0 ELSE 1 END, name ASC
+      LIMIT 1
+    `);
     return r.rows[0]?.id || null;
   }
 
@@ -6170,8 +6176,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const currentQty = stockRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
       const reservedQty = stockRows.reduce((sum, row) => sum + Number(row.reserved_qty || 0), 0);
       const availableQty = stockRows.reduce((sum, row) => sum + Number(row.available_qty || 0), 0);
-      const lastBuyPrice = priceHistory.last_buy_price ?? imports.last_buy_price ?? variant.rows[0].buy_price ?? null;
-      const lastSellPrice = priceHistory.last_sell_price ?? imports.last_sell_price ?? variant.rows[0].sell_price ?? null;
+      const lastBuyPrice = priceHistory.last_buy_price ?? variant.rows[0].buy_price ?? imports.last_buy_price ?? null;
+      const lastSellPrice = priceHistory.last_sell_price ?? variant.rows[0].sell_price ?? imports.last_sell_price ?? null;
       const sellNet = lastSellPrice === null || lastSellPrice === undefined ? null : Number(lastSellPrice) / 1.21;
       const marginWithoutTva = lastBuyPrice && Number(lastBuyPrice) > 0 && sellNet !== null
         ? ((sellNet - Number(lastBuyPrice)) / Number(lastBuyPrice)) * 100
@@ -6623,7 +6629,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const currentQtyForLocation = Number(stockLocation.rows[0]?.qty || 0);
         if (priceChangeLocationId) {
           await insertStockMovementSafe(client, {
-            movementType: "price_change",
+            movementType: "manual_adjustment",
             sourceType: "price_change",
             sourcePrefix: "price",
             fallbackSourceType: "manual_stock_edit",
