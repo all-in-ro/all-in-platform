@@ -424,6 +424,11 @@ export default function AllInSuppliers() {
   const [brandsOpen, setBrandsOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
   const reportRef = useRef<HTMLElement | null>(null);
+  const createSectionRef = useRef<HTMLElement | null>(null);
+  const brandsSectionRef = useRef<HTMLElement | null>(null);
+  const createSupplierNameRef = useRef<HTMLInputElement | null>(null);
+  const brandNameRef = useRef<HTMLInputElement | null>(null);
+  const [jumpHighlight, setJumpHighlight] = useState<"create" | "brands" | "">("");
   const [form, setForm] = useState<FormState>({
     name: "",
     code: "",
@@ -450,6 +455,40 @@ export default function AllInSuppliers() {
   );
   const [brandDeleteTarget, setBrandDeleteTarget] = useState<AifBrand | null>(null);
   const [linkDeleteTarget, setLinkDeleteTarget] = useState<AifSupplierBrandLink | null>(null);
+
+  function scrollToPageSection(ref: { current: HTMLElement | null }) {
+    const run = () => {
+      const el = ref.current;
+      if (!el) return;
+      const headerOffset = 104;
+      const top = el.getBoundingClientRect().top + window.scrollY - headerOffset;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    };
+    window.requestAnimationFrame(run);
+    window.setTimeout(run, 80);
+    window.setTimeout(run, 220);
+  }
+
+  function flashJumpTarget(target: "create" | "brands") {
+    setJumpHighlight(target);
+    window.setTimeout(() => {
+      setJumpHighlight((current) => (current === target ? "" : current));
+    }, 1400);
+  }
+
+  function goToCreateSupplier() {
+    setCreateOpen(true);
+    flashJumpTarget("create");
+    scrollToPageSection(createSectionRef);
+    window.setTimeout(() => createSupplierNameRef.current?.focus(), 300);
+  }
+
+  function goToBrands() {
+    setBrandsOpen(true);
+    flashJumpTarget("brands");
+    scrollToPageSection(brandsSectionRef);
+    window.setTimeout(() => brandNameRef.current?.focus(), 300);
+  }
 
   const reportBySupplier = useMemo(() => {
     const map = new Map<string, AifSupplierReportItem>();
@@ -650,15 +689,14 @@ export default function AllInSuppliers() {
     setBrandSupplierId(id);
     setReportOpen(true);
     setBrandsOpen(true);
-    window.setTimeout(() => {
-      reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
+    scrollToPageSection(reportRef);
   }
 
   function focusSupplierBrandLinks(id: string) {
     setBrandSupplierId(id);
     setBrandId("");
     setBrandsOpen(true);
+    scrollToPageSection(brandsSectionRef);
   }
 
   function changeCompareMode(mode: CompareMode) {
@@ -1045,10 +1083,10 @@ export default function AllInSuppliers() {
               <p className="mt-0.5 text-[11px] leading-snug text-white/52">Beszállítói törzsadatok és vásárlási kimutatások</p>
             </div>
             <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
-              <button className={headerPrimaryBtn} onClick={() => setCreateOpen(true)} type="button">
+              <button className={headerPrimaryBtn} onClick={goToCreateSupplier} type="button" title="Ugrás az új beszállító űrlaphoz">
                 <Plus size={15} /> Új beszállító
               </button>
-              <button className={headerBtnSoft} onClick={() => setBrandsOpen(true)} type="button">
+              <button className={headerBtnSoft} onClick={goToBrands} type="button" title="Ugrás a márkák részhez">
                 <Building2 size={15} /> Márkák
               </button>
               <button className={headerBtnSoft} onClick={() => load()} disabled={busy} type="button">
@@ -1449,7 +1487,7 @@ export default function AllInSuppliers() {
           )}
         </section>
 
-        <section className={compactCard}>
+        <section ref={createSectionRef} className={`${compactCard} scroll-mt-28 transition-all duration-300 ${jumpHighlight === "create" ? "border-[#2a8d8b]/85 ring-2 ring-[#2a8d8b]/70 shadow-[0_0_0_1px_rgba(42,141,139,0.20),0_0_30px_rgba(42,141,139,0.25)]" : ""}`}> 
           <SectionToggle
             icon={<Plus size={16} />}
             title="Új beszállító"
@@ -1462,6 +1500,7 @@ export default function AllInSuppliers() {
               <label className={label}>
                 Név
                 <input
+                  ref={createSupplierNameRef}
                   className={`${input} w-full`}
                   value={form.name}
                   onChange={(e) => updateFormName(e.target.value)}
@@ -1491,7 +1530,7 @@ export default function AllInSuppliers() {
           )}
         </section>
 
-        <section className={card}>
+        <section ref={brandsSectionRef} className={`${card} scroll-mt-28 transition-all duration-300 ${jumpHighlight === "brands" ? "border-[#2a8d8b]/85 ring-2 ring-[#2a8d8b]/70 shadow-[0_0_0_1px_rgba(42,141,139,0.20),0_0_30px_rgba(42,141,139,0.25)]" : ""}`}> 
           <SectionToggle
             icon={<Building2 size={16} />}
             title="Márkák és beszállítói kapcsolatok"
@@ -1510,6 +1549,7 @@ export default function AllInSuppliers() {
                   <label className={label}>
                     Új márka
                     <input
+                      ref={brandNameRef}
                       className={`${input} w-full`}
                       value={brandForm.name}
                       onChange={(e) => setBrandForm({ name: e.target.value })}
