@@ -526,6 +526,33 @@ export type AifStockMovementTotals = {
 };
 
 
+export type AifBarcodeConflict = {
+  variantId?: string | null;
+  barcode?: string | null;
+  internalSku?: string | null;
+  title?: string | null;
+  modelCode?: string | null;
+  brand?: string | null;
+  color?: string | null;
+  size?: string | null;
+};
+
+export type AifVariantBarcodeAssignmentResponse = {
+  ok: true;
+  unchanged?: boolean;
+  variantId: string;
+  barcode: string;
+  previousBarcode?: string | null;
+  updatedAt?: string | null;
+  item?: {
+    id?: string | null;
+    title?: string | null;
+    brand?: string | null;
+    color?: string | null;
+    size?: string | null;
+  } | null;
+};
+
 export type AifVariantHistoryEventType = "incoming" | "outgoing" | "transfer" | "inventory" | "adjustment" | "price" | "price_change" | string;
 
 export type AifVariantHistoryEvent = {
@@ -632,6 +659,11 @@ async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
     (error as Error & { status?: number; statusCode?: number; code?: string }).statusCode = res.status;
     if (data && typeof data === "object" && data.code) {
       (error as Error & { status?: number; statusCode?: number; code?: string }).code = String(data.code);
+    }
+    if (data && typeof data === "object") {
+      (error as Error & { conflict?: AifBarcodeConflict | null; payload?: unknown }).conflict =
+        (data.conflict && typeof data.conflict === "object" ? data.conflict : null) as AifBarcodeConflict | null;
+      (error as Error & { conflict?: AifBarcodeConflict | null; payload?: unknown }).payload = data;
     }
     throw error;
   }
@@ -895,6 +927,32 @@ export function apiAifStockMovements(options?: {
   return fetchAifJSON<{ items: AifStockMovementItem[]; totals: AifStockMovementTotals }>(`/stock-movements${suffix}`);
 }
 
+
+export function apiAifGetVariant(variantId: string) {
+  return fetchAifJSON<{
+    item: AifInventoryItem & Record<string, unknown>;
+    stock?: AifStockItem[];
+    supplierCodes?: Array<Record<string, unknown>>;
+    movements?: Array<Record<string, unknown>>;
+  }>(`/variants/${encodeURIComponent(variantId)}`);
+}
+
+export function apiAifAssignVariantBarcode(
+  variantId: string,
+  barcode: string,
+  options?: { source?: string }
+) {
+  return fetchAifJSON<AifVariantBarcodeAssignmentResponse>(
+    `/variants/${encodeURIComponent(variantId)}/barcode`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        barcode,
+        source: options?.source || "barcode_center",
+      }),
+    }
+  );
+}
 
 export function apiAifVariantHistory(variantId: string, limit = 500) {
   const q = new URLSearchParams();
