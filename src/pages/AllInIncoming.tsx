@@ -551,8 +551,8 @@ const previewTopGrid = "grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px
 const previewTopHeaderGrid = "hidden";
 const previewMiddleGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1.65fr)_minmax(0,1.85fr)_minmax(0,0.65fr)_minmax(0,1fr)_minmax(0,0.65fr)_minmax(0,0.65fr)] lg:items-end";
 const previewBottomGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,3fr)_minmax(0,0.6fr)_minmax(0,0.75fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.05fr)] lg:items-end";
-const modalBackdrop = "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/74 px-4 py-6 backdrop-blur-sm";
-const modalCard = "w-full max-w-2xl rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl";
+const modalBackdrop = "fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-slate-950/78 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-4 sm:py-6";
+const modalCard = "my-auto max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]";
 const wizardStepBase = "rounded-2xl border px-3 py-3 transition shadow-sm";
 const wizardStepActive = `${wizardStepBase} border-[#67d4d1]/65 bg-[#208d8b]/22 text-white shadow-[#208d8b]/10`;
 const wizardStepDone = `${wizardStepBase} border-[#7bd7d4]/90 bg-[#208d8b] text-white shadow-[0_0_0_1px_rgba(123,215,212,0.28),0_14px_30px_rgba(32,141,139,0.32)] ring-1 ring-[#7bd7d4]/35 hover:bg-[#249b99]`;
@@ -633,12 +633,14 @@ function calculateReceptionAmounts(goodsValue: number, shippingValue: number, tv
   return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
 }
 
-function invoiceGoodsTarget(invoiceGross: number, shippingValue: number, tvaMode: string, tvaRate: number) {
-  const gross = Math.max(0, toNumber(invoiceGross));
+function invoiceGoodsTarget(invoiceAmount: number, shippingValue: number) {
+  // A megadott számlaösszeg mindig ugyanabban az ár-alapban értendő, mint a sorok:
+  // nettó soroknál nettó, bruttó soroknál bruttó, TVA nélküli soroknál változatlan.
+  // A korábbi logika nettó módnál még egyszer elosztotta 1 + TVA-val az összeget,
+  // ezért például 7 747,59-ből tévesen 6 402,97 lett.
+  const amount = Math.max(0, toNumber(invoiceAmount));
   const shipping = Math.max(0, toNumber(shippingValue));
-  const vatFactor = 1 + Math.max(0, toNumber(tvaRate)) / 100;
-  const invoiceValueInLinePriceBasis = tvaMode === "without_tva" && vatFactor > 0 ? gross / vatFactor : gross;
-  return Math.max(0, invoiceValueInLinePriceBasis - shipping);
+  return Math.max(0, amount - shipping);
 }
 
 function isRonCurrencyCode(value: unknown) {
@@ -1464,6 +1466,31 @@ export default function AllInIncoming(_props: Props) {
   const [editLocationType, setEditLocationType] = useState<LocationType>("warehouse");
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
 
+  useEffect(() => {
+    const anyModalOpen = Boolean(invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen);
+    if (!anyModalOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const closeTopModal = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (invoiceDifferencePrompt) setInvoiceDifferencePrompt(null);
+      else if (salesTvaModalOpen) setSalesTvaModalOpen(false);
+      else if (locationModalOpen) setLocationModalOpen(false);
+      else if (currencyModalOpen) setCurrencyModalOpen(false);
+    };
+
+    document.addEventListener("keydown", closeTopModal, true);
+    return () => {
+      document.removeEventListener("keydown", closeTopModal, true);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen]);
+
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === supplierId) || null,
     [suppliers, supplierId]
@@ -2023,11 +2050,22 @@ export default function AllInIncoming(_props: Props) {
     () => calculateReceptionAmounts(totalReceptionGoodsValue, shippingValue, tvaMode, vatRateValue),
     [totalReceptionGoodsValue, shippingValue, tvaMode, vatRateValue]
   );
-  const invoiceDifference = invoiceGrossProvided ? invoiceGrossValue - computedReception.gross : 0;
+  const linePriceBasisTotal = totalReceptionGoodsValue + shippingValue;
+  const invoiceDifference = invoiceGrossProvided ? invoiceGrossValue - linePriceBasisTotal : 0;
   const invoiceTargetGoodsValue = invoiceGrossProvided
-    ? invoiceGoodsTarget(invoiceGrossValue, shippingValue, tvaMode, vatRateValue)
+    ? invoiceGoodsTarget(invoiceGrossValue, shippingValue)
     : totalReceptionGoodsValue;
-  const receptionBaseValue = invoiceGrossProvided ? invoiceGrossValue : computedReception.gross;
+  const invoiceAmountLabel = tvaMode === "without_tva"
+    ? "Számla nettó összege"
+    : tvaMode === "with_tva"
+      ? "Számla bruttó összege"
+      : "Számla összege";
+  const invoiceAmountPlaceholder = tvaMode === "without_tva"
+    ? "A számla nettó összege"
+    : tvaMode === "with_tva"
+      ? "A számla bruttó végösszege"
+      : "A számla összege";
+  const receptionBaseValue = invoiceGrossProvided ? invoiceGrossValue : linePriceBasisTotal;
   const receptionRonValue = isRonCurrency ? receptionBaseValue : receptionBaseValue * rateValue;
   const receptionReady = Boolean(
     invoiceNumber.trim() &&
@@ -3726,8 +3764,8 @@ export default function AllInIncoming(_props: Props) {
               <input className={`${input} w-full`} value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} placeholder="ha nincs, hagyd üresen" />
             </label>
             <label className={label}>
-              Számla végösszeg
-              <input className={requiredInput(requiredMissing.invoiceGross)} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder="Számla végösszege" />
+              {invoiceAmountLabel}
+              <input className={requiredInput(requiredMissing.invoiceGross)} value={invoiceGross} onChange={(e) => setInvoiceGross(e.target.value)} placeholder={invoiceAmountPlaceholder} />
             </label>
           </div>
 
@@ -3755,8 +3793,11 @@ export default function AllInIncoming(_props: Props) {
               <p className="mt-1 text-sm text-white">{moneyText(totalReceptionGoodsValue, currencyCode)}</p>
             </div>
             <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított összeg</p>
-              <p className="mt-1 text-sm text-white">{moneyText(computedReception.gross, currencyCode)}</p>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított számlaérték</p>
+              <p className="mt-1 text-sm text-white">{moneyText(linePriceBasisTotal, currencyCode)}</p>
+              {tvaMode === "without_tva" && computedReception.vat > 0 && (
+                <p className="mt-1 text-[11px] text-white/55">TVA-val számított bruttó: {moneyText(computedReception.gross, currencyCode)}</p>
+              )}
             </div>
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eltérés</p>
@@ -3771,7 +3812,7 @@ export default function AllInIncoming(_props: Props) {
 
           {invoiceGrossProvided && approvedCount > 0 && Math.abs(invoiceDifference) > 0.01 && (
             <div className="rounded-xl border border-amber-200/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
-              A számla végösszege és a sorok számított összege eltér. A kijelölt sorok mentésekor a rendszer rákérdez, hogy arányosan szétossza-e a különbözetet, vagy változatlanul hagyja a vételárakat.
+              A megadott számlaösszeg és a sorok azonos ár-alapú összege eltér. A kijelölt sorok mentésekor a rendszer rákérdez, hogy arányosan szétossza-e a különbözetet, vagy változatlanul hagyja a vételárakat.
             </div>
           )}
 
@@ -3885,13 +3926,21 @@ export default function AllInIncoming(_props: Props) {
         {sizeDatalistOptions.map((size) => <option key={size} value={size} />)}
       </datalist>
       {invoiceDifferencePrompt && (
-        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="invoice-difference-title">
-          <div className={modalCard}>
+        <div
+          className={modalBackdrop}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="invoice-difference-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !busy) setInvoiceDifferencePrompt(null);
+          }}
+        >
+          <div className={modalCard} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p id="invoice-difference-title" className="text-lg font-normal">A számla és a vételárak nem egyeznek</p>
                 <p className="mt-1 text-sm leading-6 text-white/70">
-                  Mentés előtt döntsd el, hogy a rendszer arányosan korrigálja a kijelölt vételárakat, vagy hagyja őket pontosan úgy, ahogy az XLS-ben szerepelnek.
+                  Mentés előtt döntsd el, hogy a rendszer arányosan korrigálja a kijelölt vételárakat, vagy hagyja őket pontosan úgy, ahogy az XLS-ben szerepelnek. Az összehasonlítás nettó soroknál nettóval, bruttó soroknál bruttóval történik.
                 </p>
               </div>
               <button className={neutralBtn} onClick={() => setInvoiceDifferencePrompt(null)} disabled={busy} type="button">
@@ -3905,7 +3954,7 @@ export default function AllInIncoming(_props: Props) {
                 <p className="mt-1 text-base text-white">{moneyText(invoiceDifferencePrompt.currentGoodsValue, currencyCode)}</p>
               </div>
               <div className={statCard}>
-                <p className="text-xs uppercase tracking-[0.06em] text-white/58">Számla alapján célérték</p>
+                <p className="text-xs uppercase tracking-[0.06em] text-white/58">Számla alapján, azonos ár-alapon</p>
                 <p className="mt-1 text-base text-white">{moneyText(invoiceDifferencePrompt.targetGoodsValue, currencyCode)}</p>
               </div>
               <div className={statCard}>
@@ -3942,19 +3991,30 @@ export default function AllInIncoming(_props: Props) {
               </div>
             )}
 
-            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-[11px] text-white/45">Bezárás: ESC vagy kattintás a sötét háttérre</span>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button className={neutralBtn} onClick={() => setInvoiceDifferencePrompt(null)} disabled={busy} type="button">Mégse, vissza az ellenőrzéshez</button>
               <button className={neutralBtn} onClick={keepInvoicePricesAndSave} disabled={busy} type="button">Árak maradjanak változatlanul</button>
               <button className={primaryBtn} onClick={distributeInvoiceDifferenceAndSave} disabled={busy || !invoiceDifferencePrompt.canDistribute} type="button">
                 Különbözet arányos szétosztása
               </button>
+              </div>
             </div>
           </div>
         </div>
       )}
       {salesTvaModalOpen && (
-        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
-          <div className={modalCard}>
+        <div
+          className={modalBackdrop}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sales-tva-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSalesTvaModalOpen(false);
+          }}
+        >
+          <div className={modalCard} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p id="sales-tva-title" className="text-lg font-normal">Eladási ár / TVA beállítás</p>
@@ -3995,8 +4055,16 @@ export default function AllInIncoming(_props: Props) {
         </div>
       )}
       {locationModalOpen && (
-        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="locations-title">
-          <div className={modalCard}>
+        <div
+          className={modalBackdrop}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="locations-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !busy) setLocationModalOpen(false);
+          }}
+        >
+          <div className={modalCard} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p id="locations-title" className="text-lg font-normal">Cél helyek kezelése</p>
@@ -4187,8 +4255,16 @@ export default function AllInIncoming(_props: Props) {
       )}
 
       {currencyModalOpen && (
-        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="currencies-title">
-          <div className={modalCard}>
+        <div
+          className={modalBackdrop}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="currencies-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !busy) setCurrencyModalOpen(false);
+          }}
+        >
+          <div className={modalCard} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p id="currencies-title" className="text-lg font-normal">Pénznemek kezelése</p>
