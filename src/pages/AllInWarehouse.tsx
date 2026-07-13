@@ -818,6 +818,8 @@ function goBarcodeManager(variantId?: string, barcode?: string, title?: string) 
   if (variantId) params.set("variant", variantId);
   if (barcode) params.set("barcode", barcode);
   if (title) params.set("title", title);
+  params.set("source", "warehouse");
+  params.set("return", "allinwarehouse");
   const suffix = params.toString() ? `?${params.toString()}` : "";
   window.location.hash = `#allinbarcodes${suffix}`;
 }
@@ -1179,24 +1181,6 @@ function labelEscapeHtml(input: unknown) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function labelShortHashCode(input: string, length = 7) {
-  const source = String(input || `${Date.now()}-${Math.random()}`);
-  let hash = 2166136261;
-  for (let i = 0; i < source.length; i += 1) {
-    hash ^= source.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36).toUpperCase().padStart(length, "0").slice(-length);
-}
-
-function labelMakeInternalCode(seed = "", parts: unknown[] = []) {
-  const source = [seed, ...parts]
-    .map((value) => String(value ?? "").trim())
-    .filter(Boolean)
-    .join("|");
-  return labelCleanInternalCode(`AIF${labelShortHashCode(source)}`);
 }
 
 function labelInt(v: unknown, fallback: number, min: number, max: number) {
@@ -5342,18 +5326,11 @@ export default function AllInWarehouse() {
     return String(Math.max(1, qty || 1));
   }
 
-  function barcodeForLabelItem(item: InventoryItem) {
-    const existing = labelCleanInternalCode(item.barcode || item.internal_sku || "");
-    if (existing) return existing;
-    return labelMakeInternalCode("", [
-      item.variant_id,
-      item.model_id,
-      item.title_ro,
-      item.brand_name,
-      item.category_name_ro,
-      item.color_name,
-      item.size,
-    ]);
+  function barcodeForLabelItem(item: InventoryItem, detailItem?: Record<string, any> | null) {
+    return String(detailItem?.barcode || item.barcode || "")
+      .replace(/[\r\n\t]+/g, "")
+      .trim()
+      .slice(0, 64);
   }
 
   async function openLabelComposer() {
@@ -5370,9 +5347,10 @@ export default function AllInWarehouse() {
       return next;
     });
 
+    const resolvedDetailMap: Record<string, DetailResponse> = { ...labelDetailMap };
     const missingIds = selectedLabelItems
       .map((item) => String(item.variant_id || ""))
-      .filter((id) => id && !labelDetailMap[id]);
+      .filter((id) => id && !resolvedDetailMap[id]);
 
     if (missingIds.length) {
       setLabelDetailsBusy(true);
@@ -5388,19 +5366,27 @@ export default function AllInWarehouse() {
           })
         );
 
-        setLabelDetailMap((current) => {
-          const next = { ...current };
-          for (const row of loaded) {
-            if (row.detail) next[row.id] = row.detail;
-          }
-          return next;
-        });
+        for (const row of loaded) {
+          if (row.detail) resolvedDetailMap[row.id] = row.detail;
+        }
+        setLabelDetailMap(resolvedDetailMap);
       } finally {
         setLabelDetailsBusy(false);
       }
     }
 
+    const missingBarcodeItems = selectedLabelItems.filter((item) => {
+      const id = String(item.variant_id || "");
+      return !barcodeForLabelItem(item, resolvedDetailMap[id]?.item || null);
+    });
+
     setLabelComposerOpen(true);
+    if (missingBarcodeItems.length) {
+      const first = missingBarcodeItems[0];
+      setMessage(
+        `${missingBarcodeItems.length} terméknek nincs mentett bárkódja. A címkenyomtatás csak a termékhez elmentett kódot használja. Első hiányzó: ${first.title_ro || first.variant_id || "termék"}.`
+      );
+    }
   }
 
   function updateLabelCopies(id: string, value: string) {
@@ -5427,7 +5413,7 @@ export default function AllInWarehouse() {
     return selectedLabelItems.map((item) => {
       const id = String(item.variant_id || "");
       const detailItem = labelDetailMap[id]?.item || {};
-      const barcode = barcodeForLabelItem(item);
+      const barcode = barcodeForLabelItem(item, detailItem);
       const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 1, 1, 999), 0, 999);
       const color = colorDisplay(item.color_name || detailItem.color_name, item.color_code || detailItem.color_code);
       const price = item.sell_price == null ? "" : String(item.sell_price);
@@ -5449,6 +5435,11 @@ export default function AllInWarehouse() {
       };
     });
   }, [selectedLabelItems, labelCopies, colorTypes, labelDetailMap]);
+
+  const labelInvalidRows = useMemo(
+    () => labelRowsForPrint.filter((row) => row.copies > 0 && !row.render.ok),
+    [labelRowsForPrint]
+  );
 
   const labelPrintItems = useMemo<WarehouseLabelPrintItem[]>(() => {
     const out: WarehouseLabelPrintItem[] = [];
@@ -5476,6 +5467,8 @@ export default function AllInWarehouse() {
     return out;
   }, [labelRowsForPrint]);
 
+  const labelPrintReady = labelPrintItems.length > 0 && labelInvalidRows.length === 0;
+
   const labelPrintPages = useMemo(() => {
     const pages: WarehouseLabelPrintItem[][] = [];
     for (let i = 0; i < labelPrintItems.length; i += labelsPerPage) {
@@ -5501,6 +5494,13 @@ export default function AllInWarehouse() {
   function printGeneratedLabels() {
     if (!labelPrintItems.length) {
       setMessage("Nincs nyomtatható címke. Állíts be legalább egy példányt.");
+      return;
+    }
+    if (labelInvalidRows.length) {
+      const first = labelInvalidRows[0];
+      setMessage(
+        `${labelInvalidRows.length} termék címkéje nem nyomtatható, mert nincs termékhez mentett, érvényes bárkód. Első érintett: ${first.title || first.id}.`
+      );
       return;
     }
 
@@ -7576,14 +7576,14 @@ export default function AllInWarehouse() {
               </div>
               <div className="flex flex-wrap justify-end gap-2">
                 <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><ArrowLeft size={15} /> Vissza</button>
-                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={printGeneratedLabels} disabled={!labelPrintItems.length} type="button"><Barcode size={15} /> Nyomtatás A4</button>
+                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={printGeneratedLabels} disabled={!labelPrintReady} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Barcode size={15} /> Nyomtatás A4</button>
                 <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
             <div className="space-y-4 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                A címkék egy közös A4-es ívre kerülnek egymás után, több termék együtt is. A címke a román főkategóriát és az anyagösszetételt használja. Ha nincs anyagösszetétel, az a rész üres marad.
+                A címkék egy közös A4-es ívre kerülnek egymás után. Nyomtatás csak a termékhez adatbázisban elmentett bárkóddal lehetséges, így ugyanaz a kód marad a raktárban, a címkén és később a Shopify-kapcsolatban is.
               </div>
 
               <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
@@ -7679,8 +7679,22 @@ export default function AllInWarehouse() {
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{row.title}</p>
                           <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • {row.color} • {row.size}</p>
-                          <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode}</p>
-                          {!row.render.ok && <p className="mt-1 text-xs text-rose-100">{row.render.error}</p>}
+                          <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode || "nincs mentve"}</p>
+                          {!row.render.ok && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rose-300/25 bg-rose-500/10 px-2 py-1.5">
+                              <span className="text-xs text-rose-100">{row.render.error}</span>
+                              <button
+                                className="inline-flex h-7 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/40 bg-[#2a8d8b] px-2 text-[11px] text-white hover:bg-[#319c99]"
+                                type="button"
+                                onClick={() => {
+                                  setLabelComposerOpen(false);
+                                  goBarcodeManager(row.id, "", row.title);
+                                }}
+                              >
+                                <Barcode size={13} /> Generálás és mentés
+                              </button>
+                            </div>
+                          )}
                         </div>
                         <div>
                           <p className="mb-1 text-[11px] uppercase tracking-[0.05em] text-white/55">Címke darab</p>
@@ -7765,7 +7779,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap justify-end gap-2">
                 {selectedWorkPanel === "label" && (
                   <button className={primaryBtn} onClick={openLabelComposer} type="button" disabled={!selectedLabelItems.length || labelDetailsBusy}>
-                    <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Vonalkódok / címkék generálása"}
+                    <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Címkék előkészítése"}
                   </button>
                 )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
@@ -9044,7 +9058,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   className={btn}
-                  onClick={() => goBarcodeManager(detail.item?.id, edit.barcode, edit.titleRo || detail.item?.title_ro)}
+                  onClick={() => goBarcodeManager(detail.item?.id, detail.item?.barcode || "", edit.titleRo || detail.item?.title_ro)}
                   disabled={!detail.item?.id}
                   type="button"
                   title="Külön vonalkód- és címkemodul megnyitása"
@@ -9241,7 +9255,7 @@ export default function AllInWarehouse() {
           <AlertTriangle className="mr-2 inline" size={15} /> {activationTodoCount} aktiválandó készleten lévő variáns
         </button>
       )}
-    
+
       <div className="aifWarehouseLabelPrintRoot" style={labelPrintStyle}>
         {labelPrintPages.map((page, pageIndex) => (
           <div className="aifWarehouseLabelPrintPage" key={`label-page-${pageIndex}`}>
