@@ -8312,7 +8312,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-
   router.get("/health", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
     res.json({ ok: true, suppliers: r.rows[0].suppliers });
