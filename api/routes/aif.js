@@ -387,6 +387,47 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  function cleanSellPriceCurrencyMode(value, fallback = "invoice") {
+    const mode = normCode(value);
+    if (mode === "ron") return "ron";
+    if (mode === "invoice" || mode === "invoice_currency" || mode === "reception_currency") return "invoice";
+    return fallback === "ron" ? "ron" : "invoice";
+  }
+
+  function receptionSellPricePolicy(reception = {}) {
+    const source = reception && typeof reception === "object" ? reception : {};
+    const rawMeta = source.rawMeta && typeof source.rawMeta === "object"
+      ? source.rawMeta
+      : source.raw_meta && typeof source.raw_meta === "object"
+        ? source.raw_meta
+        : {};
+    const invoiceCurrency = currencyCode(
+      source.currencyCode || source.currency_code || rawMeta.currencyCode || rawMeta.currency_code || "RON"
+    ) || "RON";
+    const explicitMode = source.sellPriceCurrencyMode ?? source.sell_price_currency_mode ??
+      rawMeta.sellPriceCurrencyMode ?? rawMeta.sell_price_currency_mode;
+    const mode = cleanSellPriceCurrencyMode(explicitMode, invoiceCurrency === "RON" ? "ron" : "invoice");
+    const sourceCurrency = mode === "ron" ? "RON" : invoiceCurrency;
+    return {
+      mode,
+      invoiceCurrency,
+      sourceCurrency,
+      isRon: sourceCurrency === "RON",
+    };
+  }
+
+  function applyReceptionSellPricePolicyToNormalized(normalized, reception = {}) {
+    if (!normalized || typeof normalized !== "object") return normalized;
+    const policy = receptionSellPricePolicy(reception);
+    normalized.sellPriceCurrencyMode = policy.mode;
+    normalized.sell_price_currency_mode = policy.mode;
+    normalized.sellPriceCurrency = policy.sourceCurrency;
+    normalized.sell_price_currency = policy.sourceCurrency;
+    normalized.sellPriceIsRon = policy.isRon;
+    normalized.sell_price_is_ron = policy.isRon;
+    return normalized;
+  }
+
   async function ensureAifSettingsTable(client = pool) {
     await client.query(`CREATE TABLE IF NOT EXISTS aif_app_settings (
       key text PRIMARY KEY,
@@ -1393,6 +1434,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       receptionDate: emptyToNull(src.receptionDate || src.reception_date || body.receptionDate || body.reception_date),
       currencyCode: code || null,
       exchangeRateToRon: exchangeRate && exchangeRate > 0 ? exchangeRate : null,
+      sellPriceCurrencyMode: cleanSellPriceCurrencyMode(
+        src.sellPriceCurrencyMode ?? src.sell_price_currency_mode ?? body.sellPriceCurrencyMode ?? body.sell_price_currency_mode,
+        code === "RON" ? "ron" : "invoice"
+      ),
       tvaMode: mode,
       tvaRate: toMoney(src.tvaRate ?? src.tva_rate ?? body.tvaRate ?? body.tva_rate),
       shippingCost: toMoney(src.shippingCost ?? src.shipping_cost ?? body.shippingCost ?? body.shipping_cost) ?? 0,
@@ -2106,21 +2151,93 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       let recalcWarning = null;
       try {
-        const fresh = await pool.query(`SELECT currency_code, exchange_rate_to_ron FROM aif_receptions WHERE id=$1`, [receptionId]);
-        const rate = Number(fresh.rows[0]?.exchange_rate_to_ron || 1);
-        const currency = fresh.rows[0]?.currency_code || null;
-        await pool.query(
+        await client.query("BEGIN");
+        const fresh = await client.query(
+          `SELECT currency_code, exchange_rate_to_ron, raw_meta
+           FROM aif_receptions
+           WHERE id=$1
+           FOR UPDATE`,
+          [receptionId]
+        );
+        const freshRow = fresh.rows[0] || {};
+        const rate = Number(freshRow.exchange_rate_to_ron || 1);
+        const currency = currencyCode(freshRow.currency_code || "RON") || "RON";
+        const sellPolicy = receptionSellPricePolicy({
+          currencyCode: currency,
+          exchangeRateToRon: rate,
+          rawMeta: freshRow.raw_meta || {},
+        });
+        const sellRate = sellPolicy.isRon ? 1 : rate;
+
+        await client.query(
           `UPDATE aif_import_rows rw
-           SET buy_price_ron = CASE WHEN rw.buy_price IS NULL THEN NULL ELSE round(rw.buy_price * $2::numeric, 2) END,
-               sell_price_ron = ${sellPriceRonSql('rw.sell_price', 'rw.normalized', '$2')},
-               normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object('currencyCode',$3,'exchangeRateToRon',$2),
+           SET buy_price_ron = CASE
+                 WHEN rw.status='committed' THEN rw.buy_price_ron
+                 WHEN rw.buy_price IS NULL THEN NULL
+                 ELSE round(rw.buy_price * $2::numeric, 2)
+               END,
+               sell_price_ron = CASE
+                 WHEN rw.sell_price IS NULL THEN NULL
+                 ELSE round(rw.sell_price * $3::numeric, 2)
+               END,
+               normalized = COALESCE(rw.normalized,'{}'::jsonb) || jsonb_build_object(
+                 'currencyCode', $4,
+                 'exchangeRateToRon', $2,
+                 'sellPriceCurrencyMode', $5,
+                 'sell_price_currency_mode', $5,
+                 'sellPriceCurrency', $6,
+                 'sell_price_currency', $6,
+                 'sellPriceIsRon', $7,
+                 'sell_price_is_ron', $7,
+                 'sellPriceGrossRon', CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $3::numeric, 2) END,
+                 'sellPriceRon', CASE WHEN rw.sell_price IS NULL THEN NULL ELSE round(rw.sell_price * $3::numeric, 2) END
+               ),
                updated_at=now()
            FROM aif_import_batches b
-           WHERE rw.batch_id=b.id AND b.reception_id=$1 AND rw.status <> 'committed'`,
-          [receptionId, rate, currency]
+           WHERE rw.batch_id=b.id
+             AND b.reception_id=$1`,
+          [
+            receptionId,
+            rate,
+            sellRate,
+            currency,
+            sellPolicy.mode,
+            sellPolicy.sourceCurrency,
+            sellPolicy.isRon,
+          ]
         );
+
+        // Csak akkor írjuk át a termék jelenlegi eladási árát, ha ennek a receptiónak
+        // a sora a legutóbbi készletre vett árforrás az adott variánshoz.
+        await client.query(
+          `WITH latest_committed AS (
+             SELECT DISTINCT ON (rw.variant_id)
+                    rw.variant_id,
+                    rw.sell_price_ron,
+                    b.reception_id
+             FROM aif_import_rows rw
+             JOIN aif_import_batches b ON b.id=rw.batch_id
+             WHERE rw.status='committed'
+               AND rw.variant_id IS NOT NULL
+               AND rw.sell_price_ron IS NOT NULL
+             ORDER BY rw.variant_id,
+                      COALESCE(b.committed_at, b.created_at) DESC,
+                      rw.row_no DESC,
+                      rw.id DESC
+           )
+           UPDATE aif_product_variants v
+           SET sell_price=lc.sell_price_ron,
+               updated_at=now()
+           FROM latest_committed lc
+           WHERE v.id=lc.variant_id
+             AND lc.reception_id=$1`,
+          [receptionId]
+        );
+
+        await client.query("COMMIT");
       } catch (recalcError) {
-        recalcWarning = recalcError?.message || "A nem készletre vett sorok RON újraszámolása nem sikerült.";
+        try { await client.query("ROLLBACK"); } catch {}
+        recalcWarning = recalcError?.message || "A terméksorok és az eladási árak RON újraszámolása nem sikerült.";
         console.error("AIF reception row recalculation warning", recalcError);
       }
 
@@ -4258,6 +4375,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const salesTvaSettings = await readSalesTvaSettings(client);
       let errorCount = 0;
       for (const nr of normalizedRows) {
+        applyReceptionSellPricePolicyToNormalized(nr.normalized, reception);
         applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
@@ -4732,7 +4850,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureSnCodSchema(client);
       const batch = await client.query(
         `SELECT b.id, b.status, b.currency_code, b.exchange_rate_to_ron,
-                r.exchange_rate_to_ron AS reception_exchange_rate, r.currency_code AS reception_currency_code
+                r.exchange_rate_to_ron AS reception_exchange_rate, r.currency_code AS reception_currency_code,
+                r.raw_meta AS reception_raw_meta
          FROM aif_import_batches b
          LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE b.id::text=$1
@@ -4750,6 +4869,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const exchangeRate = Number(batch.rows[0].exchange_rate_to_ron || batch.rows[0].reception_exchange_rate || 1);
       const currency = currencyCode(batch.rows[0].currency_code || batch.rows[0].reception_currency_code || "RON") || "RON";
+      const receptionPricing = {
+        currencyCode: currency,
+        exchangeRateToRon: exchangeRate,
+        rawMeta: batch.rows[0].reception_raw_meta || {},
+      };
       const salesTvaSettings = await readSalesTvaSettings(client);
 
       let fallbackRowNo = 1;
@@ -4768,6 +4892,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
         await enrichNormalizedRow(client, nr);
+        applyReceptionSellPricePolicyToNormalized(nr.normalized, receptionPricing);
         applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
         if (nr.errors.length) chunkErrorCount++;
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
@@ -5174,9 +5299,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
       const current = await client.query(
-        `SELECT rw.*, b.exchange_rate_to_ron, b.currency_code, b.status AS batch_status
+        `SELECT rw.*, b.exchange_rate_to_ron, b.currency_code, b.status AS batch_status,
+                r.raw_meta AS reception_raw_meta
          FROM aif_import_rows rw
          JOIN aif_import_batches b ON b.id=rw.batch_id
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE rw.id::text=$1
          FOR UPDATE OF rw`,
         [rowId]
@@ -5216,6 +5343,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const nr = normalizeRowInput({ normalized: nextNormalized, raw: row.raw, rowNo: row.row_no }, row.row_no || 1);
       await enrichNormalizedRow(client, nr);
+      applyReceptionSellPricePolicyToNormalized(nr.normalized, {
+        currencyCode: row.currency_code,
+        exchangeRateToRon: row.exchange_rate_to_ron,
+        rawMeta: row.reception_raw_meta || {},
+      });
       const salesTvaSettings = await readSalesTvaSettings(client);
       applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
       if (isCommitted) {
@@ -5292,8 +5424,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.colorCode,
             nr.normalized.colorName,
             nr.normalized.size,
-            nr.normalized.buyPrice,
-            nr.normalized.sellPrice,
+            buyPriceRon,
+            sellPriceRon,
             nr.normalized.compareAtPrice,
             nr.normalized.snCod || nr.normalized.sn_cod,
             variantAttributesJsonFromNormalized(nr.normalized),
@@ -8311,6 +8443,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
+
 
   router.get("/health", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
