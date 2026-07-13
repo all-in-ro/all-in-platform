@@ -67,6 +67,7 @@ type LocationType = string;
 type IncomingWorkflowStep = "reception" | "source" | "import" | "manual" | "review";
 type IncomingInputMode = "" | "import" | "manual";
 type InvoiceDifferenceMode = "distributed" | "kept";
+type SellPriceCurrencyMode = "invoice" | "ron";
 type InvoiceDifferencePrompt = {
   currentGoodsValue: number;
   targetGoodsValue: number;
@@ -480,7 +481,7 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
     "descriptionRo", "description_ro", "description", "material", "composition", "imageUrl", "image_url", "barcode", "supplierBarcode",
     "colorCode", "color_code", "supplierColorCode", "colorName", "color_name", "colorHex", "color_hex", "brandColorCodeId", "colorTypeCode",
     "size", "sizeTypeCode", "brandSizeCodeId", "qty", "quantity", "buyPrice", "buy_price", "sellPrice", "sell_price",
-    "sellPriceGrossRon", "sell_price_gross_ron", "sellPriceCurrency", "sell_price_currency", "sellPriceIsRon", "sell_price_is_ron",
+    "sellPriceGrossRon", "sell_price_gross_ron", "sellPriceRon", "sell_price_ron", "sellPriceCurrencyMode", "sell_price_currency_mode", "sellPriceCurrency", "sell_price_currency", "sellPriceIsRon", "sell_price_is_ron",
     "sellPriceIncludesTva", "sell_price_includes_tva", "salesPriceIncludesTva", "salesTvaRate", "sales_tva_rate", "saleTvaRate", "sale_tva_rate",
     "compareAtPrice", "compare_at_price", "weightGrams", "weight_grams", "attributes"
   ];
@@ -1409,6 +1410,7 @@ export default function AllInIncoming(_props: Props) {
   const [tvaRate, setTvaRate] = useState("");
   const [salesTvaRate, setSalesTvaRate] = useState("21");
   const [salesPriceIncludesTva, setSalesPriceIncludesTva] = useState(true);
+  const [sellPriceCurrencyMode, setSellPriceCurrencyMode] = useState<SellPriceCurrencyMode>("invoice");
   const [salesTvaModalOpen, setSalesTvaModalOpen] = useState(false);
   const [salesTvaSettingsLoading, setSalesTvaSettingsLoading] = useState(false);
   const [salesTvaSettingsSaving, setSalesTvaSettingsSaving] = useState(false);
@@ -1580,6 +1582,10 @@ export default function AllInIncoming(_props: Props) {
   const activeCurrencies = useMemo(() => currencies.filter((c) => c.is_active), [currencies]);
   const isRonCurrency = isRonCurrencyCode(currencyCode);
   const exchangeRateRequired = Boolean(currencyCode && !isRonCurrency);
+  const sellPriceSourceCurrency = sellPriceCurrencyMode === "ron"
+    ? "RON"
+    : (String(currencyCode || "").trim().toUpperCase() || "RON");
+  const sellPriceSourceIsRon = isRonCurrencyCode(sellPriceSourceCurrency);
   const locationTypeOptions = useMemo(() => {
     if (activeLocationTypes.length) return activeLocationTypes;
     return [{ id: "warehouse", code: "warehouse", name: "Raktár", is_active: true } as AifLocationType];
@@ -1594,6 +1600,19 @@ export default function AllInIncoming(_props: Props) {
     if (String(nextCurrencyCode || "").trim().toUpperCase() === "RON") {
       setExchangeRateToRon("");
     }
+  }
+
+  function sellPriceRonFromSource(value: unknown) {
+    const amount = toNumber(value);
+    if (!amount) return amount;
+    if (sellPriceSourceIsRon) return roundMoney(amount, 2);
+    const rate = exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
+    return rate > 0 ? roundMoney(amount * rate, 2) : 0;
+  }
+
+  function sellPriceCurrencyModeLabel() {
+    if (sellPriceCurrencyMode === "ron") return "RON, már kész eladási végár";
+    return `A számla pénzneme (${sellPriceSourceCurrency})`;
   }
 
   async function loadSalesTvaSettings(showMessage = false) {
@@ -2195,12 +2214,16 @@ export default function AllInIncoming(_props: Props) {
     const enrichedRow = applyProductCodeAndBrandColor(row);
     const normalized = { ...(enrichedRow.normalized || {}) } as any;
     const rate = salesTvaRate.trim() ? toNumber(salesTvaRate) : 0;
-    normalized.sellPriceCurrency = "RON";
-    normalized.sellPriceIsRon = true;
+    normalized.sellPriceCurrencyMode = sellPriceCurrencyMode;
+    normalized.sellPriceCurrency = sellPriceSourceCurrency;
+    normalized.sellPriceIsRon = sellPriceSourceIsRon;
     normalized.sellPriceIncludesTva = salesPriceIncludesTva;
+    normalized.salesPriceIncludesTva = salesPriceIncludesTva;
     normalized.salesTvaRate = rate;
+    normalized.saleTvaRate = rate;
     if (normalized.sellPrice !== undefined && normalized.sellPrice !== null && normalized.sellPrice !== "") {
-      normalized.sellPriceGrossRon = toNumber(normalized.sellPrice);
+      normalized.sellPriceGrossRon = sellPriceRonFromSource(normalized.sellPrice);
+      normalized.sellPriceRon = normalized.sellPriceGrossRon;
     }
     const tariffCode = customsTariffCodeFromRow(row);
     if (tariffCode) assignCustomsTariffCode(normalized, tariffCode);
@@ -2223,8 +2246,6 @@ export default function AllInIncoming(_props: Props) {
         salesTvaRate: parsedRate,
         salesPriceIncludesTva,
         sellPriceIncludesTva: salesPriceIncludesTva,
-        sellPriceCurrency: "RON",
-        sellPriceIsRon: true,
       });
       const item = response.item || response.settings || {};
       setSalesTvaRate(String(item.salesTvaRate ?? parsedRate));
@@ -2232,7 +2253,7 @@ export default function AllInIncoming(_props: Props) {
       setSalesTvaUpdatedAt(item.updatedAt || item.updated_at || null);
       setSalesTvaUpdatedBy(item.updatedBy || item.updated_by || null);
       setSalesTvaModalOpen(false);
-      setMessage("Eladási TVA központi alapbeállítás mentve. Minden gép és telefon ezt fogja használni.");
+      setMessage("Eladási TVA központi alapbeállítás mentve. A pénznemet továbbra is receptiónként választod ki.");
       return item;
     } catch (e: any) {
       setMessage(e?.message || "Az eladási TVA központi beállítás mentése nem sikerült.");
@@ -2375,6 +2396,7 @@ export default function AllInIncoming(_props: Props) {
     setExchangeRateToRon("");
     setTvaMode("");
     setTvaRate("");
+    setSellPriceCurrencyMode("invoice");
     setShippingCost("");
     setInvoiceGross("");
     setDefaultBrandCode("");
@@ -2412,6 +2434,12 @@ export default function AllInIncoming(_props: Props) {
     setInvoiceGross(String(item.invoice_gross ?? ""));
     setNote(String((item as any).note || ""));
     const rawMeta = (item as any).raw_meta || {};
+    const storedSellPriceMode = String(rawMeta.sellPriceCurrencyMode || rawMeta.sell_price_currency_mode || "").trim().toLowerCase();
+    setSellPriceCurrencyMode(
+      storedSellPriceMode === "ron" || storedSellPriceMode === "invoice"
+        ? storedSellPriceMode as SellPriceCurrencyMode
+        : (String(nextCurrencyCode || "").trim().toUpperCase() === "RON" ? "ron" : "invoice")
+    );
     if (rawMeta.salesTvaRate !== undefined || rawMeta.saleTvaRate !== undefined) setSalesTvaRate(String(rawMeta.salesTvaRate ?? rawMeta.saleTvaRate ?? "21"));
     if (rawMeta.salesPriceIncludesTva !== undefined || rawMeta.sellPriceIncludesTva !== undefined) setSalesPriceIncludesTva(Boolean(rawMeta.salesPriceIncludesTva ?? rawMeta.sellPriceIncludesTva));
     if (clearDraftRows) {
@@ -2530,8 +2558,9 @@ export default function AllInIncoming(_props: Props) {
         qty,
         buyPrice,
         sellPrice,
-        sellPriceCurrency: "RON",
-        sellPriceIsRon: true,
+        sellPriceCurrencyMode,
+        sellPriceCurrency: sellPriceSourceCurrency,
+        sellPriceIsRon: sellPriceSourceIsRon,
         sellPriceIncludesTva: salesPriceIncludesTva,
         salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
       },
@@ -2571,8 +2600,9 @@ export default function AllInIncoming(_props: Props) {
         qty,
         buyPrice,
         sellPrice,
-        sellPriceCurrency: "RON",
-        sellPriceIsRon: true,
+        sellPriceCurrencyMode,
+        sellPriceCurrency: sellPriceSourceCurrency,
+        sellPriceIsRon: sellPriceSourceIsRon,
         sellPriceIncludesTva: salesPriceIncludesTva,
         salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
         source: "manual",
@@ -2708,6 +2738,7 @@ export default function AllInIncoming(_props: Props) {
       setRows(normalizedRows);
       setWorkbench(analysisWithSnCod);
       setIncomingInputMode("import");
+      setSellPriceCurrencyMode(isRonCurrency ? "ron" : "invoice");
       setIncomingStep("import");
       setWorkbenchOpen(true);
       setPreviewLimit(25);
@@ -2887,7 +2918,9 @@ export default function AllInIncoming(_props: Props) {
           note,
           salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
           salesPriceIncludesTva,
-          sellPriceCurrency: "RON",
+          sellPriceCurrencyMode,
+          sellPriceCurrency: sellPriceSourceCurrency,
+          sellPriceIsRon: sellPriceSourceIsRon,
         },
       };
       if (selectedReceptionId) basePayload.receptionId = selectedReceptionId;
@@ -3368,7 +3401,9 @@ export default function AllInIncoming(_props: Props) {
             note,
             salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
             salesPriceIncludesTva,
-            sellPriceCurrency: "RON",
+            sellPriceCurrencyMode,
+            sellPriceCurrency: sellPriceSourceCurrency,
+            sellPriceIsRon: sellPriceSourceIsRon,
           },
         }),
       });
@@ -3424,10 +3459,12 @@ export default function AllInIncoming(_props: Props) {
     setIncomingInputMode(mode);
     setIncomingStep(mode);
     if (mode === "manual") {
+      if (!rows.length) setSellPriceCurrencyMode("ron");
       setManualRowsOpen(true);
       setWorkbenchOpen(false);
     }
     if (mode === "import") {
+      if (!rows.length) setSellPriceCurrencyMode(isRonCurrency ? "ron" : "invoice");
       setWorkbenchOpen(Boolean(workbench));
     }
     setMessage(mode === "import" ? "Import mód kiválasztva. Válaszd ki az XLS/XLSX fájlt, majd ellenőrizd az oszloptársítást." : "Manuális mód kiválasztva. Töltsd ki a terméksort, majd add hozzá az előnézethez.");
@@ -3770,12 +3807,33 @@ export default function AllInIncoming(_props: Props) {
           </div>
 
           <div className="rounded-xl border border-[#67d4d1]/28 bg-[#208d8b]/10 px-3 py-2.5 text-sm text-white/82">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="grid gap-3 lg:grid-cols-[1fr_300px_auto] lg:items-end">
               <div>
                 <p className="text-xs uppercase tracking-[0.06em] text-white/62">Eladási ár kezelése</p>
-                <p className="mt-1 text-white">Az eladási ár RON-ban kerül mentésre, {salesPriceIncludesTva ? `TVA-val együtt (${salesTvaRate || "0"}%)` : `TVA nélkül (${salesTvaRate || "0"}%)`}.</p>
+                <p className="mt-1 text-white">
+                  {sellPriceCurrencyMode === "invoice" && !sellPriceSourceIsRon
+                    ? `Az XLS eladási ára ${sellPriceSourceCurrency}. Mentéskor a ${exchangeRateToRon || "hiányzó"} RON árfolyammal RON-ra váltjuk.`
+                    : "Az eladási ár már kész RON végárként kerül mentésre."}
+                </p>
+                <p className="mt-1 text-xs text-white/58">
+                  {salesPriceIncludesTva ? `TVA-val együtt (${salesTvaRate || "0"}%)` : `TVA nélkül (${salesTvaRate || "0"}%)`}
+                  {rows.length && toNumber(rows[0]?.normalized?.sellPrice) > 0
+                    ? ` • Példa: ${moneyText(toNumber(rows[0]?.normalized?.sellPrice), sellPriceSourceCurrency)} → ${moneyText(sellPriceRonFromSource(rows[0]?.normalized?.sellPrice), "RON")}`
+                    : ""}
+                </p>
               </div>
-              <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} type="button">Beállítás</button>
+              <label className={label}>
+                Eladási ár pénzneme
+                <select
+                  className={`${selectInput} w-full`}
+                  value={sellPriceCurrencyMode}
+                  onChange={(e) => setSellPriceCurrencyMode(e.target.value as SellPriceCurrencyMode)}
+                >
+                  <option style={optionStyle} value="invoice">{`Számla pénzneme (${currencyCode || "nincs kiválasztva"})`}</option>
+                  <option style={optionStyle} value="ron">RON, már kész végár</option>
+                </select>
+              </label>
+              <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} type="button">TVA beállítás</button>
             </div>
           </div>
 
@@ -4018,7 +4076,7 @@ export default function AllInIncoming(_props: Props) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p id="sales-tva-title" className="text-lg font-normal">Eladási ár / TVA beállítás</p>
-                <p className="mt-1 text-sm text-white/70">Az eladási ár RON-ban mentődik a termékhez. Központi alap minden eszközön: {salesTvaRate || "0"}%.</p>
+                <p className="mt-1 text-sm text-white/70">Ez csak az eladási TVA kezelés központi alapja. A pénznemet receptiónként külön választod ki: {sellPriceCurrencyModeLabel()}.</p>
               </div>
               <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(false)} type="button">
                 <X size={14} /> Bezárás
@@ -4037,11 +4095,11 @@ export default function AllInIncoming(_props: Props) {
             </div>
 
             <div className="mt-3 rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-sm text-white/82">
-              Központi alapbeállítás. Mentés után minden gépen, telefonon és böngészőben ez lesz az érvényes eladási TVA.
+              Központi TVA alapbeállítás. Mentés után minden gépen, telefonon és böngészőben ez lesz az érvényes.
             </div>
 
             <div className="mt-4 rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/70">
-              A beolvasott és kézi terméksorok eladási ára RON-os végárként kerül tovább a termékadatlapra. A TVA beállítás szerveren tárolódik, ezért minden gépen és telefonon ugyanaz lesz.
+              A pénznem nem globális beállítás. Külföldi számlánál kiválaszthatod, hogy az XLS eladási ára a számla pénznemében van-e és árfolyammal váltandó, vagy már eleve RON végár.
               {salesTvaUpdatedAt && <span className="mt-1 block text-white/45">Utolsó központi mentés: {String(salesTvaUpdatedAt).slice(0, 16).replace("T", " ")}{salesTvaUpdatedBy ? ` • ${salesTvaUpdatedBy}` : ""}</span>}
             </div>
 
@@ -4913,8 +4971,18 @@ export default function AllInIncoming(_props: Props) {
                         <input className={`${previewInput} w-full text-right`} value={valueString(n.buyPrice)} onChange={(e) => updateRowField(globalIndex, "buyPrice", e.target.value)} title={valueString(n.buyPrice)} />
                       </label>
                       <label className={previewField}>
-                        <span className={compactFieldLabel} title="Eladás RON">Eladás RON</span>
-                        <input className={`${previewInput} w-full text-right`} value={valueString(n.sellPrice)} onChange={(e) => updateRowField(globalIndex, "sellPrice", e.target.value)} title={valueString(n.sellPrice)} />
+                        <span
+                          className={compactFieldLabel}
+                          title={`Mentett RON végár: ${moneyText(sellPriceRonFromSource(n.sellPrice), "RON")}`}
+                        >
+                          Eladás {sellPriceSourceCurrency}
+                        </span>
+                        <input
+                          className={`${previewInput} w-full text-right`}
+                          value={valueString(n.sellPrice)}
+                          onChange={(e) => updateRowField(globalIndex, "sellPrice", e.target.value)}
+                          title={`${valueString(n.sellPrice)} ${sellPriceSourceCurrency} → ${moneyText(sellPriceRonFromSource(n.sellPrice), "RON")}`}
+                        />
                       </label>
                       <div className={previewField}>
                         <span className={compactFieldLabel}>Állapot</span>
