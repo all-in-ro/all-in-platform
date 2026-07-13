@@ -3314,7 +3314,7 @@ export default function AllInWarehouse() {
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "subCategory" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
-  const [bulkProductDeleteTarget, setBulkProductDeleteTarget] = useState<{ ids: string[]; items: InventoryItem[] } | null>(null);
+  const [bulkProductDeleteTarget, setBulkProductDeleteTarget] = useState<{ ids: string[]; items: InventoryItem[]; context: "warehouse" | "incoming" } | null>(null);
   const [historyTarget, setHistoryTarget] = useState<InventoryItem | null>(null);
   const [variantHistory, setVariantHistory] = useState<VariantHistoryResponse | null>(null);
   const [variantHistoryBusy, setVariantHistoryBusy] = useState(false);
@@ -3325,6 +3325,7 @@ export default function AllInWarehouse() {
   const [stockEditorAllowTotalChange, setStockEditorAllowTotalChange] = useState(false);
   const [stockEditorWarning, setStockEditorWarning] = useState("");
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
+  const [incomingSelectedVariants, setIncomingSelectedVariants] = useState<Record<string, boolean>>({});
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
   const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
   const [persistedSelectedItems, setPersistedSelectedItems] = useState<InventoryItem[]>([]);
@@ -3373,6 +3374,10 @@ export default function AllInWarehouse() {
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
+
+  useEffect(() => {
+    setIncomingSelectedVariants({});
+  }, [incomingFocus?.batchId]);
 
   const inventoryDisplayItems = useMemo(() => {
     const baseItems = items.filter((item) => !isArchivedInventoryItem(item));
@@ -3515,6 +3520,12 @@ export default function AllInWarehouse() {
     setPersistedSelectedItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
     setStockRows((current) => current.filter((row) => String(row.variant_id || "") !== id));
     setSelectedVariants((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setIncomingSelectedVariants((current) => {
       if (!current[id]) return current;
       const next = { ...current };
       delete next[id];
@@ -4635,6 +4646,7 @@ export default function AllInWarehouse() {
     setSortMode("name");
     setIncomingFocus(null);
     setIncomingFocusItems([]);
+    setIncomingSelectedVariants({});
     setProductPage(1);
     setListOpen(true);
     if (showMessage) setMessage("Szűrők törölve. Most az összes raktári terméksor látszik.");
@@ -4699,10 +4711,10 @@ export default function AllInWarehouse() {
     return filtered.slice(start, start + productPageSize);
   }, [filtered, safeProductPage, productPageSize]);
 
-  const filteredVariantIds = useMemo(
-    () => productPageItems.map((x) => String(x.variant_id || "")).filter(Boolean),
-    [productPageItems]
-  );
+  const filteredVariantIds = useMemo(() => {
+    const sourceItems = incomingFocus?.batchId ? filtered : productPageItems;
+    return sourceItems.map((x) => String(x.variant_id || "")).filter(Boolean);
+  }, [incomingFocus?.batchId, filtered, productPageItems]);
 
   useEffect(() => {
     setProductPage(1);
@@ -4830,6 +4842,22 @@ export default function AllInWarehouse() {
     </div>
   ) : null;
 
+  useEffect(() => {
+    if (!incomingFocus?.batchId) {
+      setIncomingSelectedVariants({});
+      return;
+    }
+    setIncomingSelectedVariants((current) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const [id, selected] of Object.entries(current)) {
+        if (selected && incomingFocusVariantSet.has(id)) next[id] = true;
+        else changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [incomingFocus?.batchId, incomingFocusVariantIdsKey]);
+
   const selectionSourceItems = useMemo(() => mergeInventoryItems(items, persistedSelectedItems), [items, persistedSelectedItems]);
 
   const selectedItems = useMemo(() => {
@@ -4837,7 +4865,15 @@ export default function AllInWarehouse() {
     return selectionSourceItems.filter((x) => selected.has(selectedVariantIdFromItem(x)));
   }, [selectionSourceItems, selectedVariants]);
 
+  const incomingSelectedItems = useMemo(() => {
+    if (!incomingFocus?.batchId) return [] as InventoryItem[];
+    const selected = new Set(Object.keys(incomingSelectedVariants).filter((id) => incomingSelectedVariants[id]));
+    return filtered.filter((x) => selected.has(selectedVariantIdFromItem(x)));
+  }, [filtered, incomingFocus?.batchId, incomingSelectedVariants]);
+
   const selectedCount = selectedItems.length;
+  const incomingSelectedCount = incomingSelectedItems.length;
+  const activeListSelectedCount = incomingFocus?.batchId ? incomingSelectedCount : selectedCount;
   const selectedUnassignedItems = useMemo(
     () => selectedItems.filter((x) => !selectedWorkActions[String(x.variant_id || "")]),
     [selectedItems, selectedWorkActions]
@@ -5199,7 +5235,8 @@ export default function AllInWarehouse() {
     }, 0);
   }
 
-  const selectedVisibleCount = filteredVariantIds.filter((id) => selectedVariants[id]).length;
+  const activeListSelectionMap = incomingFocus?.batchId ? incomingSelectedVariants : selectedVariants;
+  const selectedVisibleCount = filteredVariantIds.filter((id) => activeListSelectionMap[id]).length;
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedVisibleCount === filteredVariantIds.length;
 
   function assignSelectedItemToAction(item: InventoryItem, action: SelectedWorkAction) {
@@ -5548,6 +5585,16 @@ export default function AllInWarehouse() {
 
   function toggleVariantSelection(id: string, checked: boolean) {
     if (!id) return;
+    if (incomingFocus?.batchId) {
+      setIncomingSelectedVariants((current) => {
+        const next = { ...current };
+        if (checked) next[id] = true;
+        else delete next[id];
+        return next;
+      });
+      return;
+    }
+
     setSelectedVariants((current) => {
       const next = { ...current };
       if (checked) next[id] = true;
@@ -5564,6 +5611,18 @@ export default function AllInWarehouse() {
   }
 
   function toggleAllFilteredSelection(checked: boolean) {
+    if (incomingFocus?.batchId) {
+      setIncomingSelectedVariants((current) => {
+        const next = { ...current };
+        for (const id of filteredVariantIds) {
+          if (checked) next[id] = true;
+          else delete next[id];
+        }
+        return next;
+      });
+      return;
+    }
+
     setSelectedVariants((current) => {
       const next = { ...current };
       for (const id of filteredVariantIds) {
@@ -5579,6 +5638,10 @@ export default function AllInWarehouse() {
         return next;
       });
     }
+  }
+
+  function clearIncomingSelection() {
+    setIncomingSelectedVariants({});
   }
 
   function clearSelectedVariants() {
@@ -6676,15 +6739,16 @@ export default function AllInWarehouse() {
     }
   }
 
-  function openSelectedProductsDeleteConfirm() {
-    const ids = Array.from(new Set(selectedItems.map((item) => selectedVariantIdFromItem(item)).filter(Boolean)));
+  function openSelectedProductsDeleteConfirm(context: "warehouse" | "incoming" = incomingFocus?.batchId ? "incoming" : "warehouse") {
+    const sourceItems = context === "incoming" ? incomingSelectedItems : selectedItems;
+    const ids = Array.from(new Set(sourceItems.map((item) => selectedVariantIdFromItem(item)).filter(Boolean)));
     if (!ids.length) {
-      setMessage("Nincs kijelölt termék törléshez.");
+      setMessage(context === "incoming" ? "Nincs kijelölt termék az utolsó bevételezés törléséhez." : "Nincs kijelölt termék törléshez.");
       return;
     }
-    const itemById = new Map(selectedItems.map((item) => [selectedVariantIdFromItem(item), item]));
+    const itemById = new Map(sourceItems.map((item) => [selectedVariantIdFromItem(item), item]));
     const deleteItems = ids.map((id) => itemById.get(id)).filter(Boolean) as InventoryItem[];
-    setBulkProductDeleteTarget({ ids, items: deleteItems });
+    setBulkProductDeleteTarget({ ids, items: deleteItems, context });
   }
 
   async function confirmDeleteSelectedProducts() {
@@ -6713,7 +6777,26 @@ export default function AllInWarehouse() {
         }
       }
 
+      const deleteContext = bulkProductDeleteTarget.context;
       setBulkProductDeleteTarget(null);
+      if (deleteContext === "incoming") {
+        setIncomingSelectedVariants((current) => {
+          const next = { ...current };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+      } else {
+        setSelectedVariants((current) => {
+          const next = { ...current };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+        setSelectedWorkActions((current) => {
+          const next = { ...current };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+      }
       if (detail?.item?.id && ids.includes(String(detail.item.id))) setDetail(null);
       if (historyTarget?.variant_id && ids.includes(String(historyTarget.variant_id))) {
         setHistoryTarget(null);
@@ -7125,9 +7208,14 @@ export default function AllInWarehouse() {
               <span className={chip}>{filtered.length} variáns</span>
               {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
               {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
-              {selectedCount > 0 && (
+              {!incomingFocus && selectedCount > 0 && (
                 <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2.5 py-1 text-xs text-white">
                   {selectedCount} kijelölve
+                </span>
+              )}
+              {incomingFocus && incomingSelectedCount > 0 && (
+                <span className="rounded-full border border-red-200/45 bg-[#d31126]/18 px-2.5 py-1 text-xs text-white">
+                  {incomingSelectedCount} kijelölve ebben az importban
                 </span>
               )}
               {incomingFocus && (
@@ -7148,19 +7236,30 @@ export default function AllInWarehouse() {
               {incomingFocus && (
                 <button
                   className={btnSoft}
-                  onClick={() => { setIncomingFocus(null); setIncomingFocusItems([]); setProductPage(1); setMessage("Utolsó bevételezés szűrő törölve. Most újra az összes raktári variáns látszik."); }}
+                  onClick={() => { setIncomingFocus(null); setIncomingFocusItems([]); setIncomingSelectedVariants({}); setProductPage(1); setMessage("Utolsó bevételezés szűrő törölve. Most újra az összes raktári variáns látszik."); }}
                   type="button"
                   title="Csak az utolsó import sorainak mutatását kikapcsolja"
                 >
                   <X size={15} /> Import szűrő törlése
                 </button>
               )}
-              {selectedCount > 0 && (
+              {incomingFocus ? (
+                incomingSelectedCount > 0 ? (
+                  <>
+                    <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("incoming")} disabled={saving} type="button" title="Csak az utolsó bevételezésben kijelölt sorokat törli">
+                      <Trash2 size={15} /> Kijelölt termékek törlése
+                    </button>
+                    <button className={btnSoft} onClick={clearIncomingSelection} type="button" title="Csak az importnézet kijelölését törli">
+                      <X size={15} /> Import kijelölés törlése
+                    </button>
+                  </>
+                ) : null
+              ) : selectedCount > 0 && (
                 <>
                   <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(true)} type="button">
                     <Eye size={15} /> Kijelöltek megnyitása
                   </button>
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={openSelectedProductsDeleteConfirm} disabled={saving} type="button" title="Az összes kijelölt terméket törli">
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("warehouse")} disabled={saving} type="button" title="Az összes raktári munkalistán kijelölt terméket törli">
                     <Trash2 size={15} /> Kijelölt termékek törlése
                   </button>
                   <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli">
@@ -7186,13 +7285,20 @@ export default function AllInWarehouse() {
                       <p className="font-semibold text-white">A legutóbbi bevezetés még aktiválandó sorait mutatom.</p>
                       <p className="mt-1">Forrás: {String(incomingFocus.sourceFileName || incomingFocus.batch?.source_file_name || incomingFocus.batchId || "import")} • import sor: {incomingFocus.rows.length || incomingFocus.variantIds.length} • megjelenő variáns: {filtered.length}/{incomingFocus.variantIds.length}{incomingFocus.totalQty ? ` • ${incomingFocus.totalQty} db` : ""}</p>
                       <p className="mt-1 text-[#bdf5f2]">Amint a Modell állapot és a Variáns állapot aktív, a sor eltűnik innen. A készlet nem tűnik el, csak átkerül a normál raktárlistába.</p>
+                      <p className="mt-1 text-[#bdf5f2]">Az itteni kijelölés külön importlista: nem keveredik a normál raktári kijelölésekkel, címkékkel vagy készletmozgatási teendőkkel.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      {selectedCount > 0 ? (
-                        <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={openSelectedProductsDeleteConfirm} disabled={saving} type="button">
+                      {filteredVariantIds.length > 0 && incomingSelectedCount < filteredVariantIds.length ? (
+                        <button className={btnSoft} onClick={() => toggleAllFilteredSelection(true)} type="button" title="Csak az utolsó bevételezés látható sorait jelöli ki, a normál raktári munkalistát nem bántja.">
+                          <PackageCheck size={14} /> Összes import sor kijelölése
+                        </button>
+                      ) : null}
+                      {incomingSelectedCount > 0 ? (
+                        <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("incoming")} disabled={saving} type="button">
                           <Trash2 size={15} /> Kijelölt termékek törlése
                         </button>
                       ) : null}
+                      {incomingSelectedCount > 0 ? <button className={btnSoft} onClick={clearIncomingSelection} type="button"><X size={14} /> Import kijelölés törlése</button> : null}
                       <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button"><X size={14} /> Minden raktári variáns</button>
                     </div>
                   </div>
@@ -7250,8 +7356,8 @@ export default function AllInWarehouse() {
                           checked={allFilteredSelected}
                           onChange={(e) => toggleAllFilteredSelection(e.target.checked)}
                           disabled={!filteredVariantIds.length}
-                          aria-label="Az aktuális oldal termékeinek kijelölése"
-                          title="Az aktuális oldal termékeinek kijelölése"
+                          aria-label={incomingFocus?.batchId ? "Az utolsó bevételezés összes szűrt termékének kijelölése" : "Az aktuális oldal termékeinek kijelölése"}
+                          title={incomingFocus?.batchId ? "Az utolsó bevételezés összes szűrt termékének kijelölése" : "Az aktuális oldal termékeinek kijelölése"}
                         />
                       </th>
                       <th className="px-2 py-3 text-center align-middle font-normal">Kép</th>
@@ -7270,7 +7376,7 @@ export default function AllInWarehouse() {
                   <tbody className="divide-y divide-white/12 align-middle">
                     {productPageItems.map((it, index) => {
                       const variantId = String(it.variant_id || "");
-                      const isSelected = Boolean(selectedVariants[variantId]);
+                      const isSelected = Boolean(activeListSelectionMap[variantId]);
                       const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
                       return (
                       <tr
@@ -7335,7 +7441,7 @@ export default function AllInWarehouse() {
               <div className="grid gap-3 lg:hidden">
                 {productPageItems.map((it) => {
                   const variantId = String(it.variant_id || "");
-                  const isSelected = Boolean(selectedVariants[variantId]);
+                  const isSelected = Boolean(activeListSelectionMap[variantId]);
                   const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
                   return (
                   <article
@@ -8262,7 +8368,7 @@ export default function AllInWarehouse() {
           <div className="w-full max-w-xl overflow-hidden rounded-2xl border-2 border-red-300/75 bg-[#4b1f28] text-white shadow-2xl shadow-red-950/60">
             <div className="flex items-center justify-between gap-3 border-b border-red-200/25 bg-[#d31126] px-4 py-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-red-50/78">Kijelölt termékek törlése</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-red-50/78">{bulkProductDeleteTarget.context === "incoming" ? "Importból kijelölt termékek törlése" : "Kijelölt termékek törlése"}</p>
                 <h2 className="mt-1 text-xl text-white">Biztosan törlöd a kijelölt termékeket?</h2>
               </div>
               <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/30 bg-white/15 px-3 text-xs text-white hover:bg-white/20" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button"><X size={14} /> Bezárás</button>
@@ -8271,9 +8377,10 @@ export default function AllInWarehouse() {
               <div className="rounded-2xl border border-red-200/45 bg-red-600/25 px-3 py-3">
                 <div className="flex items-center gap-2 text-base text-white">
                   <AlertTriangle size={20} className="text-red-100" />
-                  <span>{bulkProductDeleteTarget.ids.length} kijelölt termék törlésre kerül.</span>
+                  <span>{bulkProductDeleteTarget.ids.length} kijelölt termék törlésre kerül{bulkProductDeleteTarget.context === "incoming" ? " az utolsó bevételezés nézetből" : ""}.</span>
                 </div>
-                <p className="mt-2 text-sm leading-relaxed text-red-50/85">A termék azonnal eltűnik a raktárlistából és az aktuális importlistából is. Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
+                <p className="mt-2 text-sm leading-relaxed text-red-50/85">{bulkProductDeleteTarget.context === "incoming" ? "Csak az utolsó bevételezés külön kijelöléséből törlünk. A normál raktári munkalistán kijelölt termékeket nem bántjuk." : "A normál raktári munkalistán kijelölt termékeket töröljük. Az utolsó bevételezés külön kijelölése ettől független."} Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
+                {bulkProductDeleteTarget.context === "incoming" ? <p className="mt-2 rounded-xl border border-red-200/35 bg-red-950/22 px-3 py-2 text-sm text-red-50">Ez csak a Legutóbbi bevételezés kijelölését használja. A normál raktári kijelölési listádhoz, címkéidhez és egyéb teendőidhez nem nyúl.</p> : null}
               </div>
 
               <div className="max-h-56 overflow-auto rounded-2xl border border-red-200/25 bg-red-950/25 p-2">
