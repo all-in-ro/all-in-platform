@@ -2479,7 +2479,7 @@ function VariantHistoryPanel({
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
                           <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : historyQty(event.qty_delta, true)}</span>
-                          <span className="rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
+                          <span className="rounded-full border border-slate-200 bg-white/100 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
                         </div>
                         <div className="mt-2 grid gap-1.5 text-[12px] leading-snug text-slate-600 sm:grid-cols-2">
                           {isPriceEvent ? (
@@ -3314,6 +3314,7 @@ export default function AllInWarehouse() {
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "subCategory" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
+  const [bulkProductDeleteTarget, setBulkProductDeleteTarget] = useState<{ ids: string[]; items: InventoryItem[] } | null>(null);
   const [historyTarget, setHistoryTarget] = useState<InventoryItem | null>(null);
   const [variantHistory, setVariantHistory] = useState<VariantHistoryResponse | null>(null);
   const [variantHistoryBusy, setVariantHistoryBusy] = useState(false);
@@ -6675,6 +6676,68 @@ export default function AllInWarehouse() {
     }
   }
 
+  function openSelectedProductsDeleteConfirm() {
+    const ids = Array.from(new Set(selectedItems.map((item) => selectedVariantIdFromItem(item)).filter(Boolean)));
+    if (!ids.length) {
+      setMessage("Nincs kijelölt termék törléshez.");
+      return;
+    }
+    const itemById = new Map(selectedItems.map((item) => [selectedVariantIdFromItem(item), item]));
+    const deleteItems = ids.map((id) => itemById.get(id)).filter(Boolean) as InventoryItem[];
+    setBulkProductDeleteTarget({ ids, items: deleteItems });
+  }
+
+  async function confirmDeleteSelectedProducts() {
+    if (!bulkProductDeleteTarget?.ids.length) return;
+    const ids = Array.from(new Set(bulkProductDeleteTarget.ids.map((id) => String(id || "").trim()).filter(Boolean)));
+    if (!ids.length) return;
+
+    setSaving(true);
+    setMessage("");
+    const activeIncomingBatchId = String(incomingFocus?.batchId || "").trim();
+    const failures: string[] = [];
+    let archivedCount = 0;
+    let permanentlyDeletedCount = 0;
+
+    try {
+      for (const id of ids) {
+        try {
+          const result = await apiVariantDelete(id);
+          const mode = String(result?.mode || "deleted");
+          if (mode === "archived" || mode === "archived_after_delete_fallback") archivedCount += 1;
+          else permanentlyDeletedCount += 1;
+          notifyStockMovesChanged({ variantId: id, source: "warehouse_selected_variants_delete", mode });
+          removeVariantFromWarehouseClientState(id);
+        } catch (error: any) {
+          failures.push(`${id}: ${error?.message || "törlési hiba"}`);
+        }
+      }
+
+      setBulkProductDeleteTarget(null);
+      if (detail?.item?.id && ids.includes(String(detail.item.id))) setDetail(null);
+      if (historyTarget?.variant_id && ids.includes(String(historyTarget.variant_id))) {
+        setHistoryTarget(null);
+        setVariantHistory(null);
+        setVariantHistoryError("");
+      }
+
+      await load();
+      if (activeIncomingBatchId && isUuidLike(activeIncomingBatchId)) await loadIncomingFocusBatch(activeIncomingBatchId, false);
+
+      const successCount = ids.length - failures.length;
+      const modeText = [
+        permanentlyDeletedCount ? `${permanentlyDeletedCount} végleg törölve` : "",
+        archivedCount ? `${archivedCount} archiválva` : "",
+      ].filter(Boolean).join(" • ");
+      setMessage(failures.length
+        ? `Kijelölt termékek törlése részben sikerült: ${successCount}/${ids.length}. ${modeText || ""} Hibás: ${failures.slice(0, 3).join(" | ")}${failures.length > 3 ? " ..." : ""}`
+        : `Kijelölt termékek törölve: ${ids.length} termék. ${modeText || ""}`
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function onImageSelected(file: File | null) {
     if (!file || !detail?.item?.id) return;
     setSaving(true);
@@ -7097,6 +7160,9 @@ export default function AllInWarehouse() {
                   <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(true)} type="button">
                     <Eye size={15} /> Kijelöltek megnyitása
                   </button>
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={openSelectedProductsDeleteConfirm} disabled={saving} type="button" title="Az összes kijelölt terméket törli">
+                    <Trash2 size={15} /> Kijelölt termékek törlése
+                  </button>
                   <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli">
                     <X size={15} /> Kijelölés törlése
                   </button>
@@ -7121,7 +7187,14 @@ export default function AllInWarehouse() {
                       <p className="mt-1">Forrás: {String(incomingFocus.sourceFileName || incomingFocus.batch?.source_file_name || incomingFocus.batchId || "import")} • import sor: {incomingFocus.rows.length || incomingFocus.variantIds.length} • megjelenő variáns: {filtered.length}/{incomingFocus.variantIds.length}{incomingFocus.totalQty ? ` • ${incomingFocus.totalQty} db` : ""}</p>
                       <p className="mt-1 text-[#bdf5f2]">Amint a Modell állapot és a Variáns állapot aktív, a sor eltűnik innen. A készlet nem tűnik el, csak átkerül a normál raktárlistába.</p>
                     </div>
-                    <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button"><X size={14} /> Minden raktári variáns</button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedCount > 0 ? (
+                        <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={openSelectedProductsDeleteConfirm} disabled={saving} type="button">
+                          <Trash2 size={15} /> Kijelölt termékek törlése
+                        </button>
+                      ) : null}
+                      <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button"><X size={14} /> Minden raktári variáns</button>
+                    </div>
                   </div>
                 </div>
               ) : sortMode === "incoming_desc" && (
@@ -8182,6 +8255,46 @@ export default function AllInWarehouse() {
           onReload={reloadProductHistory}
           onClose={() => { setHistoryTarget(null); setVariantHistory(null); setVariantHistoryError(""); }}
         />
+      )}
+
+      {bulkProductDeleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-red-950/80 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-xl overflow-hidden rounded-2xl border-2 border-red-300/75 bg-[#4b1f28] text-white shadow-2xl shadow-red-950/60">
+            <div className="flex items-center justify-between gap-3 border-b border-red-200/25 bg-[#d31126] px-4 py-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-red-50/78">Kijelölt termékek törlése</p>
+                <h2 className="mt-1 text-xl text-white">Biztosan törlöd a kijelölt termékeket?</h2>
+              </div>
+              <button className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/30 bg-white/15 px-3 text-xs text-white hover:bg-white/20" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button"><X size={14} /> Bezárás</button>
+            </div>
+            <div className="space-y-4 p-4">
+              <div className="rounded-2xl border border-red-200/45 bg-red-600/25 px-3 py-3">
+                <div className="flex items-center gap-2 text-base text-white">
+                  <AlertTriangle size={20} className="text-red-100" />
+                  <span>{bulkProductDeleteTarget.ids.length} kijelölt termék törlésre kerül.</span>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-red-50/85">A termék azonnal eltűnik a raktárlistából és az aktuális importlistából is. Készletmozgáshoz kapcsolt terméknél a rendszer archiválja, hogy a korábbi előzmények ne sérüljenek.</p>
+              </div>
+
+              <div className="max-h-56 overflow-auto rounded-2xl border border-red-200/25 bg-red-950/25 p-2">
+                {bulkProductDeleteTarget.items.slice(0, 8).map((item) => (
+                  <div key={selectedVariantIdFromItem(item)} className="mb-1 last:mb-0 rounded-xl border border-white/12 bg-white/10 px-3 py-2 text-sm">
+                    <div className="text-white">{item.title_ro || item.shopify_title || itemProductCode(item) || selectedVariantIdFromItem(item)}</div>
+                    <div className="mt-0.5 text-xs text-red-50/70">{item.brand_name || "Nincs márka"} • {itemMainCategoryLabel(item)} • {displayColorName(item.color_name, item.color_code)} • {item.size || "nincs méret"}</div>
+                  </div>
+                ))}
+                {bulkProductDeleteTarget.ids.length > 8 ? <p className="px-2 py-1 text-xs text-red-50/70">+ {bulkProductDeleteTarget.ids.length - 8} további kijelölt termék</p> : null}
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2 pt-1">
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/24 bg-white/10 px-4 text-sm text-white hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => setBulkProductDeleteTarget(null)} disabled={saving} type="button">Mégse</button>
+                <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-100 bg-[#d31126] px-4 text-sm text-white shadow-[0_12px_30px_rgba(211,17,38,0.32)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-60" onClick={confirmDeleteSelectedProducts} disabled={saving} type="button">
+                  <Trash2 size={16} /> {saving ? "Törlés folyamatban..." : "Igen, törlés"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {productDeleteTarget && (
