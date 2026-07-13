@@ -149,7 +149,9 @@ export type AifReceptionInput = {
   saleTvaRate?: number | string;
   salesPriceIncludesTva?: boolean;
   sellPriceIncludesTva?: boolean;
+  sellPriceCurrencyMode?: "invoice" | "ron" | string;
   sellPriceCurrency?: string;
+  sellPriceIsRon?: boolean;
   shippingCost?: number | string;
   goodsValue?: number | string;
   invoiceNet?: number | string;
