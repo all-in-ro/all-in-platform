@@ -66,6 +66,34 @@ type ColorType = {
   is_active?: boolean;
 };
 
+type BarcodeConflictInfo = {
+  variantId?: string | null;
+  barcode?: string | null;
+  internalSku?: string | null;
+  title?: string | null;
+  modelCode?: string | null;
+  brand?: string | null;
+  color?: string | null;
+  size?: string | null;
+};
+
+type BarcodeSavePrompt = {
+  candidate: string;
+  previous: string;
+  source: "generated" | "manual" | "print";
+};
+
+type BarcodeAssignmentResponse = {
+  ok?: boolean;
+  unchanged?: boolean;
+  variantId?: string;
+  barcode?: string;
+  previousBarcode?: string | null;
+  conflict?: BarcodeConflictInfo | null;
+  error?: string;
+  code?: string;
+};
+
 const CODE128_PATTERNS = [
   "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
   "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132",
@@ -199,6 +227,20 @@ function cleanInternalCode(input: string) {
     .replace(/[^A-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
+}
+
+function barcodeComparable(value: unknown) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function barcodeConflictText(conflict?: BarcodeConflictInfo | null) {
+  if (!conflict) return "";
+  return [
+    conflict.title,
+    conflict.brand,
+    conflict.color,
+    conflict.size,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" • ");
 }
 
 function cleanText(input: unknown, max = 120) {
@@ -367,6 +409,11 @@ export default function AllInBarcodes(_props: PageProps) {
   const [savedTemplates, setSavedTemplates] = useState<SavedTemplate[]>([]);
   const [status, setStatus] = useState("");
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
+  const [persistedBarcode, setPersistedBarcode] = useState("");
+  const [barcodeSavePrompt, setBarcodeSavePrompt] = useState<BarcodeSavePrompt | null>(null);
+  const [barcodeSaving, setBarcodeSaving] = useState(false);
+  const [barcodeConflict, setBarcodeConflict] = useState<BarcodeConflictInfo | null>(null);
+  const [variantLoaded, setVariantLoaded] = useState(false);
 
   useEffect(() => {
     let loadedColors: ColorType[] = [];
@@ -396,6 +443,9 @@ export default function AllInBarcodes(_props: PageProps) {
     const initialDescription = queryValue(params, "description", "material");
 
     setVariantId(initialVariantId);
+    setVariantLoaded(!initialVariantId);
+    setPersistedBarcode("");
+    setBarcodeConflict(null);
     setTitle(initialTitle);
     setBarcode(initialBarcode);
     setBrand(initialBrand);
@@ -436,25 +486,33 @@ export default function AllInBarcodes(_props: PageProps) {
           item.internal_sku,
           initialCode,
         );
-        const loadedBarcode = firstText(item.barcode, supplierCode.supplier_barcode, supplierCode.supplier_sku, item.internal_sku, initialBarcode);
+        const loadedBarcode = firstText(item.barcode);
         const loadedCategory = firstText(item.category_name_ro, item.category_name_hu, item.category_code, initialCategory);
         const loadedDescription = firstText(item.material, item.description_ro, initialDescription);
         const loadedSize = firstText(item.size, supplierCode.supplier_size, initialSize);
         const loadedColor = officialColorFromTypes(firstText(item.color_name, supplierCode.supplier_color_name, item.color_code, initialColor), loadedColors);
         const loadedPrice = displayMoneyValue(firstText(item.sell_price, item.compare_at_price, item.buy_price, initialPrice));
 
-        setTitle((prev) => prev || loadedTitle);
-        setBrand((prev) => prev || loadedBrand);
-        setProductCode((prev) => prev || loadedProductCode);
-        setBarcode((prev) => prev || loadedBarcode);
-        setCategory((prev) => prev || loadedCategory);
-        setDescription((prev) => prev || loadedDescription);
-        setSize((prev) => prev || loadedSize);
-        setColor((prev) => prev || loadedColor);
-        setPrice((prev) => prev || loadedPrice);
-        setStatus("Termékadatok betöltve a raktárból.");
+        setVariantId(String(item.id || initialVariantId));
+        setTitle(loadedTitle);
+        setBrand(loadedBrand);
+        setProductCode(loadedProductCode);
+        setBarcode(loadedBarcode);
+        setPersistedBarcode(loadedBarcode);
+        setCategory(loadedCategory);
+        setDescription(loadedDescription);
+        setSize(loadedSize);
+        setColor(loadedColor);
+        setPrice(loadedPrice);
+        setStatus(
+          loadedBarcode
+            ? "A termékhez mentett bárkód betöltve. Ezt használja a címkenyomtatás és később a Shopify-kapcsolat is."
+            : "A termékhez még nincs mentett bárkód. Generálás után a rendszer rákérdez a termékhez mentésre."
+        );
       } catch (e: any) {
         if (!cancelled) setStatus(e?.message || "A termékadatok betöltése nem sikerült.");
+      } finally {
+        if (!cancelled) setVariantLoaded(true);
       }
     }
 
@@ -469,13 +527,29 @@ export default function AllInBarcodes(_props: PageProps) {
     setColor((prev) => officialColorFromTypes(prev, colorTypes));
   }, [colorTypes]);
 
+  useEffect(() => {
+    if (!barcodeSavePrompt) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelBarcodeSavePrompt();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [barcodeSavePrompt, persistedBarcode]);
+
   const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
 
+  const barcodeNeedsSave = Boolean(
+    variantId &&
+    barcodeComparable(barcode) !== barcodeComparable(persistedBarcode)
+  );
+  const barcodeBoundToVariant = Boolean(variantId && persistedBarcode && !barcodeNeedsSave);
   const render = useMemo(() => code128Svg(barcode, 70), [barcode]);
   const copyCount = intNumber(copies, 1, 1, 300);
   const labels = useMemo(() => Array.from({ length: copyCount }), [copyCount]);
   const safeFile = cleanInternalCode(barcode || title || "aif-vonalkod") || "aif-vonalkod";
-  const canPrint = Boolean(barcode.trim()) && render.ok;
+  const canPrint = Boolean(barcode.trim()) && render.ok && (!variantId || !barcodeNeedsSave);
   const labelW = mmNumber(labelWidth, 40, 20, 120);
   const labelH = mmNumber(labelHeight, 46, 15, 100);
   const cols = intNumber(pageCols, 5, 1, 8);
@@ -502,10 +576,157 @@ export default function AllInBarcodes(_props: PageProps) {
     setContent((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  function generatedBarcodeCandidate() {
+    return makeInternalCode("", [
+      variantId || "standalone",
+      productCode,
+      size,
+      color,
+      brand,
+      title,
+    ]);
+  }
+
+  function openBarcodeSavePrompt(candidate: string, source: BarcodeSavePrompt["source"]) {
+    const cleanCandidate = cleanInternalCode(candidate);
+    if (!cleanCandidate) {
+      setStatus("Nem sikerült érvényes bárkódot előállítani.");
+      return;
+    }
+    setBarcode(cleanCandidate);
+    setBarcodeConflict(null);
+    setBarcodeSavePrompt({
+      candidate: cleanCandidate,
+      previous: persistedBarcode,
+      source,
+    });
+  }
+
   function generateCode() {
-    const generated = makeInternalCode(barcode, [variantId, productCode, size, color, brand, title]);
+    if (variantId && !variantLoaded) {
+      setStatus("A termékadatok még töltődnek. Várd meg a betöltés végét.");
+      return;
+    }
+
+    const generated = generatedBarcodeCandidate();
+    if (!generated) {
+      setStatus("Nem sikerült belső bárkódot létrehozni.");
+      return;
+    }
+
+    if (variantId && persistedBarcode && barcodeComparable(generated) === barcodeComparable(persistedBarcode)) {
+      setBarcode(persistedBarcode);
+      setBarcodeConflict(null);
+      setStatus("Ennek a terméknek már ez a mentett bárkódja. Nem generáltam fölöslegesen másikat.");
+      return;
+    }
+
     setBarcode(generated);
-    setStatus("Rövid belső vonalkód létrehozva. Ez később Shopify SKU-ként is használható.");
+    setBarcodeConflict(null);
+
+    if (variantId) {
+      openBarcodeSavePrompt(generated, "generated");
+      setStatus(
+        persistedBarcode
+          ? "Új kód készült. Mentés előtt erősítsd meg, mert ez lecseréli a termék jelenlegi bárkódját."
+          : "Új kód készült. Erősítsd meg, hogy a rendszer elmentse ehhez a termékhez."
+      );
+      return;
+    }
+
+    setStatus("Rövid belső vonalkód létrehozva. Nincs termékhez kötve, ezért csak ezen az oldalon használható.");
+  }
+
+  function requestSaveCurrentBarcode(source: BarcodeSavePrompt["source"] = "manual") {
+    const candidate = cleanInternalCode(barcode);
+    if (!candidate) {
+      setStatus("A termékhez mentéshez adj meg vagy generálj bárkódot.");
+      return;
+    }
+    if (!variantId) {
+      setStatus("Nincs termékvariáns kiválasztva, ezért ezt a kódot nem tudom termékhez menteni.");
+      return;
+    }
+    if (barcodeComparable(candidate) === barcodeComparable(persistedBarcode)) {
+      setBarcode(persistedBarcode || candidate);
+      setStatus("Ez a bárkód már ehhez a termékhez van mentve.");
+      return;
+    }
+    openBarcodeSavePrompt(candidate, source);
+  }
+
+  function cancelBarcodeSavePrompt() {
+    setBarcodeSavePrompt(null);
+    setBarcodeConflict(null);
+    if (variantId) setBarcode(persistedBarcode);
+    setStatus(
+      persistedBarcode
+        ? "A módosítást elvetettem. A termék mentett bárkódja változatlan maradt."
+        : "A generált kódot nem mentettem a termékhez."
+    );
+  }
+
+  async function saveBarcodeToVariant() {
+    const candidate = cleanInternalCode(barcodeSavePrompt?.candidate || barcode);
+    if (!variantId || !candidate) {
+      setStatus("Hiányzik a termékvariáns vagy a mentendő bárkód.");
+      return;
+    }
+
+    setBarcodeSaving(true);
+    setBarcodeConflict(null);
+    try {
+      const res = await fetch(`/api/aif/variants/${encodeURIComponent(variantId)}/barcode`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          barcode: candidate,
+          source: "allin_barcode_center",
+        }),
+      });
+      const data = await res.json().catch(() => ({} as BarcodeAssignmentResponse)) as BarcodeAssignmentResponse;
+      if (!res.ok) {
+        if (res.status === 409 || data.code === "barcode_conflict") {
+          const conflict = data.conflict || null;
+          setBarcodeConflict(conflict);
+          const conflictName = barcodeConflictText(conflict);
+          setStatus(
+            data.error ||
+            `Bárkód ütközés: a ${candidate} már másik termékhez tartozik${conflictName ? ` (${conflictName})` : ""}.`
+          );
+          return;
+        }
+        throw new Error(data.error || "A bárkód mentése nem sikerült.");
+      }
+
+      const savedBarcode = String(data.barcode || candidate).trim();
+      setBarcode(savedBarcode);
+      setPersistedBarcode(savedBarcode);
+      setBarcodeSavePrompt(null);
+      setBarcodeConflict(null);
+      setStatus(
+        data.unchanged
+          ? "A bárkód már ehhez a termékhez volt mentve."
+          : "A bárkód elmentve a termékhez. A címkenyomtatás és a későbbi Shopify-kapcsolat ezt a kódot fogja használni."
+      );
+
+      try {
+        const payload = {
+          at: new Date().toISOString(),
+          variantId,
+          barcode: savedBarcode,
+        };
+        window.localStorage.setItem("allinfashion:barcode:changed:v1", JSON.stringify(payload));
+        window.dispatchEvent(new CustomEvent("aif:variant-barcode-changed", { detail: payload }));
+      } catch {
+        // A szerveres mentés már megtörtént; a böngészős jelzés csak kényelmi extra.
+      }
+    } catch (error: any) {
+      setStatus(error?.message || "A bárkód mentése nem sikerült.");
+    } finally {
+      setBarcodeSaving(false);
+    }
   }
 
   async function copyBarcode() {
@@ -575,8 +796,13 @@ export default function AllInBarcodes(_props: PageProps) {
   }
 
   function printLabels() {
+    if (variantId && barcodeNeedsSave) {
+      requestSaveCurrentBarcode("print");
+      setStatus("Nyomtatás előtt mentsd a bárkódot a termékhez, hogy a címke és a termékadat ugyanazt az azonosítót használja.");
+      return;
+    }
     if (!canPrint) {
-      setStatus(render.error || "Nyomtatáshoz érvényes vonalkód kell.");
+      setStatus(render.error || "Nyomtatáshoz érvényes, termékhez mentett bárkód kell.");
       return;
     }
     window.print();
@@ -690,6 +916,22 @@ export default function AllInBarcodes(_props: PageProps) {
         .toggleText small { color:rgba(255,255,255,.58); font-size:11px; line-height:1.2; }
         .helpBox { border:1px solid rgba(244,208,111,.72); border-radius:12px; padding:11px; background:rgba(107,85,32,.22); margin-top:10px; font-size:12.5px; color:rgba(255,255,255,.82); }
         .statusBox { border:1px solid rgba(142,230,206,.65); background:rgba(35,116,95,.18); border-radius:12px; padding:10px; color:#e9fffa; font-size:13px; }
+        .barcodeBindingBox { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:9px 10px; margin-top:8px; background:rgba(17,26,41,.24); font-size:12px; }
+        .barcodeBindingBox.saved { border-color:rgba(142,230,206,.68); background:rgba(35,116,95,.22); }
+        .barcodeBindingBox.unsaved { border-color:rgba(244,208,111,.75); background:rgba(107,85,32,.22); }
+        .barcodeBindingBox.missing { border-color:rgba(255,141,160,.60); background:rgba(207,18,52,.12); }
+        .barcodeBindingBadge { flex:0 0 auto; border-radius:999px; border:1px solid currentColor; padding:3px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.06em; }
+        .barcodeSaveModalBackdrop { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(2,6,23,.78); backdrop-filter:blur(5px); }
+        .barcodeSaveModal { width:min(680px,100%); max-height:92vh; overflow:auto; border:1px solid rgba(255,255,255,.72); border-radius:20px; background:#4f5a6b; color:#fff; box-shadow:0 26px 70px rgba(0,0,0,.42); }
+        .barcodeSaveModalHead { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; position:sticky; top:0; z-index:2; padding:16px; border-bottom:1px solid rgba(255,255,255,.18); background:rgba(51,64,86,.98); }
+        .barcodeSaveModalBody { padding:16px; }
+        .barcodeCompareGrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+        .barcodeCompareCard { min-width:0; border:1px solid rgba(255,255,255,.20); border-radius:14px; background:#2f3a4d; padding:11px; }
+        .barcodeCompareCard small { display:block; color:rgba(255,255,255,.55); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+        .barcodeCompareCard strong { display:block; overflow-wrap:anywhere; margin-top:5px; color:#fff; font-size:16px; font-weight:500; }
+        .barcodeModalWarning { margin-top:12px; border:1px solid rgba(244,208,111,.70); border-radius:12px; padding:10px; background:rgba(107,85,32,.22); color:#fff6d8; font-size:12.5px; line-height:1.45; }
+        .barcodeModalConflict { margin-top:12px; border:1px solid rgba(255,141,160,.75); border-radius:12px; padding:10px; background:rgba(207,18,52,.18); color:#ffe2e7; font-size:12.5px; line-height:1.45; }
+        .barcodeModalActions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; margin-top:16px; }
         .errorBox { border:1px solid #ff8da0; background:rgba(207,18,52,.16); color:#ffe2e7; border-radius:12px; padding:10px; font-size:12px; }
         .compactError { margin-top:8px; }
         .previewBox { display:grid; grid-template-columns: 1fr; gap:12px; }
@@ -725,7 +967,7 @@ export default function AllInBarcodes(_props: PageProps) {
         .summaryCard span { display:block; margin-top:3px; color:#fff; font-size:13px; }
         .printSheet { display:none; }
         @media (max-width: 980px) { .barcodeGrid { grid-template-columns:1fr; } .barcodeHeader { flex-direction:column; } .formGrid { grid-template-columns:1fr; } .stepLine { grid-template-columns:1fr 1fr; } }
-        @media (max-width: 560px) { .contentGrid, .summaryGrid { grid-template-columns:1fr; } .stepLine { grid-template-columns:1fr; } }
+        @media (max-width: 560px) { .contentGrid, .summaryGrid, .barcodeCompareGrid { grid-template-columns:1fr; } .stepLine { grid-template-columns:1fr; } }
         @media print {
           @page { size: A4; margin: 0; }
           body * { visibility:hidden !important; }
@@ -770,6 +1012,73 @@ export default function AllInBarcodes(_props: PageProps) {
         }
       `}</style>
 
+      {barcodeSavePrompt && (
+        <div
+          className="barcodeSaveModalBackdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="barcode-save-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !barcodeSaving) cancelBarcodeSavePrompt();
+          }}
+        >
+          <div className="barcodeSaveModal">
+            <div className="barcodeSaveModalHead">
+              <div>
+                <div className="eyebrow">Termékhez kötött bárkód</div>
+                <h2 id="barcode-save-title" style={{ margin: "5px 0 0", fontSize: 23, fontWeight: 400 }}>
+                  {barcodeSavePrompt.previous ? "Lecseréljük a termék bárkódját?" : "Elmentsük a bárkódot ehhez a termékhez?"}
+                </h2>
+                <div className="muted" style={{ marginTop: 5 }}>
+                  {title || "Névtelen termék"}{brand ? ` • ${brand}` : ""}{color ? ` • ${color}` : ""}{size ? ` • ${size}` : ""}
+                </div>
+              </div>
+              <button type="button" onClick={cancelBarcodeSavePrompt} disabled={barcodeSaving}>Bezárás</button>
+            </div>
+
+            <div className="barcodeSaveModalBody">
+              <p className="muted" style={{ lineHeight: 1.55 }}>
+                Mentés után ez kerül a termékhez az adatbázisban. A következő címkenyomtatásnál ugyanez a kód töltődik vissza, ezért nem kell kézzel másolni vagy új kódot generálni.
+              </p>
+
+              <div className="barcodeCompareGrid">
+                <div className="barcodeCompareCard">
+                  <small>Jelenlegi mentett kód</small>
+                  <strong>{barcodeSavePrompt.previous || "Nincs még mentett kód"}</strong>
+                </div>
+                <div className="barcodeCompareCard">
+                  <small>Mentendő kód</small>
+                  <strong>{barcodeSavePrompt.candidate}</strong>
+                </div>
+              </div>
+
+              {barcodeSavePrompt.previous ? (
+                <div className="barcodeModalWarning">
+                  A csere a termék egyedi azonosítóját módosítja. Csak akkor cseréld le, ha tényleg szükséges, különben a címkék és a későbbi Shopify-kapcsolat két külön kódot kezdhet kergetni.
+                </div>
+              ) : (
+                <div className="barcodeModalWarning">
+                  A mentett kód egyedi lesz ehhez a variánshoz. A rendszer ütközés esetén nem engedi elmenteni.
+                </div>
+              )}
+
+              {barcodeConflict && (
+                <div className="barcodeModalConflict">
+                  <strong>Bárkód ütközés.</strong> A kód már ehhez a termékhez tartozik: {barcodeConflictText(barcodeConflict) || barcodeConflict.variantId || "ismeretlen termék"}. Válassz vagy generálj másik egyedi kódot.
+                </div>
+              )}
+
+              <div className="barcodeModalActions">
+                <button type="button" onClick={cancelBarcodeSavePrompt} disabled={barcodeSaving}>Mégse</button>
+                <button type="button" className="primary" onClick={saveBarcodeToVariant} disabled={barcodeSaving}>
+                  {barcodeSaving ? "Mentés..." : barcodeSavePrompt.previous ? "Igen, csere és mentés" : "Mentés a termékhez"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="barcodeShell">
         <section className="barcodeHeader">
           <div>
@@ -807,7 +1116,33 @@ export default function AllInBarcodes(_props: PageProps) {
               </div>
               <div className="field full">
                 <label>Vonalkód / Shopify SKU alap</label>
-                <input value={barcode} onChange={(e) => setBarcode(cleanInternalCode(e.target.value))} placeholder="Egyedi variánsazonosító" />
+                <input
+                  value={barcode}
+                  onChange={(e) => {
+                    setBarcode(cleanInternalCode(e.target.value));
+                    setBarcodeConflict(null);
+                  }}
+                  placeholder="Egyedi variánsazonosító"
+                />
+                {variantId ? (
+                  <div className={`barcodeBindingBox ${barcodeBoundToVariant ? "saved" : barcodeNeedsSave ? "unsaved" : "missing"}`}>
+                    <span>
+                      {barcodeBoundToVariant
+                        ? "A kód ehhez a termékhez van mentve. Címkenyomtatáskor ugyanez töltődik vissza."
+                        : barcodeNeedsSave
+                          ? "A mező eltér a termékhez mentett kódtól. Nyomtatás előtt menteni kell."
+                          : "Ehhez a termékhez még nincs mentett bárkód."}
+                    </span>
+                    <span className="barcodeBindingBadge">
+                      {barcodeBoundToVariant ? "Mentve" : barcodeNeedsSave ? "Mentés kell" : "Hiányzik"}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="barcodeBindingBox unsaved">
+                    <span>Nincs termékvariánshoz kötve. A kód csak ezen az oldalon használható.</span>
+                    <span className="barcodeBindingBadge">Helyi</span>
+                  </div>
+                )}
               </div>
               <div className="field">
                 <label>Kategória</label>
@@ -853,15 +1188,27 @@ export default function AllInBarcodes(_props: PageProps) {
             </div>
 
             <div className="actions" style={{ marginTop: 12, justifyContent: "flex-start" }}>
-              <button type="button" className="primary" onClick={generateCode}>Belső vonalkód generálása</button>
+              <button type="button" className="primary" onClick={generateCode} disabled={Boolean(variantId && !variantLoaded)}>
+                {persistedBarcode ? "Mentett kód ellenőrzése / új kód" : "Belső vonalkód generálása"}
+              </button>
+              {variantId && barcodeNeedsSave && (
+                <button type="button" className="warning" onClick={() => requestSaveCurrentBarcode("manual")} disabled={barcodeSaving}>
+                  Mentés a termékhez
+                </button>
+              )}
               <button type="button" onClick={copyBarcode} disabled={!barcode}>Másolás</button>
               <button type="button" onClick={exportSvg} disabled={!render.ok}>SVG export</button>
               <button type="button" onClick={exportCsv}>CSV export</button>
             </div>
 
             <div className="helpBox">
-              Ez rövid belső AllIn / Shopify SKU alapú Code128 címke. A rövidebb kód stabilabban olvasható sérült vagy kisméretű címkén is.
+              A termékhez mentett bárkód marad az állandó azonosító. A címkenyomtatás és a későbbi Shopify-kapcsolat ugyanazt a kódot használja; ütközés esetén a rendszer nem engedi a mentést.
             </div>
+            {barcodeConflict && (
+              <div className="errorBox" style={{ marginTop: 10 }}>
+                Bárkód ütközés: {barcodeConflictText(barcodeConflict) || barcodeConflict.variantId || "a kód már másik termékhez tartozik"}.
+              </div>
+            )}
             {status && <div className="statusBox" style={{ marginTop: 10 }}>{status}</div>}
           </div>
 
