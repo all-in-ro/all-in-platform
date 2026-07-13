@@ -1999,6 +1999,7 @@ export default function AllInIncoming(_props: Props) {
     return sum + toNumber(n.qty) * toNumber(n.buyPrice);
   }, 0), [approvedRowList]);
   const approvedQty = useMemo(() => approvedRowList.reduce((sum, row) => sum + toNumber(row.normalized?.qty), 0), [approvedRowList]);
+  const importedTotalQty = useMemo(() => rows.reduce((sum, row: any) => sum + toNumber(row?.normalized?.qty ?? row?.qty ?? row?.quantity), 0), [rows]);
   const savedReceptionGoodsValue = selectedReceptionId ? loadedReceptionRowTotals.value : 0;
   const totalReceptionGoodsValue = savedReceptionGoodsValue + approvedGoodsValue;
   const rateValue = exchangeRateRequired && exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
@@ -4333,7 +4334,7 @@ export default function AllInIncoming(_props: Props) {
             </button>
           </div>
 
-          <div className="mt-4 grid gap-2 md:grid-cols-5">
+          <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Fájl</p>
               <p className="mt-1 truncate text-sm">{fileName || "-"}</p>
@@ -4341,6 +4342,10 @@ export default function AllInIncoming(_props: Props) {
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Beolvasott sorok</p>
               <p className="mt-1 text-lg font-normal">{rows.length}</p>
+            </div>
+            <div className={statCard}>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Termék összesen</p>
+              <p className="mt-1 text-lg font-normal">{importedTotalQty.toLocaleString("hu-HU")} db</p>
             </div>
             <div className={statCard}>
               <p className="text-xs uppercase tracking-[0.06em] text-white/62">Kijelölt sorok</p>
