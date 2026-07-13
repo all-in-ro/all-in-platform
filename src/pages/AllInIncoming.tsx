@@ -66,6 +66,17 @@ type Props = { onLogout?: () => void };
 type LocationType = string;
 type IncomingWorkflowStep = "reception" | "source" | "import" | "manual" | "review";
 type IncomingInputMode = "" | "import" | "manual";
+type InvoiceDifferenceMode = "distributed" | "kept";
+type InvoiceDifferencePrompt = {
+  currentGoodsValue: number;
+  targetGoodsValue: number;
+  targetNewRowsValue: number;
+  difference: number;
+  adjustmentFactor: number;
+  canDistribute: boolean;
+  extremeDifference: boolean;
+  selectedRowsCount: number;
+};
 
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
@@ -563,9 +574,71 @@ function valueString(v: unknown) {
 }
 
 function toNumber(v: unknown) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (v === null || v === undefined || String(v).trim() === "") return 0;
-  const n = Number(String(v).replace(",", "."));
+
+  let raw = String(v)
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[^0-9,.'+\-eE]/g, "")
+    .replace(/'/g, "");
+
+  const commaCount = (raw.match(/,/g) || []).length;
+  const dotCount = (raw.match(/\./g) || []).length;
+
+  if (commaCount && dotCount) {
+    const decimalSeparator = raw.lastIndexOf(",") > raw.lastIndexOf(".") ? "," : ".";
+    const thousandsSeparator = decimalSeparator === "," ? "." : ",";
+    raw = raw.split(thousandsSeparator).join("");
+    if (decimalSeparator === ",") raw = raw.replace(/,/g, ".");
+  } else if (commaCount) {
+    const parts = raw.split(",");
+    if (commaCount > 1) {
+      const decimalPart = parts.pop() || "";
+      raw = `${parts.join("")}.${decimalPart}`;
+    } else {
+      raw = raw.replace(",", ".");
+    }
+  } else if (dotCount > 1) {
+    const parts = raw.split(".");
+    const decimalPart = parts.pop() || "";
+    raw = `${parts.join("")}.${decimalPart}`;
+  }
+
+  const n = Number(raw);
   return Number.isFinite(n) ? n : 0;
+}
+
+function roundMoney(value: number, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
+}
+
+function calculateReceptionAmounts(goodsValue: number, shippingValue: number, tvaMode: string, tvaRate: number) {
+  const goodsPlusShipping = Math.max(0, toNumber(goodsValue)) + Math.max(0, toNumber(shippingValue));
+  const vatFactor = 1 + Math.max(0, toNumber(tvaRate)) / 100;
+
+  if (tvaMode === "without_tva") {
+    const net = goodsPlusShipping;
+    const gross = net * vatFactor;
+    return { net, vat: gross - net, gross };
+  }
+
+  if (tvaMode === "with_tva") {
+    const gross = goodsPlusShipping;
+    const net = vatFactor > 0 ? gross / vatFactor : gross;
+    return { net, vat: gross - net, gross };
+  }
+
+  return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
+}
+
+function invoiceGoodsTarget(invoiceGross: number, shippingValue: number, tvaMode: string, tvaRate: number) {
+  const gross = Math.max(0, toNumber(invoiceGross));
+  const shipping = Math.max(0, toNumber(shippingValue));
+  const vatFactor = 1 + Math.max(0, toNumber(tvaRate)) / 100;
+  const invoiceValueInLinePriceBasis = tvaMode === "without_tva" && vatFactor > 0 ? gross / vatFactor : gross;
+  return Math.max(0, invoiceValueInLinePriceBasis - shipping);
 }
 
 function isRonCurrencyCode(value: unknown) {
@@ -1378,6 +1451,7 @@ export default function AllInIncoming(_props: Props) {
   const [incomingInputMode, setIncomingInputMode] = useState<IncomingInputMode>("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [invoiceDifferencePrompt, setInvoiceDifferencePrompt] = useState<InvoiceDifferencePrompt | null>(null);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [newLocationType, setNewLocationType] = useState<LocationType>("warehouse");
@@ -1930,11 +2004,10 @@ export default function AllInIncoming(_props: Props) {
   const rateValue = exchangeRateRequired && exchangeRateToRon.trim() ? toNumber(exchangeRateToRon) : 0;
   const exchangeRateToRonForPayload = exchangeRateRequired ? rateValue : null;
   const shippingValue = shippingCost.trim() ? toNumber(shippingCost) : 0;
-  const vatRateValue = tvaMode === "with_tva" && tvaRate.trim() ? toNumber(tvaRate) : 0;
-  const goodsPlusShipping = totalReceptionGoodsValue + shippingValue;
+  const vatRateValue = tvaMode && tvaMode !== "no_tva" && tvaRate.trim() ? toNumber(tvaRate) : 0;
   const invoiceGrossProvided = invoiceGross.trim().length > 0;
   const invoiceGrossValue = invoiceGrossProvided ? toNumber(invoiceGross) : 0;
-  const tvaRateRequired = tvaMode === "with_tva";
+  const tvaRateRequired = tvaMode === "with_tva" || tvaMode === "without_tva";
   const requiredMissing = {
     invoiceNumber: !invoiceNumber.trim(),
     invoiceDate: !invoiceDate,
@@ -1942,21 +2015,17 @@ export default function AllInIncoming(_props: Props) {
     currencyCode: !currencyCode,
     exchangeRateToRon: exchangeRateRequired && (!exchangeRateToRon.trim() || rateValue <= 0),
     tvaMode: !tvaMode,
-    tvaRate: tvaRateRequired && (!tvaRate.trim() || vatRateValue < 0),
-    invoiceGross: !invoiceGrossProvided,
+    tvaRate: tvaRateRequired && (!tvaRate.trim() || vatRateValue <= 0),
+    invoiceGross: !invoiceGrossProvided || invoiceGrossValue <= 0,
   };
-  const computedReception = useMemo(() => {
-    if (!tvaMode) return { net: 0, vat: 0, gross: goodsPlusShipping };
-    const vatFactor = 1 + Math.max(0, vatRateValue) / 100;
-    if (tvaMode === "with_tva") {
-      const gross = goodsPlusShipping;
-      const net = vatFactor > 0 ? gross / vatFactor : gross;
-      const vat = gross - net;
-      return { net, vat, gross };
-    }
-    return { net: goodsPlusShipping, vat: 0, gross: goodsPlusShipping };
-  }, [goodsPlusShipping, tvaMode, vatRateValue]);
+  const computedReception = useMemo(
+    () => calculateReceptionAmounts(totalReceptionGoodsValue, shippingValue, tvaMode, vatRateValue),
+    [totalReceptionGoodsValue, shippingValue, tvaMode, vatRateValue]
+  );
   const invoiceDifference = invoiceGrossProvided ? invoiceGrossValue - computedReception.gross : 0;
+  const invoiceTargetGoodsValue = invoiceGrossProvided
+    ? invoiceGoodsTarget(invoiceGrossValue, shippingValue, tvaMode, vatRateValue)
+    : totalReceptionGoodsValue;
   const receptionBaseValue = invoiceGrossProvided ? invoiceGrossValue : computedReception.gross;
   const receptionRonValue = isRonCurrency ? receptionBaseValue : receptionBaseValue * rateValue;
   const receptionReady = Boolean(
@@ -1966,8 +2035,9 @@ export default function AllInIncoming(_props: Props) {
     currencyCode &&
     (!exchangeRateRequired || rateValue > 0) &&
     tvaMode &&
-    (!tvaRateRequired || tvaRate.trim()) &&
-    invoiceGrossProvided
+    (!tvaRateRequired || vatRateValue > 0) &&
+    invoiceGrossProvided &&
+    invoiceGrossValue > 0
   );
   const receptionHeaderMissing = {
     supplier: !supplierId,
@@ -2011,8 +2081,8 @@ export default function AllInIncoming(_props: Props) {
       current.map((row, rowIndex) => {
         if (rowIndex !== index) return row;
         const normalized = { ...(row.normalized || {}) } as any;
-        if (field === "qty") normalized[field] = value === "" ? null : Number(value);
-        else if (field === "buyPrice" || field === "sellPrice") normalized[field] = value === "" ? null : Number(String(value).replace(",", "."));
+        if (field === "qty") normalized[field] = value === "" ? null : toNumber(value);
+        else if (field === "buyPrice" || field === "sellPrice") normalized[field] = value === "" ? null : toNumber(value);
         else if (field === "size") normalized[field] = normalizeAifSizeValue(value);
         else normalized[field] = value;
 
@@ -2103,7 +2173,7 @@ export default function AllInIncoming(_props: Props) {
   }
 
   async function saveSalesTvaSettings() {
-    const parsedRate = Number(String(salesTvaRate || "").replace(",", "."));
+    const parsedRate = toNumber(salesTvaRate);
     if (!Number.isFinite(parsedRate) || parsedRate < 0 || parsedRate > 100) {
       setMessage("Az eladási TVA százalék 0 és 100 közötti szám legyen.");
       return null;
@@ -2249,6 +2319,7 @@ export default function AllInIncoming(_props: Props) {
     setWorkbench(null);
     setApprovedRows({});
     setPreviewLimit(25);
+    setInvoiceDifferencePrompt(null);
   }
 
   function startNewEmptyReception(showMessage = true) {
@@ -2283,6 +2354,7 @@ export default function AllInIncoming(_props: Props) {
   function fillReceptionHeader(detail: AifReceptionDetail, options: { clearDraftRows?: boolean } = {}) {
     const clearDraftRows = options.clearDraftRows !== false;
     const item = detail.item;
+    setInvoiceDifferencePrompt(null);
     const rowsWithSize = (detail.rows || []).map((row: any) => normalizeAifRowSize(row));
     setSelectedReceptionId(item.id);
     setReceptionPickerId(item.id);
@@ -2377,9 +2449,9 @@ export default function AllInIncoming(_props: Props) {
     const category = activeCategories.find((c) => (c.code || c.id) === categoryCode);
     const parentCategory = activeCategories.find((c) => (c.code || c.id) === parentCategoryCode);
     const manualSubCategory = activeCategories.find((c) => (c.code || c.id) === subCategoryCode);
-    const qty = manualQty.trim() ? Number(String(manualQty).replace(",", ".")) : null;
-    const buyPrice = manualBuyPrice.trim() ? Number(String(manualBuyPrice).replace(",", ".")) : null;
-    const sellPrice = manualSellPrice.trim() ? Number(String(manualSellPrice).replace(",", ".")) : null;
+    const qty = manualQty.trim() ? toNumber(manualQty) : null;
+    const buyPrice = manualBuyPrice.trim() ? toNumber(manualBuyPrice) : null;
+    const sellPrice = manualSellPrice.trim() ? toNumber(manualSellPrice) : null;
     const normalizedManualSize = normalizeAifSizeValue(manualSize);
 
     const manualRow: AifParsedRow = {
@@ -2612,6 +2684,213 @@ export default function AllInIncoming(_props: Props) {
     }
   }
 
+  function approvedRowsFrom(sourceRows: AifParsedRow[]) {
+    return sourceRows.filter((row, index) => approvedRows[rowKey(row, index)]);
+  }
+
+  function createInvoiceDifferencePrompt(sourceRows: AifParsedRow[]): InvoiceDifferencePrompt | null {
+    if (!invoiceGrossProvided || !tvaMode) return null;
+    const selectedRows = approvedRowsFrom(sourceRows);
+    if (!selectedRows.length) return null;
+
+    const currentNewRowsValue = selectedRows.reduce((sum, row) => {
+      const normalized = row.normalized || {};
+      return sum + toNumber(normalized.qty) * toNumber(normalized.buyPrice);
+    }, 0);
+    const currentGoodsValue = savedReceptionGoodsValue + currentNewRowsValue;
+    const targetGoodsValue = invoiceTargetGoodsValue;
+    const targetNewRowsValue = targetGoodsValue - savedReceptionGoodsValue;
+    const difference = targetGoodsValue - currentGoodsValue;
+    const adjustmentFactor = currentNewRowsValue > 0 ? targetNewRowsValue / currentNewRowsValue : 0;
+    const extremeDifference = adjustmentFactor > 0 && (adjustmentFactor < 0.01 || adjustmentFactor > 100);
+    const canDistribute = Boolean(
+      Math.abs(difference) > 0.01 &&
+      currentNewRowsValue > 0 &&
+      targetNewRowsValue > 0 &&
+      adjustmentFactor > 0 &&
+      !extremeDifference
+    );
+
+    return {
+      currentGoodsValue,
+      targetGoodsValue,
+      targetNewRowsValue,
+      difference,
+      adjustmentFactor,
+      canDistribute,
+      extremeDifference,
+      selectedRowsCount: selectedRows.length,
+    };
+  }
+
+  function distributeDifferenceAcrossApprovedRows(sourceRows: AifParsedRow[], prompt: InvoiceDifferencePrompt) {
+    const selectedIndexes = sourceRows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row, index }) => approvedRows[rowKey(row, index)])
+      .filter(({ row }) => toNumber(row.normalized?.qty) > 0 && toNumber(row.normalized?.buyPrice) >= 0);
+
+    if (!selectedIndexes.length || !prompt.canDistribute) return null;
+
+    const adjustedPrices = new Map<number, number>();
+    for (const { row, index } of selectedIndexes) {
+      const oldPrice = toNumber(row.normalized?.buyPrice);
+      adjustedPrices.set(index, roundMoney(oldPrice * prompt.adjustmentFactor, 2));
+    }
+
+    const adjustedRowsValue = () => selectedIndexes.reduce((sum, { row, index }) => {
+      return sum + toNumber(row.normalized?.qty) * toNumber(adjustedPrices.get(index));
+    }, 0);
+
+    let residual = roundMoney(prompt.targetNewRowsValue - adjustedRowsValue(), 2);
+    if (Math.abs(residual) >= 0.01) {
+      const residualTarget = selectedIndexes
+        .slice()
+        .sort((a, b) => {
+          const aQty = toNumber(a.row.normalized?.qty);
+          const bQty = toNumber(b.row.normalized?.qty);
+          const aQtyOne = Math.abs(aQty - 1) < 0.000001 ? 1 : 0;
+          const bQtyOne = Math.abs(bQty - 1) < 0.000001 ? 1 : 0;
+          if (aQtyOne !== bQtyOne) return bQtyOne - aQtyOne;
+          const aValue = aQty * toNumber(a.row.normalized?.buyPrice);
+          const bValue = bQty * toNumber(b.row.normalized?.buyPrice);
+          return bValue - aValue;
+        })[0];
+
+      if (residualTarget) {
+        const qty = Math.max(0.000001, toNumber(residualTarget.row.normalized?.qty));
+        const currentPrice = toNumber(adjustedPrices.get(residualTarget.index));
+        const precision = Math.abs(qty - 1) < 0.000001 ? 2 : 6;
+        adjustedPrices.set(residualTarget.index, Math.max(0, roundMoney(currentPrice + residual / qty, precision)));
+      }
+    }
+
+    residual = prompt.targetNewRowsValue - adjustedRowsValue();
+    if (Math.abs(residual) > 0.000001) {
+      const fallback = selectedIndexes[0];
+      if (fallback) {
+        const qty = Math.max(0.000001, toNumber(fallback.row.normalized?.qty));
+        const currentPrice = toNumber(adjustedPrices.get(fallback.index));
+        adjustedPrices.set(fallback.index, Math.max(0, roundMoney(currentPrice + residual / qty, 8)));
+      }
+    }
+
+    return sourceRows.map((row, index) => {
+      if (!adjustedPrices.has(index)) return row;
+      return {
+        ...row,
+        normalized: {
+          ...(row.normalized || {}),
+          buyPrice: adjustedPrices.get(index),
+        },
+      } as AifParsedRow;
+    });
+  }
+
+  async function performSaveDraft(sourceRows: AifParsedRow[], differenceMode?: InvoiceDifferenceMode) {
+    const selectedRows = approvedRowsFrom(sourceRows);
+    const selectedProblems = selectedRows.filter((row) => aifRowErrors(row, sizeTypes, brandSizeCodes).length > 0).length;
+    const selectedGoodsValue = selectedRows.reduce((sum, row) => {
+      const normalized = row.normalized || {};
+      return sum + toNumber(normalized.qty) * toNumber(normalized.buyPrice);
+    }, 0);
+    const selectedQty = selectedRows.reduce((sum, row) => sum + toNumber(row.normalized?.qty), 0);
+    const selectedCount = selectedRows.length;
+    const localExcludedCount = Math.max(0, sourceRows.length - selectedCount);
+    const localComputedReception = calculateReceptionAmounts(
+      savedReceptionGoodsValue + selectedGoodsValue,
+      shippingValue,
+      tvaMode,
+      vatRateValue
+    );
+
+    if (!selectedCount) {
+      setMessage("Nincs kijelölt sor. Beolvasás után csak a kijelölt sorok menthetők importként.");
+      return;
+    }
+    if (selectedProblems > 0) {
+      setMessage("A kijelölt sorok között hibás vagy hiányos adat van. Javítás vagy kizárás után menthető.");
+      return;
+    }
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const rowsForSave = selectedRows
+        .map(rowWithSalesMeta)
+        .map(compactAifImportRowForSave);
+      const chunks = buildAifImportRowChunks(rowsForSave);
+      if (!chunks.length) {
+        setMessage("Nincs menthető terméksor. Jelölj ki legalább egy hibátlan sort.");
+        return;
+      }
+
+      const basePayload: any = {
+        supplierId,
+        targetLocationId: locationId,
+        sourceFileName: fileName || "Manuális bevételezés",
+        sourceFormat: fileName && fileName !== "Manuális bevételezés" ? "xls" : "manual",
+        note,
+        reception: {
+          invoiceNumber,
+          invoiceDate,
+          receptionDate,
+          currencyCode,
+          exchangeRateToRon: exchangeRateToRonForPayload,
+          tvaMode,
+          tvaRate: vatRateValue,
+          shippingCost: shippingValue,
+          goodsValue: selectedGoodsValue,
+          invoiceNet: localComputedReception.net,
+          invoiceVat: localComputedReception.vat,
+          invoiceGross: invoiceGrossValue,
+          lineCount: selectedCount,
+          totalQty: selectedQty,
+          note,
+          salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
+          salesPriceIncludesTva,
+          sellPriceCurrency: "RON",
+        },
+      };
+      if (selectedReceptionId) basePayload.receptionId = selectedReceptionId;
+
+      setMessage(`Mentés folyamatban: ${selectedCount} sor ${chunks.length} kisebb csomagban.`);
+      const saved = await apiAifCreateFullImportBatch({ ...basePayload, rows: chunks[0] });
+      let savedRowCount = Number(saved.rowCount || chunks[0].length);
+      let savedErrorCount = Number(saved.errorCount || 0);
+
+      for (let chunkIndex = 1; chunkIndex < chunks.length; chunkIndex++) {
+        const alreadySent = chunks.slice(0, chunkIndex).reduce((sum, chunk) => sum + chunk.length, 0);
+        setMessage(`Mentés folyamatban: ${alreadySent} / ${selectedCount} sor elküldve. Csomag ${chunkIndex + 1} / ${chunks.length}.`);
+        const part = await apiAifAppendImportRows(saved.id, chunks[chunkIndex]);
+        savedRowCount = Number(part.rowCount || savedRowCount + chunks[chunkIndex].length);
+        savedErrorCount = Number(part.errorCount || 0);
+      }
+
+      clearImportedRows();
+      resetManualRowForm();
+      await Promise.all([loadBatches(), loadReceptions()]);
+      const savedReceptionId = selectedReceptionId || saved.receptionId;
+      if (savedReceptionId) {
+        const detail = await apiAifGetReception(savedReceptionId);
+        fillReceptionHeader(detail, { clearDraftRows: false });
+      }
+      setIncomingStep("review");
+      const differenceText = differenceMode === "distributed"
+        ? " A számlaeltérés arányosan szét lett osztva a kijelölt vételárak között."
+        : differenceMode === "kept"
+          ? " A vételárak változatlanul maradtak a számlaeltérés ellenére."
+          : "";
+      setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${savedRowCount} kijelölt sor, ellenőrzendő sor: ${savedErrorCount}. Kizárt sorok: ${localExcludedCount}. ${chunks.length > 1 ? `${chunks.length} kisebb csomagban mentve.` : ""}${differenceText}`);
+    } catch (e: any) {
+      const isPayloadTooLarge = Number(e?.status || e?.statusCode || 0) === 413 || /413|payload too large|túl nagy|tul nagy/i.test(String(e?.message || ""));
+      setMessage(isPayloadTooLarge
+        ? "A mentés még így is túl nagy csomagot ért el. A sorok már darabolva mennek, ezért ilyenkor jellemzően egy extrém hosszú leírás vagy beágyazott adat okozza. Próbáld a problémás sort javítani vagy szólj, és tovább szűkítjük a csomagméretet."
+        : e.message || "Nem sikerült menteni az importot.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveDraft() {
     if (!supplierId || !locationId) {
       setIncomingStep("reception");
@@ -2636,78 +2915,33 @@ export default function AllInIncoming(_props: Props) {
       setMessage(`A receptió kötelező mezőit ki kell tölteni: ${missingReceptionFieldLabels.join(", ") || "hiányzó adat"}.`);
       return;
     }
-    setBusy(true);
-    setMessage("");
-    try {
-      const rowsForSave = approvedRowList
-        .map(rowWithSalesMeta)
-        .map(compactAifImportRowForSave);
-      const chunks = buildAifImportRowChunks(rowsForSave);
-      if (!chunks.length) {
-        setMessage("Nincs menthető terméksor. Jelölj ki legalább egy hibátlan sort.");
-        return;
-      }
 
-      const basePayload: any = {
-        supplierId,
-        targetLocationId: locationId,
-        sourceFileName: fileName || "Manuális bevételezés",
-        sourceFormat: fileName && fileName !== "Manuális bevételezés" ? "xls" : "manual",
-        note,
-        reception: {
-          invoiceNumber,
-          invoiceDate,
-          receptionDate,
-          currencyCode,
-          exchangeRateToRon: exchangeRateToRonForPayload,
-          tvaMode,
-          tvaRate: vatRateValue,
-          shippingCost: shippingValue,
-          goodsValue: approvedGoodsValue,
-          invoiceNet: computedReception.net,
-          invoiceVat: computedReception.vat,
-          invoiceGross: invoiceGrossValue,
-          lineCount: approvedCount,
-          totalQty: approvedQty,
-          note,
-          salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
-          salesPriceIncludesTva,
-          sellPriceCurrency: "RON",
-        },
-      };
-      if (selectedReceptionId) basePayload.receptionId = selectedReceptionId;
-
-      setMessage(`Mentés folyamatban: ${approvedCount} sor ${chunks.length} kisebb csomagban.`);
-      const saved = await apiAifCreateFullImportBatch({ ...basePayload, rows: chunks[0] });
-      let savedRowCount = Number(saved.rowCount || chunks[0].length);
-      let savedErrorCount = Number(saved.errorCount || 0);
-
-      for (let chunkIndex = 1; chunkIndex < chunks.length; chunkIndex++) {
-        const alreadySent = chunks.slice(0, chunkIndex).reduce((sum, chunk) => sum + chunk.length, 0);
-        setMessage(`Mentés folyamatban: ${alreadySent} / ${approvedCount} sor elküldve. Csomag ${chunkIndex + 1} / ${chunks.length}.`);
-        const part = await apiAifAppendImportRows(saved.id, chunks[chunkIndex]);
-        savedRowCount = Number(part.rowCount || savedRowCount + chunks[chunkIndex].length);
-        savedErrorCount = Number(part.errorCount || 0);
-      }
-
-      clearImportedRows();
-      resetManualRowForm();
-      await Promise.all([loadBatches(), loadReceptions()]);
-      const savedReceptionId = selectedReceptionId || saved.receptionId;
-      if (savedReceptionId) {
-        const detail = await apiAifGetReception(savedReceptionId);
-        fillReceptionHeader(detail, { clearDraftRows: false });
-      }
-      setIncomingStep("review");
-      setMessage(`${selectedReceptionId ? "Receptió folytatása mentve" : "Új receptió mentve"}: ${savedRowCount} kijelölt sor, ellenőrzendő sor: ${savedErrorCount}. Kizárt sorok: ${excludedCount}. ${chunks.length > 1 ? `${chunks.length} kisebb csomagban mentve.` : ""}`);
-    } catch (e: any) {
-      const isPayloadTooLarge = Number(e?.status || e?.statusCode || 0) === 413 || /413|payload too large|túl nagy|tul nagy/i.test(String(e?.message || ""));
-      setMessage(isPayloadTooLarge
-        ? "A mentés még így is túl nagy csomagot ért el. A sorok már darabolva mennek, ezért ilyenkor jellemzően egy extrém hosszú leírás vagy beágyazott adat okozza. Próbáld a problémás sort javítani vagy szólj, és tovább szűkítjük a csomagméretet."
-        : e.message || "Nem sikerült menteni az importot.");
-    } finally {
-      setBusy(false);
+    const prompt = createInvoiceDifferencePrompt(rows);
+    if (prompt && Math.abs(prompt.difference) > 0.01) {
+      setInvoiceDifferencePrompt(prompt);
+      return;
     }
+
+    await performSaveDraft(rows);
+  }
+
+  async function keepInvoicePricesAndSave() {
+    setInvoiceDifferencePrompt(null);
+    await performSaveDraft(rows, "kept");
+  }
+
+  async function distributeInvoiceDifferenceAndSave() {
+    const prompt = invoiceDifferencePrompt;
+    if (!prompt) return;
+    const adjustedRows = distributeDifferenceAcrossApprovedRows(rows, prompt);
+    if (!adjustedRows) {
+      setInvoiceDifferencePrompt(null);
+      setMessage("A különbözet nem osztható szét biztonságosan. Ellenőrizd a számla végösszegét, a pénznemet, az árfolyamot és a kijelölt sorok vételárát.");
+      return;
+    }
+    setRows(adjustedRows);
+    setInvoiceDifferencePrompt(null);
+    await performSaveDraft(adjustedRows, "distributed");
   }
 
   async function commitBatch(batch: AifImportBatchSummary) {
@@ -3070,7 +3304,7 @@ export default function AllInIncoming(_props: Props) {
       setMessage("Új receptió fejadatai a kijelölt sorok mentésekor jönnek létre.");
       return;
     }
-    if (!invoiceNumber.trim() || !invoiceDate || !receptionDate || !currencyCode || (exchangeRateRequired && rateValue <= 0) || !tvaMode || !invoiceGrossProvided) {
+    if (!invoiceNumber.trim() || !invoiceDate || !receptionDate || !currencyCode || (exchangeRateRequired && rateValue <= 0) || !tvaMode || (tvaRateRequired && vatRateValue <= 0) || !invoiceGrossProvided || invoiceGrossValue <= 0) {
       setMessage("A mentéshez töltsd ki a receptió kötelező mezőit. Külföldi pénznemnél az árfolyam is kell.");
       return;
     }
@@ -3475,16 +3709,16 @@ export default function AllInIncoming(_props: Props) {
             </label>
             <label className={label}>
               TVA kezelés
-              <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next !== "with_tva") setTvaRate("0"); }}>
+              <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); else if (!tvaRate.trim() || toNumber(tvaRate) <= 0) setTvaRate("21"); }}>
                 <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
-                <option style={optionStyle} value="without_tva">Árak nettóban</option>
-                <option style={optionStyle} value="with_tva">Árak bruttóban</option>
+                <option style={optionStyle} value="without_tva">Árak nettóban • TVA hozzáadódik</option>
+                <option style={optionStyle} value="with_tva">Árak bruttóban • TVA benne van</option>
                 <option style={optionStyle} value="no_tva">TVA nélkül</option>
               </select>
             </label>
             <label className={label}>
               TVA %
-              <input className={`${requiredInput(tvaMode !== "with_tva" ? false : requiredMissing.tvaRate)} ${tvaMode !== "with_tva" ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode !== "with_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode !== "with_tva"} placeholder={tvaMode !== "with_tva" ? "Nem szükséges" : "pl. 19"} />
+              <input className={`${requiredInput(tvaMode === "no_tva" || !tvaMode ? false : requiredMissing.tvaRate)} ${tvaMode === "no_tva" || !tvaMode ? "opacity-70 cursor-not-allowed" : ""}`} value={tvaMode === "no_tva" ? "0" : tvaRate} onChange={(e) => setTvaRate(e.target.value)} disabled={tvaMode === "no_tva" || !tvaMode} placeholder={tvaMode === "no_tva" || !tvaMode ? "Nem szükséges" : "pl. 21"} />
             </label>
             <label className={label}>
               Szállítás
@@ -3533,6 +3767,12 @@ export default function AllInIncoming(_props: Props) {
               {computedReception.vat > 0 && <p className="mt-1 text-[11px] text-white/55">TVA: {moneyText(computedReception.vat, currencyCode)}</p>}
             </div>
           </div>
+
+          {invoiceGrossProvided && approvedCount > 0 && Math.abs(invoiceDifference) > 0.01 && (
+            <div className="rounded-xl border border-amber-200/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-50">
+              A számla végösszege és a sorok számított összege eltér. A kijelölt sorok mentésekor a rendszer rákérdez, hogy arányosan szétossza-e a különbözetet, vagy változatlanul hagyja a vételárakat.
+            </div>
+          )}
 
           {!receptionHeaderReady && (
             <div className="rounded-xl border border-red-300/35 bg-[#c90d22]/16 px-3 py-2 text-sm text-red-50">
@@ -3643,6 +3883,74 @@ export default function AllInIncoming(_props: Props) {
       <datalist id="aif-size-options">
         {sizeDatalistOptions.map((size) => <option key={size} value={size} />)}
       </datalist>
+      {invoiceDifferencePrompt && (
+        <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="invoice-difference-title">
+          <div className={modalCard}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p id="invoice-difference-title" className="text-lg font-normal">A számla és a vételárak nem egyeznek</p>
+                <p className="mt-1 text-sm leading-6 text-white/70">
+                  Mentés előtt döntsd el, hogy a rendszer arányosan korrigálja a kijelölt vételárakat, vagy hagyja őket pontosan úgy, ahogy az XLS-ben szerepelnek.
+                </p>
+              </div>
+              <button className={neutralBtn} onClick={() => setInvoiceDifferencePrompt(null)} disabled={busy} type="button">
+                <X size={14} /> Bezárás
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <div className={statCard}>
+                <p className="text-xs uppercase tracking-[0.06em] text-white/58">Sorok jelenlegi vételára</p>
+                <p className="mt-1 text-base text-white">{moneyText(invoiceDifferencePrompt.currentGoodsValue, currencyCode)}</p>
+              </div>
+              <div className={statCard}>
+                <p className="text-xs uppercase tracking-[0.06em] text-white/58">Számla alapján célérték</p>
+                <p className="mt-1 text-base text-white">{moneyText(invoiceDifferencePrompt.targetGoodsValue, currencyCode)}</p>
+              </div>
+              <div className={statCard}>
+                <p className="text-xs uppercase tracking-[0.06em] text-white/58">Különbözet</p>
+                <p className={`mt-1 text-base ${Math.abs(invoiceDifferencePrompt.difference) > 0.01 ? "text-amber-100" : "text-white"}`}>
+                  {moneyText(invoiceDifferencePrompt.difference, currencyCode)}
+                </p>
+              </div>
+              <div className={statCard}>
+                <p className="text-xs uppercase tracking-[0.06em] text-white/58">Arányos korrekció</p>
+                <p className="mt-1 text-base text-white">
+                  {(invoiceDifferencePrompt.adjustmentFactor * 100).toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}%
+                </p>
+              </div>
+            </div>
+
+            {exchangeRateRequired && rateValue > 0 && (
+              <div className="mt-3 rounded-xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2 text-sm text-white/82">
+                A számla szerinti célérték RON-ban: {moneyText(invoiceDifferencePrompt.targetGoodsValue * rateValue, "RON")} • árfolyam: 1 {currencyCode} = {rateValue.toLocaleString("ro-RO", { maximumFractionDigits: 6 })} RON.
+              </div>
+            )}
+
+            {invoiceDifferencePrompt.extremeDifference ? (
+              <div className="mt-3 rounded-xl border border-red-300/40 bg-[#c90d22]/18 px-3 py-2 text-sm leading-6 text-red-50">
+                A különbség extrém nagy. Ez többnyire elírt számlaösszeget, rossz pénznemet vagy rossz vételár-oszlopot jelent. Az automatikus szétosztás ezért biztonsági okból le van tiltva.
+              </div>
+            ) : !invoiceDifferencePrompt.canDistribute ? (
+              <div className="mt-3 rounded-xl border border-amber-200/30 bg-amber-400/10 px-3 py-2 text-sm leading-6 text-amber-50">
+                A különbözet most nem osztható szét biztonságosan. Ilyen akkor fordul elő, ha a már mentett sorok önmagukban meghaladják a számla célértékét, vagy nincs pozitív kijelölt vételár.
+              </div>
+            ) : (
+              <div className="mt-3 rounded-xl border border-emerald-200/24 bg-emerald-400/10 px-3 py-2 text-sm leading-6 text-emerald-50">
+                Szétosztáskor a {invoiceDifferencePrompt.selectedRowsCount} kijelölt sor vételára arányosan változik. A maradék kerekítési különbözet a legnagyobb alkalmas sorra kerül, így a sorösszeg és a számla egyezni fog.
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button className={neutralBtn} onClick={() => setInvoiceDifferencePrompt(null)} disabled={busy} type="button">Mégse, vissza az ellenőrzéshez</button>
+              <button className={neutralBtn} onClick={keepInvoicePricesAndSave} disabled={busy} type="button">Árak maradjanak változatlanul</button>
+              <button className={primaryBtn} onClick={distributeInvoiceDifferenceAndSave} disabled={busy || !invoiceDifferencePrompt.canDistribute} type="button">
+                Különbözet arányos szétosztása
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {salesTvaModalOpen && (
         <div className={modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
           <div className={modalCard}>
