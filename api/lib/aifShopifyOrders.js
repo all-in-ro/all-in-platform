@@ -260,6 +260,22 @@ export async function ensureAifShopifyOrderSchema(client) {
   await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_refund_lines_refund_idx
     ON aif_shopify_refund_lines (shopify_refund_id)`);
 
+  // Minimális törlési napló. Nem tárol kliens- vagy rendelési adatot, csak azt akadályozza meg,
+  // hogy egy később beérkező Shopify webhook újra létrehozza a végleg törölt AllIn rekordot.
+  await client.query(`CREATE TABLE IF NOT EXISTS aif_shopify_order_deletions (
+    shopify_order_id text PRIMARY KEY,
+    shopify_order_legacy_id text NULL,
+    order_name text NULL,
+    deleted_by text NULL,
+    delete_reason text NULL,
+    is_test boolean NOT NULL DEFAULT false,
+    deleted_at timestamptz NOT NULL DEFAULT now()
+  )`);
+  await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_order_deletions_legacy_idx
+    ON aif_shopify_order_deletions (shopify_order_legacy_id)`);
+  await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_order_deletions_name_idx
+    ON aif_shopify_order_deletions (order_name)`);
+
   await client.query(`CREATE INDEX IF NOT EXISTS aif_shopify_order_event_work_idx
     ON aif_shopify_webhook_events (status, next_attempt_at, received_at)
     WHERE topic IN (
@@ -369,6 +385,22 @@ async function markEvent(client, webhookId, status, result = {}, error = null) {
   );
 }
 
+async function findDeletedOrder(client, { orderId = null, legacyId = null, orderName = null } = {}) {
+  const values = [text(orderId), text(legacyId), text(orderName)];
+  if (!values.some(Boolean)) return null;
+  const result = await client.query(
+    `SELECT shopify_order_id, shopify_order_legacy_id, order_name, deleted_by, delete_reason, is_test, deleted_at
+     FROM aif_shopify_order_deletions
+     WHERE ($1::text <> '' AND shopify_order_id=$1)
+        OR ($2::text <> '' AND shopify_order_legacy_id=$2)
+        OR ($3::text <> '' AND order_name=$3)
+     ORDER BY deleted_at DESC
+     LIMIT 1`,
+    values
+  );
+  return result.rows[0] || null;
+}
+
 async function ensureOrderPlaceholder(client, orderId, orderLegacyId, event) {
   if (!orderId) return null;
   await client.query(
@@ -394,6 +426,25 @@ async function upsertOrder(client, event) {
   if (!shopifyOrderId) {
     await markEvent(client, event.shopify_webhook_id, "ignored", { reason: "order_id_missing", topic: event.topic });
     return { status: "ignored", reason: "order_id_missing" };
+  }
+
+  const deletedOrder = await findDeletedOrder(client, {
+    orderId: shopifyOrderId,
+    legacyId,
+    orderName: text(payload.name) || null,
+  });
+  if (deletedOrder) {
+    const result = {
+      reason: "order_permanently_deleted_in_allin",
+      topic: event.topic,
+      orderId: shopifyOrderId,
+      orderLegacyId: legacyId,
+      orderName: text(payload.name) || null,
+      deletedAt: deletedOrder.deleted_at || null,
+      stockChangedByOrderProcessor: false,
+    };
+    await markEvent(client, event.shopify_webhook_id, "ignored", result);
+    return { status: "ignored", ...result };
   }
 
   const currency = text(payload.currency || payload.presentment_currency)
@@ -605,6 +656,25 @@ async function upsertRefund(client, event) {
     return { status: "ignored", reason: "refund_ids_missing" };
   }
 
+  const deletedOrder = await findDeletedOrder(client, {
+    orderId: shopifyOrderId,
+    legacyId: orderLegacyId,
+    orderName: text(payload?.order?.name) || null,
+  });
+  if (deletedOrder) {
+    const result = {
+      reason: "order_permanently_deleted_in_allin",
+      topic: event.topic,
+      orderId: shopifyOrderId,
+      orderLegacyId,
+      refundId: shopifyRefundId,
+      deletedAt: deletedOrder.deleted_at || null,
+      stockChangedByOrderProcessor: false,
+    };
+    await markEvent(client, event.shopify_webhook_id, "ignored", result);
+    return { status: "ignored", ...result };
+  }
+
   await ensureOrderPlaceholder(client, shopifyOrderId, orderLegacyId, event);
 
   const amount = refundAmount(payload);
@@ -775,8 +845,15 @@ export async function listAifShopifyOrders(client, options = {}) {
   const limit = Math.min(500, Math.max(1, integer(options.limit, 100)));
   const search = text(options.search);
   const status = text(options.status);
+  const financialStatus = text(options.financialStatus || options.financial_status);
+  const fulfillmentStatus = text(options.fulfillmentStatus || options.fulfillment_status);
+  const from = text(options.from);
+  const to = text(options.to);
+  const onlyProblems = bool(options.onlyProblems ?? options.only_problems, false);
+  const testMode = text(options.testMode || options.test_mode).toLowerCase();
   const args = [];
   const where = [];
+
   if (search) {
     args.push(`%${search}%`);
     const p = `$${args.length}`;
@@ -785,10 +862,16 @@ export async function listAifShopifyOrders(client, options = {}) {
       OR COALESCE(o.customer_name,'') ILIKE ${p}
       OR COALESCE(o.customer_email,'') ILIKE ${p}
       OR COALESCE(o.customer_phone,'') ILIKE ${p}
+      OR COALESCE(o.shipping_address->>'company','') ILIKE ${p}
+      OR COALESCE(o.billing_address->>'company','') ILIKE ${p}
       OR EXISTS (
         SELECT 1 FROM aif_shopify_order_lines l
         WHERE l.shopify_order_id=o.shopify_order_id
-          AND (COALESCE(l.sku,'') ILIKE ${p} OR COALESCE(l.title,'') ILIKE ${p})
+          AND (
+            COALESCE(l.sku,'') ILIKE ${p}
+            OR COALESCE(l.title,'') ILIKE ${p}
+            OR COALESCE(l.variant_title,'') ILIKE ${p}
+          )
       )
     )`);
   }
@@ -796,13 +879,46 @@ export async function listAifShopifyOrders(client, options = {}) {
     args.push(status);
     where.push(`o.status=$${args.length}`);
   }
+  if (financialStatus) {
+    args.push(financialStatus);
+    where.push(`COALESCE(o.financial_status,'')=$${args.length}`);
+  }
+  if (fulfillmentStatus) {
+    args.push(fulfillmentStatus);
+    where.push(`COALESCE(o.fulfillment_status,'unfulfilled')=$${args.length}`);
+  }
+  if (from) {
+    args.push(from);
+    where.push(`COALESCE(o.shopify_created_at, o.created_at) >= $${args.length}::date`);
+  }
+  if (to) {
+    args.push(to);
+    where.push(`COALESCE(o.shopify_created_at, o.created_at) < ($${args.length}::date + interval '1 day')`);
+  }
+  if (onlyProblems) {
+    where.push(`EXISTS (
+      SELECT 1 FROM aif_shopify_order_lines problem_line
+      WHERE problem_line.shopify_order_id=o.shopify_order_id
+        AND problem_line.is_active=true
+        AND problem_line.aif_variant_id IS NULL
+    )`);
+  }
+  if (testMode === "test") {
+    where.push(`(COALESCE(o.raw->>'test','false')='true' OR COALESCE(o.order_name,'') ~* '^#?AIF-(TEST|LIFE)-')`);
+  } else if (testMode === "real") {
+    where.push(`NOT (COALESCE(o.raw->>'test','false')='true' OR COALESCE(o.order_name,'') ~* '^#?AIF-(TEST|LIFE)-')`);
+  }
+
   args.push(limit);
   const result = await client.query(
     `SELECT
        o.*,
        count(l.shopify_line_item_id) FILTER (WHERE l.is_active=true)::int AS line_count,
-       COALESCE(sum(l.current_quantity) FILTER (WHERE l.is_active=true),0)::int AS item_qty,
-       count(l.shopify_line_item_id) FILTER (WHERE l.is_active=true AND l.aif_variant_id IS NULL)::int AS unmapped_line_count
+       COALESCE(sum(l.quantity) FILTER (WHERE l.is_active=true),0)::int AS item_qty,
+       count(l.shopify_line_item_id) FILTER (WHERE l.is_active=true AND l.aif_variant_id IS NOT NULL)::int AS mapped_line_count,
+       count(l.shopify_line_item_id) FILTER (WHERE l.is_active=true AND l.aif_variant_id IS NULL)::int AS unmapped_line_count,
+       (SELECT count(*)::int FROM aif_shopify_refunds r WHERE r.shopify_order_id=o.shopify_order_id) AS refund_count,
+       COALESCE((SELECT sum(r.amount) FROM aif_shopify_refunds r WHERE r.shopify_order_id=o.shopify_order_id),0)::numeric AS refund_total
      FROM aif_shopify_orders o
      LEFT JOIN aif_shopify_order_lines l ON l.shopify_order_id=o.shopify_order_id
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
@@ -828,26 +944,235 @@ export async function getAifShopifyOrder(client, id) {
   );
   if (!order.rowCount) return null;
   const item = order.rows[0];
-  const [lines, refunds] = await Promise.all([
+  const [lines, refunds, events] = await Promise.all([
     client.query(
-      `SELECT l.*, m.title_ro AS aif_title, v.color_name AS aif_color, v.size AS aif_size
+      `SELECT
+         l.*,
+         m.title_ro AS aif_title,
+         m.shopify_title AS aif_shopify_title,
+         v.internal_sku AS aif_internal_sku,
+         v.barcode AS aif_barcode,
+         v.color_name AS aif_color,
+         v.color_code AS aif_color_code,
+         v.size AS aif_size,
+         v.image_url AS aif_image_url,
+         b.name AS aif_brand,
+         COALESCE(st.total_qty,0)::numeric AS aif_total_qty,
+         COALESCE(st.reserved_qty,0)::numeric AS aif_reserved_qty,
+         COALESCE(st.available_qty,0)::numeric AS aif_available_qty,
+         COALESCE(st.locations,'[]'::jsonb) AS aif_stock_locations
        FROM aif_shopify_order_lines l
        LEFT JOIN aif_product_variants v ON v.id=l.aif_variant_id
        LEFT JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN LATERAL (
+         SELECT
+           COALESCE(sum(s.qty),0) AS total_qty,
+           COALESCE(sum(s.reserved_qty),0) AS reserved_qty,
+           COALESCE(sum(s.qty-s.reserved_qty),0) AS available_qty,
+           COALESCE(jsonb_agg(
+             jsonb_build_object(
+               'locationId', loc.id,
+               'locationCode', loc.code,
+               'locationName', loc.name,
+               'qty', s.qty,
+               'reservedQty', s.reserved_qty,
+               'availableQty', s.qty-s.reserved_qty,
+               'updatedAt', s.updated_at
+             ) ORDER BY loc.name
+           ) FILTER (WHERE loc.id IS NOT NULL),'[]'::jsonb) AS locations
+         FROM aif_stock s
+         JOIN aif_locations loc ON loc.id=s.location_id
+         WHERE s.variant_id=l.aif_variant_id
+       ) st ON true
        WHERE l.shopify_order_id=$1
        ORDER BY l.is_active DESC, l.created_at ASC`,
       [item.shopify_order_id]
     ),
     client.query(
       `SELECT r.*,
-              COALESCE((SELECT jsonb_agg(rl ORDER BY rl.created_at ASC) FROM aif_shopify_refund_lines rl WHERE rl.shopify_refund_id=r.shopify_refund_id),'[]'::jsonb) AS lines
+              COALESCE((
+                SELECT jsonb_agg(rl ORDER BY rl.created_at ASC)
+                FROM aif_shopify_refund_lines rl
+                WHERE rl.shopify_refund_id=r.shopify_refund_id
+              ),'[]'::jsonb) AS lines
        FROM aif_shopify_refunds r
        WHERE r.shopify_order_id=$1
        ORDER BY r.shopify_created_at DESC NULLS LAST, r.created_at DESC`,
       [item.shopify_order_id]
     ),
+    client.query(
+      `SELECT shopify_webhook_id, topic, shop_domain, status, result, error,
+              attempts, received_at, processed_at, updated_at
+       FROM aif_shopify_webhook_events
+       WHERE topic IN (
+         'orders/create','orders/updated','orders/cancelled','orders/paid',
+         'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+       )
+         AND (
+           result->>'orderId'=$1
+           OR ($2::text IS NOT NULL AND payload->>'id'=$2)
+           OR ($2::text IS NOT NULL AND payload->>'order_id'=$2)
+           OR ($2::text IS NOT NULL AND payload->'order'->>'id'=$2)
+           OR ($3::text IS NOT NULL AND payload->>'name'=$3)
+         )
+       ORDER BY received_at DESC
+       LIMIT 100`,
+      [item.shopify_order_id, item.shopify_order_legacy_id, item.order_name]
+    ),
   ]);
-  return { item, lines: lines.rows, refunds: refunds.rows };
+  return { item, lines: lines.rows, refunds: refunds.rows, events: events.rows };
+}
+
+export async function deleteAifShopifyOrder(client, id, options = {}) {
+  await ensureAifShopifyOrderSchema(client);
+  const key = text(id);
+  const actor = text(options.actor || "system") || "system";
+  const reason = text(options.reason || "Végleges törlés az AllIn rendelési felületéről") || null;
+
+  const orderResult = await client.query(
+    `SELECT *
+     FROM aif_shopify_orders
+     WHERE shopify_order_id=$1
+        OR shopify_order_legacy_id=$1
+        OR order_name=$1
+     LIMIT 1
+     FOR UPDATE`,
+    [key]
+  );
+
+  if (!orderResult.rowCount) {
+    const deleted = await findDeletedOrder(client, { orderId: key, legacyId: key, orderName: key });
+    if (deleted) {
+      return {
+        ok: true,
+        alreadyDeleted: true,
+        mode: "permanently_deleted",
+        orderId: deleted.shopify_order_id,
+        orderName: deleted.order_name || null,
+        stockChanged: false,
+      };
+    }
+    return null;
+  }
+
+  const order = orderResult.rows[0];
+  const isTest = bool(order.raw?.test, false) || /#?AIF-(TEST|LIFE)-/i.test(text(order.order_name));
+
+  const counts = await client.query(
+    `SELECT
+       (SELECT count(*)::int FROM aif_shopify_order_lines l WHERE l.shopify_order_id=$1) AS lines,
+       (SELECT count(*)::int FROM aif_shopify_refunds r WHERE r.shopify_order_id=$1) AS refunds,
+       (SELECT count(*)::int
+          FROM aif_shopify_refund_lines rl
+          JOIN aif_shopify_refunds r ON r.shopify_refund_id=rl.shopify_refund_id
+         WHERE r.shopify_order_id=$1) AS refund_lines`,
+    [order.shopify_order_id]
+  );
+
+  // Csak ellenőrző összesítés. A rendelés törlése egyetlen készletsort vagy készletmozgást sem módosít.
+  const stockSnapshot = await client.query(
+    `WITH variants AS (
+       SELECT DISTINCT aif_variant_id AS variant_id
+       FROM aif_shopify_order_lines
+       WHERE shopify_order_id=$1 AND aif_variant_id IS NOT NULL
+     )
+     SELECT
+       count(v.variant_id)::int AS mapped_variants,
+       COALESCE(sum(s.qty),0)::numeric AS stock_qty,
+       COALESCE(sum(s.reserved_qty),0)::numeric AS reserved_qty,
+       COALESCE(sum(s.qty-s.reserved_qty),0)::numeric AS available_qty
+     FROM variants v
+     LEFT JOIN aif_stock s ON s.variant_id=v.variant_id`,
+    [order.shopify_order_id]
+  );
+
+  await client.query(
+    `INSERT INTO aif_shopify_order_deletions (
+       shopify_order_id, shopify_order_legacy_id, order_name,
+       deleted_by, delete_reason, is_test, deleted_at
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,now())
+     ON CONFLICT (shopify_order_id) DO UPDATE SET
+       shopify_order_legacy_id=COALESCE(EXCLUDED.shopify_order_legacy_id, aif_shopify_order_deletions.shopify_order_legacy_id),
+       order_name=COALESCE(EXCLUDED.order_name, aif_shopify_order_deletions.order_name),
+       deleted_by=EXCLUDED.deleted_by,
+       delete_reason=EXCLUDED.delete_reason,
+       is_test=EXCLUDED.is_test,
+       deleted_at=now()`,
+    [
+      order.shopify_order_id,
+      order.shopify_order_legacy_id,
+      order.order_name,
+      actor,
+      reason,
+      isTest,
+    ]
+  );
+
+  const deletedEvents = await client.query(
+    `DELETE FROM aif_shopify_webhook_events
+     WHERE topic IN (
+       'orders/create','orders/updated','orders/cancelled','orders/paid',
+       'orders/fulfilled','orders/partially_fulfilled','refunds/create'
+     )
+       AND (
+         result->>'orderId'=$1
+         OR ($2::text IS NOT NULL AND payload->>'id'=$2)
+         OR ($2::text IS NOT NULL AND payload->>'order_id'=$2)
+         OR ($2::text IS NOT NULL AND payload->'order'->>'id'=$2)
+         OR ($3::text IS NOT NULL AND payload->>'name'=$3)
+       )`,
+    [order.shopify_order_id, order.shopify_order_legacy_id, order.order_name]
+  );
+
+  const deletedOrder = await client.query(
+    `DELETE FROM aif_shopify_orders
+     WHERE shopify_order_id=$1
+     RETURNING shopify_order_id`,
+    [order.shopify_order_id]
+  );
+
+  return {
+    ok: true,
+    mode: "permanently_deleted",
+    orderId: order.shopify_order_id,
+    orderLegacyId: order.shopify_order_legacy_id || null,
+    orderName: order.order_name || null,
+    isTest,
+    deleted: {
+      orders: deletedOrder.rowCount,
+      lines: Number(counts.rows[0]?.lines || 0),
+      refunds: Number(counts.rows[0]?.refunds || 0),
+      refundLines: Number(counts.rows[0]?.refund_lines || 0),
+      webhookEvents: deletedEvents.rowCount,
+    },
+    stockChanged: false,
+    stockSnapshot: {
+      mappedVariants: Number(stockSnapshot.rows[0]?.mapped_variants || 0),
+      qty: Number(stockSnapshot.rows[0]?.stock_qty || 0),
+      reservedQty: Number(stockSnapshot.rows[0]?.reserved_qty || 0),
+      availableQty: Number(stockSnapshot.rows[0]?.available_qty || 0),
+    },
+  };
+}
+
+export async function deleteAifShopifyOrders(client, ids, options = {}) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(text).filter(Boolean))).slice(0, 200);
+  const items = [];
+  for (const id of uniqueIds) {
+    const result = await deleteAifShopifyOrder(client, id, options);
+    if (result) items.push(result);
+  }
+  return {
+    ok: true,
+    requested: uniqueIds.length,
+    deleted: items.filter((item) => !item.alreadyDeleted).length,
+    alreadyDeleted: items.filter((item) => item.alreadyDeleted).length,
+    notFound: Math.max(0, uniqueIds.length - items.length),
+    stockChanged: false,
+    items,
+  };
 }
 
 export async function listAifShopifyOrderEvents(client, options = {}) {
