@@ -52,7 +52,29 @@ const r2PublicBase = R2_PUBLIC_BASE_URL ? R2_PUBLIC_BASE_URL.replace(/\/+$/, "")
 // --- in-memory sessions (ok for MVP) ---
 const sessions = new Map();
 
-app.use(express.json());
+const captureShopifyWebhookRawBody = (req, _res, buffer) => {
+  const url = String(req.originalUrl || req.url || "");
+
+  if (url.startsWith("/api/aif/shopify/webhooks/")) {
+    req.rawBody = Buffer.from(buffer);
+  }
+};
+
+const defaultJsonParser = express.json({
+  limit: "10mb",
+  verify: captureShopifyWebhookRawBody,
+});
+
+const aifJsonParser = express.json({
+  limit: "80mb",
+  verify: captureShopifyWebhookRawBody,
+});
+
+app.use((req, res, next) => {
+  const url = String(req.originalUrl || req.url || "");
+  const parser = url.startsWith("/api/aif/") ? aifJsonParser : defaultJsonParser;
+  return parser(req, res, next);
+});
 
 // --- file uploads (multipart) ---
 const upload = multer({
