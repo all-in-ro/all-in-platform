@@ -19,7 +19,7 @@ export type ShopifyStatusSource = {
 export type ShopifyVisualState = "synced" | "mapped" | "pending" | "error" | "unmapped";
 
 export const AIF_SHOPIFY_ICON_URL =
-  "https://pub-ef5c0d3dd6b84acc99c683aa84c0d7d2.r2.dev/spfyicon.png";
+  "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/spfyicon.png";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
