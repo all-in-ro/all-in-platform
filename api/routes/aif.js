@@ -6,6 +6,8 @@ import {
   receiveAifShopifyInventoryWebhook,
 } from "../lib/aifShopifyInbound.js";
 import {
+  deleteAifShopifyOrder,
+  deleteAifShopifyOrders,
   getAifShopifyOrder,
   listAifShopifyOrderEvents,
   listAifShopifyOrders,
@@ -8528,11 +8530,81 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         limit: Number(req.query.limit || 100),
         search: req.query.search || req.query.q || "",
         status: req.query.status || "",
+        financialStatus: req.query.financialStatus || req.query.financial_status || "",
+        fulfillmentStatus: req.query.fulfillmentStatus || req.query.fulfillment_status || "",
+        from: req.query.from || "",
+        to: req.query.to || "",
+        onlyProblems: req.query.onlyProblems || req.query.only_problems || false,
+        testMode: req.query.testMode || req.query.test_mode || "",
       });
       res.json({ ok: true, items });
     } catch (e) {
       console.error("AIF Shopify orders list failed", e);
       res.status(500).json({ error: e?.message || "A Shopify rendelések betöltése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/orders/delete-batch", requireAdminOrSecret, async (req, res) => {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids.map((value) => text(value)).filter(Boolean)
+      : [];
+    const confirmation = text(req.body?.confirmation || req.body?.confirm).toUpperCase();
+    const reason = text(req.body?.reason || "Végleges törlés az AllIn rendelési felületéről");
+    if (!ids.length) return res.status(400).json({ error: "Nincs kijelölt törölhető rendelés." });
+    if (!["TÖRLÉS", "TORLES", "DELETE"].includes(confirmation)) {
+      return res.status(400).json({ error: "A végleges törléshez írd be: TÖRLÉS" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await deleteAifShopifyOrders(client, ids, {
+        actor: actorFrom(req),
+        reason,
+      });
+      await client.query("COMMIT");
+      res.json(result);
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF Shopify orders permanent delete failed", e);
+      res.status(Number(e?.statusCode || 500)).json({
+        error: e?.message || "A Shopify rendelések végleges törlése nem sikerült.",
+        code: e?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/shopify/orders/:id", requireAdminOrSecret, async (req, res) => {
+    const confirmation = text(req.body?.confirmation || req.body?.confirm || req.query?.confirmation || req.query?.confirm).toUpperCase();
+    const reason = text(req.body?.reason || req.query?.reason || "Végleges törlés az AllIn rendelési felületéről");
+    if (!["TÖRLÉS", "TORLES", "DELETE"].includes(confirmation)) {
+      return res.status(400).json({ error: "A végleges törléshez írd be: TÖRLÉS" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await deleteAifShopifyOrder(client, req.params.id, {
+        actor: actorFrom(req),
+        reason,
+      });
+      if (!result) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A Shopify rendelés nem található." });
+      }
+      await client.query("COMMIT");
+      res.json(result);
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF Shopify order permanent delete failed", e);
+      res.status(Number(e?.statusCode || 500)).json({
+        error: e?.message || "A Shopify rendelés végleges törlése nem sikerült.",
+        code: e?.code || null,
+      });
     } finally {
       client.release();
     }
