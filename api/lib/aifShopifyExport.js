@@ -417,9 +417,13 @@ async function loadExportCandidates(client, variantIds, selectionMode) {
   const modelIds = selectedModels.rows.map((row) => row.model_id).filter(Boolean);
   if (!modelIds.length) return [];
 
+  // A lekérdezés mindkét exportmódban ugyanazt az egyetlen SQL-paramétert használja.
+  // Korábban az all_model_variants ág csak $2-t hivatkozott, miközben $1 is átadásra került.
+  // PostgreSQL ezért nem tudta meghatározni a nem használt $1 típusát.
   const where = selectionMode === "selected_variants"
     ? `v.id::text = ANY($1::text[])`
-    : `v.model_id = ANY($2::uuid[])`;
+    : `v.model_id = ANY($1::uuid[])`;
+  const whereValues = selectionMode === "selected_variants" ? [ids] : [modelIds];
 
   const result = await client.query(
     `SELECT
@@ -504,7 +508,7 @@ async function loadExportCandidates(client, variantIds, selectionMode) {
               svm.variant_id, svm.shopify_product_id, svm.shopify_variant_id, svm.shopify_inventory_item_id,
               svm.shopify_product_title, svm.shopify_variant_title, svm.sync_status
      ORDER BY COALESCE(b.name,''), m.title_ro, v.color_name, v.size`,
-    [ids, modelIds]
+    whereValues
   );
   return result.rows;
 }
