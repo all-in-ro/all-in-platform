@@ -28,6 +28,7 @@ import {
   Search,
   X,
 } from "lucide-react";
+import ShopifyStatusIcon, { isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
@@ -276,6 +277,18 @@ type InventoryItem = {
   available_qty?: number | string | null;
   last_stock_movement_at?: string | null;
   last_incoming_at?: string | null;
+  shopify_mapped?: boolean | null;
+  shopify_sync_status?: string | null;
+  shopify_outbox_status?: string | null;
+  shopify_product_id?: string | null;
+  shopify_variant_id?: string | null;
+  shopify_inventory_item_id?: string | null;
+  shopify_product_title?: string | null;
+  shopify_variant_title?: string | null;
+  shopify_product_status?: string | null;
+  shopify_last_synced_at?: string | null;
+  shopify_last_error?: string | null;
+  shopify_outbox_error?: string | null;
 };
 
 type PersistedSelectedWorkItem = InventoryItem & {
@@ -575,6 +588,7 @@ type StockTransferPrintLine = {
 };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
+type ShopifyFilter = "all" | "mapped" | "unmapped" | "error";
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc";
 
 type BarcodeScannerMode = "search" | "editBarcode";
@@ -3264,6 +3278,7 @@ export default function AllInWarehouse() {
   const [location, setLocation] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
+  const [shopifyFilter, setShopifyFilter] = useState<ShopifyFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("name");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(() => overviewOpenByDefault());
@@ -4585,6 +4600,9 @@ export default function AllInWarehouse() {
     if (color !== "all") out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes));
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
+    if (shopifyFilter === "mapped") out = out.filter((x) => isShopifyMappedItem(x));
+    if (shopifyFilter === "unmapped") out = out.filter((x) => !isShopifyMappedItem(x));
+    if (shopifyFilter === "error") out = out.filter((x) => shopifyMappingHasError(x));
     if (location !== "all") {
       out = out.filter((x) => (stockMap.get(x.variant_id) || []).some((s) => (s.location_code === location || s.location_name === location) && n(s.qty) > 0));
     }
@@ -4611,7 +4629,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, gender, color, colorTypes, location, stockFilter, imageFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, gender, color, colorTypes, location, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -4627,6 +4645,7 @@ export default function AllInWarehouse() {
     setLocation("all");
     setStockFilter("all");
     setImageFilter("all");
+    setShopifyFilter("all");
     setSortMode("name");
     setIncomingFocus(null);
     setIncomingFocusItems([]);
@@ -4670,11 +4689,20 @@ export default function AllInWarehouse() {
     if (imageFilter !== "all") {
       labels.push(`Kép: ${imageFilter === "missing" ? "Hiányzik kép" : "Van kép"}`);
     }
+    if (shopifyFilter !== "all") {
+      const shopifyLabels: Record<ShopifyFilter, string> = {
+        all: "Összes",
+        mapped: "Shopifyhoz kapcsolva",
+        unmapped: "Nincs Shopifyon",
+        error: "Shopify hiba",
+      };
+      labels.push(`Shopify: ${shopifyLabels[shopifyFilter]}`);
+    }
     if (incomingFocus?.batchId) {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -4702,7 +4730,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, sortMode, incomingFocusVariantIdsKey]);
+  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, shopifyFilter, sortMode, incomingFocusVariantIdsKey]);
 
   useEffect(() => {
     if (productPage > totalProductPages) setProductPage(totalProductPages);
@@ -7136,6 +7164,14 @@ export default function AllInWarehouse() {
                   <option value="missing">Hiányzik kép</option>
                 </select>
               </label>
+              <label className={label}>Shopify
+                <select className={select} value={shopifyFilter} onChange={(e) => setShopifyFilter(e.target.value as ShopifyFilter)}>
+                  <option value="all">Összes</option>
+                  <option value="mapped">Összekötve</option>
+                  <option value="unmapped">Nincs Shopifyon</option>
+                  <option value="error">Szinkronhiba</option>
+                </select>
+              </label>
               <label className={label}>Sorrend
                 <select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
                   <option value="incoming_desc">Legutóbbi bevételezés</option>
@@ -7398,14 +7434,17 @@ export default function AllInWarehouse() {
                         </td>
                         <td className="truncate px-2 py-2.5 text-left align-middle" title={it.brand_name || ""}>{it.brand_name || "-"}</td>
                         <td className="relative min-w-0 overflow-visible px-2 py-2.5 text-left align-middle">
-                          <button
-                            className="block max-w-full truncate text-left text-[13px] leading-5 text-white hover:text-[#cffffd] focus:outline-none focus:underline"
-                            onClick={() => openDetail(it.variant_id)}
-                            title={it.title_ro || "Termék részletei"}
-                            type="button"
-                          >
-                            {it.title_ro || "-"}
-                          </button>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <button
+                              className="block min-w-0 max-w-full flex-1 truncate text-left text-[13px] leading-5 text-white hover:text-[#cffffd] focus:outline-none focus:underline"
+                              onClick={() => openDetail(it.variant_id)}
+                              title={it.title_ro || "Termék részletei"}
+                              type="button"
+                            >
+                              {it.title_ro || "-"}
+                            </button>
+                            <ShopifyStatusIcon item={it} size="xs" />
+                          </div>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
                             <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
                           </div>
