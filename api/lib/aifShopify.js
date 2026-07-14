@@ -18,6 +18,12 @@ function clampInt(value) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function signedInt(value) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.trunc(parsed);
+}
+
 function normalizeSku(value) {
   return text(value).toLowerCase();
 }
@@ -477,10 +483,10 @@ async function readAifStockQuantities(client, variantId, config = envConfig()) {
   };
 }
 
-export async function enqueueAifShopifyVariant(client, variantId, reason = "stock_change", options = {}) {
+export async function enqueueAifShopifyVariant(client, variantId, reason = "stock_change", _options = {}) {
   const config = envConfig();
-  if (!config.enabled && !options.force) return { queued: false, reason: "sync_disabled" };
-  if (missingConfig(config).length) return { queued: false, reason: "config_missing", missing: missingConfig(config) };
+  const missing = missingConfig(config);
+  if (missing.length) return { queued: false, reason: "config_missing", missing };
   await ensureAifShopifyTables(client);
 
   const mapping = await client.query(`SELECT 1 FROM aif_shopify_variant_map WHERE variant_id::text=$1 LIMIT 1`, [text(variantId)]);
@@ -507,7 +513,7 @@ export async function enqueueAifShopifyVariant(client, variantId, reason = "stoc
        updated_at=now()`,
     [text(variantId), quantities.csikszereda, quantities.kezdi, text(reason) || "stock_change", idempotencyKey]
   );
-  return { queued: true, quantities, idempotencyKey };
+  return { queued: true, quantities, idempotencyKey, syncEnabled: config.enabled };
 }
 
 export async function enqueueAllMappedAifShopifyVariants(client, reason = "full_sync") {
@@ -527,12 +533,12 @@ export async function enqueueAllMappedAifShopifyVariants(client, reason = "full_
        COALESCE(sum(CASE WHEN s.location_id::text=$1 THEN GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) ELSE 0 END),0)::int,
        COALESCE(sum(CASE WHEN s.location_id::text=$2 THEN GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) ELSE 0 END),0)::int,
        $3,
-       CASE WHEN $4::boolean THEN 'pending' ELSE 'blocked' END,
+       'pending',
        0,
        gen_random_uuid()::text,
        now(),
        NULL,
-       CASE WHEN $4::boolean THEN NULL ELSE 'SHOPIFY_SYNC_ENABLED=false' END,
+       NULL,
        now(),
        now()
      FROM aif_shopify_variant_map m
@@ -550,9 +556,9 @@ export async function enqueueAllMappedAifShopifyVariants(client, reason = "full_
        last_error=EXCLUDED.last_error,
        updated_at=now()
      RETURNING variant_id`,
-    [config.aifCsikszeredaLocationId, config.aifKezdiLocationId, text(reason) || "full_sync", config.enabled]
+    [config.aifCsikszeredaLocationId, config.aifKezdiLocationId, text(reason) || "full_sync"]
   );
-  return { queued: result.rowCount, status: config.enabled ? "pending" : "blocked" };
+  return { queued: result.rowCount, status: "pending", syncEnabled: config.enabled };
 }
 
 async function inventoryLevels(inventoryItemId) {
@@ -601,7 +607,7 @@ async function activateMissingLocations(inventoryItemId, requiredLocationIds) {
 
 function availableQuantity(level) {
   const item = (level?.quantities || []).find((row) => row?.name === "available");
-  return clampInt(item?.quantity);
+  return signedInt(item?.quantity);
 }
 
 async function setInventoryQuantities({ inventoryItemId, csikszeredaQty, kezdiQty, idempotencyKey, referenceId }) {
@@ -614,19 +620,19 @@ async function setInventoryQuantities({ inventoryItemId, csikszeredaQty, kezdiQt
       inventoryItemId,
       locationId: config.shopifyCsikszeredaLocationId,
       quantity: clampInt(csikszeredaQty),
-      compareQuantity: availableQuantity(byLocation.get(config.shopifyCsikszeredaLocationId)),
+      changeFromQuantity: availableQuantity(byLocation.get(config.shopifyCsikszeredaLocationId)),
     },
     {
       inventoryItemId,
       locationId: config.shopifyKezdiLocationId,
       quantity: clampInt(kezdiQty),
-      compareQuantity: availableQuantity(byLocation.get(config.shopifyKezdiLocationId)),
+      changeFromQuantity: availableQuantity(byLocation.get(config.shopifyKezdiLocationId)),
     },
   ];
 
   const mutation = `mutation AifInventorySet($input: InventorySetQuantitiesInput!, $idempotencyKey: String!) {
     inventorySetQuantities(input: $input) @idempotent(key: $idempotencyKey) {
-      inventoryAdjustmentGroup { createdAt reason referenceDocumentUri changes { name delta } }
+      inventoryAdjustmentGroup { createdAt reason referenceDocumentUri changes { name delta quantityAfterChange } }
       userErrors { field message code }
     }
   }`;
@@ -658,14 +664,24 @@ async function claimOutboxRows(pool, limit) {
       `WITH picked AS (
          SELECT variant_id
          FROM aif_shopify_sync_outbox
-         WHERE status IN ('pending','error')
-           AND next_attempt_at <= now()
+         WHERE (
+           (status IN ('pending','error') AND next_attempt_at <= now())
+           OR
+           (status='processing' AND locked_at < now() - interval '10 minutes')
+         )
          ORDER BY updated_at ASC
          LIMIT $1
          FOR UPDATE SKIP LOCKED
        )
        UPDATE aif_shopify_sync_outbox o
-       SET status='processing', locked_at=now(), attempts=o.attempts+1, updated_at=now()
+       SET status='processing',
+           locked_at=now(),
+           attempts=o.attempts+1,
+           idempotency_key=CASE
+             WHEN o.status='processing' THEN gen_random_uuid()::text
+             ELSE o.idempotency_key
+           END,
+           updated_at=now()
        FROM picked
        WHERE o.variant_id=picked.variant_id
        RETURNING o.*`,
@@ -693,6 +709,7 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
 
   const rows = await claimOutboxRows(pool, options.limit || 20);
   let success = 0;
+  let superseded = 0;
   const errors = [];
 
   for (const row of rows) {
@@ -709,49 +726,66 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
         csikszeredaQty: row.desired_csikszereda_qty,
         kezdiQty: row.desired_kezdi_qty,
         idempotencyKey: row.idempotency_key,
-        referenceId: `${row.variant_id}-${Date.now()}`,
+        referenceId: row.idempotency_key,
       });
 
       await client.query("BEGIN");
-      await client.query(
-        `UPDATE aif_shopify_variant_map
-         SET last_synced_csikszereda_qty=$2,
-             last_synced_kezdi_qty=$3,
-             last_synced_at=now(),
-             sync_status='synced',
-             last_error=NULL,
-             raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
-             updated_at=now()
-         WHERE variant_id=$1`,
-        [row.variant_id, row.desired_csikszereda_qty, row.desired_kezdi_qty, JSON.stringify({ lastInventorySet: result })]
-      );
-      await client.query(
+      const completed = await client.query(
         `UPDATE aif_shopify_sync_outbox
          SET status='done', locked_at=NULL, last_error=NULL, updated_at=now()
-         WHERE variant_id=$1`,
-        [row.variant_id]
+         WHERE variant_id=$1
+           AND idempotency_key=$2
+           AND status='processing'
+         RETURNING variant_id`,
+        [row.variant_id, row.idempotency_key]
       );
+      if (completed.rowCount) {
+        await client.query(
+          `UPDATE aif_shopify_variant_map
+           SET last_synced_csikszereda_qty=$2,
+               last_synced_kezdi_qty=$3,
+               last_synced_at=now(),
+               sync_status='synced',
+               last_error=NULL,
+               raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
+               updated_at=now()
+           WHERE variant_id=$1`,
+          [row.variant_id, row.desired_csikszereda_qty, row.desired_kezdi_qty, JSON.stringify({ lastInventorySet: result })]
+        );
+        success += 1;
+      } else {
+        superseded += 1;
+      }
       await client.query("COMMIT");
-      success += 1;
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       const message = error?.message || String(error);
       const delay = retryDelaySeconds(row.attempts);
-      await client.query(
+      const failed = await client.query(
         `UPDATE aif_shopify_sync_outbox
-         SET status='error', locked_at=NULL, last_error=$2,
-             next_attempt_at=now()+($3::text || ' seconds')::interval,
+         SET status='error',
+             locked_at=NULL,
+             last_error=$3,
+             idempotency_key=gen_random_uuid()::text,
+             next_attempt_at=now()+($4::text || ' seconds')::interval,
              updated_at=now()
-         WHERE variant_id=$1`,
-        [row.variant_id, message.slice(0, 4000), delay]
+         WHERE variant_id=$1
+           AND idempotency_key=$2
+           AND status='processing'
+         RETURNING variant_id`,
+        [row.variant_id, row.idempotency_key, message.slice(0, 4000), delay]
       );
-      await client.query(
-        `UPDATE aif_shopify_variant_map
-         SET sync_status='error', last_error=$2, updated_at=now()
-         WHERE variant_id=$1`,
-        [row.variant_id, message.slice(0, 4000)]
-      );
-      errors.push({ variantId: row.variant_id, error: message, code: error?.code || null, retryInSeconds: delay });
+      if (failed.rowCount) {
+        await client.query(
+          `UPDATE aif_shopify_variant_map
+           SET sync_status='error', last_error=$2, updated_at=now()
+           WHERE variant_id=$1`,
+          [row.variant_id, message.slice(0, 4000)]
+        );
+        errors.push({ variantId: row.variant_id, error: message, code: error?.code || null, retryInSeconds: delay });
+      } else {
+        superseded += 1;
+      }
     } finally {
       client.release();
     }
@@ -762,6 +796,7 @@ export async function processAifShopifyOutboxBatch(pool, options = {}) {
     processed: rows.length,
     success,
     errors: errors.length,
+    superseded,
     errorItems: errors,
   };
 }
@@ -777,7 +812,20 @@ export async function getAifShopifyStatus(client) {
       (SELECT count(*)::int FROM aif_shopify_sync_outbox WHERE status='processing') AS processing,
       (SELECT count(*)::int FROM aif_shopify_sync_outbox WHERE status='error') AS errors,
       (SELECT count(*)::int FROM aif_shopify_sync_outbox WHERE status='blocked') AS blocked,
-      (SELECT count(*)::int FROM aif_shopify_sync_outbox WHERE status='done') AS done`),
+      (SELECT count(*)::int FROM aif_shopify_sync_outbox WHERE status='done') AS done,
+      (SELECT count(*)::int FROM aif_shopify_sync_outbox WHERE status='processing' AND locked_at < now() - interval '10 minutes') AS stale_processing,
+      (SELECT EXISTS(
+         SELECT 1
+         FROM pg_trigger
+         WHERE tgname='aif_shopify_stock_outbox_trg'
+           AND NOT tgisinternal
+       )) AS stock_trigger_installed,
+      (SELECT EXISTS(
+         SELECT 1
+         FROM pg_trigger
+         WHERE tgname='aif_shopify_variant_map_outbox_trg'
+           AND NOT tgisinternal
+       )) AS mapping_trigger_installed`),
     publicConfig.missing.length
       ? Promise.resolve(null)
       : shopifyGraphql(`query AifShopifyStatus {
