@@ -23,6 +23,14 @@ import {
   mapAifShopifyVariants,
   processAifShopifyOutboxBatch,
 } from "../lib/aifShopify.js";
+import {
+  createAifShopifyProductExport,
+  ensureAifShopifyExportSchema,
+  getAifShopifyProductExportArchive,
+  listAifShopifyProductExports,
+  previewAifShopifyProductExport,
+  reconcileAifShopifyProductExport,
+} from "../lib/aifShopifyExport.js";
 
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
@@ -34,7 +42,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function ensureAifShopifyInventorySchema() {
     if (!aifShopifyInventorySchemaPromise) {
-      aifShopifyInventorySchemaPromise = ensureAifShopifyTables(pool).catch((error) => {
+      aifShopifyInventorySchemaPromise = ensureAifShopifyExportSchema(pool).catch((error) => {
         aifShopifyInventorySchemaPromise = null;
         throw error;
       });
@@ -290,7 +298,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function cleanSelectedWorkAction(value) {
     const action = normCode(value);
-    return ["label", "order", "move"].includes(action) ? action : null;
+    return ["label", "order", "move", "shopify"].includes(action) ? action : null;
   }
 
   function selectedRowsFromBody(body) {
@@ -346,7 +354,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (owner_key, variant_id),
-      CHECK (action IS NULL OR action IN ('label','order','move'))
+      CHECK (action IS NULL OR action IN ('label','order','move','shopify'))
     )`);
     await client.query(`CREATE INDEX IF NOT EXISTS aif_user_selected_variants_owner_sort_idx
       ON aif_user_selected_variants (owner_key, sort_order, updated_at)`);
@@ -7543,6 +7551,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          v.id AS variant_id,
          v.internal_sku,
          (svm.variant_id IS NOT NULL) AS shopify_mapped,
+         sxp.export_id::text AS shopify_export_id,
+         sxp.item_status AS shopify_export_item_status,
+         sxp.export_status AS shopify_export_status,
+         sxp.exported_at AS shopify_exported_at,
+         sxp.reconciled_at AS shopify_export_reconciled_at,
+         sxp.validation_errors AS shopify_export_errors,
+         sxp.validation_warnings AS shopify_export_warnings,
+         (sxp.item_status='exported_pending' AND svm.variant_id IS NULL) AS shopify_export_pending,
          COALESCE(sso.status, svm.sync_status) AS shopify_sync_status,
          sso.status AS shopify_outbox_status,
          svm.shopify_product_id,
@@ -7619,6 +7635,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LEFT JOIN latest_import_detail lid ON lid.variant_id=v.id
        LEFT JOIN supplier_info si ON si.variant_id=v.id
        LEFT JOIN incoming_info ii ON ii.variant_id=v.id
+       LEFT JOIN LATERAL (
+         SELECT ei.export_id, ei.item_status, ei.validation_errors, ei.validation_warnings,
+                e.status AS export_status, e.created_at AS exported_at, e.reconciled_at
+         FROM aif_shopify_product_export_items ei
+         JOIN aif_shopify_product_exports e ON e.id=ei.export_id
+         WHERE ei.variant_id=v.id
+         ORDER BY e.created_at DESC
+         LIMIT 1
+       ) sxp ON true
        LEFT JOIN aif_shopify_variant_map svm ON svm.variant_id=v.id
        LEFT JOIN aif_shopify_sync_outbox sso ON sso.variant_id=v.id
        WHERE ${where.join(" AND ")}
@@ -8777,6 +8802,92 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       console.error("AIF Shopify outbox process failed", e);
       res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify szinkron feldolgozása nem sikerült.", code: e?.code || null });
+    }
+  });
+
+  // Shopify termékexport: kijelölt AllIn variánsok ellenőrzése, Shopify CSV/ZIP és import utáni párosítás.
+  router.post("/shopify/product-exports/preview", requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const preview = await previewAifShopifyProductExport(client, {
+        variantIds: Array.isArray(req.body?.variantIds) ? req.body.variantIds : Array.isArray(req.body?.variant_ids) ? req.body.variant_ids : [],
+        selectionMode: req.body?.selectionMode || req.body?.selection_mode,
+        productStatus: req.body?.productStatus || req.body?.product_status,
+        includeMapped: req.body?.includeMapped ?? req.body?.include_mapped,
+      });
+      res.json(preview);
+    } catch (e) {
+      console.error("AIF Shopify product export preview failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify export ellenőrzése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/product-exports", requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await createAifShopifyProductExport(client, {
+        variantIds: Array.isArray(req.body?.variantIds) ? req.body.variantIds : Array.isArray(req.body?.variant_ids) ? req.body.variant_ids : [],
+        selectionMode: req.body?.selectionMode || req.body?.selection_mode,
+        productStatus: req.body?.productStatus || req.body?.product_status,
+        includeMapped: req.body?.includeMapped ?? req.body?.include_mapped,
+        actor: actorFrom(req),
+      });
+      res.json(result);
+    } catch (e) {
+      console.error("AIF Shopify product export create failed", e);
+      const payload = { error: e?.message || "A Shopify export létrehozása nem sikerült.", code: e?.code || null };
+      if (e?.preview) payload.preview = e.preview;
+      res.status(Number(e?.statusCode || 500)).json(payload);
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/product-exports", requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const items = await listAifShopifyProductExports(client, { limit: Number(req.query.limit || 20) });
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error("AIF Shopify product exports list failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify exportok betöltése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/product-exports/:id/download", requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await getAifShopifyProductExportArchive(client, req.params.id);
+      if (!result) return res.status(404).json({ error: "Shopify export nem található." });
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${result.fileName}"`);
+      res.setHeader("Content-Length", String(result.archive.length));
+      res.send(result.archive);
+    } catch (e) {
+      console.error("AIF Shopify product export download failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify export ZIP nem tölthető le.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/product-exports/:id/reconcile", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await reconcileAifShopifyProductExport(client, req.params.id, {
+        enqueueStock: req.body?.enqueueStock !== false && req.body?.enqueue_stock !== false,
+      });
+      if (!result) return res.status(404).json({ error: "Shopify export nem található." });
+      res.json(result);
+    } catch (e) {
+      console.error("AIF Shopify product export reconcile failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify import utáni párosítás nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
     }
   });
 
