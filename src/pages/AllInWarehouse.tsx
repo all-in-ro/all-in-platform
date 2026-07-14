@@ -26,9 +26,11 @@ import {
   RefreshCw,
   Save,
   Search,
+  ShoppingBag,
   X,
 } from "lucide-react";
-import ShopifyStatusIcon, { isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
+import ShopifyStatusIcon, { isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
@@ -98,12 +100,13 @@ function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   }
 }
 
-type SelectedWorkAction = "label" | "order" | "move";
+type SelectedWorkAction = "label" | "order" | "move" | "shopify";
 
 const selectedWorkActionLabels: Record<SelectedWorkAction, string> = {
   label: "Vonalkód / címke",
   order: "Rendelés / PDF",
   move: "Készletmozgatás",
+  shopify: "Shopify export",
 };
 
 function readSavedSelectedVariantActions(): Record<string, SelectedWorkAction> {
@@ -113,7 +116,7 @@ function readSavedSelectedVariantActions(): Record<string, SelectedWorkAction> {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const allowed = new Set(["label", "order", "move"]);
+    const allowed = new Set(["label", "order", "move", "shopify"]);
     return Object.entries(parsed).reduce<Record<string, SelectedWorkAction>>((acc, [id, value]) => {
       const key = String(id || "").trim();
       const action = String(value || "") as SelectedWorkAction;
@@ -129,7 +132,7 @@ function saveSelectedVariantActionsToStorage(actions: Record<string, SelectedWor
   if (typeof window === "undefined") return;
   const clean = Object.entries(actions).reduce<Record<string, SelectedWorkAction>>((acc, [id, action]) => {
     const key = String(id || "").trim();
-    if (key && ["label", "order", "move"].includes(action)) acc[key] = action;
+    if (key && ["label", "order", "move", "shopify"].includes(action)) acc[key] = action;
     return acc;
   }, {});
   if (!Object.keys(clean).length) {
@@ -195,7 +198,7 @@ function markSelectedCloudMigrationDone() {
 
 function normalizeSelectedWorkAction(value: unknown): SelectedWorkAction | null {
   const raw = String(value || "").trim();
-  return raw === "label" || raw === "order" || raw === "move" ? raw : null;
+  return raw === "label" || raw === "order" || raw === "move" || raw === "shopify" ? raw : null;
 }
 
 function selectedVariantIdFromItem(item: Partial<InventoryItem> & { selected_variant_id?: string | null; variantId?: string | null; id?: string | null }) {
@@ -289,6 +292,14 @@ type InventoryItem = {
   shopify_last_synced_at?: string | null;
   shopify_last_error?: string | null;
   shopify_outbox_error?: string | null;
+  shopify_export_id?: string | null;
+  shopify_export_item_status?: string | null;
+  shopify_export_status?: string | null;
+  shopify_exported_at?: string | null;
+  shopify_export_reconciled_at?: string | null;
+  shopify_export_errors?: string[] | null;
+  shopify_export_warnings?: string[] | null;
+  shopify_export_pending?: boolean | null;
 };
 
 type PersistedSelectedWorkItem = InventoryItem & {
@@ -588,7 +599,7 @@ type StockTransferPrintLine = {
 };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
-type ShopifyFilter = "all" | "mapped" | "unmapped" | "error";
+type ShopifyFilter = "all" | "mapped" | "exported" | "unmapped" | "error";
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc";
 
 type BarcodeScannerMode = "search" | "editBarcode";
@@ -3330,6 +3341,7 @@ export default function AllInWarehouse() {
   const [persistedSelectedItems, setPersistedSelectedItems] = useState<InventoryItem[]>([]);
   const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
+  const [shopifyExportModalOpen, setShopifyExportModalOpen] = useState(false);
   const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
   const [stockMoveNote, setStockMoveNote] = useState("");
   const [stockMoveDocumentTitle, setStockMoveDocumentTitle] = useState("Készlet átadási lista");
@@ -4601,7 +4613,8 @@ export default function AllInWarehouse() {
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
     if (shopifyFilter === "mapped") out = out.filter((x) => isShopifyMappedItem(x));
-    if (shopifyFilter === "unmapped") out = out.filter((x) => !isShopifyMappedItem(x));
+    if (shopifyFilter === "exported") out = out.filter((x) => isShopifyExportPending(x));
+    if (shopifyFilter === "unmapped") out = out.filter((x) => !isShopifyMappedItem(x) && !isShopifyExportPending(x));
     if (shopifyFilter === "error") out = out.filter((x) => shopifyMappingHasError(x));
     if (location !== "all") {
       out = out.filter((x) => (stockMap.get(x.variant_id) || []).some((s) => (s.location_code === location || s.location_name === location) && n(s.qty) > 0));
@@ -4693,6 +4706,7 @@ export default function AllInWarehouse() {
       const shopifyLabels: Record<ShopifyFilter, string> = {
         all: "Összes",
         mapped: "Shopifyhoz kapcsolva",
+        exported: "Exportálva, párosításra vár",
         unmapped: "Nincs Shopifyon",
         error: "Shopify hiba",
       };
@@ -4902,10 +4916,15 @@ export default function AllInWarehouse() {
     () => selectedItems.filter((x) => selectedWorkActions[String(x.variant_id || "")] === "move"),
     [selectedItems, selectedWorkActions]
   );
+  const selectedShopifyItems = useMemo(
+    () => selectedItems.filter((x) => selectedWorkActions[String(x.variant_id || "")] === "shopify"),
+    [selectedItems, selectedWorkActions]
+  );
   const selectedWorkCounts: Record<SelectedWorkAction, number> = {
     label: selectedLabelItems.length,
     order: selectedOrderItems.length,
     move: selectedMoveItems.length,
+    shopify: selectedShopifyItems.length,
   };
   const selectedWorkButtonClass = (action: SelectedWorkAction) => selectedWorkCounts[action] > 0 ? primaryBtn : btnSoft;
 
@@ -5286,6 +5305,7 @@ export default function AllInWarehouse() {
   function selectedItemsForAction(action: SelectedWorkAction) {
     if (action === "label") return selectedLabelItems;
     if (action === "order") return selectedOrderItems;
+    if (action === "shopify") return selectedShopifyItems;
     return selectedMoveItems;
   }
 
@@ -5733,7 +5753,7 @@ export default function AllInWarehouse() {
   useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
     if (selectedWorkPanel && selectedWorkCounts[selectedWorkPanel] <= 0) setSelectedWorkPanel(null);
-  }, [selectedPanelOpen, selectedCount, selectedWorkPanel, selectedWorkCounts.label, selectedWorkCounts.order, selectedWorkCounts.move]);
+  }, [selectedPanelOpen, selectedCount, selectedWorkPanel, selectedWorkCounts.label, selectedWorkCounts.order, selectedWorkCounts.move, selectedWorkCounts.shopify]);
 
   const activationTodoCount = useMemo(
     () => inventoryDisplayItems.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x)).length,
@@ -7168,6 +7188,7 @@ export default function AllInWarehouse() {
                 <select className={select} value={shopifyFilter} onChange={(e) => setShopifyFilter(e.target.value as ShopifyFilter)}>
                   <option value="all">Összes</option>
                   <option value="mapped">Összekötve</option>
+                  <option value="exported">Exportálva, párosításra vár</option>
                   <option value="unmapped">Nincs Shopifyon</option>
                   <option value="error">Szinkronhiba</option>
                 </select>
@@ -7547,13 +7568,16 @@ export default function AllInWarehouse() {
                 <button className={selectedWorkButtonClass("move")} type="button" disabled={!selectedWorkCounts.move} onClick={() => setSelectedWorkPanel("move")} title="Készletmozgatás listára tett termékek">
                   <PackageCheck size={15} /> Készletmozgatás {selectedWorkCounts.move > 0 ? `(${selectedWorkCounts.move})` : ""}
                 </button>
+                <button className={selectedWorkButtonClass("shopify")} type="button" disabled={!selectedWorkCounts.shopify} onClick={() => setSelectedWorkPanel("shopify")} title="Shopify export listára tett termékek">
+                  <ShoppingBag size={15} /> Shopify export {selectedWorkCounts.shopify > 0 ? `(${selectedWorkCounts.shopify})` : ""}
+                </button>
                 <button className={btnSoft} onClick={() => setSelectedPanelOpen(false)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez vagy készletmozgatáshoz kerüljön.
+                Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez, készletmozgatáshoz vagy Shopify exporthoz kerüljön.
               </div>
 
               <div className="grid gap-2">
@@ -7801,6 +7825,10 @@ export default function AllInWarehouse() {
                   <span className="inline-flex items-center gap-2"><PackageCheck size={16} /> Készletmozgatás</span>
                   <span className="text-xs text-white/55">átadási lista</span>
                 </button>
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "shopify")} type="button">
+                  <span className="inline-flex items-center gap-2"><ShoppingBag size={16} /> Shopify export</span>
+                  <span className="text-xs text-white/55">termék + készlet CSV</span>
+                </button>
               </div>
             </div>
           </div>
@@ -7821,13 +7849,18 @@ export default function AllInWarehouse() {
                     <Barcode size={15} /> {labelDetailsBusy ? "Termékadatok betöltése..." : "Címkék előkészítése"}
                   </button>
                 )}
+                {selectedWorkPanel === "shopify" && (
+                  <button className={primaryBtn} onClick={() => setShopifyExportModalOpen(true)} type="button" disabled={!selectedShopifyItems.length}>
+                    <ShoppingBag size={15} /> Shopify export előkészítése
+                  </button>
+                )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
                 <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); }} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad.
+                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad. Shopify exportnál a következő ablak minden szükséges adatot ellenőriz, mielőtt a CSV-k elkészülnek.
               </div>
 
               {selectedWorkPanel === "move" && (
@@ -8060,6 +8093,13 @@ export default function AllInWarehouse() {
           </div>
         </div>
       )}
+
+      <ShopifyProductExportModal
+        open={shopifyExportModalOpen}
+        items={selectedShopifyItems}
+        onClose={() => setShopifyExportModalOpen(false)}
+        onChanged={() => load()}
+      />
 
       {stockMoveConfirmOpen && selectedWorkPanel === "move" && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-3 py-4 backdrop-blur-sm">
