@@ -154,7 +154,7 @@ export default function ShopifyProductExportModal({
   onChanged?: () => void | Promise<void>;
 }) {
   const [selectionMode, setSelectionMode] = useState<"selected_variants" | "all_model_variants">("all_model_variants");
-  const [productStatus, setProductStatus] = useState<"draft" | "active">("draft");
+  const [productStatus, setProductStatus] = useState<"draft" | "active">("active");
   const [includeMapped, setIncludeMapped] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -264,14 +264,30 @@ export default function ShopifyProductExportModal({
     setError("");
     setReconcileMessage("");
     try {
-      const result = await requestJSON<{ mapped: number; errors: number; status: string; errorItems?: Array<{ sku?: string; error?: string }> }>(
+      const result = await requestJSON<{
+        mapped: number;
+        errors: number;
+        status: string;
+        activatedProducts?: number;
+        publishedProducts?: number;
+        brandUpdatedProducts?: number;
+        brandSkippedProducts?: number;
+        errorItems?: Array<{ sku?: string; error?: string }>;
+        productErrors?: Array<{ scope?: string; error?: string }>;
+      }>(
         `/api/aif/shopify/product-exports/${encodeURIComponent(exportId)}/reconcile`,
         { method: "POST", body: JSON.stringify({ enqueueStock: true }) }
       );
+      const productSummary = [
+        result.activatedProducts ? `${result.activatedProducts} termék aktiválva` : "",
+        result.publishedProducts ? `${result.publishedProducts} termék közzétéve az Online áruházban` : "",
+        result.brandUpdatedProducts ? `${result.brandUpdatedProducts} Brand mező kitöltve` : "",
+        result.brandSkippedProducts ? `${result.brandSkippedProducts} Brand mező kihagyva` : "",
+      ].filter(Boolean).join(" • ");
       setReconcileMessage(
         result.errors
-          ? `Párosítva: ${result.mapped}. Hibás vagy még nem található: ${result.errors}.`
-          : `Párosítás kész: ${result.mapped} variáns. A Miercurea Ciuc induló készlet szinkronja sorba állt.`
+          ? `Párosítva: ${result.mapped}. Javítandó: ${result.errors}.${productSummary ? ` ${productSummary}.` : ""}`
+          : `Párosítás kész: ${result.mapped} variáns. ${productSummary || "A termékek aktiválása és az Online áruház közzététele elkészült."} A Miercurea Ciuc induló készlet szinkronja sorba állt.`
       );
       await loadHistory();
       await onChanged?.();
@@ -319,8 +335,8 @@ export default function ShopifyProductExportModal({
             <label className="grid gap-1.5 text-xs text-white/65">
               Shopify termékállapot
               <select className={field} value={productStatus} onChange={(event) => setProductStatus(event.target.value as typeof productStatus)}>
-                <option value="draft">Piszkozat, ellenőrzés után aktiválom</option>
-                <option value="active">Aktív, azonnal megjelenhet</option>
+                <option value="active">Aktív, Online áruházban is közzétéve</option>
+                <option value="draft">Piszkozat, nem kerül az Online áruházba</option>
               </select>
             </label>
             <label className="flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-white/14 bg-[#303a4c] px-3 text-xs text-white/72">
@@ -330,7 +346,7 @@ export default function ShopifyProductExportModal({
           </div>
 
           <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
-            Alapból a már Shopifyhoz kapcsolt variánsok kimaradnak. Így egy termék-CSV nem hoz létre fölösleges új variánsazonosítókat, mert abból a készletszinkron különösebb ünneplés nélkül szétesne.
+            Alapból a már Shopifyhoz kapcsolt variánsok kimaradnak. Aktív exportnál a párosítás a terméket aktiválja, kitölti a használható Brand kategóriamezőt, és hozzáadja az Online áruház értékesítési csatornához is. Így nem csak a Shop alkalmazásban lebeg valahol, mint egy különösen drága digitális szellem.
           </div>
 
           {error ? (
