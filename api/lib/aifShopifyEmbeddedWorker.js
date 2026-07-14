@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { processAifShopifyOutboxBatch } from "./aifShopify.js";
+import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
 
 const GLOBAL_STATE_KEY = Symbol.for("allin.shopify.embeddedWorker");
 
@@ -29,21 +30,31 @@ async function tick(state) {
   state.running = true;
 
   try {
-    const result = await processAifShopifyOutboxBatch(state.pool, {
+    const inbound = await processAifShopifyInboundBatch(state.pool, {
       limit: state.limit,
     });
-
-    if (result.processed || result.errors || result.superseded) {
-      console.log("AIF Shopify embedded sync batch", JSON.stringify({
+    if (inbound.claimed || inbound.errors || inbound.ignored) {
+      console.log("AIF Shopify embedded inbound batch", JSON.stringify({
         instanceId: state.instanceId,
-        ...result,
+        ...inbound,
       }));
     }
 
-    if (!result.enabled) {
+    const outbound = await processAifShopifyOutboxBatch(state.pool, {
+      limit: state.limit,
+    });
+    if (outbound.processed || outbound.errors || outbound.superseded) {
+      console.log("AIF Shopify embedded sync batch", JSON.stringify({
+        instanceId: state.instanceId,
+        ...outbound,
+      }));
+    }
+
+    if (!inbound.enabled && !outbound.enabled) {
       schedule(state, state.disabledDelayMs);
     } else {
-      schedule(state, result.processed ? state.busyDelayMs : state.idleDelayMs);
+      const hadWork = Boolean(inbound.claimed || outbound.processed);
+      schedule(state, hadWork ? state.busyDelayMs : state.idleDelayMs);
     }
   } catch (error) {
     console.error("AIF Shopify embedded sync error", {
