@@ -1,5 +1,6 @@
 import { ShoppingBag } from "lucide-react";
-import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type ShopifyStatusSource = {
   shopify_mapped?: boolean | null;
@@ -89,28 +90,64 @@ function dateTime(value?: string | null) {
   });
 }
 
-const stateMeta: Record<ShopifyVisualState, { label: string; className: string }> = {
+function statusText(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+  const key = raw.toLowerCase();
+  const labels: Record<string, string> = {
+    active: "Aktív",
+    draft: "Piszkozat",
+    archived: "Archivált",
+    mapped: "Összekötve",
+    synced: "Szinkronizálva",
+    done: "Kész",
+    pending: "Várakozik",
+    processing: "Folyamatban",
+    prepared: "Előkészítve",
+    downloaded: "Letöltve",
+    partially_mapped: "Részben párosítva",
+    exported_pending: "Exportálva, párosításra vár",
+    error: "Hiba",
+    failed: "Sikertelen",
+    blocked: "Blokkolva",
+  };
+  return labels[key] || raw;
+}
+
+const stateMeta: Record<ShopifyVisualState, { label: string; border: string; badge: string; dot: string }> = {
   synced: {
     label: "Shopifyhoz kapcsolva és szinkronizálva",
-    className: "border-emerald-300/45 bg-emerald-400/18 text-emerald-50",
+    border: "border-[#78a832]",
+    badge: "border-[#b8dd82] bg-[#eef8df] text-[#416b14]",
+    dot: "bg-[#78a832]",
   },
   mapped: {
     label: "Shopifyhoz kapcsolva",
-    className: "border-[#78d9bf]/45 bg-[#2a8d8b]/25 text-[#d7fffd]",
+    border: "border-[#95bf47]",
+    badge: "border-[#c7e39c] bg-[#f3f9e9] text-[#4b6f1f]",
+    dot: "bg-[#95bf47]",
   },
   pending: {
     label: "Shopify export / szinkron folyamatban",
-    className: "border-amber-200/50 bg-amber-300/18 text-amber-50",
+    border: "border-amber-400",
+    badge: "border-amber-200 bg-amber-50 text-amber-800",
+    dot: "bg-amber-400",
   },
   error: {
     label: "Shopify szinkronhiba",
-    className: "border-rose-300/55 bg-rose-500/20 text-rose-50",
+    border: "border-rose-500",
+    badge: "border-rose-200 bg-rose-50 text-rose-700",
+    dot: "bg-rose-500",
   },
   unmapped: {
     label: "Nincs Shopifyhoz kapcsolva",
-    className: "border-white/18 bg-white/[0.06] text-white/45",
+    border: "border-slate-300",
+    badge: "border-slate-200 bg-slate-50 text-slate-600",
+    dot: "bg-slate-400",
   },
 };
+
+type TooltipRow = { label: string; value: string };
 
 export default function ShopifyStatusIcon({
   item,
@@ -123,54 +160,179 @@ export default function ShopifyStatusIcon({
   showWhenUnmapped?: boolean;
   className?: string;
 }) {
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
   const state = shopifyVisualState(item);
   const visibleState = state !== "unmapped";
   const meta = stateMeta[state];
-  const tooltip = useMemo(() => {
-    const rows = [meta.label];
-    const title = clean(item?.shopify_product_title);
-    const variant = clean(item?.shopify_variant_title);
-    const productStatus = clean(item?.shopify_product_status);
-    const lastSync = dateTime(item?.shopify_last_synced_at);
-    const exportedAt = dateTime(item?.shopify_exported_at);
-    const exportStatus = clean(item?.shopify_export_item_status || item?.shopify_export_status);
-    const exportWarnings = Array.isArray(item?.shopify_export_warnings) ? item.shopify_export_warnings.filter((value) => clean(value)) : [];
-    const exportErrors = Array.isArray(item?.shopify_export_errors) ? item.shopify_export_errors.filter((value) => clean(value)) : [];
-    const error = clean(item?.shopify_last_error || item?.shopify_outbox_error || exportErrors[0]);
-    if (title) rows.push(`Termék: ${title}`);
-    if (variant) rows.push(`Variáns: ${variant}`);
-    if (productStatus) rows.push(`Shopify állapot: ${productStatus}`);
-    if (exportStatus) rows.push(`Export állapot: ${exportStatus}`);
-    if (exportedAt) rows.push(`Exportálva: ${exportedAt}`);
-    if (lastSync) rows.push(`Utolsó szinkron: ${lastSync}`);
-    if (exportWarnings.length) rows.push(`Figyelmeztetés: ${exportWarnings[0]}`);
-    if (error) rows.push(`Hiba: ${error}`);
-    return rows.join("\n");
-  }, [item, meta.label]);
+
+  const tooltipRows = useMemo<TooltipRow[]>(() => {
+    const rows: TooltipRow[] = [];
+    const add = (label: string, value: unknown) => {
+      const text = clean(value);
+      if (text) rows.push({ label, value: text });
+    };
+    add("Shopify termék", item?.shopify_product_title);
+    add("Variáns", item?.shopify_variant_title);
+    add("Termékállapot", statusText(item?.shopify_product_status));
+    add("Szinkron", statusText(item?.shopify_sync_status));
+    add("Feldolgozás", statusText(item?.shopify_outbox_status));
+    add("Export", statusText(item?.shopify_export_item_status || item?.shopify_export_status));
+    add("Exportálva", dateTime(item?.shopify_exported_at));
+    add("Párosítva", dateTime(item?.shopify_export_reconciled_at));
+    add("Utolsó szinkron", dateTime(item?.shopify_last_synced_at));
+    add("Product ID", item?.shopify_product_id);
+    add("Variant ID", item?.shopify_variant_id);
+    add("Inventory item", item?.shopify_inventory_item_id);
+    return rows;
+  }, [item]);
+
+  const warnings = useMemo(
+    () => (Array.isArray(item?.shopify_export_warnings) ? item.shopify_export_warnings.map(clean).filter(Boolean) : []),
+    [item?.shopify_export_warnings]
+  );
+  const errors = useMemo(() => {
+    const values = [
+      clean(item?.shopify_last_error),
+      clean(item?.shopify_outbox_error),
+      ...(Array.isArray(item?.shopify_export_errors) ? item.shopify_export_errors.map(clean) : []),
+    ].filter(Boolean);
+    return Array.from(new Set(values));
+  }, [item?.shopify_last_error, item?.shopify_outbox_error, item?.shopify_export_errors]);
 
   if (!visibleState && !showWhenUnmapped) return null;
 
-  const dimension = size === "xs" ? "h-5 w-5" : size === "md" ? "h-8 w-8" : "h-6 w-6";
-  const iconSize = size === "xs" ? 11 : size === "md" ? 17 : 13;
+  const dimension = size === "xs" ? "h-6 w-6" : size === "md" ? "h-9 w-9" : "h-7 w-7";
+  const iconSize = size === "xs" ? 13 : size === "md" ? 20 : 16;
+
+  function updateTooltipPosition() {
+    if (typeof window === "undefined") return;
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const tooltipWidth = Math.min(390, Math.max(310, window.innerWidth - 24));
+    const sidePadding = 12;
+    const estimatedHeight = Math.min(520, 114 + tooltipRows.length * 38 + (warnings.length ? 58 : 0) + (errors.length ? 70 : 0));
+    let left = rect.left + rect.width / 2 - tooltipWidth / 2;
+    left = Math.min(Math.max(sidePadding, left), Math.max(sidePadding, window.innerWidth - tooltipWidth - sidePadding));
+    const openUp = rect.bottom + estimatedHeight + 12 > window.innerHeight && rect.top > estimatedHeight + 12;
+    setTooltipStyle({
+      position: "fixed",
+      left,
+      top: openUp ? rect.top - 8 : rect.bottom + 8,
+      width: tooltipWidth,
+      transform: openUp ? "translateY(-100%)" : "none",
+    });
+  }
+
+  function openTooltip() {
+    updateTooltipPosition();
+    setTooltipOpen(true);
+  }
+
+  useEffect(() => {
+    if (!tooltipOpen) return;
+    updateTooltipPosition();
+    const reposition = () => updateTooltipPosition();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [tooltipOpen, tooltipRows.length, warnings.length, errors.length]);
+
+  const tooltip = tooltipOpen && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          className="pointer-events-none z-[9999] overflow-hidden rounded-2xl border border-[#95bf47]/70 bg-white text-left text-[11px] leading-snug text-slate-700 shadow-2xl shadow-black/35"
+          style={tooltipStyle}
+          role="tooltip"
+        >
+          <div className="flex items-center gap-3 bg-[#008060] px-3 py-2.5 text-white">
+            <span className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/70 bg-white shadow-sm">
+              <ShoppingBag size={19} strokeWidth={1.9} className="absolute text-[#008060]" />
+              {!imageFailed ? (
+                <img
+                  src={AIF_SHOPIFY_ICON_URL}
+                  alt=""
+                  className="relative h-[78%] w-[78%] object-contain"
+                  onError={() => setImageFailed(true)}
+                />
+              ) : null}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-white/72">Shopify kapcsolat</div>
+              <div className="mt-0.5 truncate text-[13px] text-white">{clean(item?.shopify_product_title) || clean(item?.shopify_variant_title) || "Termékkapcsolat"}</div>
+            </div>
+            <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] ${meta.badge}`}>
+              <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+              {state === "synced" ? "Szinkronban" : state === "mapped" ? "Összekötve" : state === "pending" ? "Folyamatban" : state === "error" ? "Hiba" : "Nincs összekötve"}
+            </span>
+          </div>
+
+          <div className="p-2.5">
+            <div className="mb-2 rounded-xl border border-[#d6e9ba] bg-[#f4f9ec] px-2.5 py-2 text-[11px] text-[#42651c]">
+              {meta.label}
+            </div>
+
+            <div className="space-y-1.5">
+              {tooltipRows.length ? tooltipRows.map((row) => (
+                <div key={`${row.label}:${row.value}`} className="grid grid-cols-[112px,minmax(0,1fr)] overflow-hidden rounded-xl border border-slate-200 bg-[#f7f8f8]">
+                  <div className="bg-[#eef3e8] px-2.5 py-1.5 text-slate-500">{row.label}</div>
+                  <div className="min-w-0 truncate px-2.5 py-1.5 text-right tabular-nums text-slate-900" title={row.value}>{row.value}</div>
+                </div>
+              )) : (
+                <div className="rounded-xl border border-slate-200 bg-[#f7f8f8] px-3 py-2 text-slate-500">Nincs további Shopify-adat.</div>
+              )}
+            </div>
+
+            {warnings.length ? (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                <div className="text-[10px] uppercase tracking-[0.08em] text-amber-700">Figyelmeztetés</div>
+                <div className="mt-1 line-clamp-3">{warnings[0]}</div>
+              </div>
+            ) : null}
+
+            {errors.length ? (
+              <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700">
+                <div className="text-[10px] uppercase tracking-[0.08em] text-rose-600">Hiba</div>
+                <div className="mt-1 line-clamp-4">{errors[0]}</div>
+              </div>
+            ) : null}
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
 
   return (
-    <span
-      className={`${dimension} inline-flex shrink-0 items-center justify-center rounded-lg border shadow-sm ${meta.className} ${className}`}
-      title={tooltip}
-      aria-label={meta.label}
-    >
-      {!imageFailed ? (
-        <img
-          src={AIF_SHOPIFY_ICON_URL}
-          alt=""
-          className="h-[72%] w-[72%] object-contain"
-          loading="lazy"
-          onError={() => setImageFailed(true)}
-        />
-      ) : (
-        <ShoppingBag size={iconSize} strokeWidth={1.9} />
-      )}
-    </span>
+    <>
+      <span
+        ref={anchorRef}
+        className={`${dimension} relative inline-flex shrink-0 items-center justify-center rounded-lg border bg-white shadow-[0_2px_8px_rgba(15,23,42,0.24)] transition hover:-translate-y-px hover:shadow-[0_5px_14px_rgba(0,128,96,0.30)] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/60 ${meta.border} ${className}`}
+        aria-label={meta.label}
+        tabIndex={0}
+        onMouseEnter={openTooltip}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={openTooltip}
+        onBlur={() => setTooltipOpen(false)}
+      >
+        <ShoppingBag size={iconSize} strokeWidth={1.9} className="absolute text-[#008060]" />
+        {!imageFailed ? (
+          <img
+            src={AIF_SHOPIFY_ICON_URL}
+            alt=""
+            className="relative h-[78%] w-[78%] object-contain"
+            loading="lazy"
+            onError={() => setImageFailed(true)}
+          />
+        ) : null}
+        <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${meta.dot}`} />
+      </span>
+      {tooltip}
+    </>
   );
 }
