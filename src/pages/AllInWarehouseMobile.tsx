@@ -18,6 +18,7 @@ import {
   Search,
   X,
 } from "lucide-react";
+import ShopifyStatusIcon, { isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 
 type Props = {
   apiBase?: string;
@@ -118,6 +119,18 @@ type InventoryItem = {
   available_qty?: number | string | null;
   last_stock_movement_at?: string | null;
   last_incoming_at?: string | null;
+  shopify_mapped?: boolean | null;
+  shopify_sync_status?: string | null;
+  shopify_outbox_status?: string | null;
+  shopify_product_id?: string | null;
+  shopify_variant_id?: string | null;
+  shopify_inventory_item_id?: string | null;
+  shopify_product_title?: string | null;
+  shopify_variant_title?: string | null;
+  shopify_product_status?: string | null;
+  shopify_last_synced_at?: string | null;
+  shopify_last_error?: string | null;
+  shopify_outbox_error?: string | null;
 };
 
 type DetailResponse = { item: InventoryItem & Record<string, any>; stock?: StockItem[]; supplierCodes?: any[]; movements?: any[] };
@@ -194,6 +207,7 @@ type EditForm = {
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "incoming_desc" | "missing";
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
+type ShopifyFilter = "all" | "mapped" | "unmapped" | "error";
 
 const WAREHOUSE_SALES_TVA_RATE_PERCENT = 21;
 const page = "min-h-screen bg-[#4b5362] pb-28 text-white font-normal";
@@ -819,6 +833,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [color, setColor] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
+  const [shopifyFilter, setShopifyFilter] = useState<ShopifyFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("name");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [buyPricesVisible, setBuyPricesVisible] = useState(false);
@@ -1038,7 +1053,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }, [category, categoryOptions, subCategories]);
 
   const hasActiveFilters = Boolean(
-    search.trim() || brand !== "all" || category !== "all" || subCategory !== "all" || gender !== "all" || color !== "all" || stockFilter !== "all" || imageFilter !== "all" || focusVariantIds.length
+    search.trim() || brand !== "all" || category !== "all" || subCategory !== "all" || gender !== "all" || color !== "all" || stockFilter !== "all" || imageFilter !== "all" || shopifyFilter !== "all" || focusVariantIds.length
   );
 
   function colorLabel(item: Partial<InventoryItem>) {
@@ -1087,6 +1102,9 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         if (!itemMatchesColor(item)) return false;
         if (imageFilter === "with" && !item.image_url) return false;
         if (imageFilter === "missing" && item.image_url) return false;
+        if (shopifyFilter === "mapped" && !isShopifyMappedItem(item)) return false;
+        if (shopifyFilter === "unmapped" && isShopifyMappedItem(item)) return false;
+        if (shopifyFilter === "error" && !shopifyMappingHasError(item)) return false;
         if (stockFilter === "available" && n(item.available_qty ?? item.total_qty) <= 0) return false;
         if (stockFilter === "out" && n(item.total_qty) > 0) return false;
         if (stockFilter === "reserved" && n(item.total_reserved_qty) <= 0) return false;
@@ -1103,7 +1121,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         if (sortMode === "brand") return firstText(a.brand_name, a.brand_code).localeCompare(firstText(b.brand_name, b.brand_code), "hu", { sensitivity: "base" }) || itemTitle(a).localeCompare(itemTitle(b), "hu", { sensitivity: "base" });
         return itemTitle(a).localeCompare(itemTitle(b), "hu", { sensitivity: "base" });
       });
-  }, [items, focusVariantIds, search, brand, brands, category, categoryOptions, subCategory, subCategories, gender, color, colorTypes, stockFilter, imageFilter, sortMode]);
+  }, [items, focusVariantIds, search, brand, brands, category, categoryOptions, subCategory, subCategories, gender, color, colorTypes, stockFilter, imageFilter, shopifyFilter, sortMode]);
 
   function itemSupplierText(item: InventoryItem) {
     return firstText((item as any).supplier_names, splitCsv((item as any).supplier_codes).join(" "));
@@ -1130,6 +1148,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     setColor("all");
     setStockFilter("all");
     setImageFilter("all");
+    setShopifyFilter("all");
     setFocusVariantIds([]);
     setFocusLabel("");
     setVisibleCount(40);
@@ -1605,7 +1624,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-[#9fe5e2]">{item.brand_name || item.brand_code || "Márka nélkül"}</p>
-                        <h2 className="mt-1 line-clamp-2 text-base leading-tight text-white">{itemTitle(item)}</h2>
+                        <div className="mt-1 flex items-start gap-1.5">
+                          <h2 className="min-w-0 flex-1 line-clamp-2 text-base leading-tight text-white">{itemTitle(item)}</h2>
+                          <ShopifyStatusIcon item={item} size="sm" />
+                        </div>
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1705,6 +1727,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <label className={label}>Szín<select className={select} value={color} onChange={(e) => { setColor(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{colorTypes.map((row) => <option key={row.id} value={row.code || row.name_ro}>{row.name_ro}</option>)}</select></label>
               <label className={label}>Készlet<select className={select} value={stockFilter} onChange={(e) => { setStockFilter(e.target.value as StockFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="available">Van elérhető</option><option value="out">Nulla készlet</option><option value="reserved">Van foglalás</option><option value="missing">Hiányzó adat</option><option value="watch">Aktiválandó / figyelendő</option></select></label>
               <label className={label}>Kép<select className={select} value={imageFilter} onChange={(e) => { setImageFilter(e.target.value as ImageFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="with">Van kép</option><option value="missing">Nincs kép</option></select></label>
+              <label className={label}>Shopify<select className={select} value={shopifyFilter} onChange={(e) => { setShopifyFilter(e.target.value as ShopifyFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="mapped">Összekötve</option><option value="unmapped">Nincs Shopifyon</option><option value="error">Szinkronhiba</option></select></label>
               <label className={label}>Sorrend<select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}><option value="name">Terméknév</option><option value="brand">Márka</option><option value="stock_desc">Készlet csökkenő</option><option value="stock_asc">Készlet növekvő</option><option value="value_desc">Érték</option><option value="incoming_desc">Utolsó bevételezés</option><option value="missing">Javítandók előre</option></select></label>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
