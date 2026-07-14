@@ -1530,3 +1530,83 @@ export function apiAifMoveImportRow(rowId: string, targetReceptionId: string) {
 }
 
 export const apiAifCommitReceptionSelected = apiAifCommitReceptionRows;
+
+export type AifShopifyStatus = {
+  ok: boolean;
+  config: {
+    enabled: boolean;
+    shopDomain: string;
+    apiVersion: string;
+    missing: string[];
+    shopifyLocations: { csikszereda: string; kezdi: string };
+    aifLocations: {
+      csikszereda: { id: string; code: string };
+      kezdi: { id: string; code: string };
+    };
+  };
+  shop?: { id?: string; name?: string; myshopifyDomain?: string } | null;
+  scope?: string | null;
+  locations?: Record<string, unknown>;
+  database?: Record<string, number | string>;
+};
+
+export type AifShopifyAudit = {
+  generatedAt: string;
+  counts: {
+    allInVariants: number;
+    allInWithSku: number;
+    allInWithoutSku: number;
+    shopifyVariants: number;
+    shopifyWithSku: number;
+    shopifyWithoutSku: number;
+    safeMatches: number;
+    allInDuplicateSkus: number;
+    shopifyDuplicateSkus: number;
+    missingInShopify: number;
+    shopifyOnly: number;
+    caseMismatches: number;
+    mappedRows: number;
+  };
+  safeMatches?: Array<Record<string, unknown>>;
+  samples?: Record<string, unknown>;
+};
+
+export function apiAifShopifyEnsureSchema() {
+  return fetchAifJSON<{ ok: true }>("/shopify/schema", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function apiAifShopifyStatus() {
+  return fetchAifJSON<AifShopifyStatus>("/shopify/status");
+}
+
+export function apiAifShopifyAudit(sample = 30) {
+  return fetchAifJSON<{ ok: true; audit: AifShopifyAudit }>(`/shopify/audit?sample=${encodeURIComponent(String(sample))}`);
+}
+
+export function apiAifShopifyMap(options?: { dryRun?: boolean; sampleLimit?: number }) {
+  return fetchAifJSON<{ ok: true; dryRun: boolean; mapped: number; wouldMap?: number; errors?: unknown[]; audit: AifShopifyAudit }>("/shopify/map", {
+    method: "POST",
+    body: JSON.stringify({ dryRun: options?.dryRun !== false, sampleLimit: options?.sampleLimit || 30 }),
+  });
+}
+
+export function apiAifShopifyMappings(limit = 200) {
+  return fetchAifJSON<{ ok: true; items: Array<Record<string, unknown>> }>(`/shopify/mappings?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export function apiAifShopifyEnqueueAll(reason = "manual_full_sync") {
+  return fetchAifJSON<{ ok: true; queued: number; status?: string }>("/shopify/enqueue-all", {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function apiAifShopifyProcess(limit = 20) {
+  return fetchAifJSON<{ ok: true; enabled: boolean; processed: number; success: number; errors: number; message?: string }>("/shopify/process", {
+    method: "POST",
+    body: JSON.stringify({ limit }),
+  });
+}
