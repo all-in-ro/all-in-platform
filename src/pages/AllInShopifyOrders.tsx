@@ -47,6 +47,7 @@ type Props = {
   role?: "admin" | "shop";
 };
 
+
 type LooseRecord = Record<string, any>;
 
 type StockLocation = {
