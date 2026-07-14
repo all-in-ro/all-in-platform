@@ -26,7 +26,7 @@ import {
 import {
   createAifShopifyProductExport,
   ensureAifShopifyExportSchema,
-  getAifShopifyProductExportArchive,
+  getAifShopifyProductExportCsv,
   listAifShopifyProductExports,
   previewAifShopifyProductExport,
   reconcileAifShopifyProductExport,
@@ -8805,7 +8805,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  // Shopify termékexport: kijelölt AllIn variánsok ellenőrzése, Shopify CSV/ZIP és import utáni párosítás.
+  // Shopify termékexport: kijelölt AllIn variánsok ellenőrzése, egyetlen termék-CSV és import utáni párosítás.
   router.post("/shopify/product-exports/preview", requireAuthed, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -8861,15 +8861,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shopify/product-exports/:id/download", requireAuthed, async (req, res) => {
     const client = await pool.connect();
     try {
-      const result = await getAifShopifyProductExportArchive(client, req.params.id);
+      const result = await getAifShopifyProductExportCsv(client, req.params.id);
       if (!result) return res.status(404).json({ error: "Shopify export nem található." });
-      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${result.fileName}"`);
-      res.setHeader("Content-Length", String(result.archive.length));
-      res.send(result.archive);
+      res.setHeader("Content-Length", String(result.csv.length));
+      res.send(result.csv);
     } catch (e) {
       console.error("AIF Shopify product export download failed", e);
-      res.status(500).json({ error: e?.message || "A Shopify export ZIP nem tölthető le.", code: e?.code || null });
+      res.status(500).json({ error: e?.message || "A Shopify export CSV nem tölthető le.", code: e?.code || null });
     } finally {
       client.release();
     }
