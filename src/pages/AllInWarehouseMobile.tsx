@@ -18,7 +18,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import ShopifyStatusIcon, { isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import ShopifyStatusIcon, { isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 
 type Props = {
   apiBase?: string;
@@ -131,6 +131,14 @@ type InventoryItem = {
   shopify_last_synced_at?: string | null;
   shopify_last_error?: string | null;
   shopify_outbox_error?: string | null;
+  shopify_export_id?: string | null;
+  shopify_export_item_status?: string | null;
+  shopify_export_status?: string | null;
+  shopify_exported_at?: string | null;
+  shopify_export_reconciled_at?: string | null;
+  shopify_export_errors?: string[] | null;
+  shopify_export_warnings?: string[] | null;
+  shopify_export_pending?: boolean | null;
 };
 
 type DetailResponse = { item: InventoryItem & Record<string, any>; stock?: StockItem[]; supplierCodes?: any[]; movements?: any[] };
@@ -207,7 +215,7 @@ type EditForm = {
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "incoming_desc" | "missing";
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
-type ShopifyFilter = "all" | "mapped" | "unmapped" | "error";
+type ShopifyFilter = "all" | "mapped" | "exported" | "unmapped" | "error";
 
 const WAREHOUSE_SALES_TVA_RATE_PERCENT = 21;
 const page = "min-h-screen bg-[#4b5362] pb-28 text-white font-normal";
@@ -1103,7 +1111,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         if (imageFilter === "with" && !item.image_url) return false;
         if (imageFilter === "missing" && item.image_url) return false;
         if (shopifyFilter === "mapped" && !isShopifyMappedItem(item)) return false;
-        if (shopifyFilter === "unmapped" && isShopifyMappedItem(item)) return false;
+        if (shopifyFilter === "exported" && !isShopifyExportPending(item)) return false;
+        if (shopifyFilter === "unmapped" && (isShopifyMappedItem(item) || isShopifyExportPending(item))) return false;
         if (shopifyFilter === "error" && !shopifyMappingHasError(item)) return false;
         if (stockFilter === "available" && n(item.available_qty ?? item.total_qty) <= 0) return false;
         if (stockFilter === "out" && n(item.total_qty) > 0) return false;
@@ -1727,7 +1736,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <label className={label}>Szín<select className={select} value={color} onChange={(e) => { setColor(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{colorTypes.map((row) => <option key={row.id} value={row.code || row.name_ro}>{row.name_ro}</option>)}</select></label>
               <label className={label}>Készlet<select className={select} value={stockFilter} onChange={(e) => { setStockFilter(e.target.value as StockFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="available">Van elérhető</option><option value="out">Nulla készlet</option><option value="reserved">Van foglalás</option><option value="missing">Hiányzó adat</option><option value="watch">Aktiválandó / figyelendő</option></select></label>
               <label className={label}>Kép<select className={select} value={imageFilter} onChange={(e) => { setImageFilter(e.target.value as ImageFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="with">Van kép</option><option value="missing">Nincs kép</option></select></label>
-              <label className={label}>Shopify<select className={select} value={shopifyFilter} onChange={(e) => { setShopifyFilter(e.target.value as ShopifyFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="mapped">Összekötve</option><option value="unmapped">Nincs Shopifyon</option><option value="error">Szinkronhiba</option></select></label>
+              <label className={label}>Shopify<select className={select} value={shopifyFilter} onChange={(e) => { setShopifyFilter(e.target.value as ShopifyFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="mapped">Összekötve</option><option value="exported">Exportálva, párosításra vár</option><option value="unmapped">Nincs Shopifyon</option><option value="error">Szinkronhiba</option></select></label>
               <label className={label}>Sorrend<select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}><option value="name">Terméknév</option><option value="brand">Márka</option><option value="stock_desc">Készlet csökkenő</option><option value="stock_asc">Készlet növekvő</option><option value="value_desc">Érték</option><option value="incoming_desc">Utolsó bevételezés</option><option value="missing">Javítandók előre</option></select></label>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
