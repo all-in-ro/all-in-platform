@@ -1,4 +1,4 @@
-	export type AifSupplier = {
+export type AifSupplier = {
   id: string;
   code: string;
   name: string;
@@ -339,9 +339,17 @@ export type AifInventoryItem = {
   shopify_last_synced_at?: string | null;
   shopify_last_error?: string | null;
   shopify_outbox_error?: string | null;
+  shopify_export_id?: string | null;
+  shopify_export_item_status?: string | null;
+  shopify_export_status?: string | null;
+  shopify_exported_at?: string | null;
+  shopify_export_reconciled_at?: string | null;
+  shopify_export_errors?: string[] | null;
+  shopify_export_warnings?: string[] | null;
+  shopify_export_pending?: boolean | null;
 };
 
-export type AifSelectedWorkAction = "label" | "order" | "move";
+export type AifSelectedWorkAction = "label" | "order" | "move" | "shopify";
 
 export type AifSelectedWorkItem = AifInventoryItem & {
   selected_variant_id?: string | null;
@@ -1621,6 +1629,104 @@ export function apiAifShopifyProcess(limit = 20) {
     method: "POST",
     body: JSON.stringify({ limit }),
   });
+}
+
+export type AifShopifyProductExportSelectionMode = "selected_variants" | "all_model_variants";
+export type AifShopifyProductExportStatus = "draft" | "active";
+
+export type AifShopifyProductExportPreviewItem = {
+  variantId: string;
+  modelId: string;
+  title?: string | null;
+  brand?: string | null;
+  color?: string | null;
+  size?: string | null;
+  sku?: string | null;
+  imageUrl?: string | null;
+  availableQty?: number | string | null;
+  mapped?: boolean | null;
+  state: "valid" | "invalid" | "skipped_mapped" | string;
+  errors: string[];
+  warnings: string[];
+};
+
+export type AifShopifyProductExportPreview = {
+  ok: true;
+  selectionMode: AifShopifyProductExportSelectionMode;
+  productStatus: AifShopifyProductExportStatus;
+  location: { id?: string | null; name: string };
+  summary: {
+    selectedVariantCount: number;
+    modelCount: number;
+    validModelCount: number;
+    variantCount: number;
+    validVariantCount: number;
+    invalidVariantCount: number;
+    skippedMappedCount: number;
+    warningCount: number;
+    totalAvailableQty: number;
+    locationId?: string | null;
+    locationName: string;
+  };
+  items: AifShopifyProductExportPreviewItem[];
+};
+
+export type AifShopifyProductExportCreateResult = {
+  ok: true;
+  exportId: string;
+  fileName: string;
+  downloadUrl: string;
+  summary: AifShopifyProductExportPreview["summary"];
+  location: AifShopifyProductExportPreview["location"];
+  productRows: number;
+  inventoryRows: number;
+};
+
+export function apiAifPreviewShopifyProductExport(input: {
+  variantIds: string[];
+  selectionMode?: AifShopifyProductExportSelectionMode;
+  productStatus?: AifShopifyProductExportStatus;
+  includeMapped?: boolean;
+}) {
+  return fetchAifJSON<AifShopifyProductExportPreview>("/shopify/product-exports/preview", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifCreateShopifyProductExport(input: {
+  variantIds: string[];
+  selectionMode?: AifShopifyProductExportSelectionMode;
+  productStatus?: AifShopifyProductExportStatus;
+  includeMapped?: boolean;
+}) {
+  return fetchAifJSON<AifShopifyProductExportCreateResult>("/shopify/product-exports", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifListShopifyProductExports(limit = 20) {
+  return fetchAifJSON<{ ok: true; items: Array<Record<string, unknown>> }>(`/shopify/product-exports?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export function apiAifReconcileShopifyProductExport(exportId: string, options?: { enqueueStock?: boolean }) {
+  return fetchAifJSON<{
+    ok: true;
+    exportId: string;
+    status: string;
+    mapped: number;
+    errors: number;
+    errorItems?: Array<{ variantId?: string; sku?: string; error?: string }>;
+    totals?: Record<string, number | string>;
+  }>(`/shopify/product-exports/${encodeURIComponent(exportId)}/reconcile`, {
+    method: "POST",
+    body: JSON.stringify({ enqueueStock: options?.enqueueStock !== false }),
+  });
+}
+
+export function aifShopifyProductExportDownloadUrl(exportId: string) {
+  return `${AIF_BASE}/shopify/product-exports/${encodeURIComponent(exportId)}/download`;
 }
 
 export type AifShopifyAddress = {
