@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   ensureAifShopifyTables,
-  enqueueAifShopifyVariant,
   getAifShopifyStatus,
   shopifyGraphql,
 } from "./aifShopify.js";
@@ -798,7 +797,6 @@ export async function createAifShopifyProductExport(client, options = {}) {
   }
 
   const { productRows, byVariant: productByVariant } = productRowsForItems(prepared.validItems, prepared.productStatus);
-  const { inventoryRows, byVariant: inventoryByVariant } = inventoryRowsForItems(prepared.validItems, prepared.location.name);
   const reportRows = reportRowsForItems(prepared.items);
   const exportId = randomUUID();
   const actor = text(options.actor || "system") || "system";
@@ -848,7 +846,7 @@ export async function createAifShopifyProductExport(client, options = {}) {
           item.validation_errors,
           item.validation_warnings,
           productByVariant.has(item.variant_id) ? JSON.stringify(productByVariant.get(item.variant_id)) : null,
-          inventoryByVariant.has(item.variant_id) ? JSON.stringify(inventoryByVariant.get(item.variant_id)) : null,
+          null,
           JSON.stringify({
             title: item.shopify_title || item.title_ro,
             brand: item.brand_name,
@@ -872,121 +870,17 @@ export async function createAifShopifyProductExport(client, options = {}) {
   return {
     ok: true,
     exportId,
-    fileName: `allinfashion_shopify_export_${new Date().toISOString().slice(0, 10)}_${exportId.slice(0, 8)}.zip`,
+    fileName: `allinfashion_shopify_products_${new Date().toISOString().slice(0, 10)}_${exportId.slice(0, 8)}.csv`,
     downloadUrl: `/api/aif/shopify/product-exports/${encodeURIComponent(exportId)}/download`,
     summary: prepared.summary,
     location: prepared.location,
     productRows: productRows.length,
-    inventoryRows: inventoryRows.length,
+    inventoryRows: 0,
+    stockMode: "pair_then_sync",
   };
 }
 
-function crc32Table() {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    table[n] = c >>> 0;
-  }
-  return table;
-}
-
-const CRC_TABLE = crc32Table();
-
-function crc32(buffer) {
-  let crc = 0xffffffff;
-  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function dosDateTime(date = new Date()) {
-  const year = Math.max(1980, date.getFullYear());
-  const dosTime = ((date.getHours() & 0x1f) << 11) | ((date.getMinutes() & 0x3f) << 5) | ((Math.floor(date.getSeconds() / 2)) & 0x1f);
-  const dosDate = (((year - 1980) & 0x7f) << 9) | (((date.getMonth() + 1) & 0x0f) << 5) | (date.getDate() & 0x1f);
-  return { dosTime, dosDate };
-}
-
-function zipFiles(files) {
-  const localParts = [];
-  const centralParts = [];
-  let offset = 0;
-  const { dosTime, dosDate } = dosDateTime();
-
-  for (const file of files) {
-    const name = Buffer.from(file.name, "utf8");
-    const data = Buffer.isBuffer(file.data) ? file.data : Buffer.from(String(file.data), "utf8");
-    const crc = crc32(data);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0x0800, 6);
-    local.writeUInt16LE(0, 8);
-    local.writeUInt16LE(dosTime, 10);
-    local.writeUInt16LE(dosDate, 12);
-    local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(data.length, 18);
-    local.writeUInt32LE(data.length, 22);
-    local.writeUInt16LE(name.length, 26);
-    local.writeUInt16LE(0, 28);
-    localParts.push(local, name, data);
-
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(20, 4);
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(0, 10);
-    central.writeUInt16LE(dosTime, 12);
-    central.writeUInt16LE(dosDate, 14);
-    central.writeUInt32LE(crc, 16);
-    central.writeUInt32LE(data.length, 20);
-    central.writeUInt32LE(data.length, 24);
-    central.writeUInt16LE(name.length, 28);
-    central.writeUInt16LE(0, 30);
-    central.writeUInt16LE(0, 32);
-    central.writeUInt16LE(0, 34);
-    central.writeUInt16LE(0, 36);
-    central.writeUInt32LE(0, 38);
-    central.writeUInt32LE(offset, 42);
-    centralParts.push(central, name);
-    offset += local.length + name.length + data.length;
-  }
-
-  const centralDirectory = Buffer.concat(centralParts);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(0, 4);
-  end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(centralDirectory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  end.writeUInt16LE(0, 20);
-  return Buffer.concat([...localParts, centralDirectory, end]);
-}
-
-function readmeForExport(exportRow, itemCount) {
-  return `AllInFashion -> Shopify termékexport\n\n` +
-    `Export ID: ${exportRow.id}\n` +
-    `Létrehozva: ${new Date(exportRow.created_at).toLocaleString("hu-HU")}\n` +
-    `Termékállapot: ${exportRow.product_status}\n` +
-    `Variánsok: ${itemCount}\n` +
-    `Induló Shopify helyszín: ${exportRow.shopify_location_name}\n\n` +
-    `IMPORT SORREND\n` +
-    `1. Shopify Admin -> Products -> Import. Töltsd fel a 01_shopify_products.csv fájlt.\n` +
-    `2. Új termékeknél NE jelöld be az "Overwrite products with matching handles" opciót.\n` +
-    `3. Várd meg, amíg a termékimport befejeződik.\n` +
-    `4. Shopify Admin -> Products -> Inventory -> Import. Töltsd fel a 02_shopify_inventory_miercurea_ciuc.csv fájlt.\n` +
-    `5. Az AllIn Raktárban nyisd meg a Shopify export listát és kattints az "Import elkészült, párosítás" gombra.\n\n` +
-    `FONTOS\n` +
-    `- A Shopify SKU és Barcode mező az AllIn mentett vonalkódját használja.\n` +
-    `- A készlet teljes elérhető mennyisége induláskor a ${exportRow.shopify_location_name} helyre kerül.\n` +
-    `- Az online_shop AllIn hely nincs beleszámítva.\n` +
-    `- A párosítás után a készletmozgásokat már kizárólag az AllIn rendszerben kezeld.\n` +
-    `- A 03_export_report.csv tartalmazza a kihagyott és hibás sorokat is.\n`;
-}
-
-export async function getAifShopifyProductExportArchive(client, exportId) {
+export async function getAifShopifyProductExportCsv(client, exportId) {
   await ensureAifShopifyExportSchema(client);
   const exportResult = await client.query(`SELECT * FROM aif_shopify_product_exports WHERE id::text=$1 LIMIT 1`, [text(exportId)]);
   if (!exportResult.rowCount) return null;
@@ -997,30 +891,11 @@ export async function getAifShopifyProductExportArchive(client, exportId) {
      ORDER BY model_id, created_at, variant_id`,
     [exportRow.id]
   );
-  const productRows = items.rows.filter((row) => row.item_status === "exported_pending" && row.product_row).map((row) => row.product_row);
-  const inventoryRows = items.rows.filter((row) => row.item_status === "exported_pending" && row.inventory_row).map((row) => row.inventory_row);
-  const reportRows = reportRowsForItems(items.rows.map((row) => ({
-    ...(row.snapshot || {}),
-    export_state: row.item_status,
-    shopify_title: row.snapshot?.title,
-    title_ro: row.snapshot?.title,
-    brand_name: row.snapshot?.brand,
-    color_name: row.snapshot?.color,
-    size: row.snapshot?.size,
-    sku: row.sku,
-    internal_sku: row.snapshot?.internalSku,
-    export_available_qty: row.snapshot?.availableQty,
-    shopify_mapped: row.snapshot?.mapped,
-    validation_errors: row.validation_errors || [],
-    validation_warnings: row.validation_warnings || [],
-  })));
-  const fileName = `allinfashion_shopify_export_${new Date(exportRow.created_at).toISOString().slice(0, 10)}_${String(exportRow.id).slice(0, 8)}.zip`;
-  const archive = zipFiles([
-    { name: "01_shopify_products.csv", data: csvFromRows(PRODUCT_HEADERS, productRows) },
-    { name: "02_shopify_inventory_miercurea_ciuc.csv", data: csvFromRows(INVENTORY_HEADERS, inventoryRows) },
-    { name: "03_export_report.csv", data: csvFromRows(REPORT_HEADERS, reportRows) },
-    { name: "README.txt", data: readmeForExport(exportRow, productRows.length) },
-  ]);
+  const productRows = items.rows
+    .filter((row) => ["exported_pending", "mapped", "error"].includes(String(row.item_status)) && row.product_row)
+    .map((row) => row.product_row);
+  const fileName = `allinfashion_shopify_products_${new Date(exportRow.created_at).toISOString().slice(0, 10)}_${String(exportRow.id).slice(0, 8)}.csv`;
+  const csv = Buffer.from(csvFromRows(PRODUCT_HEADERS, productRows), "utf8");
   await client.query(
     `UPDATE aif_shopify_product_exports
      SET status=CASE WHEN status='prepared' THEN 'downloaded' ELSE status END,
@@ -1028,7 +903,7 @@ export async function getAifShopifyProductExportArchive(client, exportId) {
      WHERE id=$1`,
     [exportRow.id]
   );
-  return { fileName, archive, itemCount: productRows.length, export: exportRow };
+  return { fileName, csv, itemCount: productRows.length, export: exportRow };
 }
 
 async function loadAllShopifyVariants() {
@@ -1056,6 +931,31 @@ async function loadAllShopifyVariants() {
     if (!after) break;
   }
   return variants;
+}
+
+async function enqueueInitialMiercureaProductExportStock(client, variantId, quantity, reason = "product_export_reconcile") {
+  await ensureAifShopifyTables(client);
+  const desiredMiercureaQty = Math.max(0, integer(quantity, 0));
+  const idempotencyKey = randomUUID();
+  await client.query(
+    `INSERT INTO aif_shopify_sync_outbox (
+       variant_id, desired_csikszereda_qty, desired_kezdi_qty, reason,
+       status, attempts, idempotency_key, next_attempt_at, locked_at, last_error, created_at, updated_at
+     ) VALUES ($1::uuid,$2,0,$3,'pending',0,$4,now(),NULL,NULL,now(),now())
+     ON CONFLICT (variant_id) DO UPDATE SET
+       desired_csikszereda_qty=EXCLUDED.desired_csikszereda_qty,
+       desired_kezdi_qty=0,
+       reason=EXCLUDED.reason,
+       status='pending',
+       attempts=0,
+       idempotency_key=EXCLUDED.idempotency_key,
+       next_attempt_at=now(),
+       locked_at=NULL,
+       last_error=NULL,
+       updated_at=now()`,
+    [text(variantId), desiredMiercureaQty, text(reason) || "product_export_reconcile", idempotencyKey]
+  );
+  return { queued: true, csikszereda: desiredMiercureaQty, kezdi: 0, idempotencyKey };
 }
 
 export async function reconcileAifShopifyProductExport(client, exportId, options = {}) {
@@ -1147,7 +1047,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         [exportRow.id, item.variant_id]
       );
       if (options.enqueueStock !== false) {
-        await enqueueAifShopifyVariant(client, item.variant_id, "product_export_reconcile");
+        await enqueueInitialMiercureaProductExportStock(client, item.variant_id, item.snapshot?.availableQty, "product_export_reconcile");
       }
       mapped += 1;
     } catch (error) {
