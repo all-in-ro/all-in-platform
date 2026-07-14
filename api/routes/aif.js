@@ -1,6 +1,11 @@
 import express from "express";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
+  listAifShopifyInboundEvents,
+  processAifShopifyInboundBatch,
+  receiveAifShopifyInventoryWebhook,
+} from "../lib/aifShopifyInbound.js";
+import {
   auditAifShopifySkus,
   enqueueAllMappedAifShopifyVariants,
   ensureAifShopifyTables,
@@ -17,7 +22,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   const AIF_JSON_BODY_LIMIT = "80mb";
 
-  router.use(express.json({ limit: AIF_JSON_BODY_LIMIT }));
+  router.use(express.json({
+    limit: AIF_JSON_BODY_LIMIT,
+    verify: (req, _res, buffer) => {
+      req.rawBody = Buffer.from(buffer);
+    },
+  }));
   router.use(express.urlencoded({ extended: true, limit: AIF_JSON_BODY_LIMIT }));
   router.use((err, _req, res, next) => {
     if (err?.type === "entity.too.large" || err?.status === 413 || err?.statusCode === 413) {
@@ -8456,6 +8466,47 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  // Shopify -> AllIn inventory webhook. Public endpoint, Shopify HMAC védi.
+  router.post("/shopify/webhooks/inventory-levels-update", async (req, res) => {
+    try {
+      const result = await receiveAifShopifyInventoryWebhook(pool, {
+        rawBody: req.rawBody,
+        payload: req.body,
+        headers: req.headers,
+      });
+      if (!result.accepted) {
+        return res.status(Number(result.statusCode || 400)).json({ ok: false, error: result.error, topic: result.topic || null });
+      }
+      return res.status(200).json({ ok: true, duplicate: result.duplicate, webhookId: result.webhookId });
+    } catch (e) {
+      console.error("AIF Shopify inventory webhook receive failed", e);
+      return res.status(500).json({ ok: false, error: e?.message || "A Shopify webhook mentése nem sikerült." });
+    }
+  });
+
+  router.post("/shopify/inbound/process", requireAdminOrSecret, async (req, res) => {
+    try {
+      const result = await processAifShopifyInboundBatch(pool, { limit: Number(req.body?.limit || 20) });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("AIF Shopify inbound process failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify bejövő készlet feldolgozása nem sikerült.", code: e?.code || null });
+    }
+  });
+
+  router.get("/shopify/inbound/events", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const items = await listAifShopifyInboundEvents(client, { limit: Number(req.query.limit || 50) });
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error("AIF Shopify inbound events list failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify webhook események betöltése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
 
   // Shopify integráció, 1. fázis: kapcsolat, SKU-audit, biztonságos térképezés és kézi outbox teszt.
   // SHOPIFY_SYNC_ENABLED=false mellett ezek az útvonalak nem írnak készletet a Shopifyba.
