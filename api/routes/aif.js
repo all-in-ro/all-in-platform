@@ -24,13 +24,23 @@ import {
   processAifShopifyOutboxBatch,
 } from "../lib/aifShopify.js";
 
-
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
   startAifShopifyEmbeddedWorker(pool);
 
   const AIF_JSON_BODY_LIMIT = "80mb";
+  let aifShopifyInventorySchemaPromise = null;
+
+  function ensureAifShopifyInventorySchema() {
+    if (!aifShopifyInventorySchemaPromise) {
+      aifShopifyInventorySchemaPromise = ensureAifShopifyTables(pool).catch((error) => {
+        aifShopifyInventorySchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifShopifyInventorySchemaPromise;
+  }
 
   router.use(express.json({
     limit: AIF_JSON_BODY_LIMIT,
@@ -7408,6 +7418,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.delete("/selected-variants", requireAuthed, clearSelectedVariants);
 
   router.get("/inventory", requireAuthed, async (req, res) => {
+    await ensureAifShopifyInventorySchema();
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const includeZero = ["1", "true", "yes"].includes(text(req.query.includeZero || req.query.include_zero).toLowerCase());
@@ -7531,6 +7542,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        SELECT
          v.id AS variant_id,
          v.internal_sku,
+         (svm.variant_id IS NOT NULL) AS shopify_mapped,
+         COALESCE(sso.status, svm.sync_status) AS shopify_sync_status,
+         sso.status AS shopify_outbox_status,
+         svm.shopify_product_id,
+         svm.shopify_variant_id,
+         svm.shopify_inventory_item_id,
+         svm.shopify_product_title,
+         svm.shopify_variant_title,
+         svm.shopify_product_status,
+         svm.last_synced_at AS shopify_last_synced_at,
+         svm.last_error AS shopify_last_error,
+         sso.last_error AS shopify_outbox_error,
          COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,''), NULLIF(lid.normalized->>'barcode',''), NULLIF(lid.normalized->>'supplierBarcode','')) AS barcode,
          COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,''), NULLIF(lid.normalized->>'barcode',''), NULLIF(lid.normalized->>'supplierBarcode','')) AS display_barcode,
          v.barcode AS variant_barcode,
@@ -7596,6 +7619,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LEFT JOIN latest_import_detail lid ON lid.variant_id=v.id
        LEFT JOIN supplier_info si ON si.variant_id=v.id
        LEFT JOIN incoming_info ii ON ii.variant_id=v.id
+       LEFT JOIN aif_shopify_variant_map svm ON svm.variant_id=v.id
+       LEFT JOIN aif_shopify_sync_outbox sso ON sso.variant_id=v.id
        WHERE ${where.join(" AND ")}
        ORDER BY COALESCE(b.name,'') ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC
        LIMIT ${limitParam}`,
