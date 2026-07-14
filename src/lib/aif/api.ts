@@ -1610,3 +1610,203 @@ export function apiAifShopifyProcess(limit = 20) {
     body: JSON.stringify({ limit }),
   });
 }
+
+export type AifShopifyAddress = {
+  first_name?: string | null;
+  last_name?: string | null;
+  name?: string | null;
+  company?: string | null;
+  address1?: string | null;
+  address2?: string | null;
+  city?: string | null;
+  province?: string | null;
+  province_code?: string | null;
+  zip?: string | null;
+  country?: string | null;
+  country_code?: string | null;
+  phone?: string | null;
+  [key: string]: unknown;
+};
+
+export type AifShopifyOrderSummary = {
+  id: string;
+  shopify_order_id?: string | number | null;
+  shopify_graphql_id?: string | null;
+  order_number?: string | number | null;
+  name?: string | null;
+  status?: string | null;
+  financial_status?: string | null;
+  fulfillment_status?: string | null;
+  currency?: string | null;
+  subtotal_price?: string | number | null;
+  total_discounts?: string | number | null;
+  total_tax?: string | number | null;
+  total_price?: string | number | null;
+  total_refunded?: string | number | null;
+  customer_id?: string | number | null;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  shipping_address?: AifShopifyAddress | string | null;
+  billing_address?: AifShopifyAddress | string | null;
+  line_count?: number | string | null;
+  mapped_line_count?: number | string | null;
+  unmapped_line_count?: number | string | null;
+  refund_count?: number | string | null;
+  test?: boolean | null;
+  test_order?: boolean | null;
+  processed_at?: string | null;
+  cancelled_at?: string | null;
+  closed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  raw?: Record<string, unknown> | null;
+  payload?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+export type AifShopifyOrderLine = {
+  id?: string | null;
+  order_id?: string | null;
+  shopify_line_item_id?: string | number | null;
+  shopify_product_id?: string | number | null;
+  shopify_variant_id?: string | number | null;
+  aif_variant_id?: string | null;
+  allin_variant_id?: string | null;
+  mapped_variant_id?: string | null;
+  sku?: string | null;
+  internal_sku?: string | null;
+  title?: string | null;
+  variant_title?: string | null;
+  allin_title?: string | null;
+  title_ro?: string | null;
+  color?: string | null;
+  color_name?: string | null;
+  size?: string | null;
+  quantity?: number | string | null;
+  current_quantity?: number | string | null;
+  refundable_quantity?: number | string | null;
+  price?: string | number | null;
+  total_discount?: string | number | null;
+  fulfillment_status?: string | null;
+  mapped?: boolean | null;
+  raw?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+export type AifShopifyRefundLine = {
+  id?: string | null;
+  refund_id?: string | null;
+  order_line_id?: string | null;
+  shopify_refund_line_id?: string | number | null;
+  shopify_line_item_id?: string | number | null;
+  aif_variant_id?: string | null;
+  sku?: string | null;
+  title?: string | null;
+  quantity?: number | string | null;
+  subtotal?: string | number | null;
+  total_tax?: string | number | null;
+  restock_type?: string | null;
+  location_id?: string | number | null;
+  raw?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+export type AifShopifyRefund = {
+  id?: string | null;
+  order_id?: string | null;
+  shopify_refund_id?: string | number | null;
+  amount?: string | number | null;
+  currency?: string | null;
+  reason?: string | null;
+  note?: string | null;
+  status?: string | null;
+  restock?: boolean | null;
+  location_id?: string | number | null;
+  location_name?: string | null;
+  created_at?: string | null;
+  processed_at?: string | null;
+  lines?: AifShopifyRefundLine[];
+  refund_lines?: AifShopifyRefundLine[];
+  raw?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+export type AifShopifyOrderEvent = {
+  id?: string | null;
+  webhook_id?: string | null;
+  topic?: string | null;
+  status?: string | null;
+  attempts?: number | string | null;
+  error?: string | null;
+  received_at?: string | null;
+  processed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  order_id?: string | null;
+  shopify_order_id?: string | number | null;
+  result?: Record<string, unknown> | string | null;
+  payload?: Record<string, unknown> | null;
+  raw?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+export type AifShopifyOrderListResponse = {
+  ok?: true;
+  items: AifShopifyOrderSummary[];
+  count?: number;
+  total?: number;
+  totals?: Record<string, number | string>;
+};
+
+export type AifShopifyOrderDetail = {
+  ok?: true;
+  item?: AifShopifyOrderSummary;
+  order?: AifShopifyOrderSummary;
+  lines?: AifShopifyOrderLine[];
+  orderLines?: AifShopifyOrderLine[];
+  order_lines?: AifShopifyOrderLine[];
+  refunds?: AifShopifyRefund[];
+  refundLines?: AifShopifyRefundLine[];
+  refund_lines?: AifShopifyRefundLine[];
+  events?: AifShopifyOrderEvent[];
+  [key: string]: unknown;
+};
+
+export function apiAifListShopifyOrders(options?: {
+  limit?: number;
+  search?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("limit", String(options?.limit || 100));
+  if (options?.search?.trim()) q.set("q", options.search.trim());
+  if (options?.status?.trim()) q.set("status", options.status.trim());
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
+  return fetchAifJSON<AifShopifyOrderListResponse>(`/shopify/orders?${q.toString()}`);
+}
+
+export function apiAifGetShopifyOrder(id: string) {
+  return fetchAifJSON<AifShopifyOrderDetail>(`/shopify/orders/${encodeURIComponent(id)}`);
+}
+
+export function apiAifListShopifyOrderEvents(options?: {
+  limit?: number;
+  status?: string;
+  topic?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("limit", String(options?.limit || 50));
+  if (options?.status?.trim()) q.set("status", options.status.trim());
+  if (options?.topic?.trim()) q.set("topic", options.topic.trim());
+  return fetchAifJSON<{ ok?: true; items: AifShopifyOrderEvent[] }>(`/shopify/order-events?${q.toString()}`);
+}
+
+export const apiAifShopifyOrders = apiAifListShopifyOrders;
+export const apiAifShopifyOrder = apiAifGetShopifyOrder;
+export const apiAifShopifyOrderEvents = apiAifListShopifyOrderEvents;
