@@ -1,4 +1,13 @@
 import express from "express";
+import {
+  auditAifShopifySkus,
+  enqueueAllMappedAifShopifyVariants,
+  ensureAifShopifyTables,
+  getAifShopifyStatus,
+  listAifShopifyMappings,
+  mapAifShopifyVariants,
+  processAifShopifyOutboxBatch,
+} from "../lib/aifShopify.js";
 
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
@@ -8444,6 +8453,100 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  // Shopify integráció, 1. fázis: kapcsolat, SKU-audit, biztonságos térképezés és kézi outbox teszt.
+  // SHOPIFY_SYNC_ENABLED=false mellett ezek az útvonalak nem írnak készletet a Shopifyba.
+  router.post("/shopify/schema", requireAdminOrSecret, async (_req, res) => {
+    const client = await pool.connect();
+    try {
+      await ensureAifShopifyTables(client);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("AIF Shopify schema ensure failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify szinkron táblák létrehozása nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/status", requireAdminOrSecret, async (_req, res) => {
+    const client = await pool.connect();
+    try {
+      const status = await getAifShopifyStatus(client);
+      res.json(status);
+    } catch (e) {
+      console.error("AIF Shopify status failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify kapcsolat ellenőrzése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/audit", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const audit = await auditAifShopifySkus(client, { sampleLimit: Number(req.query.sample || req.query.limit || 30) });
+      res.json({ ok: true, audit });
+    } catch (e) {
+      console.error("AIF Shopify SKU audit failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify SKU-audit nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/map", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
+      const result = await mapAifShopifyVariants(client, {
+        dryRun,
+        sampleLimit: Number(req.body?.sampleLimit || req.body?.sample_limit || 30),
+      });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("AIF Shopify variant map failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify variánsok összekapcsolása nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/mappings", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const items = await listAifShopifyMappings(client, { limit: Number(req.query.limit || 200) });
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error("AIF Shopify mappings list failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify kapcsolatok betöltése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/enqueue-all", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await enqueueAllMappedAifShopifyVariants(client, text(req.body?.reason || "manual_full_sync"));
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("AIF Shopify enqueue all failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify szinkronlista előkészítése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/process", requireAdminOrSecret, async (req, res) => {
+    try {
+      const result = await processAifShopifyOutboxBatch(pool, { limit: Number(req.body?.limit || 20) });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("AIF Shopify outbox process failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify szinkron feldolgozása nem sikerült.", code: e?.code || null });
+    }
+  });
 
   router.get("/health", requireAuthed, async (_req, res) => {
     const r = await pool.query(`SELECT count(*)::int AS suppliers FROM aif_suppliers`);
