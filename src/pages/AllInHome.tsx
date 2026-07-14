@@ -9,6 +9,7 @@ import {
   Settings,
   LogOut,
   Building2,
+  ShoppingBag,
 } from "lucide-react";
 
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
@@ -156,6 +157,11 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinreceptions")}>
               <span>RECEPTIÓK</span>
               <ClipboardList className="h-4 w-4" />
+            </MenuButton>
+
+            <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinshopifyorders")}>
+              <span>SHOPIFY RENDELÉSEK</span>
+              <ShoppingBag className="h-4 w-4" />
             </MenuButton>
 
             <MenuButton className={mainBtn} onClick={() => (window.location.hash = "#allinsuppliers")}>
