@@ -4,6 +4,7 @@ import Login from "./pages/Login";
 import AllInHome from "./pages/AllInHome";
 import AllInIncoming from "./pages/AllInIncoming";
 import AllInOrderHistory from "./pages/AllInOrderHistory";
+import AllInShopifyOrders from "./pages/AllInShopifyOrders";
 import AllInWarehouse from "./pages/AllInWarehouse";
 import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 
@@ -28,6 +29,7 @@ type ScreenName =
   | "home"
   | "incoming"
   | "orders"
+  | "shopifyorders"
   | "warehouse"
   | "reserved"
   | "stockmoves"
@@ -69,6 +71,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "home") return { name: "home" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
+  if (key === "shopifyorders" || key === "shopify-orders" || key === "webshoporders" || key === "webshop-orders") return { name: "shopifyorders" };
   if (key === "warehouse") return { name: "warehouse" };
   if (key === "reserved") return { name: "reserved" };
   if (key === "stockmoves") return { name: "stockmoves" };
@@ -86,6 +89,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allin" || key === "allin-home") return { name: "home" };
   if (key === "allinincoming" || key === "allin-incoming") return { name: "incoming" };
   if (key === "allinorderhistory" || key === "allin-orderhistory") return { name: "orders" };
+  if (key === "allinshopifyorders" || key === "allin-shopifyorders" || key === "allin-shopify-orders" || key === "aif-shopify-orders") return { name: "shopifyorders" };
   if (key === "allinwarehouse" || key === "allin-warehouse") return { name: "warehouse" };
 
   if (key === "allinreserved") return { name: "reserved" };
@@ -219,6 +223,7 @@ export default function App() {
       {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
+      {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
       {screen.name === "warehouse" && (warehouseMobile ? <AllInWarehouseMobile {...(commonProps as any)} /> : <AllInWarehouse {...(commonProps as any)} />)}
 
       {screen.name === "reserved" && <AllInReserved {...(commonProps as any)} />}
