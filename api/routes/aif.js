@@ -1,4 +1,5 @@
 import express from "express";
+import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
   auditAifShopifySkus,
   enqueueAllMappedAifShopifyVariants,
@@ -11,6 +12,8 @@ import {
 
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
+
+  startAifShopifyEmbeddedWorker(pool);
 
   const AIF_JSON_BODY_LIMIT = "80mb";
 
