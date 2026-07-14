@@ -943,7 +943,7 @@ async function loadAllShopifyVariants() {
         barcode
         title
         inventoryItem { id }
-        product { id title status handle }
+        product { id title status handle category { id name fullName } }
       }
     }
   }`;
@@ -958,6 +958,181 @@ async function loadAllShopifyVariants() {
     if (!after) break;
   }
   return variants;
+}
+
+
+async function activateShopifyProduct(productId, vendor) {
+  const mutation = `mutation AifActivateImportedProduct($product: ProductUpdateInput!) {
+    productUpdate(product: $product) {
+      product { id status vendor }
+      userErrors { field message }
+    }
+  }`;
+  const response = await shopifyGraphql(mutation, {
+    product: {
+      id: text(productId),
+      status: "ACTIVE",
+      ...(text(vendor) ? { vendor: text(vendor) } : {}),
+    },
+  });
+  const payload = response.data?.productUpdate;
+  if (payload?.userErrors?.length) {
+    throw Object.assign(new Error(payload.userErrors.map((row) => row.message).join(" | ")), {
+      code: "shopify_product_activate_failed",
+      payload,
+    });
+  }
+  return payload?.product || null;
+}
+
+async function onlineStorePublicationId() {
+  const query = `query AifOnlineStorePublication {
+    publications(first: 50) {
+      nodes {
+        id
+        supportsFuturePublishing
+        catalog { id title }
+      }
+    }
+  }`;
+  let response;
+  try {
+    response = await shopifyGraphql(query);
+  } catch (error) {
+    const message = error?.message || String(error);
+    throw Object.assign(
+      new Error(`${message} Az Online áruház automatikus közzétételéhez a Shopify alkalmazásnak read_publications és write_publications jogosultság kell.`),
+      { code: "shopify_publication_scope_missing", cause: error }
+    );
+  }
+  const publications = response.data?.publications?.nodes || [];
+  const byTitle = publications.find((row) => normalizeKey(row?.catalog?.title).includes("online store"));
+  const futureCapable = publications.find((row) => row?.supportsFuturePublishing === true);
+  const found = byTitle || futureCapable || null;
+  if (!found?.id) {
+    throw Object.assign(new Error("A Shopify Online Store publication nem található."), {
+      code: "shopify_online_store_publication_missing",
+      publications,
+    });
+  }
+  return text(found.id);
+}
+
+async function publishShopifyProductToOnlineStore(productId, publicationId) {
+  const mutation = `mutation AifPublishImportedProduct($id: ID!, $publicationId: ID!, $input: [PublicationInput!]!) {
+    publishablePublish(id: $id, input: $input) {
+      publishable { publishedOnPublication(publicationId: $publicationId) }
+      userErrors { field message }
+    }
+  }`;
+  const response = await shopifyGraphql(mutation, {
+    id: text(productId),
+    publicationId: text(publicationId),
+    input: [{ publicationId: text(publicationId) }],
+  });
+  const payload = response.data?.publishablePublish;
+  if (payload?.userErrors?.length) {
+    throw Object.assign(new Error(payload.userErrors.map((row) => row.message).join(" | ")), {
+      code: "shopify_online_store_publish_failed",
+      payload,
+    });
+  }
+  return Boolean(payload?.publishable?.publishedOnPublication);
+}
+
+function isBrandDefinition(definition) {
+  const name = normalizeKey(definition?.name).replace(/[^a-z0-9]+/g, "_");
+  const key = normalizeKey(definition?.key).replace(/[^a-z0-9]+/g, "_");
+  return ["brand", "marka", "marca"].includes(name) || ["brand", "marka", "marca"].includes(key);
+}
+
+async function applicableProductMetafieldDefinitions(categoryId) {
+  const category = text(categoryId);
+  if (!category) return [];
+  const query = `query AifCategoryMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier) {
+    categoryDefinitions: metafieldDefinitions(ownerType: PRODUCT, first: 250, constraintSubtype: $constraint) {
+      nodes { name namespace key type { name } }
+    }
+    brandCandidates: metafieldDefinitions(ownerType: PRODUCT, first: 50, query: "Brand") {
+      nodes { name namespace key type { name } }
+    }
+    exactShopifyBrand: metafieldDefinitions(ownerType: PRODUCT, first: 10, namespace: "shopify", key: "brand") {
+      nodes { name namespace key type { name } }
+    }
+  }`;
+  const response = await shopifyGraphql(query, {
+    constraint: { key: "category", value: category },
+  });
+  const combined = [
+    ...(response.data?.categoryDefinitions?.nodes || []),
+    ...(response.data?.brandCandidates?.nodes || []),
+    ...(response.data?.exactShopifyBrand?.nodes || []),
+  ];
+  const seen = new Set();
+  return combined.filter((row) => {
+    const id = `${text(row?.namespace)}.${text(row?.key)}`;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function metafieldTextValue(typeName, value) {
+  const type = text(typeName);
+  const clean = text(value);
+  if (!clean) return null;
+  if (["single_line_text_field", "multi_line_text_field"].includes(type)) return clean;
+  if (type === "list.single_line_text_field") return JSON.stringify([clean]);
+  return null;
+}
+
+async function setShopifyCategoryBrand({ productId, categoryId, brand }) {
+  if (!text(productId) || !text(categoryId) || !text(brand)) {
+    return { updated: false, skipped: true, reason: "missing_product_category_or_brand" };
+  }
+  const definitions = await applicableProductMetafieldDefinitions(categoryId);
+  const definition = definitions.find(isBrandDefinition) || null;
+  if (!definition) {
+    return { updated: false, skipped: true, reason: "brand_definition_missing" };
+  }
+  const typeName = text(definition.type?.name);
+  const value = metafieldTextValue(typeName, brand);
+  if (value === null) {
+    return {
+      updated: false,
+      skipped: true,
+      reason: "brand_definition_type_unsupported",
+      definition: { name: definition.name, namespace: definition.namespace, key: definition.key, type: typeName },
+    };
+  }
+  const mutation = `mutation AifSetImportedProductBrand($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      metafields { id namespace key value type }
+      userErrors { field message code }
+    }
+  }`;
+  const response = await shopifyGraphql(mutation, {
+    metafields: [{
+      ownerId: text(productId),
+      namespace: text(definition.namespace),
+      key: text(definition.key),
+      type: typeName,
+      value,
+    }],
+  });
+  const payload = response.data?.metafieldsSet;
+  if (payload?.userErrors?.length) {
+    throw Object.assign(new Error(payload.userErrors.map((row) => row.message).join(" | ")), {
+      code: "shopify_category_brand_set_failed",
+      payload,
+      definition,
+    });
+  }
+  return {
+    updated: Boolean(payload?.metafields?.length),
+    skipped: false,
+    definition: { name: definition.name, namespace: definition.namespace, key: definition.key, type: typeName },
+  };
 }
 
 async function enqueueInitialMiercureaProductExportStock(client, variantId, quantity, reason = "product_export_reconcile") {
@@ -992,7 +1167,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const exportRow = exportResult.rows[0];
   const itemsResult = await client.query(
     `SELECT * FROM aif_shopify_product_export_items
-     WHERE export_id=$1 AND item_status IN ('exported_pending','error')
+     WHERE export_id=$1 AND item_status IN ('exported_pending','error','mapped')
      ORDER BY created_at`,
     [exportRow.id]
   );
@@ -1009,6 +1184,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   let mapped = 0;
   let errors = 0;
   const errorItems = [];
+  const productTasks = new Map();
   for (const item of itemsResult.rows) {
     const sku = normalizeKey(item.sku);
     const matches = bySku.get(sku) || [];
@@ -1076,6 +1252,16 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       if (options.enqueueStock !== false) {
         await enqueueInitialMiercureaProductExportStock(client, item.variant_id, item.snapshot?.availableQty, "product_export_reconcile");
       }
+      if (!productTasks.has(productId)) {
+        productTasks.set(productId, {
+          productId,
+          modelId: item.model_id,
+          brand: text(item.snapshot?.brand),
+          categoryId: text(variant.product?.category?.id),
+          categoryName: text(variant.product?.category?.fullName || variant.product?.category?.name),
+          currentStatus: text(variant.product?.status),
+        });
+      }
       mapped += 1;
     } catch (error) {
       const message = error?.message || String(error);
@@ -1090,6 +1276,59 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     }
   }
 
+  let activatedProducts = 0;
+  let publishedProducts = 0;
+  let brandUpdatedProducts = 0;
+  let brandSkippedProducts = 0;
+  const productErrors = [];
+  const productWarnings = [];
+  let onlinePublicationId = "";
+
+  if (exportRow.product_status === "active" && productTasks.size) {
+    try {
+      onlinePublicationId = await onlineStorePublicationId();
+    } catch (error) {
+      productErrors.push({
+        scope: "publication",
+        error: error?.message || String(error),
+        code: error?.code || null,
+      });
+    }
+  }
+
+  for (const task of productTasks.values()) {
+    try {
+      if (exportRow.product_status === "active") {
+        await activateShopifyProduct(task.productId, task.brand);
+        activatedProducts += 1;
+        if (onlinePublicationId) {
+          const published = await publishShopifyProductToOnlineStore(task.productId, onlinePublicationId);
+          if (published) publishedProducts += 1;
+        }
+      }
+
+      const brandResult = await setShopifyCategoryBrand(task);
+      if (brandResult.updated) brandUpdatedProducts += 1;
+      else if (brandResult.skipped) {
+        brandSkippedProducts += 1;
+        productWarnings.push({
+          scope: "brand",
+          productId: task.productId,
+          category: task.categoryName || task.categoryId || null,
+          reason: brandResult.reason,
+          definition: brandResult.definition || null,
+        });
+      }
+    } catch (error) {
+      productErrors.push({
+        scope: "product_finalize",
+        productId: task.productId,
+        error: error?.message || String(error),
+        code: error?.code || null,
+      });
+    }
+  }
+
   const state = await client.query(
     `SELECT
        count(*) FILTER (WHERE item_status='mapped')::int AS mapped,
@@ -1100,16 +1339,46 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     [exportRow.id]
   );
   const totals = state.rows[0] || {};
-  const finalStatus = Number(totals.pending || 0) === 0 && Number(totals.errors || 0) === 0 ? "mapped" : "partially_mapped";
+  const productErrorCount = productErrors.length;
+  const finalStatus = Number(totals.pending || 0) === 0 && Number(totals.errors || 0) === 0 && productErrorCount === 0 ? "mapped" : "partially_mapped";
+  const reconciliation = {
+    mapped,
+    errors,
+    totals,
+    activatedProducts,
+    publishedProducts,
+    brandUpdatedProducts,
+    brandSkippedProducts,
+    productErrors,
+    productWarnings,
+    onlinePublicationId: onlinePublicationId || null,
+    at: new Date().toISOString(),
+  };
   await client.query(
     `UPDATE aif_shopify_product_exports
      SET status=$2, reconciled_at=now(), updated_at=now(),
          summary=COALESCE(summary,'{}'::jsonb) || $3::jsonb
      WHERE id=$1`,
-    [exportRow.id, finalStatus, JSON.stringify({ reconciliation: { mapped, errors, totals, at: new Date().toISOString() } })]
+    [exportRow.id, finalStatus, JSON.stringify({ reconciliation })]
   );
 
-  return { ok: true, exportId: exportRow.id, status: finalStatus, mapped, errors, errorItems, totals };
+  return {
+    ok: true,
+    exportId: exportRow.id,
+    status: finalStatus,
+    mapped,
+    errors: errors + productErrorCount,
+    mappingErrors: errors,
+    productErrorCount,
+    errorItems,
+    productErrors,
+    productWarnings,
+    activatedProducts,
+    publishedProducts,
+    brandUpdatedProducts,
+    brandSkippedProducts,
+    totals,
+  };
 }
 
 export async function listAifShopifyProductExports(client, options = {}) {
