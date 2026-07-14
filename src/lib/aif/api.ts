@@ -1,4 +1,4 @@
-export type AifSupplier = {
+	export type AifSupplier = {
   id: string;
   code: string;
   name: string;
@@ -327,6 +327,18 @@ export type AifInventoryItem = {
   total_qty: number;
   total_reserved_qty: number;
   available_qty: number;
+  shopify_mapped?: boolean | null;
+  shopify_sync_status?: string | null;
+  shopify_outbox_status?: string | null;
+  shopify_product_id?: string | null;
+  shopify_variant_id?: string | null;
+  shopify_inventory_item_id?: string | null;
+  shopify_product_title?: string | null;
+  shopify_variant_title?: string | null;
+  shopify_product_status?: string | null;
+  shopify_last_synced_at?: string | null;
+  shopify_last_error?: string | null;
+  shopify_outbox_error?: string | null;
 };
 
 export type AifSelectedWorkAction = "label" | "order" | "move";
