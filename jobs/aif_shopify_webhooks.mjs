@@ -19,7 +19,7 @@ const uri = callbackUrl();
 
 const currentResponse = await shopifyGraphql(`query AifWebhookSubscriptions {
   webhookSubscriptions(first: 100) {
-    nodes { id topic uri format apiVersion }
+    nodes { id topic uri format }
   }
 }`);
 const all = currentResponse.data?.webhookSubscriptions?.nodes || [];
@@ -52,7 +52,7 @@ if (matchingTopic.length) {
   const target = matchingTopic[0];
   result = await shopifyGraphql(`mutation AifWebhookUpdate($id: ID!, $input: WebhookSubscriptionInput!) {
     webhookSubscriptionUpdate(id: $id, webhookSubscription: $input) {
-      webhookSubscription { id topic uri format apiVersion }
+      webhookSubscription { id topic uri format }
       userErrors { field message }
     }
   }`, {
@@ -73,7 +73,7 @@ if (matchingTopic.length) {
 } else {
   result = await shopifyGraphql(`mutation AifWebhookCreate($topic: WebhookSubscriptionTopic!, $input: WebhookSubscriptionInput!) {
     webhookSubscriptionCreate(topic: $topic, webhookSubscription: $input) {
-      webhookSubscription { id topic uri format apiVersion }
+      webhookSubscription { id topic uri format }
       userErrors { field message }
     }
   }`, {
