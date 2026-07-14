@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { processAifShopifyOutboxBatch } from "./aifShopify.js";
 import { processAifShopifyInboundBatch } from "./aifShopifyInbound.js";
+import { processAifShopifyOrderBatch } from "./aifShopifyOrders.js";
 
 const GLOBAL_STATE_KEY = Symbol.for("allin.shopify.embeddedWorker");
 
@@ -40,6 +41,16 @@ async function tick(state) {
       }));
     }
 
+    const orders = await processAifShopifyOrderBatch(state.pool, {
+      limit: state.limit,
+    });
+    if (orders.claimed || orders.errors || orders.ignored) {
+      console.log("AIF Shopify embedded order batch", JSON.stringify({
+        instanceId: state.instanceId,
+        ...orders,
+      }));
+    }
+
     const outbound = await processAifShopifyOutboxBatch(state.pool, {
       limit: state.limit,
     });
@@ -50,10 +61,10 @@ async function tick(state) {
       }));
     }
 
-    if (!inbound.enabled && !outbound.enabled) {
+    if (!inbound.enabled && !orders.enabled && !outbound.enabled) {
       schedule(state, state.disabledDelayMs);
     } else {
-      const hadWork = Boolean(inbound.claimed || outbound.processed);
+      const hadWork = Boolean(inbound.claimed || orders.claimed || outbound.processed);
       schedule(state, hadWork ? state.busyDelayMs : state.idleDelayMs);
     }
   } catch (error) {
