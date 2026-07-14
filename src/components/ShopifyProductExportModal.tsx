@@ -3,7 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
-  FileArchive,
+  FileSpreadsheet,
   ImageOff,
   PackageCheck,
   RefreshCw,
@@ -72,7 +72,8 @@ type CreateResult = {
   summary: Preview["summary"];
   location: Preview["location"];
   productRows: number;
-  inventoryRows: number;
+  inventoryRows?: number;
+  stockMode?: string;
 };
 
 type ExportHistoryItem = {
@@ -270,7 +271,7 @@ export default function ShopifyProductExportModal({
       setReconcileMessage(
         result.errors
           ? `Párosítva: ${result.mapped}. Hibás vagy még nem található: ${result.errors}.`
-          : `Párosítás kész: ${result.mapped} variáns. A készletszinkron sorba állt.`
+          : `Párosítás kész: ${result.mapped} variáns. A Miercurea Ciuc induló készlet szinkronja sorba állt.`
       );
       await loadHistory();
       await onChanged?.();
@@ -300,7 +301,7 @@ export default function ShopifyProductExportModal({
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">Shopify termékpublikálás</p>
               <h2 className="mt-0.5 text-xl text-white">Kijelölt termékek exportja</h2>
-              <p className="mt-1 text-xs text-white/55">Shopify-kompatibilis termék CSV, Miercurea Ciuc készlet CSV és ellenőrzési riport egy ZIP-ben.</p>
+              <p className="mt-1 text-xs text-white/55">Egyetlen Shopify-kompatibilis termék-CSV. Import és párosítás után az AllIn automatikusan beállítja a Miercurea Ciuc készletet.</p>
             </div>
           </div>
           <button type="button" className={`${softButton} h-9 w-9 px-0`} onClick={onClose} aria-label="Bezárás"><X size={16} /></button>
@@ -367,14 +368,14 @@ export default function ShopifyProductExportModal({
 
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#77d8d4]/25 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd]">
                 <span>Induló Shopify helyszín: <strong>{preview.location.name}</strong></span>
-                <span>Minden exportált variáns teljes elérhető készlete ide kerül.</span>
+                <span>A párosítás után minden exportált variáns teljes elérhető készlete ide kerül, Kézdi pedig 0-ról indul.</span>
               </div>
 
               <section className="mt-4 overflow-hidden rounded-2xl border border-white/12 bg-[#3f4959]">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5">
                   <div>
                     <h3 className="text-sm text-white">Exportellenőrzés</h3>
-                    <p className="mt-0.5 text-xs text-white/45">A hibás sorok nem kerülnek bele a termék- és készlet-CSV-be, de a riportban megmaradnak.</p>
+                    <p className="mt-0.5 text-xs text-white/45">A hibás sorok nem kerülnek bele a CSV-be. A részletes ellenőrzés és a hibák itt, az AllIn felületén maradnak meg.</p>
                   </div>
                   <div className="flex gap-2 text-xs">
                     <span className="rounded-full border border-emerald-300/25 bg-emerald-400/12 px-2 py-1 text-emerald-50">Rendben: {validItems.length}</span>
@@ -414,7 +415,7 @@ export default function ShopifyProductExportModal({
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5">
               <div>
                 <h3 className="text-sm text-white">Legutóbbi Shopify exportok</h3>
-                <p className="mt-0.5 text-xs text-white/45">Az export bezárás vagy oldalfrissítés után is letölthető és párosítható.</p>
+                <p className="mt-0.5 text-xs text-white/45">A CSV bezárás vagy oldalfrissítés után is újra letölthető és párosítható.</p>
               </div>
               <button type="button" className={softButton} onClick={() => void loadHistory()} disabled={historyBusy}>
                 <RefreshCw size={14} className={historyBusy ? "animate-spin" : ""} /> Frissítés
@@ -439,7 +440,7 @@ export default function ShopifyProductExportModal({
                       <div className="text-xs text-white/55">Hibás: {n(row.invalid_variant_count)} • Jelzés: {n(row.warning_count)}</div>
                       <div className="flex flex-wrap justify-end gap-1.5">
                         <a className={softButton} href={`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/download`} download>
-                          <Download size={14} /> ZIP
+                          <Download size={14} /> CSV
                         </a>
                         {pending ? (
                           <button type="button" className={primaryButton} onClick={() => void reconcile(row.id)} disabled={reconcileBusy}>
@@ -461,16 +462,16 @@ export default function ShopifyProductExportModal({
             <section className="mt-4 rounded-2xl border border-[#77d8d4]/30 bg-[#203f49] p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2 text-sm text-white"><FileArchive size={17} /> Exportcsomag elkészült</div>
+                  <div className="flex items-center gap-2 text-sm text-white"><FileSpreadsheet size={17} /> Shopify CSV elkészült</div>
                   <p className="mt-1 text-xs text-[#d7fffd]/72">{created.fileName}</p>
-                  <p className="mt-1 text-xs text-[#d7fffd]/72">{created.productRows} terméksor és {created.inventoryRows} készletsor.</p>
+                  <p className="mt-1 text-xs text-[#d7fffd]/72">{created.productRows} Shopify-terméksor. A készlet a párosítás után automatikusan kerül Miercurea Ciucra.</p>
                 </div>
-                <a className={softButton} href={created.downloadUrl} download={created.fileName}><Download size={15} /> ZIP újbóli letöltése</a>
+                <a className={softButton} href={created.downloadUrl} download={created.fileName}><Download size={15} /> CSV újbóli letöltése</a>
               </div>
               <ol className="mt-3 grid gap-2 text-xs leading-relaxed text-[#d7fffd]/86 md:grid-cols-3">
-                <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>1.</strong> Shopify Products import: <code>01_shopify_products.csv</code></li>
-                <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>2.</strong> Shopify Inventory import: <code>02_shopify_inventory_miercurea_ciuc.csv</code></li>
-                <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>3.</strong> Vissza ide, majd párosítás SKU alapján.</li>
+                <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>1.</strong> Shopify Admin → Products → Import, majd töltsd fel ezt az egy CSV-t.</li>
+                <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>2.</strong> Várd meg, amíg a Shopify termékimport befejeződik.</li>
+                <li className="rounded-xl border border-white/10 bg-black/10 px-3 py-2"><strong>3.</strong> Vissza ide, Párosítás. Az AllIn feltölti a készletet Miercurea Ciucra.</li>
               </ol>
               <div className="mt-3 flex flex-wrap justify-end gap-2">
                 <button type="button" className={primaryButton} onClick={() => void reconcile(created.exportId)} disabled={reconcileBusy}>
@@ -488,7 +489,7 @@ export default function ShopifyProductExportModal({
             <button type="button" className={softButton} onClick={() => void loadPreview()} disabled={previewBusy}><RefreshCw size={15} /> Újraellenőrzés</button>
             <button type="button" className={softButton} onClick={onClose}><X size={15} /> Bezárás</button>
             <button type="button" className={primaryButton} onClick={() => void createExport()} disabled={createBusy || previewBusy || !preview?.summary.validVariantCount}>
-              <PackageCheck size={15} /> {createBusy ? "ZIP készítése..." : "Shopify ZIP elkészítése"}
+              <PackageCheck size={15} /> {createBusy ? "CSV készítése..." : "Shopify CSV elkészítése"}
             </button>
           </div>
         </footer>
