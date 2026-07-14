@@ -5,6 +5,7 @@ import {
   shopifyGraphql,
 } from "./aifShopify.js";
 
+
 const PRODUCT_HEADERS = [
   "Title",
   "URL handle",
