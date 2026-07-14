@@ -6,6 +6,13 @@ import {
   receiveAifShopifyInventoryWebhook,
 } from "../lib/aifShopifyInbound.js";
 import {
+  getAifShopifyOrder,
+  listAifShopifyOrderEvents,
+  listAifShopifyOrders,
+  processAifShopifyOrderBatch,
+  receiveAifShopifyOrderWebhook,
+} from "../lib/aifShopifyOrders.js";
+import {
   auditAifShopifySkus,
   enqueueAllMappedAifShopifyVariants,
   ensureAifShopifyTables,
@@ -8482,6 +8489,79 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       console.error("AIF Shopify inventory webhook receive failed", e);
       return res.status(500).json({ ok: false, error: e?.message || "A Shopify webhook mentése nem sikerült." });
+    }
+  });
+
+  // Shopify rendelési webhooks. Ezek csak rendelési adatot mentenek, készletet nem vonnak le.
+  // A készletet továbbra is kizárólag az inventory_levels/update webhook tartja szinkronban.
+  router.post("/shopify/webhooks/orders", async (req, res) => {
+    try {
+      const result = await receiveAifShopifyOrderWebhook(pool, {
+        rawBody: req.rawBody,
+        payload: req.body,
+        headers: req.headers,
+      });
+      if (!result.accepted) {
+        return res.status(Number(result.statusCode || 400)).json({ ok: false, error: result.error, topic: result.topic || null });
+      }
+      return res.status(200).json({ ok: true, duplicate: result.duplicate, webhookId: result.webhookId, topic: result.topic });
+    } catch (e) {
+      console.error("AIF Shopify order webhook receive failed", e);
+      return res.status(500).json({ ok: false, error: e?.message || "A Shopify rendelési webhook mentése nem sikerült." });
+    }
+  });
+
+  router.post("/shopify/orders/process", requireAdminOrSecret, async (req, res) => {
+    try {
+      const result = await processAifShopifyOrderBatch(pool, { limit: Number(req.body?.limit || 20) });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("AIF Shopify order process failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify rendelések feldolgozása nem sikerült.", code: e?.code || null });
+    }
+  });
+
+  router.get("/shopify/orders", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const items = await listAifShopifyOrders(client, {
+        limit: Number(req.query.limit || 100),
+        search: req.query.search || req.query.q || "",
+        status: req.query.status || "",
+      });
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error("AIF Shopify orders list failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify rendelések betöltése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/orders/:id", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const order = await getAifShopifyOrder(client, req.params.id);
+      if (!order) return res.status(404).json({ error: "A Shopify rendelés nem található." });
+      res.json({ ok: true, ...order });
+    } catch (e) {
+      console.error("AIF Shopify order detail failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify rendelés betöltése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/shopify/order-events", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const items = await listAifShopifyOrderEvents(client, { limit: Number(req.query.limit || 50) });
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error("AIF Shopify order events list failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify rendelési események betöltése nem sikerült." });
+    } finally {
+      client.release();
     }
   });
 
