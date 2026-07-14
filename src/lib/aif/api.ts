@@ -1679,7 +1679,8 @@ export type AifShopifyProductExportCreateResult = {
   summary: AifShopifyProductExportPreview["summary"];
   location: AifShopifyProductExportPreview["location"];
   productRows: number;
-  inventoryRows: number;
+  inventoryRows?: number;
+  stockMode?: "pair_then_sync" | string;
 };
 
 export function apiAifPreviewShopifyProductExport(input: {
