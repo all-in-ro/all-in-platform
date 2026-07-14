@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
-import ShopifyStatusIcon, { isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import ShopifyStatusIcon, { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
@@ -75,6 +75,22 @@ const taxonomyField = "grid gap-1.5 text-[11px] text-white/72";
 const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
 const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
 const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
+
+function ShopifyBrandMark({ size = "sm", className = "" }: { size?: "xs" | "sm" | "md"; className?: string }) {
+  const dimension = size === "xs" ? "h-5 w-5" : size === "md" ? "h-8 w-8" : "h-6 w-6";
+  const fallbackSize = size === "xs" ? 12 : size === "md" ? 18 : 15;
+  return (
+    <span className={`${dimension} relative inline-flex shrink-0 items-center justify-center rounded-md border border-[#95bf47]/75 bg-white shadow-sm ${className}`}>
+      <ShoppingBag size={fallbackSize} strokeWidth={1.9} className="absolute text-[#008060]" />
+      <img
+        src={AIF_SHOPIFY_ICON_URL}
+        alt=""
+        className="relative h-[78%] w-[78%] object-contain"
+        onError={(event) => { event.currentTarget.style.display = "none"; }}
+      />
+    </span>
+  );
+}
 
 const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
 const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariantActions:v1";
@@ -7464,7 +7480,7 @@ export default function AllInWarehouse() {
                             >
                               {it.title_ro || "-"}
                             </button>
-                            <ShopifyStatusIcon item={it} size="xs" />
+                            <ShopifyStatusIcon item={it} size="sm" />
                           </div>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
                             <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
@@ -7524,7 +7540,10 @@ export default function AllInWarehouse() {
                     <div className="flex gap-3">
                       <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-20 w-20 rounded-xl" iconSize={20} />
                       <div className="min-w-0 flex-1">
-                        <button className="block max-w-full truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <button className="block min-w-0 flex-1 truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
+                          <ShopifyStatusIcon item={it} size="sm" />
+                        </div>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-1"><ProductCodeTooltipButton item={it} /></div>
                         {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
@@ -7569,7 +7588,7 @@ export default function AllInWarehouse() {
                   <PackageCheck size={15} /> Készletmozgatás {selectedWorkCounts.move > 0 ? `(${selectedWorkCounts.move})` : ""}
                 </button>
                 <button className={selectedWorkButtonClass("shopify")} type="button" disabled={!selectedWorkCounts.shopify} onClick={() => setSelectedWorkPanel("shopify")} title="Shopify export listára tett termékek">
-                  <ShoppingBag size={15} /> Shopify export {selectedWorkCounts.shopify > 0 ? `(${selectedWorkCounts.shopify})` : ""}
+                  <ShopifyBrandMark size="xs" /> Shopify export {selectedWorkCounts.shopify > 0 ? `(${selectedWorkCounts.shopify})` : ""}
                 </button>
                 <button className={btnSoft} onClick={() => setSelectedPanelOpen(false)} type="button"><X size={15} /> Bezárás</button>
               </div>
@@ -7826,7 +7845,7 @@ export default function AllInWarehouse() {
                   <span className="text-xs text-white/55">átadási lista</span>
                 </button>
                 <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "shopify")} type="button">
-                  <span className="inline-flex items-center gap-2"><ShoppingBag size={16} /> Shopify export</span>
+                  <span className="inline-flex items-center gap-2"><ShopifyBrandMark size="sm" /> Shopify export</span>
                   <span className="text-xs text-white/55">termék + készlet CSV</span>
                 </button>
               </div>
@@ -7851,7 +7870,7 @@ export default function AllInWarehouse() {
                 )}
                 {selectedWorkPanel === "shopify" && (
                   <button className={primaryBtn} onClick={() => setShopifyExportModalOpen(true)} type="button" disabled={!selectedShopifyItems.length}>
-                    <ShoppingBag size={15} /> Shopify export előkészítése
+                    <ShopifyBrandMark size="xs" /> Shopify export előkészítése
                   </button>
                 )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
