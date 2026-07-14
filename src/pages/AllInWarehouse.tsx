@@ -7846,7 +7846,7 @@ export default function AllInWarehouse() {
                 </button>
                 <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "shopify")} type="button">
                   <span className="inline-flex items-center gap-2"><ShopifyBrandMark size="sm" /> Shopify export</span>
-                  <span className="text-xs text-white/55">termék + készlet CSV</span>
+                  <span className="text-xs text-white/55">egyetlen termék-CSV</span>
                 </button>
               </div>
             </div>
@@ -7879,7 +7879,7 @@ export default function AllInWarehouse() {
             </div>
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad. Shopify exportnál a következő ablak minden szükséges adatot ellenőriz, mielőtt a CSV-k elkészülnek.
+                Itt vannak azok a termékek, amelyeket ehhez a feladathoz soroltál. A pipa levétele csak ebből a feladatlistából veszi ki, a fő Kijelölt termékek listában megmarad. Shopify exportnál a következő ablak minden szükséges adatot ellenőriz, mielőtt az egyetlen Shopify CSV elkészül.
               </div>
 
               {selectedWorkPanel === "move" && (
