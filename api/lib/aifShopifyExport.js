@@ -5,7 +5,6 @@ import {
   shopifyGraphql,
 } from "./aifShopify.js";
 
-
 const PRODUCT_HEADERS = [
   "Title",
   "URL handle",
@@ -64,7 +63,6 @@ const PRODUCT_HEADERS = [
   "Google Shopping / Custom label 2",
   "Google Shopping / Custom label 3",
   "Google Shopping / Custom label 4",
-  "Collection",
 ];
 
 let exportSchemaEnsured = false;
@@ -138,7 +136,7 @@ function csvFromRows(headers, rows) {
   for (const row of rows) {
     lines.push(headers.map((header) => csvCell(row?.[header] ?? "")).join(","));
   }
-  return `\ufeff${lines.join("\r\n")}\r\n`;
+  return `${lines.join("\r\n")}\r\n`;
 }
 
 function htmlEscape(value) {
@@ -690,7 +688,6 @@ function productRowsForItems(items, productStatus) {
         "Google Shopping / Custom label 2": first ? tagValue(item.gender) : "",
         "Google Shopping / Custom label 3": first ? tagValue(item.season) : "",
         "Google Shopping / Custom label 4": first ? tagValue(item.brand_name) : "",
-        "Collection": first ? text(item.subcategory_name_ro || item.category_name_ro) : "",
       };
       productRows.push(row);
       byVariant.set(item.variant_id, row);
@@ -892,9 +889,38 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
      ORDER BY model_id, created_at, variant_id`,
     [exportRow.id]
   );
-  const productRows = items.rows
-    .filter((row) => ["exported_pending", "mapped", "error"].includes(String(row.item_status)) && row.product_row)
-    .map((row) => row.product_row);
+
+  // Shopify a termék első CSV-sorában kötelezően várja a Title mezőt.
+  // Az export létrehozásakor csak egy variánssor kap termékcímet, de az adatbázisból
+  // történő későbbi visszaolvasás variant_id szerint átrendezhette a sorokat. Ettől egy
+  // üres Title-os variáns kerülhetett a modell első sorába, amit a Shopify jogosan
+  // elutasított. Modell/handle szerint csoportosítunk, és mindig a termékadatokat
+  // tartalmazó sort tesszük elsőnek. A régebbi mentett exportokat is automatikusan
+  // kijavítjuk letöltéskor.
+  const exportableItems = items.rows
+    .filter((row) => ["exported_pending", "mapped", "error"].includes(String(row.item_status)) && row.product_row);
+  const grouped = new Map();
+  for (const item of exportableItems) {
+    const productRow = { ...(item.product_row || {}) };
+    const groupKey = text(item.model_id || productRow["URL handle"] || item.handle || item.variant_id);
+    const list = grouped.get(groupKey) || [];
+    list.push({ item, productRow });
+    grouped.set(groupKey, list);
+  }
+
+  const productRows = [];
+  for (const group of grouped.values()) {
+    const titleIndex = group.findIndex(({ productRow }) => text(productRow["Title"]));
+    if (titleIndex > 0) {
+      const [titleRow] = group.splice(titleIndex, 1);
+      group.unshift(titleRow);
+    }
+    if (group.length && !text(group[0].productRow["Title"])) {
+      const fallbackTitle = text(group[0].item?.snapshot?.title);
+      if (fallbackTitle) group[0].productRow["Title"] = fallbackTitle;
+    }
+    productRows.push(...group.map(({ productRow }) => productRow));
+  }
   const fileName = `allinfashion_shopify_products_${new Date(exportRow.created_at).toISOString().slice(0, 10)}_${String(exportRow.id).slice(0, 8)}.csv`;
   const csv = Buffer.from(csvFromRows(PRODUCT_HEADERS, productRows), "utf8");
   await client.query(
