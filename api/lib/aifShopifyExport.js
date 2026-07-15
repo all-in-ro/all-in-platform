@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  enqueueAifShopifyVariant,
   ensureAifShopifyTables,
   getAifShopifyStatus,
   shopifyGraphql,
@@ -1434,7 +1435,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
 
 export async function listAifShopifyProductExports(client, options = {}) {
   await ensureAifShopifyExportSchema(client);
-  const limit = Math.min(100, Math.max(1, integer(options.limit, 20)));
+  const limit = Math.min(500, Math.max(1, integer(options.limit, 50)));
   const result = await client.query(
     `SELECT id, status, selection_mode, product_status, shopify_location_id, shopify_location_name,
             model_count, variant_count, valid_variant_count, invalid_variant_count, warning_count,
@@ -1445,4 +1446,306 @@ export async function listAifShopifyProductExports(client, options = {}) {
     [limit]
   );
   return result.rows;
+}
+
+
+function compactRemoteVariantForMapping(variant) {
+  return {
+    id: text(variant?.id),
+    sku: text(variant?.sku),
+    barcode: text(variant?.barcode),
+    title: text(variant?.title),
+    inventoryItemId: text(variant?.inventoryItem?.id),
+    productId: text(variant?.product?.id),
+    productTitle: text(variant?.product?.title),
+    productStatus: text(variant?.product?.status),
+    productHandle: text(variant?.product?.handle),
+  };
+}
+
+async function loadMappingsForRefresh(client, options = {}) {
+  await ensureAifShopifyTables(client);
+  const limit = Math.min(1000, Math.max(1, integer(options.limit, 1000)));
+  const variantIds = unique((options.variantIds || []).map(text)).filter(Boolean);
+  const where = variantIds.length ? "WHERE m.variant_id::text = ANY($2::text[])" : "";
+  const values = variantIds.length ? [limit, variantIds] : [limit];
+  const result = await client.query(
+    `SELECT
+       m.variant_id::text,
+       m.sku AS mapped_sku,
+       m.shopify_product_id,
+       m.shopify_variant_id,
+       m.shopify_inventory_item_id,
+       m.shopify_product_title,
+       m.shopify_variant_title,
+       m.shopify_product_status,
+       m.sync_status,
+       m.last_synced_csikszereda_qty,
+       m.last_synced_kezdi_qty,
+       m.last_synced_at,
+       m.last_error,
+       m.updated_at,
+       NULLIF(trim(v.barcode),'') AS current_sku,
+       v.internal_sku,
+       v.size,
+       v.color_code,
+       v.color_name,
+       pm.title_ro,
+       pm.model_code,
+       b.name AS brand_name
+     FROM aif_shopify_variant_map m
+     JOIN aif_product_variants v ON v.id=m.variant_id
+     JOIN aif_product_models pm ON pm.id=v.model_id
+     LEFT JOIN aif_brands b ON b.id=pm.brand_id
+     ${where}
+     ORDER BY m.updated_at DESC
+     LIMIT $1`,
+    values
+  );
+  return result.rows;
+}
+
+async function markMappingBroken(client, mapping, message, details = {}) {
+  const cleanMessage = text(message).slice(0, 1000) || "A Shopify kapcsolat megszakadt.";
+  await client.query(
+    `UPDATE aif_shopify_variant_map
+     SET sync_status='error',
+         last_error=$2,
+         raw=COALESCE(raw,'{}'::jsonb) || $3::jsonb,
+         updated_at=now()
+     WHERE variant_id=$1::uuid`,
+    [
+      mapping.variant_id,
+      cleanMessage,
+      JSON.stringify({
+        source: "mapping_refresh",
+        brokenAt: new Date().toISOString(),
+        ...details,
+      }),
+    ]
+  );
+  await client.query(
+    `UPDATE aif_shopify_sync_outbox
+     SET status='blocked',
+         locked_at=NULL,
+         last_error=$2,
+         updated_at=now()
+     WHERE variant_id=$1::uuid`,
+    [mapping.variant_id, cleanMessage]
+  );
+}
+
+async function upsertMappingFromRemote(client, mapping, remote) {
+  const remoteInfo = compactRemoteVariantForMapping(remote);
+  const expectedSku = text(mapping.current_sku || mapping.mapped_sku);
+  const changed =
+    text(mapping.shopify_variant_id) !== remoteInfo.id ||
+    text(mapping.shopify_product_id) !== remoteInfo.productId ||
+    text(mapping.shopify_inventory_item_id) !== remoteInfo.inventoryItemId;
+
+  await client.query(
+    `INSERT INTO aif_shopify_variant_map (
+       variant_id, sku, shopify_product_id, shopify_variant_id, shopify_inventory_item_id,
+       shopify_product_title, shopify_variant_title, shopify_product_status,
+       sync_status, last_error, raw, updated_at
+     ) VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10::jsonb,now())
+     ON CONFLICT (variant_id) DO UPDATE SET
+       sku=EXCLUDED.sku,
+       shopify_product_id=EXCLUDED.shopify_product_id,
+       shopify_variant_id=EXCLUDED.shopify_variant_id,
+       shopify_inventory_item_id=EXCLUDED.shopify_inventory_item_id,
+       shopify_product_title=EXCLUDED.shopify_product_title,
+       shopify_variant_title=EXCLUDED.shopify_variant_title,
+       shopify_product_status=EXCLUDED.shopify_product_status,
+       sync_status=CASE WHEN $11::boolean THEN 'mapped' ELSE aif_shopify_variant_map.sync_status END,
+       last_synced_csikszereda_qty=CASE WHEN $11::boolean THEN NULL ELSE aif_shopify_variant_map.last_synced_csikszereda_qty END,
+       last_synced_kezdi_qty=CASE WHEN $11::boolean THEN NULL ELSE aif_shopify_variant_map.last_synced_kezdi_qty END,
+       last_synced_at=CASE WHEN $11::boolean THEN NULL ELSE aif_shopify_variant_map.last_synced_at END,
+       last_error=NULL,
+       raw=COALESCE(aif_shopify_variant_map.raw,'{}'::jsonb) || EXCLUDED.raw,
+       updated_at=now()`,
+    [
+      mapping.variant_id,
+      expectedSku || remoteInfo.sku || null,
+      remoteInfo.productId,
+      remoteInfo.id,
+      remoteInfo.inventoryItemId,
+      remoteInfo.productTitle,
+      remoteInfo.title,
+      remoteInfo.productStatus,
+      changed ? "mapped" : text(mapping.sync_status || "mapped"),
+      JSON.stringify({
+        source: "mapping_refresh",
+        refreshedAt: new Date().toISOString(),
+        repaired: changed,
+        previous: {
+          productId: mapping.shopify_product_id,
+          variantId: mapping.shopify_variant_id,
+          inventoryItemId: mapping.shopify_inventory_item_id,
+        },
+        shopify: remoteInfo,
+      }),
+      changed,
+    ]
+  );
+  return { changed, remote: remoteInfo };
+}
+
+export async function refreshAifShopifyMappings(client, options = {}) {
+  await ensureAifShopifyExportSchema(client);
+  const syncAll = bool(options.sync, false);
+  const syncRepaired = options.syncRepaired !== false;
+  const mappings = await loadMappingsForRefresh(client, options);
+  const shopifyVariants = await loadAllShopifyVariants();
+
+  const byId = new Map();
+  const bySku = new Map();
+  for (const variant of shopifyVariants) {
+    const id = text(variant?.id);
+    if (id) byId.set(id, variant);
+    const sku = normalizeKey(variant?.sku);
+    if (!sku) continue;
+    const list = bySku.get(sku) || [];
+    list.push(variant);
+    bySku.set(sku, list);
+  }
+
+  let valid = 0;
+  let repaired = 0;
+  let broken = 0;
+  let queued = 0;
+  let unchanged = 0;
+  const items = [];
+
+  for (const mapping of mappings) {
+    const expectedSku = text(mapping.current_sku || mapping.mapped_sku);
+    let remote = byId.get(text(mapping.shopify_variant_id)) || null;
+    let matchedBy = remote ? "stored_id" : "";
+
+    if (remote && expectedSku && normalizeKey(remote?.sku) !== normalizeKey(expectedSku)) {
+      remote = null;
+      matchedBy = "";
+    }
+
+    if (!remote && expectedSku) {
+      const matches = bySku.get(normalizeKey(expectedSku)) || [];
+      if (matches.length === 1) {
+        remote = matches[0];
+        matchedBy = "sku";
+      } else {
+        const message = matches.length > 1
+          ? `A Shopifyban ${matches.length} variáns használja ezt az SKU-t: ${expectedSku}.`
+          : `A Shopify variáns nem található ehhez az SKU-hoz: ${expectedSku}.`;
+        await markMappingBroken(client, mapping, message, {
+          expectedSku,
+          storedShopifyVariantId: mapping.shopify_variant_id,
+          matchCount: matches.length,
+        });
+        broken += 1;
+        items.push({
+          variantId: mapping.variant_id,
+          sku: expectedSku,
+          state: "broken",
+          repaired: false,
+          queued: false,
+          error: message,
+        });
+        continue;
+      }
+    }
+
+    if (!remote) {
+      const message = "A tárolt Shopify variáns már nem létezik, és nincs használható SKU az újrakereséshez.";
+      await markMappingBroken(client, mapping, message, {
+        expectedSku,
+        storedShopifyVariantId: mapping.shopify_variant_id,
+      });
+      broken += 1;
+      items.push({
+        variantId: mapping.variant_id,
+        sku: expectedSku,
+        state: "broken",
+        repaired: false,
+        queued: false,
+        error: message,
+      });
+      continue;
+    }
+
+    const updated = await upsertMappingFromRemote(client, mapping, remote);
+    if (updated.changed) repaired += 1;
+    else unchanged += 1;
+    valid += 1;
+
+    let queueResult = null;
+    if (syncAll || (updated.changed && syncRepaired)) {
+      queueResult = await enqueueAifShopifyVariant(
+        client,
+        mapping.variant_id,
+        updated.changed ? "mapping_repaired_resync" : "manual_mapping_resync"
+      );
+      if (queueResult?.queued) queued += 1;
+    }
+
+    items.push({
+      variantId: mapping.variant_id,
+      sku: expectedSku || updated.remote.sku,
+      state: updated.changed ? "repaired" : "valid",
+      repaired: updated.changed,
+      queued: Boolean(queueResult?.queued),
+      matchedBy,
+      shopifyProductId: updated.remote.productId,
+      shopifyVariantId: updated.remote.id,
+      inventoryItemId: updated.remote.inventoryItemId,
+      productTitle: updated.remote.productTitle,
+      variantTitle: updated.remote.title,
+      queue: queueResult,
+    });
+  }
+
+  return {
+    ok: true,
+    checked: mappings.length,
+    valid,
+    unchanged,
+    repaired,
+    broken,
+    queued,
+    syncRequested: syncAll,
+    syncRepaired,
+    items,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+export async function deleteAifShopifyProductExports(client, exportIds = []) {
+  await ensureAifShopifyExportSchema(client);
+  const ids = unique((exportIds || []).map(text)).filter(Boolean).slice(0, 500);
+  if (!ids.length) return { ok: true, deleted: 0, deletedItems: 0, ids: [] };
+
+  const itemCount = await client.query(
+    `SELECT count(*)::int AS count
+     FROM aif_shopify_product_export_items
+     WHERE export_id::text = ANY($1::text[])`,
+    [ids]
+  );
+  const deleted = await client.query(
+    `DELETE FROM aif_shopify_product_exports
+     WHERE id::text = ANY($1::text[])
+     RETURNING id::text`,
+    [ids]
+  );
+  return {
+    ok: true,
+    deleted: deleted.rowCount,
+    deletedItems: integer(itemCount.rows[0]?.count, 0),
+    ids: deleted.rows.map((row) => row.id),
+    mappingsUntouched: true,
+    stockUntouched: true,
+  };
+}
+
+export async function deleteAifShopifyProductExport(client, exportId) {
+  const result = await deleteAifShopifyProductExports(client, [exportId]);
+  return result.deleted ? result : null;
 }
