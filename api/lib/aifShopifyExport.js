@@ -233,8 +233,14 @@ function productCategory(row) {
   if (/sock|zokni|soset|șoset/.test(haystack)) {
     return "Apparel & Accessories > Clothing > Underwear & Socks > Socks";
   }
-  if (/cap|hat|sapka|kalap|caciul|căciul/.test(haystack)) {
-    return "Apparel & Accessories > Clothing Accessories > Headwear";
+  if (/baseball[ _-]?cap|sapca|șapcă|sepci|blitzing/.test(haystack)) {
+    return "Apparel & Accessories > Clothing Accessories > Hats > Baseball Caps";
+  }
+  if (/beanie|caciul|căciul/.test(haystack)) {
+    return "Apparel & Accessories > Clothing Accessories > Hats > Beanies";
+  }
+  if (/cap|hat|sapka|kalap/.test(haystack)) {
+    return "Apparel & Accessories > Clothing Accessories > Hats";
   }
   if (/bag|taska|t[aá]ska|geant|rucsac/.test(haystack)) {
     return "Apparel & Accessories > Handbags, Wallets & Cases";
@@ -621,7 +627,11 @@ function productRowsForItems(items, productStatus) {
   const productRows = [];
   const byVariant = new Map();
   for (const modelItems of byModel.values()) {
-    const colors = unique(modelItems.map((item) => item.color_name || item.color_code));
+    const colors = unique(
+      modelItems
+        .map((item) => text(item.color_name || item.color_code))
+        .filter((value) => value && !/^\\d+[a-z]?$/i.test(value))
+    );
     const firstImage = modelItems.map((item) => item.image_url).find(Boolean) || "";
     modelItems.forEach((item, index) => {
       const first = index === 0;
@@ -675,7 +685,9 @@ function productRowsForItems(items, productStatus) {
         "SEO title": first ? title.slice(0, 70) : "",
         "SEO description": first ? seoDescription : "",
         "Color (product.metafields.shopify.color-pattern)": first ? colors.join("; ") : "",
-        "Google Shopping / Google product category": first ? category : "",
+        "Google Shopping / Google product category": first
+          ? (/Hats(?: >|$)/.test(category) ? "2396" : category)
+          : "",
         "Google Shopping / Gender": first ? shopifyGender(item.gender) : "",
         "Google Shopping / Age group": first ? shopifyAgeGroup(item.gender) : "",
         "Google Shopping / Manufacturer part number (MPN)": productCode(item),
