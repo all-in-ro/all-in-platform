@@ -1626,8 +1626,19 @@ function isWarehouseVisibleInMainList(it: InventoryItem) {
   return !needsWarehouseActivation(it);
 }
 
+function activationRequiredMissingFields(it: Partial<InventoryItem> | Record<string, any>) {
+  const out: string[] = [];
+  if (!String((it as any).image_url || (it as any).imageUrl || "").trim()) out.push("kép");
+  if (!visibleWarehouseBarcode(it)) out.push("vonalkód");
+  if (!String((it as any).title_ro || (it as any).titleRo || "").trim()) out.push("terméknév");
+  if (!String((it as any).size || "").trim()) out.push("méret");
+  if (priceNumber((it as any).buy_price ?? (it as any).buyPrice) === null) out.push("vételár");
+  if (priceNumber((it as any).sell_price ?? (it as any).sellPrice) === null) out.push("eladási ár");
+  return out;
+}
+
 function hasMissingData(it: InventoryItem) {
-  return !it.image_url || !visibleWarehouseBarcode(it) || !it.sell_price || !it.buy_price || !it.title_ro || !it.size || needsWarehouseActivation(it);
+  return activationRequiredMissingFields(it).length > 0 || needsWarehouseActivation(it);
 }
 
 function missingLabels(it: InventoryItem) {
@@ -3181,6 +3192,12 @@ function emptyNewProductForm(): NewProductForm {
 
 function formFromDetail(d: DetailResponse): EditForm {
   const x = d.item || {};
+  const modelStatus = String(x.model_status || x.modelStatus || "active").trim().toLowerCase();
+  const storedVariantStatus = String(x.variant_status || x.variantStatus || x.status || "active").trim().toLowerCase();
+  // Régi importoknál a variáns gyakran már „active”, miközben a közös modell még draft.
+  // Ezt nem tekintjük valódi, kézi aktiválásnak: az adatlap ilyenkor Inaktívként nyílik meg,
+  // így minden méretet / színt külön kell kifejezetten Aktívra tenni.
+  const variantStatus = modelStatus !== "active" && storedVariantStatus === "active" ? "inactive" : storedVariantStatus;
   return {
     titleRo: x.title_ro || "",
     titleHu: x.title_hu || "",
@@ -3190,7 +3207,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     season: x.season || "",
     material: x.material || "",
     shopifyTitle: x.shopify_title || "",
-    modelStatus: x.model_status || "active",
+    modelStatus,
     brandCode: x.brand_code || "",
     categoryCode: x.category_code || "",
     subCategoryCode: x.subcategory_code || x.subCategoryCode || "",
@@ -3205,7 +3222,7 @@ function formFromDetail(d: DetailResponse): EditForm {
     sellPrice: x.sell_price == null ? "" : String(x.sell_price),
     compareAtPrice: x.compare_at_price == null ? "" : String(x.compare_at_price),
     imageUrl: x.image_url || "",
-    variantStatus: x.status || "active",
+    variantStatus,
   };
 }
 
@@ -6049,7 +6066,7 @@ export default function AllInWarehouse() {
     setSummaryOpen(false);
     setListOpen(true);
     setProductPage(1);
-    setMessage("Az aktiválandó készletes variánsokat mutatom. Amint egy modell és variáns aktív lesz, eltűnik innen és átkerül a normál raktárlistába.");
+    setMessage("Az aktiválandó készletes variánsokat mutatom. Minden méretet és színt külön kell Aktívra tenni; egy variáns aktiválása nem aktiválja a testvéreit.");
   }
 
   const totals = useMemo(() => {
@@ -6957,8 +6974,32 @@ export default function AllInWarehouse() {
     // Az árváltozást a backend naplózza a Termék History-ba.
     // Nem írjuk még egyszer localStorage-ba / attributes-be, mert attól ugyanaz az egy módosítás több sorban jelent meg.
     const wasActivationWorkView = stockFilter === "watch" || Boolean(incomingFocus?.batchId);
+    const previousModelStatus = String(editBaseline.modelStatus || "").trim().toLowerCase();
+    const previousVariantStatus = String(editBaseline.variantStatus || "").trim().toLowerCase();
+    const nextModelStatus = String(edit.modelStatus || "").trim().toLowerCase();
+    const nextVariantStatus = String(edit.variantStatus || "").trim().toLowerCase();
+    const explicitlyActivatingVariant = nextVariantStatus === "active" && (previousVariantStatus !== "active" || previousModelStatus !== "active");
+    const activatingSharedModel = previousModelStatus !== "active" && nextModelStatus === "active";
+    const activationCandidate = {
+      ...detail.item,
+      image_url: edit.imageUrl,
+      barcode: edit.barcode,
+      title_ro: edit.titleRo,
+      size: edit.size,
+      buy_price: edit.buyPrice,
+      sell_price: edit.sellPrice,
+      model_status: nextModelStatus,
+      variant_status: nextVariantStatus,
+    };
+    const activationMissing = explicitlyActivatingVariant ? activationRequiredMissingFields(activationCandidate) : [];
+    if (activationMissing.length) {
+      setMessage(`Ezt a konkrét variánst még nem lehet aktiválni. Hiányzik: ${activationMissing.join(", ")}. A termékkód nem helyettesíti az egyedi vonalkódot.`);
+      return false;
+    }
+
     setSaving(true);
     setMessage("");
+    let deactivatedSiblingCount = 0;
     try {
       const normalizedEditColor = normalizeColor(edit.colorName);
       const normalizedEditSize = normalizeSize(edit.size);
@@ -6967,6 +7008,27 @@ export default function AllInWarehouse() {
         detail.item.supplierVariantCode,
         [edit.supplierProductCode, normalizedEditColor || edit.colorCode, normalizedEditSize].filter(Boolean).join("::")
       );
+      // A Modell állapot közös minden méretre és színre. Amikor egy régi draft modellt
+      // először aktiválunk, a testvérvariánsokat előbb Inaktívra tesszük. Így a közös
+      // modell aktiválása nem rántja át automatikusan az S/M/XL sorokat a Raktárba.
+      if (activatingSharedModel) {
+        const currentModelId = firstWarehouseText(detail.item.model_id, detail.item.modelId);
+        if (currentModelId) {
+          const siblingIds = Array.from(new Set(
+            inventoryDisplayItems
+              .filter((item) => String(item.variant_id || "") !== detailId)
+              .filter((item) => firstWarehouseText((item as any).model_id, (item as any).modelId) === currentModelId)
+              .filter((item) => itemVariantStatus(item) === "active")
+              .map((item) => String(item.variant_id || "").trim())
+              .filter(Boolean)
+          ));
+          for (const siblingId of siblingIds) {
+            await apiVariantUpdate(siblingId, { status: "inactive" });
+          }
+          deactivatedSiblingCount = siblingIds.length;
+        }
+      }
+
       const variantUpdatePayload: Record<string, unknown> = {
         titleRo: edit.titleRo,
         titleHu: edit.titleHu,
@@ -7010,8 +7072,10 @@ export default function AllInWarehouse() {
           // Nem kritikus: a következő Frissítés vagy újranyitás úgyis behozza.
         }
       }
-      const formResolvedActivation = String(edit.modelStatus || "").toLowerCase() === "active" && String(edit.variantStatus || "").toLowerCase() === "active";
-      const resolvedActivation = formResolvedActivation || !needsWarehouseActivation(d.item as InventoryItem);
+      // Egy sor kizárólag akkor hagyhatja el az aktiválandó listát, ha ezt a konkrét
+      // variánst Aktívra állítottuk. A backendből visszaérkező régi/default „active”
+      // érték többé nem aktiválhat testvérméreteket a felhasználó helyett.
+      const resolvedActivation = nextModelStatus === "active" && nextVariantStatus === "active";
       let detailClosedDuringSave = false;
       let preferNextAfterClose = false;
       if (incomingFocus?.batchId && resolvedActivation) {
@@ -7047,9 +7111,15 @@ export default function AllInWarehouse() {
         window.requestAnimationFrame(() => restoreDetailReturnPosition({ preferNext: preferNextAfterClose }));
       }
       if (wasActivationWorkView && resolvedActivation) {
-        setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról.");
+        setMessage(deactivatedSiblingCount
+          ? `Ez a konkrét variáns aktív lett. A modell további ${deactivatedSiblingCount} méret-/színvariánsa az aktiválandó listán maradt, amíg azokat külön Aktívra nem teszed.`
+          : "Ez a konkrét variáns aktív lett, ezért levettem az aktiválandó listáról. A többi méret és szín állapota nem változott.");
         setHighlightProductId((current) => current === detailId ? "" : current);
         setPendingProductJumpId((current) => current === detailId ? "" : current);
+      } else if (wasActivationWorkView && nextModelStatus === "active" && nextVariantStatus !== "active") {
+        setMessage(deactivatedSiblingCount
+          ? `A közös modell aktív, de ez a variáns továbbra is Inaktív. A további ${deactivatedSiblingCount} variáns szintén az aktiválandó listán maradt.`
+          : "A modell aktív, de ez a konkrét variáns még Inaktív, ezért az aktiválandó listán maradt.");
       } else {
         setMessage(priceHistoryEntry
           ? (shouldCloseAfter ? "A változtatások mentve, az árváltozás bekerült a Termék History-ba." : "A termékadatok mentve, az árváltozás bekerült a Termék History-ba.")
@@ -7668,7 +7738,7 @@ export default function AllInWarehouse() {
                     <div>
                       <p className="font-semibold text-white">A legutóbbi bevezetés még aktiválandó sorait mutatom.</p>
                       <p className="mt-1">Forrás: {String(incomingFocus.sourceFileName || incomingFocus.batch?.source_file_name || incomingFocus.batchId || "import")} • import sor: {incomingFocus.rows.length || incomingFocus.variantIds.length} • megjelenő variáns: {filtered.length}/{incomingFocus.variantIds.length}{incomingFocus.totalQty ? ` • ${incomingFocus.totalQty} db` : ""}</p>
-                      <p className="mt-1 text-[#bdf5f2]">Amint a Modell állapot és a Variáns állapot aktív, a sor eltűnik innen. A készlet nem tűnik el, csak átkerül a normál raktárlistába.</p>
+                      <p className="mt-1 text-[#bdf5f2]">Csak az a konkrét méret/szín kerül át a Raktárba, amelynél a Variáns állapotot külön Aktívra teszed. A közös Modell állapot nem aktiválja automatikusan a többi variánst.</p>
                       <p className="mt-1 text-[#bdf5f2]">Az itteni kijelölés külön importlista: nem keveredik a normál raktári kijelölésekkel, címkékkel vagy készletmozgatási teendőkkel.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -9606,9 +9676,19 @@ export default function AllInWarehouse() {
                       <label className={label}>Méret<input className={input} list="warehouse-standard-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
                       <label className={label}>Vételár<input className={input} value={edit.buyPrice} onChange={(e) => setEdit((x) => ({ ...x, buyPrice: e.target.value }))} /></label>
                       <label className={label}>Eladási ár<input className={input} value={edit.sellPrice} onChange={(e) => setEdit((x) => ({ ...x, sellPrice: e.target.value }))} /></label>
-                      <label className={label}>Variáns állapot<select className={select} value={edit.variantStatus} onChange={(e) => setEdit((x) => ({ ...x, variantStatus: e.target.value }))}><option value="active">Aktív</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
-                      <label className={label}>Modell állapot<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="draft">Előkészítés</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
+                      <label className={label}>Variáns állapot (csak ez a méret/szín)<select className={select} value={edit.variantStatus} onChange={(e) => {
+                        const value = e.target.value;
+                        setEdit((x) => ({
+                          ...x,
+                          variantStatus: value,
+                          modelStatus: value === "active" && ["draft", "inactive"].includes(String(x.modelStatus || "").toLowerCase()) ? "active" : x.modelStatus,
+                        }));
+                      }}><option value="inactive">Inaktív</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
+                      <label className={label}>Modell állapot (közös minden variánsnál)<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="draft">Előkészítés</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
                       <label className={label}>Shopify cím<input className={input} value={edit.shopifyTitle} onChange={(e) => setEdit((x) => ({ ...x, shopifyTitle: e.target.value }))} /></label>
+                      <div className="md:col-span-3 rounded-xl border border-[#7bd7d4]/24 bg-[#203f49] px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]">
+                        A Raktárba csak ez a konkrét méret/szín kerül át, amikor a Variáns állapotot Aktívra teszed. Első aktiváláskor a modell többi méretét és színét a rendszer Inaktívként hagyja. Aktiváláshoz valódi vonalkód és kép is kötelező; a termékkód nem számít vonalkódnak.
+                      </div>
                     </div>
                   </section>
                 </div>
