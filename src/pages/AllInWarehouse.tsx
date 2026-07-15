@@ -753,6 +753,15 @@ type DetailResponse = {
   movements: any[];
 };
 
+type WarehouseDetailReturnAnchor = {
+  variantId: string;
+  nextVariantId?: string | null;
+  previousVariantId?: string | null;
+  productPage: number;
+  scrollY: number;
+  rowViewportTop?: number | null;
+};
+
 type VariantHistoryEvent = {
   id: string;
   created_at?: string | null;
@@ -3450,6 +3459,8 @@ export default function AllInWarehouse() {
   const [incomingFocus, setIncomingFocus] = useState<{ batchId: string; variantIds: string[]; rows: Array<Record<string, any>>; batch?: Record<string, any> | null; totalQty?: number; sourceFileName?: string | null; mode?: "import" | "activation" } | null>(null);
   const [incomingFocusItems, setIncomingFocusItems] = useState<InventoryItem[]>([]);
   const productListRef = useRef<HTMLElement | null>(null);
+  const detailReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
+  const pendingProductJumpViewportTopRef = useRef<number | null>(null);
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
@@ -4596,12 +4607,15 @@ export default function AllInWarehouse() {
   const detailHasChanges = useMemo(() => Boolean(detail?.item?.id) && !editFormsEqual(edit, editBaseline), [detail?.item?.id, edit, editBaseline]);
   const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
 
-  function closeDetailImmediately() {
+  function closeDetailImmediately(options: { restoreListPosition?: boolean } = {}) {
     setDetailCloseConfirmOpen(false);
     setDetail(null);
     setDetailBusy(false);
     setEdit(emptyForm());
     setEditBaseline(emptyForm());
+    if (options.restoreListPosition !== false) {
+      window.requestAnimationFrame(() => restoreDetailReturnPosition());
+    }
   }
 
   function discardDetailChangesAndClose() {
@@ -4834,9 +4848,49 @@ export default function AllInWarehouse() {
     return matchingNodes.find((node) => Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || matchingNodes[0] || null;
   }
 
-  function queueProductRowJump(variantId: unknown) {
+  function rememberDetailReturnAnchor(variantId: unknown) {
+    const id = String(variantId || "").trim();
+    if (!id || typeof window === "undefined") return;
+    const index = filtered.findIndex((item) => String(item.variant_id || "") === id);
+    const node = findVisibleProductNode(id);
+    const rowViewportTop = node ? node.getBoundingClientRect().top : null;
+    detailReturnAnchorRef.current = {
+      variantId: id,
+      nextVariantId: index >= 0 ? String(filtered[index + 1]?.variant_id || "") || null : null,
+      previousVariantId: index > 0 ? String(filtered[index - 1]?.variant_id || "") || null : null,
+      productPage: safeProductPage,
+      scrollY: window.scrollY,
+      rowViewportTop: typeof rowViewportTop === "number" && Number.isFinite(rowViewportTop) ? rowViewportTop : null,
+    };
+  }
+
+  function restoreDetailReturnPosition(options: { preferNext?: boolean } = {}) {
+    const anchor = detailReturnAnchorRef.current;
+    if (!anchor || typeof window === "undefined") return;
+    detailReturnAnchorRef.current = null;
+
+    const candidates = options.preferNext
+      ? [anchor.nextVariantId, anchor.variantId, anchor.previousVariantId]
+      : [anchor.variantId, anchor.nextVariantId, anchor.previousVariantId];
+    const targetId = candidates
+      .map((value) => String(value || "").trim())
+      .find((value) => value && filtered.some((item) => String(item.variant_id || "") === value));
+
+    if (targetId) {
+      queueProductRowJump(targetId, { viewportTop: anchor.rowViewportTop });
+      return;
+    }
+
+    setProductPage(Math.max(1, anchor.productPage || 1));
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: Math.max(0, anchor.scrollY || 0), behavior: "auto" });
+    });
+  }
+
+  function queueProductRowJump(variantId: unknown, options: { viewportTop?: number | null } = {}) {
     const id = String(variantId || "").trim();
     if (!id) return;
+    pendingProductJumpViewportTopRef.current = typeof options.viewportTop === "number" && Number.isFinite(options.viewportTop) ? options.viewportTop : null;
     setSummaryOpen(false);
     setListOpen(true);
     setPendingProductJumpId(id);
@@ -4897,11 +4951,21 @@ export default function AllInWarehouse() {
     const timer = window.setTimeout(() => {
       const node = findVisibleProductNode(targetId);
       if (!node) return;
-      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      const desiredViewportTop = pendingProductJumpViewportTopRef.current;
+      if (typeof desiredViewportTop === "number" && Number.isFinite(desiredViewportTop)) {
+        const rowTop = node.getBoundingClientRect().top;
+        window.scrollTo({
+          top: Math.max(0, window.scrollY + rowTop - Number(desiredViewportTop)),
+          behavior: "auto",
+        });
+      } else {
+        node.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      pendingProductJumpViewportTopRef.current = null;
       setPendingProductJumpId((current) => current === targetId ? "" : current);
       window.setTimeout(() => {
         setHighlightProductId((current) => current === targetId ? "" : current);
-      }, 5200);
+      }, 9000);
     }, 80);
 
     return () => window.clearTimeout(timer);
@@ -6339,6 +6403,7 @@ export default function AllInWarehouse() {
   }
 
   async function openDetail(id: string) {
+    rememberDetailReturnAnchor(id);
     setDetailCloseConfirmOpen(false);
     setDetailBusy(true);
     setMessage("");
@@ -6786,6 +6851,8 @@ export default function AllInWarehouse() {
       }
       const formResolvedActivation = String(edit.modelStatus || "").toLowerCase() === "active" && String(edit.variantStatus || "").toLowerCase() === "active";
       const resolvedActivation = formResolvedActivation || !needsWarehouseActivation(d.item as InventoryItem);
+      let detailClosedDuringSave = false;
+      let preferNextAfterClose = false;
       if (incomingFocus?.batchId && resolvedActivation) {
         setIncomingFocusItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== detailId));
         setIncomingFocus((current) => current ? {
@@ -6795,9 +6862,12 @@ export default function AllInWarehouse() {
         } : current);
       }
       if (wasActivationWorkView && resolvedActivation) {
-        closeDetailImmediately();
+        detailClosedDuringSave = true;
+        preferNextAfterClose = true;
+        closeDetailImmediately({ restoreListPosition: false });
       } else if (shouldCloseAfter) {
-        closeDetailImmediately();
+        detailClosedDuringSave = true;
+        closeDetailImmediately({ restoreListPosition: false });
       } else {
         const savedForm = formFromDetail(d);
         if (!savedForm.brandCode) {
@@ -6812,6 +6882,9 @@ export default function AllInWarehouse() {
       }
       await load();
       if (incomingFocus?.batchId && !resolvedActivation && isUuidLike(incomingFocus.batchId)) await loadIncomingFocusBatch(incomingFocus.batchId, false);
+      if (detailClosedDuringSave) {
+        window.requestAnimationFrame(() => restoreDetailReturnPosition({ preferNext: preferNextAfterClose }));
+      }
       if (wasActivationWorkView && resolvedActivation) {
         setMessage("A termék aktív lett, ezért levettem az aktiválandó listáról.");
         setHighlightProductId((current) => current === detailId ? "" : current);
@@ -7561,6 +7634,11 @@ export default function AllInWarehouse() {
                           </div>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
                             <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
+                            {isHighlighted ? (
+                              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-100/75 bg-amber-300 px-2 py-0.5 text-[10px] leading-none text-slate-900 shadow-[0_0_16px_rgba(252,211,77,0.42)]">
+                                <ArrowRight size={10} /> Folytatás innen
+                              </span>
+                            ) : null}
                           </div>
                           {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         </td>
@@ -7612,7 +7690,10 @@ export default function AllInWarehouse() {
                         />
                         Kijelölés
                       </label>
-                      {isSelected && <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/22 px-2 py-0.5 text-[11px] text-white">Kijelölve</span>}
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {isHighlighted ? <span className="inline-flex items-center gap-1 rounded-full border border-amber-100/75 bg-amber-300 px-2 py-0.5 text-[11px] text-slate-900 shadow-[0_0_16px_rgba(252,211,77,0.42)]"><ArrowRight size={11} /> Folytatás innen</span> : null}
+                        {isSelected && <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/22 px-2 py-0.5 text-[11px] text-white">Kijelölve</span>}
+                      </div>
                     </div>
                     <div className="flex gap-3">
                       <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-20 w-20 rounded-xl" iconSize={20} />
