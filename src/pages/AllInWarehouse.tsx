@@ -3455,7 +3455,7 @@ export default function AllInWarehouse() {
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
   const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
   const [persistedSelectedItems, setPersistedSelectedItems] = useState<InventoryItem[]>([]);
-  const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
+  const [selectedActionTargets, setSelectedActionTargets] = useState<InventoryItem[]>([]);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
   const [shopifyExportModalOpen, setShopifyExportModalOpen] = useState(false);
   const [shopifySyncCenterOpen, setShopifySyncCenterOpen] = useState(false);
@@ -5531,12 +5531,31 @@ export default function AllInWarehouse() {
   const selectedVisibleCount = filteredVariantIds.filter((id) => activeListSelectionMap[id]).length;
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedVisibleCount === filteredVariantIds.length;
 
-  function assignSelectedItemToAction(item: InventoryItem, action: SelectedWorkAction) {
-    const id = String(item.variant_id || "");
-    if (!id) return;
-    setSelectedVariants((current) => ({ ...current, [id]: true }));
-    setSelectedWorkActions((current) => ({ ...current, [id]: action }));
-    setSelectedActionTarget(null);
+  function openSelectedItemsActionPicker(targetItems: InventoryItem[]) {
+    const unique = new Map<string, InventoryItem>();
+    for (const item of targetItems || []) {
+      const id = selectedVariantIdFromItem(item);
+      if (id) unique.set(id, item);
+    }
+    const targets = Array.from(unique.values());
+    if (!targets.length) return;
+    setSelectedActionTargets(targets);
+  }
+
+  function assignSelectedItemsToAction(targetItems: InventoryItem[], action: SelectedWorkAction) {
+    const ids = Array.from(new Set((targetItems || []).map((item) => selectedVariantIdFromItem(item)).filter(Boolean)));
+    if (!ids.length) return;
+    setSelectedVariants((current) => {
+      const next = { ...current };
+      for (const id of ids) next[id] = true;
+      return next;
+    });
+    setSelectedWorkActions((current) => {
+      const next = { ...current };
+      for (const id of ids) next[id] = action;
+      return next;
+    });
+    setSelectedActionTargets([]);
     setSelectedWorkPanel(action);
   }
 
@@ -5957,7 +5976,7 @@ export default function AllInWarehouse() {
     setSelectedVariants({});
     setSelectedWorkActions({});
     setPersistedSelectedItems([]);
-    setSelectedActionTarget(null);
+    setSelectedActionTargets([]);
     setSelectedWorkPanel(null);
     setSelectedPanelOpen(false);
     apiClearSelectedVariantSelection()
@@ -7896,7 +7915,28 @@ export default function AllInWarehouse() {
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. A sor eleji pipával választható ki, hogy címkézéshez, rendeléshez, készletmozgatáshoz vagy Shopify exporthoz kerüljön.
+                Ez a kijelölt termékek közös munkalistája. A kijelölés a fiókodhoz mentődik, így mobilon és másik gépen is ugyaninnen folytatható. Egy terméknél használd a sor eleji pipát, az összes szabadon várakozó terméknél pedig az alábbi tömeges gombot.
+              </div>
+
+              <div className="flex flex-col gap-3 rounded-xl border border-white/14 bg-[#3f4959] p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm text-white">Tömeges feladatválasztás</p>
+                  <p className="mt-1 text-xs leading-relaxed text-white/55">
+                    {selectedUnassignedItems.length
+                      ? `${selectedUnassignedItems.length} termék még nincs munkalistához rendelve. Egy kattintással ugyanazt a feladatot adhatod mindegyiknek.`
+                      : "Minden kijelölt termékhez tartozik már feladat."}
+                  </p>
+                </div>
+                <button
+                  className={primaryBtn}
+                  type="button"
+                  disabled={!selectedUnassignedItems.length}
+                  onClick={() => openSelectedItemsActionPicker(selectedUnassignedItems)}
+                  title="Az összes feladatra váró terméket egyszerre kijelöli, majd megnyitja a feladatválasztót."
+                >
+                  <PackageCheck size={15} /> Összes kijelölése és feladat választása
+                  {selectedUnassignedItems.length > 0 ? ` (${selectedUnassignedItems.length})` : ""}
+                </button>
               </div>
 
               <div className="grid gap-2">
@@ -7908,7 +7948,7 @@ export default function AllInWarehouse() {
                         type="checkbox"
                         checked={false}
                         onChange={(e) => {
-                          if (e.target.checked) setSelectedActionTarget(it);
+                          if (e.target.checked) openSelectedItemsActionPicker([it]);
                         }}
                         aria-label="Feladat kiválasztása"
                         title="Feladat kiválasztása"
@@ -8119,32 +8159,39 @@ export default function AllInWarehouse() {
         </div>
       )}
 
-      {selectedActionTarget && (
+      {selectedActionTargets.length > 0 && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-3 py-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
             <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Feladat kiválasztása</p>
-                <h2 className="mt-1 text-lg text-white">{selectedActionTarget.title_ro || "Termék"}</h2>
+                <h2 className="mt-1 text-lg text-white">{selectedActionTargets.length === 1 ? (selectedActionTargets[0]?.title_ro || "Termék") : `${selectedActionTargets.length} termék`}</h2>
               </div>
-              <button className={btnSoft} onClick={() => setSelectedActionTarget(null)} type="button"><X size={14} /> Bezárás</button>
+              <button className={btnSoft} onClick={() => setSelectedActionTargets([])} type="button"><X size={14} /> Bezárás</button>
             </div>
             <div className="space-y-3 p-4">
-              <p className="text-sm text-white/70">Válaszd ki, melyik munkalistára kerüljön a kijelölt termék.</p>
+              <p className="text-sm text-white/70">Válaszd ki, melyik munkalistára kerüljön {selectedActionTargets.length === 1 ? "a kijelölt termék" : `mind a ${selectedActionTargets.length} kijelölt termék`}.</p>
+              {selectedActionTargets.length > 1 && (
+                <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                  <span className="text-white">Tömeges művelet:</span>{" "}
+                  {selectedActionTargets.slice(0, 4).map((item) => item.title_ro || item.variant_id).join(", ")}
+                  {selectedActionTargets.length > 4 ? ` és még ${selectedActionTargets.length - 4} termék` : ""}
+                </div>
+              )}
               <div className="grid gap-2">
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2 py-2 text-left text-sm text-white hover:bg-[#2a8d8b]/26" onClick={() => assignSelectedItemToAction(selectedActionTarget, "label")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2 py-2 text-left text-sm text-white hover:bg-[#2a8d8b]/26" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "label")} type="button">
                   <span className="inline-flex items-center gap-2"><Barcode size={16} /> Vonalkód / címke</span>
                   <span className="text-xs text-white/55">címkelista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "order")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "order")} type="button">
                   <span className="inline-flex items-center gap-2"><ClipboardList size={16} /> Rendelés / PDF</span>
                   <span className="text-xs text-white/55">rendelési lista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "move")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "move")} type="button">
                   <span className="inline-flex items-center gap-2"><PackageCheck size={16} /> Készletmozgatás</span>
                   <span className="text-xs text-white/55">átadási lista</span>
                 </button>
-                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemToAction(selectedActionTarget, "shopify")} type="button">
+                <button className="flex items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#3f4959] px-2 py-2 text-left text-sm text-white hover:bg-[#475365]" onClick={() => assignSelectedItemsToAction(selectedActionTargets, "shopify")} type="button">
                   <span className="inline-flex items-center gap-2"><ShopifyBrandMark size="sm" /> Shopify export</span>
                   <span className="text-xs text-white/55">egyetlen termék-CSV</span>
                 </button>
