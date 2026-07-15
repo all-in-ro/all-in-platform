@@ -44,13 +44,18 @@ type PreviewItem = {
   warnings: string[];
 };
 
+type GroupingMode = "model_colors" | "product_code";
+
 type Preview = {
   ok: true;
   selectionMode: "selected_variants" | "all_model_variants";
   productStatus: "draft" | "active";
+  groupingMode: GroupingMode;
   location: { id?: string | null; name: string };
   summary: {
     selectedVariantCount: number;
+    groupingMode?: GroupingMode;
+    allInModelCount?: number;
     modelCount: number;
     validModelCount: number;
     variantCount: number;
@@ -155,7 +160,8 @@ export default function ShopifyProductExportModal({
 }) {
   const [selectionMode, setSelectionMode] = useState<"selected_variants" | "all_model_variants">("all_model_variants");
   const [productStatus, setProductStatus] = useState<"draft" | "active">("active");
-  const [includeMapped, setIncludeMapped] = useState(false);
+  const [groupingMode, setGroupingMode] = useState<GroupingMode>("model_colors");
+  const [includeMapped, setIncludeMapped] = useState(true);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
@@ -197,7 +203,7 @@ export default function ShopifyProductExportModal({
     try {
       const result = await requestJSON<Preview>("/api/aif/shopify/product-exports/preview", {
         method: "POST",
-        body: JSON.stringify({ variantIds, selectionMode, productStatus, includeMapped }),
+        body: JSON.stringify({ variantIds, selectionMode, productStatus, groupingMode, includeMapped }),
       });
       setPreview(result);
     } catch (requestError) {
@@ -216,7 +222,7 @@ export default function ShopifyProductExportModal({
     const timer = window.setTimeout(() => void loadPreview(), 80);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, variantKey, selectionMode, productStatus, includeMapped]);
+  }, [open, variantKey, selectionMode, productStatus, groupingMode, includeMapped]);
 
   useEffect(() => {
     if (!open) return;
@@ -239,7 +245,7 @@ export default function ShopifyProductExportModal({
     try {
       const result = await requestJSON<CreateResult>("/api/aif/shopify/product-exports", {
         method: "POST",
-        body: JSON.stringify({ variantIds, selectionMode, productStatus, includeMapped }),
+        body: JSON.stringify({ variantIds, selectionMode, productStatus, groupingMode, includeMapped }),
       });
       setCreated(result);
       await loadHistory();
@@ -324,7 +330,22 @@ export default function ShopifyProductExportModal({
         </header>
 
         <div className="overflow-y-auto p-4">
-          <div className="grid gap-3 lg:grid-cols-[1fr,1fr,auto] lg:items-end">
+          <div className="grid gap-3 lg:grid-cols-[1.15fr,1.1fr,1fr,auto] lg:items-end">
+            <label className="grid gap-1.5 text-xs text-white/65">
+              Shopify csoportosítás
+              <select
+                className={field}
+                value={groupingMode}
+                onChange={(event) => {
+                  const next = event.target.value as GroupingMode;
+                  setGroupingMode(next);
+                  if (next === "model_colors") setIncludeMapped(true);
+                }}
+              >
+                <option value="model_colors">Egy modell = egy termék, a színek és méretek opciók</option>
+                <option value="product_code">Minden termékkód külön Shopify-termék</option>
+              </select>
+            </label>
             <label className="grid gap-1.5 text-xs text-white/65">
               Export terjedelme
               <select className={field} value={selectionMode} onChange={(event) => setSelectionMode(event.target.value as typeof selectionMode)}>
@@ -345,8 +366,14 @@ export default function ShopifyProductExportModal({
             </label>
           </div>
 
-          <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
-            Alapból a már Shopifyhoz kapcsolt variánsok kimaradnak. Aktív exportnál a párosítás a terméket aktiválja, kitölti a használható Brand kategóriamezőt, és hozzáadja az Online áruház értékesítési csatornához is. Így nem csak a Shop alkalmazásban lebeg valahol, mint egy különösen drága digitális szellem.
+          <div className="mt-3 rounded-2xl border border-[#77d8d4]/25 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+            {groupingMode === "model_colors"
+              ? "Egy AllIn modellből egy Shopify-termék készül. A Culoare az első, a Mărime a második variánsopció, ezért a ciklam / roz / turcoaz ugyanazon terméken belül választható."
+              : "A beszállítói termékkódok külön Shopify-termékek maradnak. Ezt csak akkor használd, amikor a színkódos cikkszám valóban külön terméket jelent."}
+          </div>
+
+          <div className="mt-2 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
+            A már Shopifyhoz kapcsolt színeket modell-csoportosításnál érdemes bent hagyni, különben fél terméket építenénk újra, ami még a CSV-nek is méltatlan. Aktív exportnál a párosítás aktiválja és közzéteszi a terméket, majd sorba állítja a készletszinkront.
           </div>
 
           {error ? (
@@ -368,7 +395,7 @@ export default function ShopifyProductExportModal({
             <>
               <section className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
                 {[
-                  ["Modellek", preview.summary.modelCount],
+                  ["Shopify termékek", preview.summary.modelCount],
                   ["Variánsok", preview.summary.variantCount],
                   ["Exportálható", preview.summary.validVariantCount],
                   ["Hibás", preview.summary.invalidVariantCount],
