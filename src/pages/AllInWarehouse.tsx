@@ -753,6 +753,27 @@ type DetailResponse = {
   movements: any[];
 };
 
+type WarehouseFilterSnapshot = {
+  search: string;
+  snCodFilter: string;
+  scannedBarcodeSearch: string;
+  supplier: string;
+  brand: string;
+  category: string;
+  subCategory: string;
+  gender: string;
+  color: string;
+  location: string;
+  stockFilter: StockFilter;
+  imageFilter: ImageFilter;
+  shopifyFilter: ShopifyFilter;
+  sortMode: SortMode;
+  filtersOpen: boolean;
+  summaryOpen: boolean;
+  listOpen: boolean;
+  productPageSize: number;
+};
+
 type WarehouseDetailReturnAnchor = {
   variantId: string;
   nextVariantId?: string | null;
@@ -760,6 +781,7 @@ type WarehouseDetailReturnAnchor = {
   productPage: number;
   scrollY: number;
   rowViewportTop?: number | null;
+  filters: WarehouseFilterSnapshot;
 };
 
 type VariantHistoryEvent = {
@@ -3461,6 +3483,8 @@ export default function AllInWarehouse() {
   const productListRef = useRef<HTMLElement | null>(null);
   const detailReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
   const pendingProductJumpViewportTopRef = useRef<number | null>(null);
+  const pendingProductJumpCandidateIdsRef = useRef<string[]>([]);
+  const pendingProductJumpFallbackRef = useRef<{ productPage: number; scrollY: number } | null>(null);
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
@@ -4848,6 +4872,51 @@ export default function AllInWarehouse() {
     return matchingNodes.find((node) => Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length)) || matchingNodes[0] || null;
   }
 
+  function currentWarehouseFilterSnapshot(): WarehouseFilterSnapshot {
+    return {
+      search,
+      snCodFilter,
+      scannedBarcodeSearch,
+      supplier,
+      brand,
+      category,
+      subCategory,
+      gender,
+      color,
+      location,
+      stockFilter,
+      imageFilter,
+      shopifyFilter,
+      sortMode,
+      filtersOpen,
+      summaryOpen,
+      listOpen,
+      productPageSize,
+    };
+  }
+
+  function restoreWarehouseFilterSnapshot(snapshot: WarehouseFilterSnapshot) {
+    setSearch(snapshot.search);
+    setSnCodFilter(snapshot.snCodFilter);
+    setScannedBarcodeSearch(snapshot.scannedBarcodeSearch);
+    setSupplier(snapshot.supplier);
+    setBrand(snapshot.brand);
+    setCategory(snapshot.category);
+    setSubCategory(snapshot.subCategory);
+    setGender(snapshot.gender);
+    setColor(snapshot.color);
+    setColorFilterOpen(false);
+    setLocation(snapshot.location);
+    setStockFilter(snapshot.stockFilter);
+    setImageFilter(snapshot.imageFilter);
+    setShopifyFilter(snapshot.shopifyFilter);
+    setSortMode(snapshot.sortMode);
+    setFiltersOpen(snapshot.filtersOpen);
+    setSummaryOpen(snapshot.summaryOpen);
+    setListOpen(true);
+    setProductPageSize(snapshot.productPageSize || WAREHOUSE_PRODUCTS_PER_PAGE);
+  }
+
   function rememberDetailReturnAnchor(variantId: unknown) {
     const id = String(variantId || "").trim();
     if (!id || typeof window === "undefined") return;
@@ -4861,6 +4930,7 @@ export default function AllInWarehouse() {
       productPage: safeProductPage,
       scrollY: window.scrollY,
       rowViewportTop: typeof rowViewportTop === "number" && Number.isFinite(rowViewportTop) ? rowViewportTop : null,
+      filters: currentWarehouseFilterSnapshot(),
     };
   }
 
@@ -4869,19 +4939,28 @@ export default function AllInWarehouse() {
     if (!anchor || typeof window === "undefined") return;
     detailReturnAnchorRef.current = null;
 
-    const candidates = options.preferNext
-      ? [anchor.nextVariantId, anchor.variantId, anchor.previousVariantId]
-      : [anchor.variantId, anchor.nextVariantId, anchor.previousVariantId];
-    const targetId = candidates
-      .map((value) => String(value || "").trim())
-      .find((value) => value && filtered.some((item) => String(item.variant_id || "") === value));
+    // Az adatlap nem jogosult átírni a munkanézetet. Ugyanazokat a szűrőket,
+    // rendezést és oldalméretet állítjuk vissza, amelyekből a terméket megnyitották.
+    restoreWarehouseFilterSnapshot(anchor.filters);
+    setProductPage(Math.max(1, anchor.productPage || 1));
 
-    if (targetId) {
-      queueProductRowJump(targetId, { viewportTop: anchor.rowViewportTop });
+    const candidates = (options.preferNext
+      ? [anchor.nextVariantId, anchor.variantId, anchor.previousVariantId]
+      : [anchor.variantId, anchor.nextVariantId, anchor.previousVariantId])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    if (candidates.length) {
+      pendingProductJumpCandidateIdsRef.current = Array.from(new Set(candidates));
+      pendingProductJumpFallbackRef.current = { productPage: Math.max(1, anchor.productPage || 1), scrollY: Math.max(0, anchor.scrollY || 0) };
+      pendingProductJumpViewportTopRef.current = typeof anchor.rowViewportTop === "number" && Number.isFinite(anchor.rowViewportTop)
+        ? anchor.rowViewportTop
+        : null;
+      setListOpen(true);
+      setPendingProductJumpId(candidates[0]);
       return;
     }
 
-    setProductPage(Math.max(1, anchor.productPage || 1));
     window.requestAnimationFrame(() => {
       window.scrollTo({ top: Math.max(0, anchor.scrollY || 0), behavior: "auto" });
     });
@@ -4890,6 +4969,8 @@ export default function AllInWarehouse() {
   function queueProductRowJump(variantId: unknown, options: { viewportTop?: number | null } = {}) {
     const id = String(variantId || "").trim();
     if (!id) return;
+    pendingProductJumpCandidateIdsRef.current = [id];
+    pendingProductJumpFallbackRef.current = null;
     pendingProductJumpViewportTopRef.current = typeof options.viewportTop === "number" && Number.isFinite(options.viewportTop) ? options.viewportTop : null;
     setSummaryOpen(false);
     setListOpen(true);
@@ -4932,11 +5013,38 @@ export default function AllInWarehouse() {
   }
 
   useEffect(() => {
-    const targetId = String(pendingProductJumpId || "").trim();
-    if (!targetId) return;
+    const requestedId = String(pendingProductJumpId || "").trim();
+    if (!requestedId) return;
     if (!listOpen) {
       setListOpen(true);
       return;
+    }
+
+    const candidateIds = pendingProductJumpCandidateIdsRef.current.length
+      ? pendingProductJumpCandidateIdsRef.current
+      : [requestedId];
+    const targetId = candidateIds.find((candidateId) =>
+      filtered.some((item) => String(item.variant_id || "") === candidateId)
+    );
+
+    // Szűrő-visszaállításkor lehet egy köztes render a régi listával. Nem adjuk fel,
+    // hanem megvárjuk, míg az eredeti munkanézet újraszámolódik. Ha abban sincs már
+    // következő sor, visszatérünk ugyanarra az oldal- és görgetési pozícióra.
+    if (!targetId) {
+      const fallback = pendingProductJumpFallbackRef.current;
+      if (!fallback) return;
+      const fallbackTimer = window.setTimeout(() => {
+        pendingProductJumpCandidateIdsRef.current = [];
+        pendingProductJumpFallbackRef.current = null;
+        pendingProductJumpViewportTopRef.current = null;
+        setPendingProductJumpId("");
+        setHighlightProductId("");
+        setProductPage(fallback.productPage);
+        window.requestAnimationFrame(() => {
+          window.scrollTo({ top: fallback.scrollY, behavior: "auto" });
+        });
+      }, 220);
+      return () => window.clearTimeout(fallbackTimer);
     }
 
     const targetIndex = filtered.findIndex((item) => String(item.variant_id || "") === targetId);
@@ -4948,6 +5056,7 @@ export default function AllInWarehouse() {
       return;
     }
 
+    setHighlightProductId(targetId);
     const timer = window.setTimeout(() => {
       const node = findVisibleProductNode(targetId);
       if (!node) return;
@@ -4961,15 +5070,17 @@ export default function AllInWarehouse() {
       } else {
         node.scrollIntoView({ behavior: "smooth", block: "center" });
       }
+      pendingProductJumpCandidateIdsRef.current = [];
+      pendingProductJumpFallbackRef.current = null;
       pendingProductJumpViewportTopRef.current = null;
-      setPendingProductJumpId((current) => current === targetId ? "" : current);
+      setPendingProductJumpId("");
       window.setTimeout(() => {
         setHighlightProductId((current) => current === targetId ? "" : current);
       }, 9000);
     }, 80);
 
     return () => window.clearTimeout(timer);
-  }, [pendingProductJumpId, filtered, safeProductPage, productPageItems.length, listOpen]);
+  }, [pendingProductJumpId, filtered, safeProductPage, productPageItems.length, listOpen, productPageSize]);
 
   const productPager = filtered.length > 0 ? (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/14 bg-[#3f4959]/80 px-3 py-2 text-xs text-white/75">
@@ -6812,6 +6923,13 @@ export default function AllInWarehouse() {
     setSaving(true);
     setMessage("");
     try {
+      const normalizedEditColor = normalizeColor(edit.colorName);
+      const normalizedEditSize = normalizeSize(edit.size);
+      const supplierVariantCode = firstWarehouseText(
+        detail.item.supplier_variant_code,
+        detail.item.supplierVariantCode,
+        [edit.supplierProductCode, normalizedEditColor || edit.colorCode, normalizedEditSize].filter(Boolean).join("::")
+      );
       const variantUpdatePayload: Record<string, unknown> = {
         titleRo: edit.titleRo,
         titleHu: edit.titleHu,
@@ -6826,13 +6944,19 @@ export default function AllInWarehouse() {
         categoryCode: edit.categoryCode || null,
         subCategoryCode: edit.subCategoryCode || null,
         barcode: edit.barcode,
+        supplierId: detail.item.supplier_id || detail.item.supplierId || null,
         supplierProductCode: edit.supplierProductCode,
         productCode: edit.supplierProductCode,
+        // A termékkód modell-szintű adat, ezért több színnél és méretnél is azonos lehet.
+        // A rejtett variánskód, a szín és a méret együtt különbözteti meg a variánsokat.
+        supplierVariantCode: supplierVariantCode || null,
+        supplierColorCode: edit.colorCode || normalizedEditColor || null,
+        supplierSize: normalizedEditSize || null,
         snCod: edit.snCod,
         customsTariffCode: edit.customsTariffCode,
         colorCode: edit.colorCode,
-        colorName: normalizeColor(edit.colorName),
-        size: normalizeSize(edit.size),
+        colorName: normalizedEditColor,
+        size: normalizedEditSize,
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         compareAtPrice: edit.compareAtPrice,
