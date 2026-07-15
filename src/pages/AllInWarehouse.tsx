@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
+import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
 import ShopifyStatusIcon, { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
@@ -3358,6 +3359,7 @@ export default function AllInWarehouse() {
   const [selectedActionTarget, setSelectedActionTarget] = useState<InventoryItem | null>(null);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
   const [shopifyExportModalOpen, setShopifyExportModalOpen] = useState(false);
+  const [shopifySyncCenterOpen, setShopifySyncCenterOpen] = useState(false);
   const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
   const [stockMoveNote, setStockMoveNote] = useState("");
   const [stockMoveDocumentTitle, setStockMoveDocumentTitle] = useState("Készlet átadási lista");
@@ -7048,6 +7050,15 @@ export default function AllInWarehouse() {
               </button>
               <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
               <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
+              <button
+                className={`${headerBtnSoft} h-8 w-9 px-0`}
+                onClick={() => setShopifySyncCenterOpen(true)}
+                type="button"
+                title="Shopify központ: kapcsolatok, újraszinkron és exportelőzmények"
+                aria-label="Shopify központ"
+              >
+                <ShopifyBrandMark size="sm" />
+              </button>
               {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
               <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
                 <PackageCheck size={15} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
@@ -8117,6 +8128,12 @@ export default function AllInWarehouse() {
         open={shopifyExportModalOpen}
         items={selectedShopifyItems}
         onClose={() => setShopifyExportModalOpen(false)}
+        onChanged={() => load()}
+      />
+
+      <ShopifySyncCenterModal
+        open={shopifySyncCenterOpen}
+        onClose={() => setShopifySyncCenterOpen(false)}
         onChanged={() => load()}
       />
 
