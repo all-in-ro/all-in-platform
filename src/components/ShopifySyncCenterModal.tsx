@@ -66,10 +66,10 @@ type RefreshResult = {
   items?: Array<{ variantId?: string; state?: string; error?: string }>;
 };
 
-const softButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45";
-const primaryButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#008060] bg-[#008060] px-3 text-xs text-white shadow-sm transition hover:bg-[#006e52] disabled:cursor-not-allowed disabled:opacity-45";
+const softButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-700 shadow-sm transition hover:border-[#95BF47]/55 hover:bg-[#F7FAF1] focus:outline-none focus:ring-2 focus:ring-[#95BF47]/30 disabled:cursor-not-allowed disabled:opacity-45";
+const primaryButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#004C3F] bg-[#004C3F] px-3 text-xs text-white shadow-sm transition hover:border-[#006E52] hover:bg-[#006E52] focus:outline-none focus:ring-2 focus:ring-[#95BF47]/35 disabled:cursor-not-allowed disabled:opacity-45";
 const dangerButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-600 bg-rose-600 px-3 text-xs text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-45";
-const smallButton = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45";
+const smallButton = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] text-slate-700 transition hover:border-[#95BF47]/55 hover:bg-[#F7FAF1] focus:outline-none focus:ring-2 focus:ring-[#95BF47]/30 disabled:cursor-not-allowed disabled:opacity-45";
 
 function numberValue(value: unknown) {
   const parsed = Number(value || 0);
@@ -310,11 +310,11 @@ export default function ShopifySyncCenterModal({
 
   return (
     <div className="fixed inset-0 z-[96] flex items-center justify-center bg-slate-950/60 px-3 py-4 backdrop-blur-sm">
-      <div className="flex max-h-[94vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-[24px] border border-slate-300 bg-[#f4f7f5] text-slate-900 shadow-2xl">
-        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[#007a5a] bg-[#008060] px-4 py-3 text-white">
+      <div className="flex max-h-[94vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-[24px] border border-[#C8D6C2] bg-[#F5F7F2] text-slate-900 shadow-2xl">
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[#2F6E3F] bg-gradient-to-r from-[#003D32] via-[#004C3F] to-[#2F6E3F] px-4 py-3 text-white">
           <div className="flex min-w-0 items-start gap-3">
-            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/35 bg-white shadow-sm">
-              <img src={AIF_SHOPIFY_ICON_URL} alt="" className="h-8 w-8 object-contain" />
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#D8E8B8] bg-white shadow-sm shadow-black/10">
+              <img src={AIF_SHOPIFY_ICON_URL} alt="" className="h-9 w-9 object-contain" />
             </span>
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.18em] text-white/70">Shopify központ</p>
@@ -322,26 +322,26 @@ export default function ShopifySyncCenterModal({
               <p className="mt-1 text-xs text-white/75">Megnyitáskor ellenőrzi, hogy a tárolt Shopify variánsok még léteznek-e. Az újraimportált, azonos SKU-jú termékeket automatikusan újrapárosítja.</p>
             </div>
           </div>
-          <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/35 bg-white/10 hover:bg-white/20" onClick={onClose} aria-label="Bezárás"><X size={17} /></button>
+          <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/35 bg-white/10 transition hover:border-[#D8E8B8] hover:bg-[#95BF47]/20 focus:outline-none focus:ring-2 focus:ring-[#95BF47]/35" onClick={onClose} aria-label="Bezárás"><X size={17} /></button>
         </header>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
-          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-            <button type="button" className={`h-8 rounded-lg px-3 text-xs ${tab === "connections" ? "bg-[#008060] text-white shadow-sm" : "text-slate-600 hover:bg-white"}`} onClick={() => setTab("connections")}><Link2 size={14} className="mr-1.5 inline" />Kapcsolatok</button>
-            <button type="button" className={`h-8 rounded-lg px-3 text-xs ${tab === "history" ? "bg-[#008060] text-white shadow-sm" : "text-slate-600 hover:bg-white"}`} onClick={() => setTab("history")}><Download size={14} className="mr-1.5 inline" />Exportelőzmények</button>
+          <div className="flex gap-1 rounded-xl bg-[#EDF2E8] p-1">
+            <button type="button" className={`h-8 rounded-lg px-3 text-xs transition ${tab === "connections" ? "bg-[#004C3F] text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-[#004C3F]"}`} onClick={() => setTab("connections")}><Link2 size={14} className="mr-1.5 inline" />Kapcsolatok</button>
+            <button type="button" className={`h-8 rounded-lg px-3 text-xs transition ${tab === "history" ? "bg-[#004C3F] text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-[#004C3F]"}`} onClick={() => setTab("history")}><Download size={14} className="mr-1.5 inline" />Exportelőzmények</button>
           </div>
           <button type="button" className={softButton} onClick={() => void loadAll()} disabled={busy}><RefreshCw size={14} className={busy ? "animate-spin" : ""} /> Frissítés</button>
         </div>
 
         <div className="overflow-y-auto p-4">
           {error ? <div className="mb-3 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700"><AlertTriangle size={17} className="mt-0.5 shrink-0" />{error}</div> : null}
-          {message ? <div className="mb-3 flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-800"><CheckCircle2 size={17} className="mt-0.5 shrink-0" />{message}</div> : null}
+          {message ? <div className="mb-3 flex items-start gap-2 rounded-2xl border border-[#CFE3A6] bg-[#F5FAEC] px-3 py-2.5 text-sm text-[#365A25]"><CheckCircle2 size={17} className="mt-0.5 shrink-0 text-[#5E8E3E]" />{message}</div> : null}
 
           {tab === "connections" ? (
             <>
               <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                  ["Szinkronban", mappingSummary.synced, "border-emerald-200 bg-emerald-50 text-emerald-800"],
+                  ["Szinkronban", mappingSummary.synced, "border-[#CFE3A6] bg-[#F5FAEC] text-[#365A25]"],
                   ["Összekötve", mappingSummary.mapped, "border-sky-200 bg-sky-50 text-sky-800"],
                   ["Folyamatban", mappingSummary.pending, "border-amber-200 bg-amber-50 text-amber-800"],
                   ["Hibás / megszakadt", mappingSummary.error, "border-rose-200 bg-rose-50 text-rose-800"],
@@ -357,9 +357,9 @@ export default function ShopifySyncCenterModal({
                 <div className="flex min-w-0 flex-1 flex-wrap gap-2">
                   <label className="relative min-w-[240px] flex-1">
                     <Search size={16} className="pointer-events-none absolute left-3 top-2.5 text-slate-400" />
-                    <input className="h-9 w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 text-sm outline-none focus:border-[#008060]" value={search} onChange={(event) => { setSearch(event.target.value); setMappingPage(1); }} placeholder="Termék, márka, SKU, méret..." />
+                    <input className="h-9 w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 text-sm outline-none transition focus:border-[#5E8E3E] focus:ring-2 focus:ring-[#95BF47]/20" value={search} onChange={(event) => { setSearch(event.target.value); setMappingPage(1); }} placeholder="Termék, márka, SKU, méret..." />
                   </label>
-                  <select className="h-9 rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-700 outline-none focus:border-[#008060]" value={mappingFilter} onChange={(event) => { setMappingFilter(event.target.value as typeof mappingFilter); setMappingPage(1); }}>
+                  <select className="h-9 rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-700 outline-none transition focus:border-[#5E8E3E] focus:ring-2 focus:ring-[#95BF47]/20" value={mappingFilter} onChange={(event) => { setMappingFilter(event.target.value as typeof mappingFilter); setMappingPage(1); }}>
                     <option value="all">Minden kapcsolat</option>
                     <option value="synced">Szinkronban</option>
                     <option value="mapped">Csak összekötve</option>
@@ -393,7 +393,7 @@ export default function ShopifySyncCenterModal({
                           {errorText ? <p className="mt-1 text-xs text-rose-600">{errorText}</p> : null}
                         </div>
                         <div>
-                          <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] ${state === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : state === "pending" ? "border-amber-200 bg-amber-50 text-amber-700" : state === "synced" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-sky-200 bg-sky-50 text-sky-700"}`}>{mappingStateLabel(row)}</span>
+                          <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] ${state === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : state === "pending" ? "border-amber-200 bg-amber-50 text-amber-700" : state === "synced" ? "border-[#BCD98B] bg-[#F3F8E9] text-[#365A25]" : "border-sky-200 bg-sky-50 text-sky-700"}`}>{mappingStateLabel(row)}</span>
                           <p className="mt-1 text-[10px] text-slate-400">Csík {numberValue(row.desired_csikszereda_qty)} • Kézdi {numberValue(row.desired_kezdi_qty)}</p>
                         </div>
                         <div className="text-xs text-slate-500">{dateTime(row.last_synced_at)}</div>
@@ -430,18 +430,18 @@ export default function ShopifySyncCenterModal({
 
               <section className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="grid grid-cols-[36px,1fr,150px,140px,auto] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] uppercase tracking-[0.08em] text-slate-500">
-                  <label className="flex items-center justify-center"><input type="checkbox" checked={allVisibleExportsSelected} onChange={(event) => setSelectedExportIds((current) => { const next = { ...current }; visibleExports.forEach((row) => { if (event.target.checked) next[row.id] = true; else delete next[row.id]; }); return next; })} /></label>
+                  <label className="flex items-center justify-center"><input className="accent-[#5E8E3E]" type="checkbox" checked={allVisibleExportsSelected} onChange={(event) => setSelectedExportIds((current) => { const next = { ...current }; visibleExports.forEach((row) => { if (event.target.checked) next[row.id] = true; else delete next[row.id]; }); return next; })} /></label>
                   <span>Export</span><span>Állapot</span><span>Helyszín</span><span className="text-right">Művelet</span>
                 </div>
                 <div className="divide-y divide-slate-100">
                   {visibleExports.map((row) => (
                     <div key={row.id} className="grid gap-2 px-3 py-2.5 lg:grid-cols-[36px,1fr,150px,140px,auto] lg:items-center">
-                      <label className="flex items-center justify-center"><input type="checkbox" checked={Boolean(selectedExportIds[row.id])} onChange={(event) => setSelectedExportIds((current) => { const next = { ...current }; if (event.target.checked) next[row.id] = true; else delete next[row.id]; return next; })} /></label>
+                      <label className="flex items-center justify-center"><input className="accent-[#5E8E3E]" type="checkbox" checked={Boolean(selectedExportIds[row.id])} onChange={(event) => setSelectedExportIds((current) => { const next = { ...current }; if (event.target.checked) next[row.id] = true; else delete next[row.id]; return next; })} /></label>
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-xs text-slate-700">{row.id.slice(0, 8)}</span><span className="text-xs text-slate-500">{dateTime(row.created_at)}</span></div>
                         <p className="mt-1 text-xs text-slate-500">{numberValue(row.valid_variant_count)} variáns • {numberValue(row.model_count)} termék • hibás {numberValue(row.invalid_variant_count)} • jelzés {numberValue(row.warning_count)}</p>
                       </div>
-                      <span className={`inline-flex w-fit rounded-full border px-2 py-1 text-[11px] ${normalized(row.status) === "mapped" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : normalized(row.status) === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{exportStatusLabel(row.status)}</span>
+                      <span className={`inline-flex w-fit rounded-full border px-2 py-1 text-[11px] ${normalized(row.status) === "mapped" ? "border-[#BCD98B] bg-[#F3F8E9] text-[#365A25]" : normalized(row.status) === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{exportStatusLabel(row.status)}</span>
                       <span className="text-xs text-slate-500">{row.shopify_location_name || "Miercurea Ciuc"}</span>
                       <div className="flex flex-wrap justify-end gap-1.5">
                         <a className={smallButton} href={`/api/aif/shopify/product-exports/${encodeURIComponent(row.id)}/download`} download><Download size={13} /> CSV</a>
