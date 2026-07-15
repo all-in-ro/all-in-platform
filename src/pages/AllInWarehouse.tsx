@@ -330,6 +330,24 @@ type PersistedSelectedWorkItem = InventoryItem & {
   selected_updated_at?: string | null;
 };
 
+// A ShopifyStatusIcon komponens a nem látható állapotnál a saját useEffect hookja
+// előtt tér vissza. Ha egy sor export után láthatóvá válik, vagy egy régi export
+// törlése után eltűnik a Shopify-jelzés, ugyanaz a komponenspéldány eltérő számú
+// hookot futtatna, amitől a React production build üres képernyővel elszáll.
+// A szülőben ezért csak akkor mountoljuk, amikor valóban van megjelenítendő
+// Shopify-állapot. Állapotváltáskor így szabályos mount/unmount történik.
+function WarehouseShopifyStatusIcon({
+  item,
+  size = "sm",
+}: {
+  item: InventoryItem;
+  size?: "xs" | "sm" | "md";
+}) {
+  const visible = isShopifyMappedItem(item) || isShopifyExportPending(item) || shopifyMappingHasError(item);
+  if (!visible) return null;
+  return <ShopifyStatusIcon item={item} size={size} />;
+}
+
 
 function firstWarehouseText(...values: unknown[]) {
   for (const value of values) {
@@ -7754,7 +7772,7 @@ export default function AllInWarehouse() {
                             >
                               {it.title_ro || "-"}
                             </button>
-                            <ShopifyStatusIcon item={it} size="sm" />
+                            <WarehouseShopifyStatusIcon item={it} size="sm" />
                           </div>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
                             <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
@@ -7824,7 +7842,7 @@ export default function AllInWarehouse() {
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
                           <button className="block min-w-0 flex-1 truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
-                          <ShopifyStatusIcon item={it} size="sm" />
+                          <WarehouseShopifyStatusIcon item={it} size="sm" />
                         </div>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-1"><ProductCodeTooltipButton item={it} /></div>
