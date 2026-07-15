@@ -101,6 +101,8 @@ const stockMovesChangedEventName = "aif:stock-moves-changed";
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
 const warehouseLocalPriceHistoryStorageKey = "allinfashion:warehouse:localPriceHistory:v1";
+const warehouseBarcodeReturnStorageKey = "allinfashion:warehouse:barcodeReturn:v1";
+const warehouseBarcodeChangedStorageKey = "allinfashion:barcode:changed:v1";
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -855,6 +857,49 @@ function goHome() {
   window.location.hash = "#allin";
 }
 
+function rememberWarehouseBarcodeReturnTarget(variantId?: string, title?: string) {
+  const cleanVariantId = String(variantId || "").trim();
+  if (!cleanVariantId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(warehouseBarcodeReturnStorageKey, JSON.stringify({
+      variantId: cleanVariantId,
+      title: String(title || "").trim() || null,
+      startedAt: new Date().toISOString(),
+    }));
+  } catch {
+    // A visszatérés kényelmi funkció. A bárkódoldal ettől még megnyílhat.
+  }
+}
+
+function consumeWarehouseBarcodeReturnTarget() {
+  if (typeof window === "undefined") return null as null | { variantId: string; title?: string | null; barcode?: string | null };
+  try {
+    const raw = window.localStorage.getItem(warehouseBarcodeReturnStorageKey);
+    if (!raw) return null;
+    window.localStorage.removeItem(warehouseBarcodeReturnStorageKey);
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const variantId = String(parsed?.variantId || "").trim();
+    if (!variantId) return null;
+
+    let savedBarcode = "";
+    try {
+      const changedRaw = window.localStorage.getItem(warehouseBarcodeChangedStorageKey);
+      const changed = changedRaw ? JSON.parse(changedRaw) as Record<string, unknown> : null;
+      if (String(changed?.variantId || "").trim() === variantId) savedBarcode = String(changed?.barcode || "").trim();
+    } catch {
+      savedBarcode = "";
+    }
+
+    return {
+      variantId,
+      title: String(parsed?.title || "").trim() || null,
+      barcode: savedBarcode || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function goBarcodeManager(variantId?: string, barcode?: string, title?: string) {
   const params = new URLSearchParams();
   if (variantId) params.set("variant", variantId);
@@ -862,6 +907,11 @@ function goBarcodeManager(variantId?: string, barcode?: string, title?: string) 
   if (title) params.set("title", title);
   params.set("source", "warehouse");
   params.set("return", "allinwarehouse");
+  if (variantId) {
+    params.set("returnDetail", "1");
+    params.set("returnVariant", variantId);
+    rememberWarehouseBarcodeReturnTarget(variantId, title);
+  }
   const suffix = params.toString() ? `?${params.toString()}` : "";
   window.location.hash = `#allinbarcodes${suffix}`;
 }
@@ -6924,8 +6974,24 @@ export default function AllInWarehouse() {
       return payload;
     };
 
+    const barcodeReturnTarget = consumeWarehouseBarcodeReturnTarget();
     const incomingPayload = consumeIncomingShowAllFlag();
     load().then(async () => {
+      const returnVariantId = String(barcodeReturnTarget?.variantId || "").trim();
+      if (returnVariantId) {
+        resetWarehouseFilters(false);
+        setFiltersOpen(false);
+        setSummaryOpen(false);
+        setListOpen(true);
+        await openDetail(returnVariantId);
+        setMessage(
+          barcodeReturnTarget?.barcode
+            ? `A bárkód elmentve: ${barcodeReturnTarget.barcode}. Visszahoztalak ugyanennek a terméknek az adatlapjára, így folytathatod a szerkesztést.`
+            : "Visszahoztalak ugyanennek a terméknek az adatlapjára, így nem kell újra kikeresni a listából."
+        );
+        return;
+      }
+
       const batchId = String(incomingPayload?.importBatchId || incomingPayload?.batchId || "").trim();
       if (batchId && isUuidLike(batchId)) {
         await loadIncomingFocusBatch(batchId, true);
@@ -7051,13 +7117,13 @@ export default function AllInWarehouse() {
               <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
               <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
               <button
-                className={`${headerBtnSoft} h-8 w-9 px-0`}
+                className="inline-flex h-8 w-9 items-center justify-center rounded-xl border border-white bg-white p-0 text-[#008060] shadow-[0_5px_14px_rgba(15,23,42,0.18)] transition hover:border-[#dfead0] hover:bg-[#f7fbf1] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45"
                 onClick={() => setShopifySyncCenterOpen(true)}
                 type="button"
                 title="Shopify központ: kapcsolatok, újraszinkron és exportelőzmények"
                 aria-label="Shopify központ"
               >
-                <ShopifyBrandMark size="sm" />
+                <ShopifyBrandMark size="sm" className="border-0 bg-transparent shadow-none" />
               </button>
               {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
               <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
