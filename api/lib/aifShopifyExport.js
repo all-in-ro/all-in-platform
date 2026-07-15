@@ -302,6 +302,28 @@ function productCode(row) {
   return text(row.supplier_product_code || row.model_code || row.internal_sku);
 }
 
+// Egy Shopify-termék egy konkrét beszállítói termékkód / színváltozat.
+// Ugyanazon kód külön méretei variánsok, de pl. 1376700-001 és 1376700-002
+// két külön Shopify-termék. Az AllIn modell_id önmagában nem elég, mert az
+// import a színkódos termékeket közös alapmodell alá rendezheti.
+function productGroupCode(row) {
+  const supplierProductCode = text(row.supplier_product_code);
+  if (supplierProductCode) return supplierProductCode;
+
+  const baseModelCode = text(row.model_code);
+  const supplierColorCode = text(row.supplier_color_code);
+  const colorCode = text(row.color_code);
+  const colorName = text(row.color_name);
+  if (baseModelCode && supplierColorCode) return `${baseModelCode}-${supplierColorCode}`;
+  if (baseModelCode && colorCode) return `${baseModelCode}-${colorCode}`;
+  if (baseModelCode && colorName) return `${baseModelCode}-${colorName}`;
+  return baseModelCode || text(row.model_id);
+}
+
+function productGroupKey(row) {
+  return `${text(row.model_id)}::${normalizeKey(productGroupCode(row))}`;
+}
+
 function validationForRow(row) {
   const errors = [];
   const warnings = [];
@@ -518,17 +540,22 @@ async function loadExportCandidates(client, variantIds, selectionMode) {
 }
 
 function handlesForRows(rows) {
-  const baseByModel = new Map();
+  const handleByGroup = new Map();
   const used = new Set();
   for (const row of rows) {
-    if (baseByModel.has(row.model_id)) continue;
-    let handle = slug([row.brand_name, productCode(row) || row.model_code || row.shopify_title || row.title_ro].filter(Boolean).join("-"));
+    const groupKey = productGroupKey(row);
+    if (handleByGroup.has(groupKey)) continue;
+    const groupCode = productGroupCode(row);
+    let handle = slug([row.brand_name, groupCode || row.shopify_title || row.title_ro].filter(Boolean).join("-"));
     if (!handle) handle = `allin-${text(row.model_id).slice(0, 8)}`;
-    if (used.has(handle)) handle = `${handle}-${text(row.model_id).replace(/-/g, "").slice(0, 8)}`;
+    if (used.has(handle)) {
+      const modelSuffix = text(row.model_id).replace(/-/g, "").slice(0, 8) || "product";
+      handle = `${handle}-${modelSuffix}`.slice(0, 180);
+    }
     used.add(handle);
-    baseByModel.set(row.model_id, handle);
+    handleByGroup.set(groupKey, handle);
   }
-  return baseByModel;
+  return handleByGroup;
 }
 
 async function prepareExport(client, options = {}) {
@@ -547,14 +574,17 @@ async function prepareExport(client, options = {}) {
     });
   }
 
-  const modelImageById = new Map();
+  const productImageByGroup = new Map();
   for (const row of rows) {
     const image = imageFromRow(row);
-    if (image && !modelImageById.has(row.model_id)) modelImageById.set(row.model_id, image);
+    const groupKey = productGroupKey(row);
+    if (image && !productImageByGroup.has(groupKey)) productImageByGroup.set(groupKey, image);
   }
   const exportRows = rows.map((row) => ({
     ...row,
-    image_url: imageFromRow(row) || modelImageById.get(row.model_id) || "",
+    product_group_key: productGroupKey(row),
+    product_group_code: productGroupCode(row),
+    image_url: imageFromRow(row) || productImageByGroup.get(productGroupKey(row)) || "",
   }));
 
   const handles = handlesForRows(exportRows);
@@ -574,7 +604,7 @@ async function prepareExport(client, options = {}) {
     const skippedMapped = Boolean(row.shopify_mapped && !includeMapped);
     return {
       ...row,
-      handle: handles.get(row.model_id),
+      handle: handles.get(productGroupKey(row)),
       sku,
       image_url: imageFromRow(row),
       validation_errors: validation.errors,
@@ -586,8 +616,9 @@ async function prepareExport(client, options = {}) {
   const validItems = items.filter((item) => item.export_state === "valid");
   const invalidItems = items.filter((item) => item.export_state === "invalid");
   const skippedItems = items.filter((item) => item.export_state === "skipped_mapped");
-  const modelCount = new Set(items.map((item) => item.model_id)).size;
-  const validModelCount = new Set(validItems.map((item) => item.model_id)).size;
+  const allInModelCount = new Set(items.map((item) => item.model_id)).size;
+  const modelCount = new Set(items.map((item) => item.product_group_key || productGroupKey(item))).size;
+  const validModelCount = new Set(validItems.map((item) => item.product_group_key || productGroupKey(item))).size;
   const warningCount = items.reduce((sum, item) => sum + item.validation_warnings.length, 0);
   const totalAvailableQty = validItems.reduce((sum, item) => sum + integer(item.export_available_qty, 0), 0);
 
@@ -602,7 +633,9 @@ async function prepareExport(client, options = {}) {
     skippedItems,
     summary: {
       selectedVariantCount: unique(options.variantIds || []).length,
+      allInModelCount,
       modelCount,
+      productCount: modelCount,
       validModelCount,
       variantCount: items.length,
       validVariantCount: validItems.length,
@@ -617,16 +650,17 @@ async function prepareExport(client, options = {}) {
 }
 
 function productRowsForItems(items, productStatus) {
-  const byModel = new Map();
+  const byProduct = new Map();
   for (const item of items) {
-    const list = byModel.get(item.model_id) || [];
+    const groupKey = item.product_group_key || productGroupKey(item);
+    const list = byProduct.get(groupKey) || [];
     list.push(item);
-    byModel.set(item.model_id, list);
+    byProduct.set(groupKey, list);
   }
 
   const productRows = [];
   const byVariant = new Map();
-  for (const modelItems of byModel.values()) {
+  for (const modelItems of byProduct.values()) {
     const colors = unique(
       modelItems
         .map((item) => text(item.color_name || item.color_code))
@@ -782,6 +816,8 @@ export async function previewAifShopifyProductExport(client, options = {}) {
     items: prepared.items.map((item) => ({
       variantId: item.variant_id,
       modelId: item.model_id,
+      productGroupCode: item.product_group_code || productGroupCode(item),
+      handle: item.handle,
       title: item.shopify_title || item.title_ro,
       brand: item.brand_name,
       color: item.color_name || item.color_code,
@@ -860,6 +896,9 @@ export async function createAifShopifyProductExport(client, options = {}) {
           JSON.stringify({
             title: item.shopify_title || item.title_ro,
             brand: item.brand_name,
+            productCode: item.product_group_code || productGroupCode(item),
+            productGroupKey: item.product_group_key || productGroupKey(item),
+            handle: item.handle,
             color: item.color_name || item.color_code,
             size: item.size,
             internalSku: item.internal_sku,
@@ -898,7 +937,7 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   const items = await client.query(
     `SELECT * FROM aif_shopify_product_export_items
      WHERE export_id=$1
-     ORDER BY model_id, created_at, variant_id`,
+     ORDER BY handle, created_at, variant_id`,
     [exportRow.id]
   );
 
@@ -906,7 +945,7 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   // Az export létrehozásakor csak egy variánssor kap termékcímet, de az adatbázisból
   // történő későbbi visszaolvasás variant_id szerint átrendezhette a sorokat. Ettől egy
   // üres Title-os variáns kerülhetett a modell első sorába, amit a Shopify jogosan
-  // elutasított. Modell/handle szerint csoportosítunk, és mindig a termékadatokat
+  // elutasított. Handle szerint csoportosítunk, és mindig a termékadatokat
   // tartalmazó sort tesszük elsőnek. A régebbi mentett exportokat is automatikusan
   // kijavítjuk letöltéskor.
   const exportableItems = items.rows
@@ -914,7 +953,7 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   const grouped = new Map();
   for (const item of exportableItems) {
     const productRow = { ...(item.product_row || {}) };
-    const groupKey = text(item.model_id || productRow["URL handle"] || item.handle || item.variant_id);
+    const groupKey = text(productRow["URL handle"] || item.handle || item.model_id || item.variant_id);
     const list = grouped.get(groupKey) || [];
     list.push({ item, productRow });
     grouped.set(groupKey, list);
