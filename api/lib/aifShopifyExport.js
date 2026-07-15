@@ -303,11 +303,27 @@ function productCode(row) {
   return text(row.supplier_product_code || row.model_code || row.internal_sku);
 }
 
-// Egy Shopify-termék egy konkrét beszállítói termékkód / színváltozat.
-// Ugyanazon kód külön méretei variánsok, de pl. 1376700-001 és 1376700-002
-// két külön Shopify-termék. Az AllIn modell_id önmagában nem elég, mert az
-// import a színkódos termékeket közös alapmodell alá rendezheti.
-function productGroupCode(row) {
+function cleanGroupingMode(value) {
+  return text(value) === "model_colors" ? "model_colors" : "product_code";
+}
+
+function modelGroupCode(row) {
+  const rawModelCode = text(row.model_code);
+  if (rawModelCode) {
+    const cleanModelCode = rawModelCode.includes(":") ? rawModelCode.split(":").pop() || rawModelCode : rawModelCode;
+    if (text(cleanModelCode)) return text(cleanModelCode);
+  }
+  return text(row.shopify_title || row.title_ro || row.model_id);
+}
+
+// Két használható Shopify-csoportosítás:
+// - model_colors: egy AllIn modell egy Shopify-termék, a szín és a méret variánsopció.
+// - product_code: minden beszállítói termékkód külön Shopify-termék.
+// Az első kell például a DOGGY POLO ciklam / roz / turcoaz színeihez, a második
+// megmarad azokhoz a márkákhoz, ahol a színkódos cikkszám tényleg külön termék.
+function productGroupCode(row, groupingMode = "product_code") {
+  if (cleanGroupingMode(groupingMode) === "model_colors") return modelGroupCode(row);
+
   const supplierProductCode = text(row.supplier_product_code);
   if (supplierProductCode) return supplierProductCode;
 
@@ -321,8 +337,16 @@ function productGroupCode(row) {
   return baseModelCode || text(row.model_id);
 }
 
-function productGroupKey(row) {
-  return `${text(row.model_id)}::${normalizeKey(productGroupCode(row))}`;
+function productGroupKey(row, groupingMode = "product_code") {
+  const mode = cleanGroupingMode(groupingMode);
+  if (mode === "model_colors") {
+    return `model::${text(row.model_id) || normalizeKey(modelGroupCode(row))}`;
+  }
+  return `${text(row.model_id)}::${normalizeKey(productGroupCode(row, mode))}`;
+}
+
+function variantOptionCombinationKey(row) {
+  return `${normalizeKey(row.color_name || row.color_code)}::${normalizeKey(row.size)}`;
 }
 
 function validationForRow(row) {
@@ -540,13 +564,13 @@ async function loadExportCandidates(client, variantIds, selectionMode) {
   return result.rows;
 }
 
-function handlesForRows(rows) {
+function handlesForRows(rows, groupingMode = "product_code") {
   const handleByGroup = new Map();
   const used = new Set();
   for (const row of rows) {
-    const groupKey = productGroupKey(row);
+    const groupKey = text(row.product_group_key) || productGroupKey(row, groupingMode);
     if (handleByGroup.has(groupKey)) continue;
-    const groupCode = productGroupCode(row);
+    const groupCode = text(row.product_group_code) || productGroupCode(row, groupingMode);
     let handle = slug([row.brand_name, groupCode || row.shopify_title || row.title_ro].filter(Boolean).join("-"));
     if (!handle) handle = `allin-${text(row.model_id).slice(0, 8)}`;
     if (used.has(handle)) {
@@ -563,6 +587,7 @@ async function prepareExport(client, options = {}) {
   await ensureAifShopifyExportSchema(client);
   const selectionMode = options.selectionMode === "selected_variants" ? "selected_variants" : "all_model_variants";
   const productStatus = options.productStatus === "active" ? "active" : "draft";
+  const groupingMode = cleanGroupingMode(options.groupingMode || options.grouping_mode);
   const includeMapped = bool(options.includeMapped, false);
   const rows = await loadExportCandidates(client, options.variantIds, selectionMode);
   const status = await getAifShopifyStatus(client);
@@ -578,34 +603,64 @@ async function prepareExport(client, options = {}) {
   const productImageByGroup = new Map();
   for (const row of rows) {
     const image = imageFromRow(row);
-    const groupKey = productGroupKey(row);
+    const groupKey = productGroupKey(row, groupingMode);
     if (image && !productImageByGroup.has(groupKey)) productImageByGroup.set(groupKey, image);
   }
-  const exportRows = rows.map((row) => ({
-    ...row,
-    product_group_key: productGroupKey(row),
-    product_group_code: productGroupCode(row),
-    image_url: imageFromRow(row) || productImageByGroup.get(productGroupKey(row)) || "",
-  }));
+  const exportRows = rows.map((row) => {
+    const groupKey = productGroupKey(row, groupingMode);
+    return {
+      ...row,
+      grouping_mode: groupingMode,
+      product_group_key: groupKey,
+      product_group_code: productGroupCode(row, groupingMode),
+      image_url: imageFromRow(row) || productImageByGroup.get(groupKey) || "",
+    };
+  });
 
-  const handles = handlesForRows(exportRows);
+  const handles = handlesForRows(exportRows, groupingMode);
   const skuCounts = new Map();
+  const optionCombinationCounts = new Map();
+  const groupMappingState = new Map();
   for (const row of exportRows) {
     const sku = normalizeKey(variantSku(row));
-    if (!sku) continue;
-    skuCounts.set(sku, (skuCounts.get(sku) || 0) + 1);
+    if (sku) skuCounts.set(sku, (skuCounts.get(sku) || 0) + 1);
+
+    const optionKey = `${row.product_group_key}::${variantOptionCombinationKey(row)}`;
+    optionCombinationCounts.set(optionKey, (optionCombinationCounts.get(optionKey) || 0) + 1);
+
+    const mappingState = groupMappingState.get(row.product_group_key) || { mapped: 0, unmapped: 0 };
+    if (row.shopify_mapped) mappingState.mapped += 1;
+    else mappingState.unmapped += 1;
+    groupMappingState.set(row.product_group_key, mappingState);
   }
 
-  const items = exportRows.map((row) => {
+  let items = exportRows.map((row) => {
     const validation = validationForRow(row);
     const sku = variantSku(row);
     if (sku && (skuCounts.get(normalizeKey(sku)) || 0) > 1) {
       validation.errors.push("A kijelölt exportban ez a Shopify SKU többször szerepel.");
     }
+
+    const optionKey = `${row.product_group_key}::${variantOptionCombinationKey(row)}`;
+    if ((optionCombinationCounts.get(optionKey) || 0) > 1) {
+      validation.errors.push("Ebben a Shopify-termékben ugyanaz a szín + méret kombináció többször szerepel.");
+    }
+
+    const mappingState = groupMappingState.get(row.product_group_key) || { mapped: 0, unmapped: 0 };
+    if (
+      groupingMode === "model_colors" &&
+      !includeMapped &&
+      !row.shopify_mapped &&
+      mappingState.mapped > 0 &&
+      mappingState.unmapped > 0
+    ) {
+      validation.errors.push("A modell egyik színe már Shopifyhoz van kapcsolva. A teljes színválaszték újraépítéséhez kapcsold be a „Már összekötötteket is exportálja” opciót.");
+    }
+
     const skippedMapped = Boolean(row.shopify_mapped && !includeMapped);
     return {
       ...row,
-      handle: handles.get(productGroupKey(row)),
+      handle: handles.get(row.product_group_key),
       sku,
       image_url: imageFromRow(row),
       validation_errors: validation.errors,
@@ -614,18 +669,39 @@ async function prepareExport(client, options = {}) {
     };
   });
 
+  if (groupingMode === "model_colors") {
+    const invalidGroups = new Set(
+      items
+        .filter((item) => item.export_state === "invalid")
+        .map((item) => item.product_group_key)
+        .filter(Boolean)
+    );
+    items = items.map((item) => {
+      if (item.export_state !== "valid" || !invalidGroups.has(item.product_group_key)) return item;
+      return {
+        ...item,
+        validation_errors: [
+          ...item.validation_errors,
+          "A modell egyik szín- vagy méretvariánsa hibás, ezért a teljes Shopify-terméket visszatartottam. Javítsd a hibás sort, majd exportáld újra a teljes modellt.",
+        ],
+        export_state: "invalid",
+      };
+    });
+  }
+
   const validItems = items.filter((item) => item.export_state === "valid");
   const invalidItems = items.filter((item) => item.export_state === "invalid");
   const skippedItems = items.filter((item) => item.export_state === "skipped_mapped");
   const allInModelCount = new Set(items.map((item) => item.model_id)).size;
-  const modelCount = new Set(items.map((item) => item.product_group_key || productGroupKey(item))).size;
-  const validModelCount = new Set(validItems.map((item) => item.product_group_key || productGroupKey(item))).size;
+  const modelCount = new Set(items.map((item) => item.product_group_key || productGroupKey(item, groupingMode))).size;
+  const validModelCount = new Set(validItems.map((item) => item.product_group_key || productGroupKey(item, groupingMode))).size;
   const warningCount = items.reduce((sum, item) => sum + item.validation_warnings.length, 0);
   const totalAvailableQty = validItems.reduce((sum, item) => sum + integer(item.export_available_qty, 0), 0);
 
   return {
     selectionMode,
     productStatus,
+    groupingMode,
     includeMapped,
     location: { id: locationId, name: locationName },
     items,
@@ -634,6 +710,7 @@ async function prepareExport(client, options = {}) {
     skippedItems,
     summary: {
       selectedVariantCount: unique(options.variantIds || []).length,
+      groupingMode,
       allInModelCount,
       modelCount,
       productCount: modelCount,
@@ -662,13 +739,13 @@ function productRowsForItems(items, productStatus) {
   const productRows = [];
   const byVariant = new Map();
   for (const modelItems of byProduct.values()) {
-    const colors = unique(
-      modelItems
-        .map((item) => text(item.color_name || item.color_code))
-        .filter((value) => value && !/^\\d+[a-z]?$/i.test(value))
-    );
-    const firstImage = modelItems.map((item) => item.image_url).find(Boolean) || "";
-    modelItems.forEach((item, index) => {
+    const sortedItems = modelItems.slice().sort((a, b) => {
+      const colorCompare = text(a.color_name || a.color_code).localeCompare(text(b.color_name || b.color_code), "ro", { sensitivity: "base" });
+      if (colorCompare !== 0) return colorCompare;
+      return text(a.size).localeCompare(text(b.size), "ro", { numeric: true, sensitivity: "base" });
+    });
+    const firstImage = sortedItems.map((item) => item.image_url).find(Boolean) || "";
+    sortedItems.forEach((item, index) => {
       const first = index === 0;
       const title = text(item.shopify_title || item.title_ro);
       const category = productCategory(item);
@@ -719,7 +796,9 @@ function productRowsForItems(items, productStatus) {
         "Gift card": "FALSE",
         "SEO title": first ? title.slice(0, 70) : "",
         "SEO description": first ? seoDescription : "",
-        "Color (product.metafields.shopify.color-pattern)": first ? colors.join("; ") : "",
+        // A szín itt normál termékopcióként megy át. A Shopify kategória-színmező
+        // metaobjektum-hivatkozást várhat, ezért nyers színnevet nem töltünk bele.
+        "Color (product.metafields.shopify.color-pattern)": "",
         "Google Shopping / Google product category": first
           ? (/Hats(?: >|$)/.test(category) ? "2396" : category)
           : "",
@@ -813,11 +892,12 @@ export async function previewAifShopifyProductExport(client, options = {}) {
     summary: prepared.summary,
     selectionMode: prepared.selectionMode,
     productStatus: prepared.productStatus,
+    groupingMode: prepared.groupingMode,
     location: prepared.location,
     items: prepared.items.map((item) => ({
       variantId: item.variant_id,
       modelId: item.model_id,
-      productGroupCode: item.product_group_code || productGroupCode(item),
+      productGroupCode: item.product_group_code || productGroupCode(item, prepared.groupingMode),
       handle: item.handle,
       title: item.shopify_title || item.title_ro,
       brand: item.brand_name,
@@ -897,8 +977,9 @@ export async function createAifShopifyProductExport(client, options = {}) {
           JSON.stringify({
             title: item.shopify_title || item.title_ro,
             brand: item.brand_name,
-            productCode: item.product_group_code || productGroupCode(item),
-            productGroupKey: item.product_group_key || productGroupKey(item),
+            productCode: item.product_group_code || productGroupCode(item, prepared.groupingMode),
+            productGroupKey: item.product_group_key || productGroupKey(item, prepared.groupingMode),
+            groupingMode: prepared.groupingMode,
             handle: item.handle,
             color: item.color_name || item.color_code,
             size: item.size,
@@ -954,6 +1035,8 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   const grouped = new Map();
   for (const item of exportableItems) {
     const productRow = { ...(item.product_row || {}) };
+    // Régi export újraletöltésekor se küldjünk nyers színnevet a kategória metaobjektum mezőbe.
+    productRow["Color (product.metafields.shopify.color-pattern)"] = "";
     const groupKey = text(productRow["URL handle"] || item.handle || item.model_id || item.variant_id);
     const list = grouped.get(groupKey) || [];
     list.push({ item, productRow });
