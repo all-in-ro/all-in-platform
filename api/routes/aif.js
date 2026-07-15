@@ -25,11 +25,14 @@ import {
 } from "../lib/aifShopify.js";
 import {
   createAifShopifyProductExport,
+  deleteAifShopifyProductExport,
+  deleteAifShopifyProductExports,
   ensureAifShopifyExportSchema,
   getAifShopifyProductExportCsv,
   listAifShopifyProductExports,
   previewAifShopifyProductExport,
   reconcileAifShopifyProductExport,
+  refreshAifShopifyMappings,
 } from "../lib/aifShopifyExport.js";
 
 export default function createAifRouter({ pool, requireAuthed, requireAdminOrSecret }) {
@@ -8782,6 +8785,55 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  router.post("/shopify/mappings/refresh", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await refreshAifShopifyMappings(client, {
+        variantIds: Array.isArray(req.body?.variantIds) ? req.body.variantIds : Array.isArray(req.body?.variant_ids) ? req.body.variant_ids : [],
+        sync: req.body?.sync === true,
+        syncRepaired: req.body?.syncRepaired !== false && req.body?.sync_repaired !== false,
+        limit: Number(req.body?.limit || 1000),
+      });
+      let processed = null;
+      if (result.queued > 0 && req.body?.process !== false) {
+        processed = await processAifShopifyOutboxBatch(pool, {
+          limit: Math.min(1000, Math.max(1, Number(req.body?.processLimit || req.body?.process_limit || result.queued))),
+        });
+      }
+      res.json({ ...result, processed });
+    } catch (e) {
+      console.error("AIF Shopify mapping refresh failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify kapcsolatok ellenőrzése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shopify/mappings/:variantId/refresh", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const variantId = text(req.params.variantId);
+      if (!variantId) return res.status(400).json({ error: "variantId required" });
+      const result = await refreshAifShopifyMappings(client, {
+        variantIds: [variantId],
+        sync: req.body?.sync !== false,
+        syncRepaired: true,
+        limit: 1,
+      });
+      let processed = null;
+      if (result.queued > 0 && req.body?.process !== false) {
+        processed = await processAifShopifyOutboxBatch(pool, { limit: Math.max(1, Number(req.body?.processLimit || 5)) });
+      }
+      res.json({ ...result, processed });
+    } catch (e) {
+      console.error("AIF Shopify single mapping refresh failed", e);
+      res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify kapcsolat újraellenőrzése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
   router.post("/shopify/enqueue-all", requireAdminOrSecret, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -8853,6 +8905,35 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       console.error("AIF Shopify product exports list failed", e);
       res.status(500).json({ error: e?.message || "A Shopify exportok betöltése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
+  router.post("/shopify/product-exports/delete-batch", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids : Array.isArray(req.body?.exportIds) ? req.body.exportIds : [];
+      const result = await deleteAifShopifyProductExports(client, ids);
+      res.json(result);
+    } catch (e) {
+      console.error("AIF Shopify product exports batch delete failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify exportelőzmények törlése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/shopify/product-exports/:id", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const result = await deleteAifShopifyProductExport(client, req.params.id);
+      if (!result) return res.status(404).json({ error: "Shopify export nem található." });
+      res.json(result);
+    } catch (e) {
+      console.error("AIF Shopify product export delete failed", e);
+      res.status(500).json({ error: e?.message || "A Shopify exportelőzmény törlése nem sikerült.", code: e?.code || null });
     } finally {
       client.release();
     }
