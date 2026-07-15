@@ -7357,7 +7357,7 @@ export default function AllInWarehouse() {
                 title="Shopify központ: kapcsolatok, újraszinkron és exportelőzmények"
                 aria-label="Shopify központ"
               >
-                <ShopifyBrandMark size="sm" className="border-0 bg-transparent shadow-none" />
+                <ShopifyBrandMark size="md" className="border-0 bg-transparent shadow-none" />
               </button>
               {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
               <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
