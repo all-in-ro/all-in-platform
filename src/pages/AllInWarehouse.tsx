@@ -298,7 +298,24 @@ type InventoryItem = {
   total_reserved_qty?: number | string | null;
   available_qty?: number | string | null;
   last_stock_movement_at?: string | null;
+  first_incoming_at?: string | null;
   last_incoming_at?: string | null;
+  last_import_batch_id?: string | null;
+  last_reception_id?: string | null;
+  last_invoice_number?: string | null;
+  last_invoice_date?: string | null;
+  last_reception_date?: string | null;
+  last_source_file_name?: string | null;
+  invoice_numbers?: string[] | string | null;
+  invoice_history?: Array<{
+    invoiceNumber?: string | null;
+    invoiceDate?: string | null;
+    receptionDate?: string | null;
+    importedAt?: string | null;
+    batchId?: string | null;
+    receptionId?: string | null;
+    sourceFileName?: string | null;
+  }> | string | null;
   shopify_mapped?: boolean | null;
   shopify_sync_status?: string | null;
   shopify_outbox_status?: string | null;
@@ -308,6 +325,9 @@ type InventoryItem = {
   shopify_product_title?: string | null;
   shopify_variant_title?: string | null;
   shopify_product_status?: string | null;
+  shopify_mapped_at?: string | null;
+  shopify_mapping_updated_at?: string | null;
+  shopify_connected_at?: string | null;
   shopify_last_synced_at?: string | null;
   shopify_last_error?: string | null;
   shopify_outbox_error?: string | null;
@@ -636,8 +656,123 @@ type StockTransferPrintLine = {
 };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
-type ShopifyFilter = "all" | "mapped" | "exported" | "unmapped" | "error";
-type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc";
+type ShopifyFilter = "all" | "mapped" | "recent_mapped" | "exported" | "unmapped" | "error";
+type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc" | "incoming_asc" | "shopify_connected_desc";
+
+type WarehouseMultiSelectOption = { value: string; label: string; hint?: string };
+
+function WarehouseMultiSelect({
+  labelText,
+  options,
+  values,
+  onChange,
+  emptyText = "Összes",
+}: {
+  labelText: string;
+  options: WarehouseMultiSelectOption[];
+  values: string[];
+  onChange: (values: string[]) => void;
+  emptyText?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedSet = useMemo(() => new Set(values.map((value) => String(value))), [values]);
+  const selectedOptions = useMemo(
+    () => options.filter((option) => selectedSet.has(String(option.value))),
+    [options, selectedSet]
+  );
+  const summary = !selectedOptions.length
+    ? emptyText
+    : selectedOptions.length <= 2
+      ? selectedOptions.map((option) => option.label).join(" + ")
+      : `${selectedOptions.length} kiválasztva`;
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || rootRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open]);
+
+  function toggle(value: string) {
+    const key = String(value);
+    const next = new Set(values.map(String));
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onChange(Array.from(next));
+  }
+
+  return (
+    <div ref={rootRef} className={`${label} relative`}>
+      <span>{labelText}</span>
+      <button
+        type="button"
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25"
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="min-w-0 truncate">{summary}</span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {selectedOptions.length ? (
+            <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/22 px-1.5 py-0.5 text-[10px] text-[#d7fffd]">{selectedOptions.length}</span>
+          ) : null}
+          <ChevronDown size={15} className={`text-white/55 transition ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/18 bg-[#293344] shadow-2xl">
+          <div className="flex items-center justify-between gap-2 border-b border-white/10 px-2 py-1.5">
+            <button
+              type="button"
+              className="h-7 rounded-lg px-2 text-[11px] text-white/72 hover:bg-white/[0.08] hover:text-white"
+              onClick={() => onChange([])}
+            >
+              Összes
+            </button>
+            <button
+              type="button"
+              className="h-7 rounded-lg px-2 text-[11px] text-white/55 hover:bg-white/[0.08] hover:text-white"
+              onClick={() => onChange(options.map((option) => option.value))}
+              disabled={!options.length}
+            >
+              Mind kijelölése
+            </button>
+          </div>
+          <div className="max-h-64 overflow-auto py-1" role="listbox" aria-multiselectable="true">
+            {options.map((option) => {
+              const active = selectedSet.has(String(option.value));
+              return (
+                <label
+                  key={option.value}
+                  className={`flex min-h-8 cursor-pointer items-center gap-2 px-3 py-1.5 text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
+                  title={option.hint || option.label}
+                >
+                  <input
+                    className={selectBox}
+                    type="checkbox"
+                    checked={active}
+                    onChange={() => toggle(option.value)}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
+                </label>
+              );
+            })}
+            {!options.length ? <div className="px-3 py-3 text-xs text-white/45">Nincs választható érték.</div> : null}
+          </div>
+          <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
+            <button type="button" className="h-7 rounded-lg bg-[#2a8d8b] px-3 text-[11px] text-white hover:bg-[#319c99]" onClick={() => setOpen(false)}>Kész</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 type BarcodeScannerMode = "search" | "editBarcode";
 
@@ -779,9 +914,11 @@ type WarehouseFilterSnapshot = {
   brand: string;
   category: string;
   subCategory: string;
-  gender: string;
+  genderFilters: string[];
+  sizeFilters: string[];
   color: string;
   location: string;
+  invoiceFilter: string;
   stockFilter: StockFilter;
   imageFilter: ImageFilter;
   shopifyFilter: ShopifyFilter;
@@ -1014,6 +1151,119 @@ function dateTimeMs(value: unknown) {
 
 function latestWarehouseIncomingMs(item: Partial<InventoryItem> | Record<string, unknown>) {
   return Math.max(dateTimeMs((item as any).last_incoming_at), dateTimeMs((item as any).last_stock_movement_at));
+}
+
+function firstWarehouseIncomingMs(item: Partial<InventoryItem> | Record<string, unknown>) {
+  return dateTimeMs((item as any).first_incoming_at) || latestWarehouseIncomingMs(item);
+}
+
+function shopifyConnectionMs(item: Partial<InventoryItem> | Record<string, unknown>) {
+  return Math.max(
+    dateTimeMs((item as any).shopify_connected_at),
+    dateTimeMs((item as any).shopify_export_reconciled_at),
+    dateTimeMs((item as any).shopify_mapped_at),
+  );
+}
+
+function inventoryInvoiceHistory(item: Partial<InventoryItem> | Record<string, unknown>) {
+  const raw = (item as any).invoice_history;
+  let rows: Array<Record<string, unknown>> = [];
+  if (Array.isArray(raw)) rows = raw.filter((row) => row && typeof row === "object") as Array<Record<string, unknown>>;
+  else if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) rows = parsed.filter((row) => row && typeof row === "object");
+    } catch {
+      rows = [];
+    }
+  }
+  if (!rows.length && String((item as any).last_invoice_number || "").trim()) {
+    rows = [{
+      invoiceNumber: (item as any).last_invoice_number,
+      invoiceDate: (item as any).last_invoice_date,
+      receptionDate: (item as any).last_reception_date,
+      importedAt: (item as any).last_incoming_at,
+      batchId: (item as any).last_import_batch_id,
+      receptionId: (item as any).last_reception_id,
+      sourceFileName: (item as any).last_source_file_name,
+    }];
+  }
+  return rows.map((row) => ({
+    invoiceNumber: String(row.invoiceNumber || row.invoice_number || "").trim(),
+    invoiceDate: String(row.invoiceDate || row.invoice_date || "").trim() || null,
+    receptionDate: String(row.receptionDate || row.reception_date || "").trim() || null,
+    importedAt: String(row.importedAt || row.imported_at || "").trim() || null,
+    batchId: String(row.batchId || row.batch_id || "").trim() || null,
+    receptionId: String(row.receptionId || row.reception_id || "").trim() || null,
+    sourceFileName: String(row.sourceFileName || row.source_file_name || "").trim() || null,
+  }))
+    .filter((row) => row.invoiceNumber)
+    .sort((a, b) => Math.max(dateTimeMs(b.receptionDate), dateTimeMs(b.invoiceDate), dateTimeMs(b.importedAt)) - Math.max(dateTimeMs(a.receptionDate), dateTimeMs(a.invoiceDate), dateTimeMs(a.importedAt)));
+}
+
+function inventoryInvoiceNumbers(item: Partial<InventoryItem> | Record<string, unknown>) {
+  const values: string[] = inventoryInvoiceHistory(item).map((row) => row.invoiceNumber);
+  const add = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach(add);
+      return;
+    }
+    String(value ?? "")
+      .split(/[;,|]+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .forEach((part) => values.push(part));
+  };
+  add((item as any).last_invoice_number);
+  add((item as any).invoice_numbers);
+  return Array.from(new Set(values));
+}
+
+function warehouseDateLabel(value: unknown) {
+  const ms = dateTimeMs(value);
+  if (!ms) return "";
+  return new Date(ms).toLocaleDateString("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+function inventoryPurchaseDateLabel(item: Partial<InventoryItem> | Record<string, unknown>, invoiceNumber?: string) {
+  const invoiceKey = normalizeSearch(invoiceNumber);
+  const historyRow = invoiceKey
+    ? inventoryInvoiceHistory(item).find((row) => normalizeSearch(row.invoiceNumber) === invoiceKey)
+    : null;
+  return warehouseDateLabel(
+    historyRow?.receptionDate ||
+    historyRow?.invoiceDate ||
+    historyRow?.importedAt ||
+    (item as any).last_reception_date ||
+    (item as any).last_invoice_date ||
+    (item as any).last_incoming_at ||
+    (item as any).last_stock_movement_at
+  );
+}
+
+function itemMatchesGenderSelections(item: Partial<InventoryItem> | Record<string, unknown>, selected: string[], rows: GenderType[]) {
+  if (!selected.length) return true;
+  const itemKey = normalizeSearch((item as any).gender);
+  if (!itemKey) return false;
+  return selected.some((value) => {
+    const selectedKey = normalizeSearch(value);
+    const row = rows.find((gender) => [gender.code, gender.name, ...(gender.aliases || [])].map(normalizeSearch).includes(selectedKey));
+    const allowed = [selectedKey, row?.code, row?.name, ...(row?.aliases || [])].map(normalizeSearch).filter(Boolean);
+    return allowed.includes(itemKey);
+  });
+}
+
+function itemMatchesSizeSelections(item: Partial<InventoryItem> | Record<string, unknown>, selected: string[], rows: SizeType[]) {
+  if (!selected.length) return true;
+  const itemValue = officialSizeFromTypes((item as any).size, rows);
+  const itemKey = normalizeSearch(itemValue);
+  if (!itemKey) return false;
+  return selected.some((value) => {
+    const selectedKey = normalizeSearch(value);
+    const row = rows.find((size) => [size.id, size.code, size.name, size.name_hu, ...(size.aliases || [])].map(normalizeSearch).includes(selectedKey));
+    const allowed = [selectedKey, row?.id, row?.code, row?.name, row?.name_hu, ...(row?.aliases || [])].map(normalizeSearch).filter(Boolean);
+    return allowed.includes(itemKey);
+  });
 }
 
 function chartBarWidth(value: unknown, maxValue: unknown, minPositivePercent = 4) {
@@ -3415,11 +3665,13 @@ export default function AllInWarehouse() {
   const [brand, setBrand] = useState("all");
   const [category, setCategory] = useState("all");
   const [subCategory, setSubCategory] = useState("all");
-  const [gender, setGender] = useState("all");
+  const [genderFilters, setGenderFilters] = useState<string[]>([]);
+  const [sizeFilters, setSizeFilters] = useState<string[]>([]);
   const [color, setColor] = useState("all");
   const [colorFilterOpen, setColorFilterOpen] = useState(false);
   const colorFilterRef = useRef<HTMLDivElement | null>(null);
   const [location, setLocation] = useState("all");
+  const [invoiceFilter, setInvoiceFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
   const [shopifyFilter, setShopifyFilter] = useState<ShopifyFilter>("all");
@@ -4317,6 +4569,67 @@ export default function AllInWarehouse() {
     return brands.filter((b) => linkedBrandIds.has(String(b.id)));
   }, [brands, supplierBrands, selectedSupplier]);
 
+  const genderFilterOptions = useMemo<WarehouseMultiSelectOption[]>(() => {
+    return genderTypes
+      .filter((row) => row.is_active !== false)
+      .slice()
+      .sort((a, b) => String(a.name || a.code).localeCompare(String(b.name || b.code), "hu", { sensitivity: "base" }))
+      .map((row) => ({ value: String(row.code), label: String(row.name || row.code) }));
+  }, [genderTypes]);
+
+  const sizeFilterOptions = useMemo<WarehouseMultiSelectOption[]>(() => {
+    const rows = new Map<string, WarehouseMultiSelectOption>();
+    const add = (value: unknown, labelValue?: unknown, hint?: string) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) return;
+      const normalized = officialSizeFromTypes(raw, sizeTypes) || raw.toUpperCase();
+      const key = normalizeSearch(normalized);
+      if (!key || rows.has(key)) return;
+      rows.set(key, { value: normalized, label: String(labelValue || normalized), hint });
+    };
+    sizeTypes.filter((row) => row.is_active !== false).forEach((row) => add(row.name || row.code, sizeTypeLabel(row), row.code && row.code !== row.name ? row.code : undefined));
+    inventoryDisplayItems.forEach((item) => add(item.size));
+    return Array.from(rows.values()).sort((a, b) => a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" }));
+  }, [sizeTypes, inventoryDisplayItems]);
+
+  const invoiceFilterOptions = useMemo(() => {
+    const map = new Map<string, { value: string; label: string; dateMs: number; count: number }>();
+    for (const item of inventoryDisplayItems) {
+      const history = inventoryInvoiceHistory(item);
+      const historyByInvoice = new Map<string, ReturnType<typeof inventoryInvoiceHistory>[number]>();
+      for (const row of history) {
+        const key = normalizeSearch(row.invoiceNumber);
+        if (key && !historyByInvoice.has(key)) historyByInvoice.set(key, row);
+      }
+      for (const invoice of inventoryInvoiceNumbers(item)) {
+        const key = normalizeSearch(invoice);
+        if (!key) continue;
+        const historyRow = historyByInvoice.get(key);
+        const dateMs = Math.max(
+          dateTimeMs(historyRow?.receptionDate),
+          dateTimeMs(historyRow?.invoiceDate),
+          dateTimeMs(historyRow?.importedAt),
+          dateTimeMs(item.last_reception_date),
+          dateTimeMs(item.last_invoice_date),
+          latestWarehouseIncomingMs(item)
+        );
+        const current = map.get(key);
+        if (!current) {
+          map.set(key, { value: invoice, label: invoice, dateMs, count: 1 });
+        } else {
+          current.count += 1;
+          if (dateMs > current.dateMs) current.dateMs = dateMs;
+        }
+      }
+    }
+    return Array.from(map.values())
+      .sort((a, b) => b.dateMs - a.dateMs || a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" }))
+      .map((row) => ({
+        ...row,
+        displayLabel: `${row.label}${row.dateMs ? ` • ${warehouseDateLabel(row.dateMs)}` : ""} • ${row.count} variáns`,
+      }));
+  }, [inventoryDisplayItems]);
+
   useEffect(() => {
     if (brand === "all") return;
     const current = normalizeSearch(brand);
@@ -4749,16 +5062,22 @@ export default function AllInWarehouse() {
     if (brand !== "all") out = out.filter((x) => (x.brand_code || x.brand_name || "") === brand || x.brand_name === brand);
     if (category !== "all") out = out.filter((x) => itemMatchesMainCategory(x, category, categorySelectOptions));
     if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
-    if (gender !== "all") out = out.filter((x) => (x.gender || "") === gender);
+    if (genderFilters.length) out = out.filter((x) => itemMatchesGenderSelections(x, genderFilters, genderTypes));
+    if (sizeFilters.length) out = out.filter((x) => itemMatchesSizeSelections(x, sizeFilters, sizeTypes));
     if (color !== "all") out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes));
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
     if (shopifyFilter === "mapped") out = out.filter((x) => isShopifyMappedItem(x));
+    if (shopifyFilter === "recent_mapped") out = out.filter((x) => isShopifyMappedItem(x) && shopifyConnectionMs(x) > 0);
     if (shopifyFilter === "exported") out = out.filter((x) => isShopifyExportPending(x));
     if (shopifyFilter === "unmapped") out = out.filter((x) => !isShopifyMappedItem(x) && !isShopifyExportPending(x));
     if (shopifyFilter === "error") out = out.filter((x) => shopifyMappingHasError(x));
     if (location !== "all") {
       out = out.filter((x) => (stockMap.get(x.variant_id) || []).some((s) => (s.location_code === location || s.location_name === location) && n(s.qty) > 0));
+    }
+    if (invoiceFilter !== "all") {
+      const invoiceKey = normalizeSearch(invoiceFilter);
+      out = out.filter((x) => inventoryInvoiceNumbers(x).some((invoice) => normalizeSearch(invoice) === invoiceKey));
     }
     if (stockFilter === "available") out = out.filter((x) => n(x.available_qty) > 0);
     if (stockFilter === "out") out = out.filter((x) => n(x.total_qty) <= 0);
@@ -4766,7 +5085,8 @@ export default function AllInWarehouse() {
     if (stockFilter === "missing") out = out.filter(hasMissingData);
     if (stockFilter === "watch") out = out.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x));
     out.sort((a, b) => {
-      if (sortMode === "incoming_desc") {
+      const effectiveSortMode = shopifyFilter === "recent_mapped" ? "shopify_connected_desc" : sortMode;
+      if (effectiveSortMode === "incoming_desc") {
         if (incomingFocus?.batchId) {
           const byActivation = Number(needsWarehouseActivation(b)) - Number(needsWarehouseActivation(a));
           if (byActivation !== 0) return byActivation;
@@ -4775,15 +5095,28 @@ export default function AllInWarehouse() {
         if (byIncoming !== 0) return byIncoming;
         return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
       }
-      if (sortMode === "brand") return String(a.brand_name || "").localeCompare(String(b.brand_name || ""), "hu");
-      if (sortMode === "stock_desc") return n(b.total_qty) - n(a.total_qty);
-      if (sortMode === "stock_asc") return n(a.total_qty) - n(b.total_qty);
-      if (sortMode === "value_desc") return n(b.total_qty) * n(b.buy_price) - n(a.total_qty) * n(a.buy_price);
-      if (sortMode === "missing") return Number(hasMissingData(b)) - Number(hasMissingData(a));
+      if (effectiveSortMode === "incoming_asc") {
+        const aIncoming = firstWarehouseIncomingMs(a);
+        const bIncoming = firstWarehouseIncomingMs(b);
+        if (!aIncoming && bIncoming) return 1;
+        if (aIncoming && !bIncoming) return -1;
+        if (aIncoming !== bIncoming) return aIncoming - bIncoming;
+        return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+      }
+      if (effectiveSortMode === "shopify_connected_desc") {
+        const byConnection = shopifyConnectionMs(b) - shopifyConnectionMs(a);
+        if (byConnection !== 0) return byConnection;
+        return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+      }
+      if (effectiveSortMode === "brand") return String(a.brand_name || "").localeCompare(String(b.brand_name || ""), "hu");
+      if (effectiveSortMode === "stock_desc") return n(b.total_qty) - n(a.total_qty);
+      if (effectiveSortMode === "stock_asc") return n(a.total_qty) - n(b.total_qty);
+      if (effectiveSortMode === "value_desc") return n(b.total_qty) * n(b.buy_price) - n(a.total_qty) * n(a.buy_price);
+      if (effectiveSortMode === "missing") return Number(hasMissingData(b)) - Number(hasMissingData(a));
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, gender, color, colorTypes, location, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, sizeTypes, color, colorTypes, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -4793,10 +5126,12 @@ export default function AllInWarehouse() {
     setBrand("all");
     setCategory("all");
     setSubCategory("all");
-    setGender("all");
+    setGenderFilters([]);
+    setSizeFilters([]);
     setColor("all");
     setColorFilterOpen(false);
     setLocation("all");
+    setInvoiceFilter("all");
     setStockFilter("all");
     setImageFilter("all");
     setShopifyFilter("all");
@@ -4826,9 +5161,11 @@ export default function AllInWarehouse() {
     if (brand !== "all") labels.push(`Márka: ${labelForMetaValue(brands, brand)}`);
     if (category !== "all") labels.push(`Főkategória: ${labelForMetaValue(categories, category)}`);
     if (subCategory !== "all") labels.push(`Alkategória / terméktípus: ${labelForMetaValue(subCategories, subCategory)}`);
-    if (gender !== "all") labels.push(`Nem: ${genderLabel(gender, genderTypes)}`);
+    if (genderFilters.length) labels.push(`Nem: ${genderFilters.map((value) => genderLabel(value, genderTypes)).join(" + ")}`);
+    if (sizeFilters.length) labels.push(`Méret: ${sizeFilters.join(" + ")}`);
     if (color !== "all") labels.push(`Szín: ${labelForMetaValue(colorTypes as any, color)}`);
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
+    if (invoiceFilter !== "all") labels.push(`Számla: ${invoiceFilter}`);
     if (stockFilter !== "all") {
       const stockLabels: Record<StockFilter, string> = {
         all: "Összes",
@@ -4847,6 +5184,7 @@ export default function AllInWarehouse() {
       const shopifyLabels: Record<ShopifyFilter, string> = {
         all: "Összes",
         mapped: "Shopifyhoz kapcsolva",
+        recent_mapped: "Legutóbb összekapcsolt",
         exported: "Exportálva, párosításra vár",
         unmapped: "Nincs Shopifyon",
         error: "Shopify hiba",
@@ -4857,7 +5195,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, color, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -4885,7 +5223,7 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     setProductPage(1);
-  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, gender, color, location, stockFilter, imageFilter, shopifyFilter, sortMode, incomingFocusVariantIdsKey]);
+  }, [search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, genderFilters, sizeFilters, color, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, sortMode, incomingFocusVariantIdsKey]);
 
   useEffect(() => {
     if (productPage > totalProductPages) setProductPage(totalProductPages);
@@ -4916,9 +5254,11 @@ export default function AllInWarehouse() {
       brand,
       category,
       subCategory,
-      gender,
+      genderFilters: [...genderFilters],
+      sizeFilters: [...sizeFilters],
       color,
       location,
+      invoiceFilter,
       stockFilter,
       imageFilter,
       shopifyFilter,
@@ -4938,10 +5278,12 @@ export default function AllInWarehouse() {
     setBrand(snapshot.brand);
     setCategory(snapshot.category);
     setSubCategory(snapshot.subCategory);
-    setGender(snapshot.gender);
+    setGenderFilters([...(snapshot.genderFilters || [])]);
+    setSizeFilters([...(snapshot.sizeFilters || [])]);
     setColor(snapshot.color);
     setColorFilterOpen(false);
     setLocation(snapshot.location);
+    setInvoiceFilter(snapshot.invoiceFilter || "all");
     setStockFilter(snapshot.stockFilter);
     setImageFilter(snapshot.imageFilter);
     setShopifyFilter(snapshot.shopifyFilter);
@@ -5026,12 +5368,15 @@ export default function AllInWarehouse() {
     setBrand("all");
     setCategory("all");
     setSubCategory("all");
-    setGender("all");
+    setGenderFilters([]);
+    setSizeFilters([]);
     setColor("all");
     setColorFilterOpen(false);
     setLocation("all");
+    setInvoiceFilter("all");
     setStockFilter("all");
     setImageFilter("all");
+    setShopifyFilter("all");
     setSortMode("name");
     setScannedBarcodeSearch(scannedCode);
     setSearch(searchText);
@@ -6847,7 +7192,7 @@ export default function AllInWarehouse() {
     const next = emptyNewProductForm();
     if (brand !== "all") next.brandCode = brand;
     if (category !== "all") next.categoryCode = category;
-    if (gender !== "all") next.gender = gender;
+    if (genderFilters.length === 1) next.gender = genderFilters[0];
     next.supplierId = supplier !== "all" ? String(selectedSupplier?.id || "") : "";
     setNewProduct(next);
     setNewProductStockRows(emptyStockRowsByLocation("0"));
@@ -7397,6 +7742,8 @@ export default function AllInWarehouse() {
   const selectedColorFilter = color === "all" ? null : findColorTypeByValue(colorTypes, color);
   const selectedColorFilterLabel = selectedColorFilter ? colorTypeLabel(selectedColorFilter) : (color === "all" ? "Összes" : String(color || "-"));
   const selectedColorFilterHex = selectedColorFilter?.hex || "";
+  const showPurchaseContext = invoiceFilter !== "all" || sortMode === "incoming_desc" || sortMode === "incoming_asc";
+  const showShopifyConnectionContext = shopifyFilter === "recent_mapped" || sortMode === "shopify_connected_desc";
 
   return (
     <main className={page}>
@@ -7499,12 +7846,18 @@ export default function AllInWarehouse() {
                   {!subCategoryFilterOptions.length && <option value="" disabled>Nincs alkategória</option>}
                 </select>
               </label>
-              <label className={label}>Nem
-                <select className={select} value={gender} onChange={(e) => setGender(e.target.value)}>
-                  <option value="all">Összes</option>
-                  {genderTypes.map((g) => <option key={g.code} value={g.code}>{g.name}</option>)}
-                </select>
-              </label>
+              <WarehouseMultiSelect
+                labelText="Nem"
+                options={genderFilterOptions}
+                values={genderFilters}
+                onChange={setGenderFilters}
+              />
+              <WarehouseMultiSelect
+                labelText="Méret"
+                options={sizeFilterOptions}
+                values={sizeFilters}
+                onChange={setSizeFilters}
+              />
               <div ref={colorFilterRef} className={`${label} relative`}>
                 Szín
                 <button
@@ -7564,6 +7917,13 @@ export default function AllInWarehouse() {
                   {locations.map((l) => <option key={l.id} value={l.code || l.name || l.id}>{l.name}</option>)}
                 </select>
               </label>
+              <label className={label}>Számla
+                <select className={select} value={invoiceFilter} onChange={(e) => { setInvoiceFilter(e.target.value); if (e.target.value !== "all" && sortMode === "name") setSortMode("incoming_asc"); }}>
+                  <option value="all">Összes számla</option>
+                  {invoiceFilterOptions.map((row) => <option key={row.value} value={row.value}>{row.displayLabel}</option>)}
+                  {!invoiceFilterOptions.length && <option value="" disabled>Nincs számlaadat</option>}
+                </select>
+              </label>
               <label className={label}>Készlet állapot
                 <select className={select} value={stockFilter} onChange={(e) => setStockFilter(e.target.value as StockFilter)}>
                   <option value="all">Összes</option>
@@ -7582,9 +7942,18 @@ export default function AllInWarehouse() {
                 </select>
               </label>
               <label className={label}>Shopify
-                <select className={select} value={shopifyFilter} onChange={(e) => setShopifyFilter(e.target.value as ShopifyFilter)}>
+                <select
+                  className={select}
+                  value={shopifyFilter}
+                  onChange={(e) => {
+                    const next = e.target.value as ShopifyFilter;
+                    setShopifyFilter(next);
+                    if (next === "recent_mapped") setSortMode("shopify_connected_desc");
+                  }}
+                >
                   <option value="all">Összes</option>
                   <option value="mapped">Összekötve</option>
+                  <option value="recent_mapped">Legutóbb összekapcsolt</option>
                   <option value="exported">Exportálva, párosításra vár</option>
                   <option value="unmapped">Nincs Shopifyon</option>
                   <option value="error">Szinkronhiba</option>
@@ -7592,7 +7961,9 @@ export default function AllInWarehouse() {
               </label>
               <label className={label}>Sorrend
                 <select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
-                  <option value="incoming_desc">Legutóbbi bevételezés</option>
+                  <option value="incoming_desc">Legújabb bevételezés elöl</option>
+                  <option value="incoming_asc">Legrégebbi bevételezés elöl</option>
+                  <option value="shopify_connected_desc">Legutóbb Shopifyhoz kapcsolt</option>
                   <option value="name">Terméknév</option>
                   <option value="brand">Márka</option>
                   <option value="stock_desc">Készlet csökkenő</option>
@@ -7757,11 +8128,17 @@ export default function AllInWarehouse() {
                     </div>
                   </div>
                 </div>
-              ) : sortMode === "incoming_desc" && (
+              ) : sortMode === "incoming_desc" || sortMode === "incoming_asc" ? (
                 <div className="mb-3 rounded-xl border border-[#5bd0cc]/24 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                  Legutóbbi bevételezés szerinti sorrend van bekapcsolva. A lista termékvariánsokat mutat, ezért ha az import már meglévő modell + szín + méret sorra ment, nem új sor jön létre, hanem a készlet darabszáma nő.
+                  {sortMode === "incoming_asc"
+                    ? "A legrégebben beérkezett termékek vannak elöl. Márkaszűrővel együtt gyorsan látszik, mi ül régóta a raktárban és érdemes-e leárazni."
+                    : "A legutóbbi bevételezés szerinti sorrend van bekapcsolva. Ha az import meglévő modell + szín + méret sorra ment, nem új sor jön létre, hanem a készlet darabszáma nő."}
                 </div>
-              )}
+              ) : showShopifyConnectionContext ? (
+                <div className="mb-3 rounded-xl border border-[#95bf47]/35 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                  A legutóbb Shopifyhoz párosított termékek vannak elöl. A sorok alatt a kapcsolás dátuma is látszik, így nem kell emlékezetből régészkedni.
+                </div>
+              ) : null}
               {hasActiveWarehouseFilters && (
                 <div className="mb-3 rounded-xl border border-amber-200/26 bg-amber-400/10 px-3 py-2 text-xs text-amber-50">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -7832,6 +8209,9 @@ export default function AllInWarehouse() {
                       const variantId = String(it.variant_id || "");
                       const isSelected = Boolean(activeListSelectionMap[variantId]);
                       const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
+                      const invoiceText = invoiceFilter !== "all" ? invoiceFilter : (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
+                      const purchaseDateText = inventoryPurchaseDateLabel(it, invoiceFilter !== "all" ? invoiceFilter : undefined);
+                      const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
                       return (
                       <tr
                         key={it.variant_id}
@@ -7871,6 +8251,14 @@ export default function AllInWarehouse() {
                               </span>
                             ) : null}
                           </div>
+                          {showPurchaseContext && (invoiceText || purchaseDateText) ? (
+                            <div className="mt-1 truncate text-[10px] leading-3 text-white/45" title={[invoiceText ? `Számla: ${invoiceText}` : "", purchaseDateText ? `Beérkezés: ${purchaseDateText}` : ""].filter(Boolean).join(" • ")}>
+                              {invoiceText ? `Számla: ${invoiceText}` : "Számla nélkül"}{purchaseDateText ? ` • ${purchaseDateText}` : ""}
+                            </div>
+                          ) : null}
+                          {showShopifyConnectionContext && shopifyConnectedText ? (
+                            <div className="mt-1 truncate text-[10px] leading-3 text-[#d7fffd]/72">Shopify kapcsolat: {shopifyConnectedText}</div>
+                          ) : null}
                           {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         </td>
                         <td className="px-2 py-2.5 text-center align-middle" title={[itemMainCategoryLabel(it), itemSubCategoryLabel(it)].filter(Boolean).join(" / ")}>
@@ -7905,6 +8293,9 @@ export default function AllInWarehouse() {
                   const variantId = String(it.variant_id || "");
                   const isSelected = Boolean(activeListSelectionMap[variantId]);
                   const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
+                  const invoiceText = invoiceFilter !== "all" ? invoiceFilter : (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
+                  const purchaseDateText = inventoryPurchaseDateLabel(it, invoiceFilter !== "all" ? invoiceFilter : undefined);
+                  const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
                   return (
                   <article
                     key={it.variant_id}
@@ -7935,6 +8326,8 @@ export default function AllInWarehouse() {
                         </div>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-1"><ProductCodeTooltipButton item={it} /></div>
+                        {showPurchaseContext && (invoiceText || purchaseDateText) ? <p className="mt-1 text-[11px] text-white/45">{invoiceText ? `Számla: ${invoiceText}` : "Számla nélkül"}{purchaseDateText ? ` • ${purchaseDateText}` : ""}</p> : null}
+                        {showShopifyConnectionContext && shopifyConnectedText ? <p className="mt-1 text-[11px] text-[#d7fffd]/72">Shopify kapcsolat: {shopifyConnectedText}</p> : null}
                         {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <StockQtyButton item={it} />
