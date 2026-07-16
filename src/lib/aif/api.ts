@@ -305,6 +305,10 @@ export type AifInventoryItem = {
   sn_cod?: string | null;
   snCod?: string | null;
   brand_name?: string | null;
+  supplier_names?: string | null;
+  supplier_codes?: string | null;
+  supplier_source_codes?: string | null;
+  supplier_ids?: string | null;
   model_id: string;
   model_code?: string | null;
   title_ro: string;
@@ -345,6 +349,14 @@ export type AifInventoryItem = {
     batchId?: string | null;
     receptionId?: string | null;
     sourceFileName?: string | null;
+    supplierId?: string | null;
+    supplierCode?: string | null;
+    supplierName?: string | null;
+    locationId?: string | null;
+    locationName?: string | null;
+    currencyCode?: string | null;
+    invoiceGross?: string | number | null;
+    receptionStatus?: string | null;
   }> | string | null;
   shopify_mapped?: boolean | null;
   shopify_sync_status?: string | null;
