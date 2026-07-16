@@ -343,6 +343,16 @@ function rowSku(row: any, draft: any) {
   return cell(row?.supplier_product_code || draft.supplierProductCode || draft.modelCode || row?.supplier_variant_code || draft.supplierVariantCode);
 }
 
+function rowSnCod(row: any, draft: any) {
+  return cell(
+    row?.sn_cod ||
+    draft?.snCod ||
+    draft?.sn_cod ||
+    row?.normalized?.snCod ||
+    row?.normalized?.sn_cod
+  );
+}
+
 function rowTitle(row: any, draft: any) {
   const name = cell(draft.titleRo || draft.productName || row?.supplier_product_code);
   const color = String(draft.colorName || row?.supplier_color_code || "").trim();
@@ -393,6 +403,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
     <tr>
       <td>${pdfEscape(rowTitle(x.row, x.draft))}</td>
       <td>${pdfEscape(rowSku(x.row, x.draft))}</td>
+      <td>${pdfEscape(rowSnCod(x.row, x.draft))}</td>
       <td class="num">${pdfNumber(x.qty, 0)}</td>
       <td class="num">${pdfNumber(x.price)}</td>
       <td class="num">${pdfNumber(x.priceRon)}</td>
@@ -476,18 +487,19 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
 
     <table>
       <colgroup>
-        <col style="width: 24%" />
+        <col style="width: 22%" />
         <col style="width: 8%" />
+        <col style="width: 7%" />
+        <col style="width: 4%" />
+        <col style="width: 7%" />
+        <col style="width: 7%" />
+        <col style="width: 6%" />
+        <col style="width: 7%" />
+        <col style="width: 7%" />
         <col style="width: 5%" />
         <col style="width: 7%" />
         <col style="width: 7%" />
-        <col style="width: 7%" />
-        <col style="width: 8%" />
-        <col style="width: 8%" />
-        <col style="width: 5%" />
-        <col style="width: 7%" />
-        <col style="width: 7%" />
-        <col style="width: 7%" />
+        <col style="width: 6%" />
       </colgroup>
       <thead>
         <tr>
@@ -499,19 +511,19 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
           <th>Pret RON</th>
           <th>Tr/db RON</th>
           <th>Cost/db RON</th>
-          <th>Vanzare RON</th>
+          <th>Vanzare/db RON</th>
           <th>TVA</th>
           <th>Val ${pdfEscape(currency)}</th>
           <th>Cost RON</th>
-          <th>Vanzare RON</th>
+          <th>Val. vanzare RON</th>
         </tr>
       </thead>
       <tbody>
-        ${tableRows || `<tr><td colspan="12" style="text-align:center;padding:18px;">Nu exista linii de receptie.</td></tr>`}
+        ${tableRows || `<tr><td colspan="13" style="text-align:center;padding:18px;">Nu exista linii de receptie.</td></tr>`}
       </tbody>
       <tfoot>
         <tr class="totals">
-          <td colspan="2">TOTAL</td>
+          <td colspan="3">TOTAL</td>
           <td class="num">${pdfNumber(totalQty, 0)}</td>
           <td></td>
           <td></td>
