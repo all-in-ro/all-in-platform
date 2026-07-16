@@ -9,6 +9,8 @@ import {
   ClipboardList,
   Clock3,
   PackageCheck,
+  PackageOpen,
+  Receipt,
   ChevronDown,
   ChevronUp,
   Edit3,
@@ -265,6 +267,7 @@ type InventoryItem = {
   brand_code?: string | null;
   supplier_names?: string | null;
   supplier_codes?: string | null;
+  supplier_source_codes?: string | null;
   supplier_ids?: string | null;
   suppliers?: Array<{ id?: string; code?: string; name?: string }> | null;
   model_id?: string | null;
@@ -315,6 +318,14 @@ type InventoryItem = {
     batchId?: string | null;
     receptionId?: string | null;
     sourceFileName?: string | null;
+    supplierId?: string | null;
+    supplierCode?: string | null;
+    supplierName?: string | null;
+    locationId?: string | null;
+    locationName?: string | null;
+    currencyCode?: string | null;
+    invoiceGross?: string | number | null;
+    receptionStatus?: string | null;
   }> | string | null;
   shopify_mapped?: boolean | null;
   shopify_sync_status?: string | null;
@@ -1196,6 +1207,14 @@ function inventoryInvoiceHistory(item: Partial<InventoryItem> | Record<string, u
     batchId: String(row.batchId || row.batch_id || "").trim() || null,
     receptionId: String(row.receptionId || row.reception_id || "").trim() || null,
     sourceFileName: String(row.sourceFileName || row.source_file_name || "").trim() || null,
+    supplierId: String(row.supplierId || row.supplier_id || "").trim() || null,
+    supplierCode: String(row.supplierCode || row.supplier_code || "").trim() || null,
+    supplierName: String(row.supplierName || row.supplier_name || "").trim() || null,
+    locationId: String(row.locationId || row.location_id || "").trim() || null,
+    locationName: String(row.locationName || row.location_name || "").trim() || null,
+    currencyCode: String(row.currencyCode || row.currency_code || "").trim() || null,
+    invoiceGross: row.invoiceGross ?? row.invoice_gross ?? null,
+    receptionStatus: String(row.receptionStatus || row.reception_status || row.status || "").trim() || null,
   }))
     .filter((row) => row.invoiceNumber)
     .sort((a, b) => Math.max(dateTimeMs(b.receptionDate), dateTimeMs(b.invoiceDate), dateTimeMs(b.importedAt)) - Math.max(dateTimeMs(a.receptionDate), dateTimeMs(a.invoiceDate), dateTimeMs(a.importedAt)));
@@ -1225,11 +1244,15 @@ function warehouseDateLabel(value: unknown) {
   return new Date(ms).toLocaleDateString("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
-function inventoryPurchaseDateLabel(item: Partial<InventoryItem> | Record<string, unknown>, invoiceNumber?: string) {
+function inventoryPurchaseDateLabel(item: Partial<InventoryItem> | Record<string, unknown>, invoiceNumber?: string, receptionId?: string | null) {
   const invoiceKey = normalizeSearch(invoiceNumber);
-  const historyRow = invoiceKey
-    ? inventoryInvoiceHistory(item).find((row) => normalizeSearch(row.invoiceNumber) === invoiceKey)
-    : null;
+  const receptionKey = String(receptionId || "").trim();
+  const historyRows = inventoryInvoiceHistory(item);
+  const historyRow = receptionKey
+    ? historyRows.find((row) => String(row.receptionId || "").trim() === receptionKey)
+    : invoiceKey
+      ? historyRows.find((row) => normalizeSearch(row.invoiceNumber) === invoiceKey)
+      : null;
   return warehouseDateLabel(
     historyRow?.receptionDate ||
     historyRow?.invoiceDate ||
@@ -1238,6 +1261,406 @@ function inventoryPurchaseDateLabel(item: Partial<InventoryItem> | Record<string
     (item as any).last_invoice_date ||
     (item as any).last_incoming_at ||
     (item as any).last_stock_movement_at
+  );
+}
+
+
+type WarehouseInvoiceFilterOption = {
+  value: string;
+  invoiceNumber: string;
+  supplierId?: string | null;
+  supplierCode?: string | null;
+  supplierName: string;
+  supplierKeys: string[];
+  invoiceDate?: string | null;
+  receptionDate?: string | null;
+  importedAt?: string | null;
+  dateMs: number;
+  count: number;
+  variantIds: string[];
+  receptionIds: string[];
+  batchIds: string[];
+  locationNames: string[];
+  currencyCodes: string[];
+  sourceFileNames: string[];
+  items: InventoryItem[];
+  displayLabel: string;
+};
+
+type WarehouseReceptionDetail = {
+  item?: Record<string, any> | null;
+  rows?: Array<Record<string, any>>;
+  batches?: Array<Record<string, any>>;
+};
+
+function inventorySupplierEntries(item: Partial<InventoryItem> | Record<string, unknown>) {
+  const source = item as Partial<InventoryItem> & Record<string, any>;
+  const entries: Array<{ id?: string | null; code?: string | null; name?: string | null; key: string; label: string }> = [];
+  const seen = new Set<string>();
+  const add = (id?: unknown, code?: unknown, name?: unknown) => {
+    const cleanId = String(id || "").trim() || null;
+    const cleanCode = String(code || "").trim() || null;
+    const cleanName = String(name || "").trim() || null;
+    const key = normalizeSearch(cleanId || cleanCode || cleanName);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    entries.push({ id: cleanId, code: cleanCode, name: cleanName, key, label: cleanName || cleanCode || cleanId || "Beszállító" });
+  };
+
+  for (const row of source.suppliers || []) add(row?.id, row?.code, row?.name);
+  const ids = splitCsv(source.supplier_ids);
+  const codes = splitCsv(source.supplier_source_codes || source.supplier_codes);
+  const names = splitCsv(source.supplier_names);
+  const count = Math.max(ids.length, codes.length, names.length);
+  for (let index = 0; index < count; index += 1) add(ids[index], codes[index], names[index]);
+  if (!entries.length) add(null, null, source.supplier_names || source.supplier_codes || null);
+  return entries;
+}
+
+function invoiceSupplierInfo(
+  item: Partial<InventoryItem> | Record<string, unknown>,
+  row?: ReturnType<typeof inventoryInvoiceHistory>[number] | null,
+) {
+  const itemEntries = inventorySupplierEntries(item);
+  const rowId = String(row?.supplierId || "").trim() || null;
+  const rowCode = String(row?.supplierCode || "").trim() || null;
+  const rowName = String(row?.supplierName || "").trim() || null;
+  const rowKey = normalizeSearch(rowId || rowCode || rowName);
+  const itemMatch = rowKey
+    ? itemEntries.find((entry) => [entry.id, entry.code, entry.name].map(normalizeSearch).includes(rowKey))
+    : itemEntries[0];
+  const keys = Array.from(new Set([
+    rowId,
+    rowCode,
+    rowName,
+    itemMatch?.id,
+    itemMatch?.code,
+    itemMatch?.name,
+    ...itemEntries.flatMap((entry) => [entry.id, entry.code, entry.name]),
+  ].map(normalizeSearch).filter(Boolean)));
+  return {
+    id: rowId || itemMatch?.id || null,
+    code: rowCode || itemMatch?.code || null,
+    name: rowName || itemMatch?.name || itemSupplierText(item as InventoryItem) || "Beszállító nélkül",
+    keys,
+  };
+}
+
+function itemMatchesInvoiceOption(item: InventoryItem, option?: WarehouseInvoiceFilterOption | null) {
+  if (!option) return true;
+  const history = inventoryInvoiceHistory(item);
+  const receptionIds = new Set(option.receptionIds.map((value) => String(value || "").trim()).filter(Boolean));
+  if (receptionIds.size && history.some((row) => row.receptionId && receptionIds.has(String(row.receptionId)))) return true;
+
+  const invoiceKey = normalizeSearch(option.invoiceNumber);
+  if (!invoiceKey) return true;
+  const supplierKeys = new Set(option.supplierKeys.map(normalizeSearch).filter(Boolean));
+  const itemSupplierKeys = new Set(inventorySupplierEntries(item).flatMap((entry) => [entry.id, entry.code, entry.name]).map(normalizeSearch).filter(Boolean));
+  const supplierMatchesOption = !supplierKeys.size || Array.from(supplierKeys).some((key) => itemSupplierKeys.has(key));
+  return supplierMatchesOption && inventoryInvoiceNumbers(item).some((invoice) => normalizeSearch(invoice) === invoiceKey);
+}
+
+function receptionStatusHu(value: unknown) {
+  const raw = normalizeSearch(value);
+  if (raw === "committed") return "Készletre vett";
+  if (raw === "parsed") return "Ellenőrizve";
+  if (raw === "needs_review") return "Ellenőrzendő";
+  if (raw === "draft") return "Folyamatban";
+  if (raw === "cancelled") return "Törölt";
+  return String(value || "-");
+}
+
+function invoiceProductRowStatusHu(value: unknown) {
+  const raw = normalizeSearch(value);
+  if (raw === "committed") return "Készleten";
+  if (raw === "parsed") return "Feldolgozható";
+  if (raw === "error") return "Javítandó";
+  if (raw === "ignored") return "Kihagyva";
+  if (raw === "draft") return "Vázlat";
+  return String(value || "-");
+}
+
+function WarehouseInvoicePicker({
+  options,
+  value,
+  onSelect,
+  onInspect,
+}: {
+  options: WarehouseInvoiceFilterOption[];
+  value: string;
+  onSelect: (value: string) => void;
+  onInspect: (option: WarehouseInvoiceFilterOption) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState<{ option: WarehouseInvoiceFilterOption; style: React.CSSProperties } | null>(null);
+  const selected = options.find((option) => option.value === value) || null;
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || rootRef.current?.contains(target)) return;
+      setOpen(false);
+      setHovered(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      setHovered(null);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  function showHover(option: WarehouseInvoiceFilterOption, element: HTMLElement) {
+    const rect = element.getBoundingClientRect();
+    const width = 326;
+    const gap = 10;
+    const padding = 12;
+    let left = rect.right + gap;
+    if (left + width > window.innerWidth - padding) left = rect.left - width - gap;
+    if (left < padding) left = Math.max(padding, window.innerWidth - width - padding);
+    const top = Math.min(Math.max(padding, rect.top - 8), Math.max(padding, window.innerHeight - 196));
+    setHovered({ option, style: { position: "fixed", left, top, width } });
+  }
+
+  return (
+    <div ref={rootRef} className={`${label} relative`}>
+      <span>Számla</span>
+      <button
+        type="button"
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25"
+        onClick={() => { setOpen((current) => !current); setHovered(null); }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="min-w-0 truncate">{selected ? `${selected.invoiceNumber} • ${selected.count} variáns` : "Összes számla"}</span>
+        <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open ? (
+        <div className="absolute left-0 top-full z-[85] mt-1 w-[min(590px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-white/18 bg-[#293344] shadow-2xl">
+          <button
+            type="button"
+            className={`flex min-h-11 w-full items-center gap-3 border-b border-white/10 px-3 text-left text-xs transition ${value === "all" ? "bg-[#2a8d8b]/24 text-white" : "text-white/78 hover:bg-white/[0.07]"}`}
+            onClick={() => { onSelect("all"); setOpen(false); setHovered(null); }}
+          >
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/12 bg-white/[0.06]"><Receipt size={16} /></span>
+            <span><span className="block text-white">Összes számla</span><span className="text-[10px] text-white/42">A számlaszűrés kikapcsolása</span></span>
+          </button>
+          <div className="max-h-80 overflow-auto py-1" role="listbox">
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`grid min-h-[54px] w-full grid-cols-[36px,minmax(0,1fr),auto] items-center gap-2 border-b border-white/[0.06] px-3 py-2 text-left transition last:border-b-0 ${active ? "bg-[#2a8d8b]/24 text-white" : "text-white/78 hover:bg-white/[0.07]"}`}
+                  onMouseEnter={(event) => showHover(option, event.currentTarget)}
+                  onMouseLeave={() => setHovered(null)}
+                  onFocus={(event) => showHover(option, event.currentTarget)}
+                  onBlur={() => setHovered(null)}
+                  onClick={() => {
+                    onSelect(option.value);
+                    onInspect(option);
+                    setOpen(false);
+                    setHovered(null);
+                  }}
+                  role="option"
+                  aria-selected={active}
+                >
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 text-[#d7fffd]"><FileText size={15} /></span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] text-white">{option.invoiceNumber} <span className="text-white/48">• {option.supplierName}</span></span>
+                    <span className="mt-0.5 block truncate text-[10px] text-white/42">{option.locationNames.join(", ") || "Célhely nélkül"} • {option.count} variáns</span>
+                  </span>
+                  <span className="shrink-0 text-right text-[10px] text-white/55">
+                    <span className="block">{warehouseDateLabel(option.invoiceDate || option.receptionDate || option.importedAt) || "-"}</span>
+                    <span className="mt-0.5 block text-[#bfe9e6]">Részletek ›</span>
+                  </span>
+                </button>
+              );
+            })}
+            {!options.length ? <div className="px-4 py-5 text-center text-xs text-white/45">Ehhez a beszállítóhoz nincs számlaadat.</div> : null}
+          </div>
+          <div className="border-t border-white/10 px-3 py-2 text-[10px] text-white/38">Rámutatás: dátumok • Kattintás: szűrés és számlarészletek</div>
+        </div>
+      ) : null}
+
+      {hovered && typeof document !== "undefined" ? createPortal(
+        <div className="pointer-events-none z-[9999] rounded-2xl border border-[#7bd7d4]/30 bg-[#202838] p-3 text-left text-[11px] text-white shadow-2xl shadow-black/45" style={hovered.style} role="tooltip">
+          <div className="flex items-center gap-2 border-b border-white/10 pb-2">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#2a8d8b]/22 text-[#d7fffd]"><Receipt size={17} /></span>
+            <div className="min-w-0"><div className="text-[10px] uppercase tracking-[0.12em] text-[#cffffd]/65">Számla</div><div className="truncate text-[14px] text-white">{hovered.option.invoiceNumber}</div></div>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            <div className="flex justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1.5"><span className="text-white/55">Beszállító</span><span className="max-w-[190px] truncate text-right">{hovered.option.supplierName}</span></div>
+            <div className="flex justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1.5"><span className="text-white/55">Számla dátuma</span><span>{warehouseDateLabel(hovered.option.invoiceDate) || "-"}</span></div>
+            <div className="flex justify-between gap-3 rounded-lg bg-white/[0.06] px-2 py-1.5"><span className="text-white/55">Receptió dátuma</span><span>{warehouseDateLabel(hovered.option.receptionDate) || "-"}</span></div>
+            <div className="flex justify-between gap-3 rounded-lg bg-[#2a8d8b]/14 px-2 py-1.5"><span className="text-[#cffffd]/70">Terméksor</span><span className="text-[#d7fffd]">{hovered.option.count} variáns</span></div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
+    </div>
+  );
+}
+
+function WarehouseInvoiceDetailModal({
+  option,
+  details,
+  loading,
+  error,
+  buyPricesVisible,
+  onClose,
+  onReload,
+}: {
+  option: WarehouseInvoiceFilterOption | null;
+  details: WarehouseReceptionDetail[];
+  loading: boolean;
+  error: string;
+  buyPricesVisible: boolean;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  useEffect(() => {
+    if (!option) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [option, onClose]);
+
+  if (!option) return null;
+  const detailItems = details.map((detail) => detail.item || {}).filter(Boolean);
+  const detailRows = details.flatMap((detail) => (detail.rows || []).filter((row) => String(row.status || "").toLowerCase() !== "ignored"));
+  const productRows = detailRows.length
+    ? detailRows.map((row, index) => {
+        const normalized = row.normalized && typeof row.normalized === "object" ? row.normalized : {};
+        return {
+          key: String(row.id || `${row.batch_id || "row"}-${row.row_no || index}`),
+          imageUrl: String((normalized as any).imageUrl || (normalized as any).image_url || row.image_url || "").trim(),
+          productCode: String(row.supplier_product_code || (normalized as any).supplierProductCode || (normalized as any).modelCode || "-").trim(),
+          title: String((normalized as any).titleRo || (normalized as any).productName || row.title_ro || row.supplier_product_code || "Névtelen termék").trim(),
+          brand: String((normalized as any).brandName || (normalized as any).brandCode || row.brand_name || "-").trim(),
+          category: String((normalized as any).categoryName || (normalized as any).categoryCode || (normalized as any).productType || "-").trim(),
+          color: String((normalized as any).colorName || row.supplier_color_code || (normalized as any).colorCode || "-").trim(),
+          size: String(row.supplier_size || (normalized as any).size || "-").trim(),
+          qty: n(row.qty ?? (normalized as any).qty),
+          buyPrice: row.buy_price_ron ?? row.buy_price ?? (normalized as any).buyPrice ?? null,
+          sellPrice: row.sell_price_ron ?? row.sell_price ?? (normalized as any).sellPriceGrossRon ?? (normalized as any).sellPrice ?? null,
+          status: String(row.status || "-").trim(),
+        };
+      })
+    : option.items.map((item) => ({
+        key: item.variant_id,
+        imageUrl: String(item.image_url || "").trim(),
+        productCode: itemProductCode(item) || "-",
+        title: String(item.title_ro || item.shopify_title || "Névtelen termék"),
+        brand: String(item.brand_name || "-"),
+        category: itemMainCategoryLabel(item),
+        color: displayColorName(item.color_name, item.color_code),
+        size: String(item.size || "-"),
+        qty: n(item.total_qty),
+        buyPrice: item.buy_price ?? null,
+        sellPrice: item.sell_price ?? null,
+        status: item.variant_status || "-",
+      }));
+  const totalQty = productRows.reduce((sum, row) => sum + n(row.qty), 0);
+  const invoiceTotal = detailItems.reduce((sum, item) => sum + n(item.invoice_gross), 0);
+  const currencies = Array.from(new Set([...option.currencyCodes, ...detailItems.map((item) => String(item.currency_code || "").trim())].filter(Boolean)));
+  const locations = Array.from(new Set([...option.locationNames, ...detailItems.map((item) => String(item.location_name || "").trim())].filter(Boolean)));
+  const supplierName = detailItems.map((item) => String(item.supplier_name || "").trim()).find(Boolean) || option.supplierName;
+  const invoiceDate = detailItems.map((item) => item.invoice_date).find(Boolean) || option.invoiceDate;
+  const receptionDate = detailItems.map((item) => item.reception_date).find(Boolean) || option.receptionDate;
+  const status = detailItems.map((item) => item.status).find(Boolean) || null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 px-3 py-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+      <div className="flex max-h-[94vh] w-full max-w-[1220px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] text-white shadow-2xl shadow-black/45">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd] shadow-lg"><Receipt size={21} /></span>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">Számla és receptió részletei</p>
+              <h2 className="mt-0.5 truncate text-[22px] leading-tight">{option.invoiceNumber}</h2>
+              <p className="mt-1 truncate text-xs text-white/60">{supplierName} • {locations.join(", ") || "Célhely nélkül"}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button className={btnSoft} type="button" onClick={onReload} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Frissítés</button>
+            <button className={btn} type="button" onClick={onClose}><X size={15} /> Bezárás</button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto p-3.5">
+          {error ? <div className="mb-3 rounded-xl border border-rose-300/30 bg-rose-500/12 px-3 py-2 text-sm text-rose-50">{error}</div> : null}
+          {loading && !details.length ? <div className="mb-3 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-5 text-center text-sm text-white/60"><RefreshCw size={16} className="mr-2 inline animate-spin" /> Számlarészletek betöltése...</div> : null}
+
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-6">
+            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Beszállító</p><p className="mt-1 truncate text-sm" title={supplierName}>{supplierName}</p></div>
+            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Számla dátuma</p><p className="mt-1 text-sm">{warehouseDateLabel(invoiceDate) || "-"}</p></div>
+            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Receptió dátuma</p><p className="mt-1 text-sm">{warehouseDateLabel(receptionDate) || "-"}</p></div>
+            <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Állapot</p><p className="mt-1 text-sm">{receptionStatusHu(status)}</p></div>
+            <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Terméksor / darab</p><p className="mt-1 text-sm text-[#d7fffd]">{productRows.length} sor • {totalQty} db</p></div>
+            <div className="rounded-2xl border border-amber-200/20 bg-amber-500/10 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-amber-100/55">Számlaérték</p><p className="mt-1 text-sm text-amber-50">{invoiceTotal ? `${money(invoiceTotal)} ${currencies.join("/")}` : "-"}</p></div>
+          </div>
+
+          <div className="mt-3 overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-sm"><PackageOpen size={16} /> A számla termékei</div>
+              <div className="flex flex-wrap gap-1.5 text-[10px] text-white/48">
+                {option.sourceFileNames.map((file) => <span key={file} className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5" title={file}>{file}</span>)}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-[1050px] w-full text-left text-xs">
+                <thead className="bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48">
+                  <tr><th className="px-2 py-2">#</th><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Márka / kategória</th><th className="px-2 py-2">Szín</th><th className="px-2 py-2">Méret</th><th className="px-2 py-2 text-right">Db</th><th className="px-2 py-2 text-right">Vételár</th><th className="px-2 py-2 text-right">Eladási ár</th><th className="px-2 py-2">Állapot</th></tr>
+                </thead>
+                <tbody>
+                  {productRows.map((row, index) => (
+                    <tr key={row.key} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]">
+                      <td className="px-2 py-2 text-white/45">{index + 1}</td>
+                      <td className="px-2 py-2">{row.imageUrl ? <img src={row.imageUrl} alt="" className="h-11 w-11 rounded-lg border border-white/12 bg-white object-contain p-0.5" loading="lazy" /> : <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/30"><ImagePlus size={16} /></span>}</td>
+                      <td className="px-2 py-2"><p className="max-w-[250px] truncate text-white">{row.title}</p><p className="mt-0.5 max-w-[250px] truncate text-[10px] text-[#cffffd]/70">{row.productCode}</p></td>
+                      <td className="px-2 py-2"><p className="max-w-[180px] truncate">{row.brand}</p><p className="mt-0.5 max-w-[180px] truncate text-[10px] text-white/42">{row.category}</p></td>
+                      <td className="px-2 py-2">{row.color}</td>
+                      <td className="px-2 py-2">{row.size}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{row.qty}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{buyPricesVisible ? money(row.buyPrice) : "••••"}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{money(row.sellPrice)}</td>
+                      <td className="px-2 py-2"><span className="rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/65">{invoiceProductRowStatusHu(row.status)}</span></td>
+                    </tr>
+                  ))}
+                  {!productRows.length && !loading ? <tr><td colSpan={10} className="px-4 py-8 text-center text-white/45">Ehhez a számlához nem találtam terméksort.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/45">
+          <span>ESC: bezárás • a számlaszűrés a bezárás után is megmarad</span>
+          <button className={btnSoft} type="button" onClick={onClose}><X size={14} /> Bezárás</button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -3142,6 +3565,7 @@ function supplierMatches(it: InventoryItem, selected: string) {
   const key = normalizeSearch(selected);
   const values = [
     ...splitCsv(it.supplier_ids),
+    ...splitCsv(it.supplier_source_codes),
     ...splitCsv(it.supplier_codes),
     ...splitCsv(it.supplier_names),
     ...(it.suppliers || []).flatMap((s) => [s.id, s.code, s.name]),
@@ -3158,6 +3582,7 @@ function itemMatchesSearch(it: InventoryItem, query: string) {
     it.brand_name,
     it.brand_code,
     itemSupplierText(it),
+    it.supplier_source_codes,
     it.supplier_codes,
     it.internal_sku,
     it.barcode,
@@ -3221,6 +3646,10 @@ async function apiImportBatchDetail(batchId: string) {
 
 async function apiImportBatchInventory(batchId: string) {
   return fetchJSON<{ ok?: boolean; batch?: Record<string, any>; batchId?: string; items?: InventoryItem[]; rows?: Array<Record<string, any>>; variantIds?: string[]; rowCount?: number; totalQty?: number }>(`/api/aif/import-batches/${encodeURIComponent(batchId)}/inventory`);
+}
+
+async function apiReceptionDetail(id: string) {
+  return fetchJSON<WarehouseReceptionDetail>(`/api/aif/receptions/${encodeURIComponent(id)}`);
 }
 
 async function apiVariantDetail(id: string) {
@@ -3672,6 +4101,10 @@ export default function AllInWarehouse() {
   const colorFilterRef = useRef<HTMLDivElement | null>(null);
   const [location, setLocation] = useState("all");
   const [invoiceFilter, setInvoiceFilter] = useState("all");
+  const [invoiceDetailTarget, setInvoiceDetailTarget] = useState<WarehouseInvoiceFilterOption | null>(null);
+  const [invoiceDetailRows, setInvoiceDetailRows] = useState<WarehouseReceptionDetail[]>([]);
+  const [invoiceDetailBusy, setInvoiceDetailBusy] = useState(false);
+  const [invoiceDetailError, setInvoiceDetailError] = useState("");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
   const [shopifyFilter, setShopifyFilter] = useState<ShopifyFilter>("all");
@@ -4592,43 +5025,142 @@ export default function AllInWarehouse() {
     return Array.from(rows.values()).sort((a, b) => a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" }));
   }, [sizeTypes, inventoryDisplayItems]);
 
-  const invoiceFilterOptions = useMemo(() => {
-    const map = new Map<string, { value: string; label: string; dateMs: number; count: number }>();
-    for (const item of inventoryDisplayItems) {
-      const history = inventoryInvoiceHistory(item);
-      const historyByInvoice = new Map<string, ReturnType<typeof inventoryInvoiceHistory>[number]>();
-      for (const row of history) {
-        const key = normalizeSearch(row.invoiceNumber);
-        if (key && !historyByInvoice.has(key)) historyByInvoice.set(key, row);
+  const invoiceFilterOptions = useMemo<WarehouseInvoiceFilterOption[]>(() => {
+    const map = new Map<string, {
+      invoiceNumber: string;
+      supplierId?: string | null;
+      supplierCode?: string | null;
+      supplierName: string;
+      supplierKeys: Set<string>;
+      invoiceDate?: string | null;
+      receptionDate?: string | null;
+      importedAt?: string | null;
+      dateMs: number;
+      variantIds: Set<string>;
+      receptionIds: Set<string>;
+      batchIds: Set<string>;
+      locationNames: Set<string>;
+      currencyCodes: Set<string>;
+      sourceFileNames: Set<string>;
+      items: Map<string, InventoryItem>;
+    }>();
+
+    let sourceItems = [...inventoryDisplayItems];
+    if (selectedSupplier) {
+      const selectedKeys = new Set([selectedSupplier.id, selectedSupplier.code, selectedSupplier.name].map(normalizeSearch).filter(Boolean));
+      sourceItems = sourceItems.filter((item) => inventorySupplierEntries(item).some((entry) => [entry.id, entry.code, entry.name].map(normalizeSearch).some((key) => selectedKeys.has(key))));
+    }
+    if (brand !== "all") sourceItems = sourceItems.filter((item) => (item.brand_code || item.brand_name || "") === brand || item.brand_name === brand);
+
+    const addInvoice = (item: InventoryItem, invoiceNumber: string, historyRow?: ReturnType<typeof inventoryInvoiceHistory>[number] | null) => {
+      const cleanInvoice = String(invoiceNumber || "").trim();
+      if (!cleanInvoice) return;
+      const supplierInfo = invoiceSupplierInfo(item, historyRow || null);
+      if (selectedSupplier) {
+        const selectedKeys = new Set([selectedSupplier.id, selectedSupplier.code, selectedSupplier.name].map(normalizeSearch).filter(Boolean));
+        const rowMatches = supplierInfo.keys.some((key) => selectedKeys.has(key));
+        if (historyRow && historyRow.supplierId && !rowMatches) return;
       }
-      for (const invoice of inventoryInvoiceNumbers(item)) {
-        const key = normalizeSearch(invoice);
-        if (!key) continue;
-        const historyRow = historyByInvoice.get(key);
-        const dateMs = Math.max(
-          dateTimeMs(historyRow?.receptionDate),
-          dateTimeMs(historyRow?.invoiceDate),
-          dateTimeMs(historyRow?.importedAt),
-          dateTimeMs(item.last_reception_date),
-          dateTimeMs(item.last_invoice_date),
-          latestWarehouseIncomingMs(item)
-        );
-        const current = map.get(key);
-        if (!current) {
-          map.set(key, { value: invoice, label: invoice, dateMs, count: 1 });
-        } else {
-          current.count += 1;
-          if (dateMs > current.dateMs) current.dateMs = dateMs;
-        }
+      const receptionId = String(historyRow?.receptionId || "").trim();
+      const batchId = String(historyRow?.batchId || "").trim();
+      const dateIdentity = String(historyRow?.invoiceDate || historyRow?.receptionDate || "").slice(0, 10);
+      const supplierKey = supplierInfo.keys[0] || normalizeSearch(supplierInfo.name) || "supplier_unknown";
+      const key = receptionId
+        ? `reception:${receptionId}`
+        : `invoice:${supplierKey}:${normalizeSearch(cleanInvoice)}:${dateIdentity}`;
+      const dateMs = Math.max(
+        dateTimeMs(historyRow?.receptionDate),
+        dateTimeMs(historyRow?.invoiceDate),
+        dateTimeMs(historyRow?.importedAt),
+        dateTimeMs(item.last_reception_date),
+        dateTimeMs(item.last_invoice_date),
+        latestWarehouseIncomingMs(item),
+      );
+      const current = map.get(key) || {
+        invoiceNumber: cleanInvoice,
+        supplierId: supplierInfo.id,
+        supplierCode: supplierInfo.code,
+        supplierName: supplierInfo.name,
+        supplierKeys: new Set<string>(),
+        invoiceDate: historyRow?.invoiceDate || item.last_invoice_date || null,
+        receptionDate: historyRow?.receptionDate || item.last_reception_date || null,
+        importedAt: historyRow?.importedAt || item.last_incoming_at || null,
+        dateMs,
+        variantIds: new Set<string>(),
+        receptionIds: new Set<string>(),
+        batchIds: new Set<string>(),
+        locationNames: new Set<string>(),
+        currencyCodes: new Set<string>(),
+        sourceFileNames: new Set<string>(),
+        items: new Map<string, InventoryItem>(),
+      };
+      supplierInfo.keys.forEach((value) => current.supplierKeys.add(value));
+      if (!current.supplierName || current.supplierName === "Beszállító nélkül") current.supplierName = supplierInfo.name;
+      if (dateMs > current.dateMs) {
+        current.dateMs = dateMs;
+        current.invoiceDate = historyRow?.invoiceDate || current.invoiceDate;
+        current.receptionDate = historyRow?.receptionDate || current.receptionDate;
+        current.importedAt = historyRow?.importedAt || current.importedAt;
+      }
+      const variantId = String(item.variant_id || "").trim();
+      if (variantId) {
+        current.variantIds.add(variantId);
+        current.items.set(variantId, item);
+      }
+      if (receptionId) current.receptionIds.add(receptionId);
+      if (batchId) current.batchIds.add(batchId);
+      const locationName = String(historyRow?.locationName || "").trim();
+      if (locationName) current.locationNames.add(locationName);
+      const currencyCode = String(historyRow?.currencyCode || "").trim();
+      if (currencyCode) current.currencyCodes.add(currencyCode);
+      const sourceFileName = String(historyRow?.sourceFileName || "").trim();
+      if (sourceFileName) current.sourceFileNames.add(sourceFileName);
+      map.set(key, current);
+    };
+
+    for (const item of sourceItems) {
+      const history = inventoryInvoiceHistory(item);
+      if (history.length) {
+        history.forEach((row) => addInvoice(item, row.invoiceNumber, row));
+      } else {
+        inventoryInvoiceNumbers(item).forEach((invoiceNumber) => addInvoice(item, invoiceNumber, null));
       }
     }
-    return Array.from(map.values())
-      .sort((a, b) => b.dateMs - a.dateMs || a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" }))
-      .map((row) => ({
-        ...row,
-        displayLabel: `${row.label}${row.dateMs ? ` • ${warehouseDateLabel(row.dateMs)}` : ""} • ${row.count} variáns`,
-      }));
-  }, [inventoryDisplayItems]);
+
+    return Array.from(map.entries())
+      .map(([value, row]) => {
+        const count = row.variantIds.size;
+        const dateLabel = warehouseDateLabel(row.invoiceDate || row.receptionDate || row.importedAt);
+        return {
+          value,
+          invoiceNumber: row.invoiceNumber,
+          supplierId: row.supplierId || null,
+          supplierCode: row.supplierCode || null,
+          supplierName: row.supplierName || "Beszállító nélkül",
+          supplierKeys: Array.from(row.supplierKeys),
+          invoiceDate: row.invoiceDate || null,
+          receptionDate: row.receptionDate || null,
+          importedAt: row.importedAt || null,
+          dateMs: row.dateMs,
+          count,
+          variantIds: Array.from(row.variantIds),
+          receptionIds: Array.from(row.receptionIds),
+          batchIds: Array.from(row.batchIds),
+          locationNames: Array.from(row.locationNames),
+          currencyCodes: Array.from(row.currencyCodes),
+          sourceFileNames: Array.from(row.sourceFileNames),
+          items: Array.from(row.items.values()),
+          displayLabel: `${row.invoiceNumber}${dateLabel ? ` • ${dateLabel}` : ""} • ${count} variáns`,
+        } satisfies WarehouseInvoiceFilterOption;
+      })
+      .sort((a, b) => b.dateMs - a.dateMs || a.invoiceNumber.localeCompare(b.invoiceNumber, "hu", { numeric: true, sensitivity: "base" }));
+  }, [inventoryDisplayItems, supplier, brand, selectedSupplier]);
+
+  const selectedInvoiceFilterOption = useMemo(
+    () => invoiceFilter === "all" ? null : invoiceFilterOptions.find((option) => option.value === invoiceFilter) || null,
+    [invoiceFilter, invoiceFilterOptions],
+  );
+
 
   useEffect(() => {
     if (brand === "all") return;
@@ -4636,6 +5168,43 @@ export default function AllInWarehouse() {
     const valid = brandOptions.some((b) => [b.id, b.code, b.name].map(normalizeSearch).some((x) => x === current));
     if (!valid) setBrand("all");
   }, [brand, brandOptions]);
+
+  useEffect(() => {
+    if (invoiceFilter === "all") return;
+    if (!invoiceFilterOptions.some((option) => option.value === invoiceFilter)) setInvoiceFilter("all");
+  }, [invoiceFilter, invoiceFilterOptions]);
+
+  async function loadInvoiceDetail(option: WarehouseInvoiceFilterOption) {
+    setInvoiceDetailTarget(option);
+    setInvoiceDetailRows([]);
+    setInvoiceDetailError("");
+    const receptionIds = Array.from(new Set(option.receptionIds.map((value) => String(value || "").trim()).filter(Boolean)));
+    if (!receptionIds.length) {
+      setInvoiceDetailBusy(false);
+      setInvoiceDetailError("Ehhez a régi számlaadathoz nincs receptióazonosító. A raktári terméklistát megmutatom, de a teljes receptiófej nem tölthető be.");
+      return;
+    }
+    setInvoiceDetailBusy(true);
+    try {
+      const details = await Promise.all(receptionIds.map((id) => apiReceptionDetail(id)));
+      setInvoiceDetailRows(details);
+    } catch (error: any) {
+      setInvoiceDetailError(error?.message || "A számla részleteinek betöltése nem sikerült.");
+    } finally {
+      setInvoiceDetailBusy(false);
+    }
+  }
+
+  async function reloadInvoiceDetail() {
+    if (!invoiceDetailTarget) return;
+    await loadInvoiceDetail(invoiceDetailTarget);
+  }
+
+  function closeInvoiceDetail() {
+    setInvoiceDetailTarget(null);
+    setInvoiceDetailRows([]);
+    setInvoiceDetailError("");
+  }
 
   useEffect(() => {
     if (subCategory === "all") return;
@@ -5075,10 +5644,7 @@ export default function AllInWarehouse() {
     if (location !== "all") {
       out = out.filter((x) => (stockMap.get(x.variant_id) || []).some((s) => (s.location_code === location || s.location_name === location) && n(s.qty) > 0));
     }
-    if (invoiceFilter !== "all") {
-      const invoiceKey = normalizeSearch(invoiceFilter);
-      out = out.filter((x) => inventoryInvoiceNumbers(x).some((invoice) => normalizeSearch(invoice) === invoiceKey));
-    }
+    if (invoiceFilter !== "all") out = out.filter((x) => itemMatchesInvoiceOption(x, selectedInvoiceFilterOption));
     if (stockFilter === "available") out = out.filter((x) => n(x.available_qty) > 0);
     if (stockFilter === "out") out = out.filter((x) => n(x.total_qty) <= 0);
     if (stockFilter === "reserved") out = out.filter((x) => n(x.total_reserved_qty) > 0);
@@ -5116,7 +5682,7 @@ export default function AllInWarehouse() {
       return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, sizeTypes, color, colorTypes, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, sizeTypes, color, colorTypes, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     setSearch("");
@@ -5165,7 +5731,7 @@ export default function AllInWarehouse() {
     if (sizeFilters.length) labels.push(`Méret: ${sizeFilters.join(" + ")}`);
     if (color !== "all") labels.push(`Szín: ${labelForMetaValue(colorTypes as any, color)}`);
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
-    if (invoiceFilter !== "all") labels.push(`Számla: ${invoiceFilter}`);
+    if (invoiceFilter !== "all") labels.push(`Számla: ${selectedInvoiceFilterOption?.invoiceNumber || invoiceFilter}`);
     if (stockFilter !== "all") {
       const stockLabels: Record<StockFilter, string> = {
         all: "Összes",
@@ -5195,7 +5761,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, color, location, invoiceFilter, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -7917,13 +8483,18 @@ export default function AllInWarehouse() {
                   {locations.map((l) => <option key={l.id} value={l.code || l.name || l.id}>{l.name}</option>)}
                 </select>
               </label>
-              <label className={label}>Számla
-                <select className={select} value={invoiceFilter} onChange={(e) => { setInvoiceFilter(e.target.value); if (e.target.value !== "all" && sortMode === "name") setSortMode("incoming_asc"); }}>
-                  <option value="all">Összes számla</option>
-                  {invoiceFilterOptions.map((row) => <option key={row.value} value={row.value}>{row.displayLabel}</option>)}
-                  {!invoiceFilterOptions.length && <option value="" disabled>Nincs számlaadat</option>}
-                </select>
-              </label>
+              <WarehouseInvoicePicker
+                options={invoiceFilterOptions}
+                value={invoiceFilter}
+                onSelect={(nextValue) => {
+                  setInvoiceFilter(nextValue);
+                  if (nextValue !== "all" && sortMode === "name") setSortMode("incoming_asc");
+                }}
+                onInspect={(option) => {
+                  if (sortMode === "name") setSortMode("incoming_asc");
+                  void loadInvoiceDetail(option);
+                }}
+              />
               <label className={label}>Készlet állapot
                 <select className={select} value={stockFilter} onChange={(e) => setStockFilter(e.target.value as StockFilter)}>
                   <option value="all">Összes</option>
@@ -8209,8 +8780,8 @@ export default function AllInWarehouse() {
                       const variantId = String(it.variant_id || "");
                       const isSelected = Boolean(activeListSelectionMap[variantId]);
                       const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
-                      const invoiceText = invoiceFilter !== "all" ? invoiceFilter : (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
-                      const purchaseDateText = inventoryPurchaseDateLabel(it, invoiceFilter !== "all" ? invoiceFilter : undefined);
+                      const invoiceText = selectedInvoiceFilterOption?.invoiceNumber || (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
+                      const purchaseDateText = inventoryPurchaseDateLabel(it, selectedInvoiceFilterOption?.invoiceNumber, selectedInvoiceFilterOption?.receptionIds?.[0]);
                       const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
                       return (
                       <tr
@@ -8293,8 +8864,8 @@ export default function AllInWarehouse() {
                   const variantId = String(it.variant_id || "");
                   const isSelected = Boolean(activeListSelectionMap[variantId]);
                   const isHighlighted = Boolean(highlightProductId && variantId === highlightProductId);
-                  const invoiceText = invoiceFilter !== "all" ? invoiceFilter : (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
-                  const purchaseDateText = inventoryPurchaseDateLabel(it, invoiceFilter !== "all" ? invoiceFilter : undefined);
+                  const invoiceText = selectedInvoiceFilterOption?.invoiceNumber || (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
+                  const purchaseDateText = inventoryPurchaseDateLabel(it, selectedInvoiceFilterOption?.invoiceNumber, selectedInvoiceFilterOption?.receptionIds?.[0]);
                   const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
                   return (
                   <article
@@ -10119,6 +10690,16 @@ export default function AllInWarehouse() {
           </div>
         </div>
       )}
+
+      <WarehouseInvoiceDetailModal
+        option={invoiceDetailTarget}
+        details={invoiceDetailRows}
+        loading={invoiceDetailBusy}
+        error={invoiceDetailError}
+        buyPricesVisible={buyPricesVisible}
+        onClose={closeInvoiceDetail}
+        onReload={() => void reloadInvoiceDetail()}
+      />
 
       {barcodeScanner && (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/65 px-3 py-4 backdrop-blur-sm sm:items-center">
