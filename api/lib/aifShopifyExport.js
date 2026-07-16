@@ -184,16 +184,49 @@ function price(value) {
 
 function shopifyGender(value) {
   const key = normalizeKey(value);
-  if (["men", "male", "masculin", "barbati", "barbat", "ferfi"].includes(key)) return "male";
-  if (["women", "female", "feminin", "femei", "femeie", "noi", "no"].includes(key)) return "female";
+  if (["men", "male", "masculin", "barbati", "barbat", "ferfi", "boys", "boy", "baieti", "baiat", "fiuk", "fiu"].includes(key)) return "male";
+  if (["women", "female", "feminin", "femei", "femeie", "noi", "no", "girls", "girl", "fete", "fata", "lany", "lanyok"].includes(key)) return "female";
   return "unisex";
 }
 
 function shopifyAgeGroup(value) {
   const key = normalizeKey(value);
-  return ["kids", "kid", "copii", "copil", "gyerek", "junior", "youth", "children"].includes(key)
+  return ["kids", "kid", "copii", "copil", "gyerek", "junior", "youth", "children", "boys", "boy", "girls", "girl", "baieti", "baiat", "fete", "fata", "fiuk", "lanyok"].includes(key)
     ? "kids"
     : "adult";
+}
+
+function shopifyAudience(value) {
+  if (shopifyAgeGroup(value) === "kids") return "Copii";
+  const gender = shopifyGender(value);
+  if (gender === "female") return "Femei";
+  if (gender === "male") return "Bărbați";
+  return "Unisex";
+}
+
+function shopifyStyle(row) {
+  const brand = normalizeKey(row?.brand_name || row?.brand_code);
+  const sportBrands = [
+    "4f", "under armour", "adidas", "nike", "puma", "reebok", "asics",
+    "new balance", "salomon", "joma", "kappa", "fila", "champion",
+  ];
+  if (sportBrands.some((candidate) => brand === candidate || brand.includes(candidate))) return "Sport";
+
+  const haystack = normalizeKey([
+    row?.shopify_title,
+    row?.title_ro,
+    row?.category_name_ro,
+    row?.category_name_hu,
+    row?.category_code,
+    row?.subcategory_name_ro,
+    row?.subcategory_name_hu,
+    row?.subcategory_code,
+    row?.product_type,
+  ].filter(Boolean).join(" "));
+
+  return /sport|training|fitness|running|runner|alerg|football|fotbal|tenis|tennis|gym|yoga|baschet|basket|ski|outdoor|performance|athletic/.test(haystack)
+    ? "Sport"
+    : "Fashion";
 }
 
 function productCategory(row) {
@@ -269,7 +302,7 @@ function descriptionHtml(row) {
 }
 
 function buildTags(row) {
-  return unique([
+  const normalizedTags = [
     "allinfashion",
     row.brand_name,
     row.category_name_ro,
@@ -278,7 +311,16 @@ function buildTags(row) {
     row.gender,
     row.season,
     row.color_name,
-  ].map(tagValue).filter(Boolean)).join(", ");
+  ].map(tagValue).filter(Boolean);
+
+  // A Shopifyban a technikai gender címke mellett az emberi, román címke is kell.
+  // Így a women/female adatból automatikusan Femei lesz, és az automata kollekciók
+  // nem kénytelenek angol-magyar-román találós kérdést játszani.
+  return unique([
+    shopifyAudience(row.gender),
+    shopifyStyle(row),
+    ...normalizedTags,
+  ]).join(", ");
 }
 
 function imageFromRow(row) {
@@ -977,6 +1019,18 @@ export async function createAifShopifyProductExport(client, options = {}) {
           JSON.stringify({
             title: item.shopify_title || item.title_ro,
             brand: item.brand_name,
+            brandCode: item.brand_code,
+            gender: item.gender,
+            audience: shopifyAudience(item.gender),
+            style: shopifyStyle(item),
+            categoryNameRo: item.category_name_ro,
+            categoryNameHu: item.category_name_hu,
+            categoryCode: item.category_code,
+            subcategoryNameRo: item.subcategory_name_ro,
+            subcategoryNameHu: item.subcategory_name_hu,
+            subcategoryCode: item.subcategory_code,
+            productType: item.product_type,
+            tags: buildTags(item),
             productCode: item.product_group_code || productGroupCode(item, prepared.groupingMode),
             productGroupKey: item.product_group_key || productGroupKey(item, prepared.groupingMode),
             groupingMode: prepared.groupingMode,
@@ -1183,25 +1237,20 @@ function isBrandDefinition(definition) {
 
 async function applicableProductMetafieldDefinitions(categoryId) {
   const category = text(categoryId);
-  if (!category) return [];
-  const query = `query AifCategoryMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier) {
+  const query = `query AifProductMetafieldDefinitions($constraint: MetafieldDefinitionConstraintSubtypeIdentifier) {
+    allDefinitions: metafieldDefinitions(ownerType: PRODUCT, first: 250) {
+      nodes { name namespace key type { name } validations { name value } }
+    }
     categoryDefinitions: metafieldDefinitions(ownerType: PRODUCT, first: 250, constraintSubtype: $constraint) {
-      nodes { name namespace key type { name } }
-    }
-    brandCandidates: metafieldDefinitions(ownerType: PRODUCT, first: 50, query: "Brand") {
-      nodes { name namespace key type { name } }
-    }
-    exactShopifyBrand: metafieldDefinitions(ownerType: PRODUCT, first: 10, namespace: "shopify", key: "brand") {
-      nodes { name namespace key type { name } }
+      nodes { name namespace key type { name } validations { name value } }
     }
   }`;
   const response = await shopifyGraphql(query, {
-    constraint: { key: "category", value: category },
+    constraint: category ? { key: "category", value: category } : null,
   });
   const combined = [
     ...(response.data?.categoryDefinitions?.nodes || []),
-    ...(response.data?.brandCandidates?.nodes || []),
-    ...(response.data?.exactShopifyBrand?.nodes || []),
+    ...(response.data?.allDefinitions?.nodes || []),
   ];
   const seen = new Set();
   return combined.filter((row) => {
@@ -1212,61 +1261,171 @@ async function applicableProductMetafieldDefinitions(categoryId) {
   });
 }
 
-function metafieldTextValue(typeName, value) {
-  const type = text(typeName);
-  const clean = text(value);
-  if (!clean) return null;
-  if (["single_line_text_field", "multi_line_text_field"].includes(type)) return clean;
-  if (type === "list.single_line_text_field") return JSON.stringify([clean]);
+function metafieldDefinitionScore(definition, aliases, preferredNamespaces = []) {
+  const name = normalizeKey(definition?.name);
+  const key = normalizeKey(definition?.key).replace(/[_-]+/g, " ");
+  const namespace = normalizeKey(definition?.namespace);
+  const normalizedAliases = (aliases || []).map((value) => normalizeKey(value).replace(/[_-]+/g, " ")).filter(Boolean);
+  const preferred = new Set((preferredNamespaces || []).map(normalizeKey).filter(Boolean));
+  let score = 0;
+  for (const alias of normalizedAliases) {
+    if (name === alias) score = Math.max(score, 100);
+    if (key === alias) score = Math.max(score, 95);
+    if (name.includes(alias) || alias.includes(name)) score = Math.max(score, 55);
+    if (key.includes(alias) || alias.includes(key)) score = Math.max(score, 50);
+  }
+  if (preferred.has(namespace)) score += 20;
+  return score;
+}
+
+function findProductMetafieldDefinition(definitions, aliases, preferredNamespaces = []) {
+  return (definitions || [])
+    .map((definition) => ({ definition, score: metafieldDefinitionScore(definition, aliases, preferredNamespaces) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.definition || null;
+}
+
+function definitionChoiceValues(definition) {
+  const choices = [];
+  for (const validation of definition?.validations || []) {
+    if (normalizeKey(validation?.name) !== "choices") continue;
+    const raw = text(validation?.value);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) choices.push(...parsed.map(text).filter(Boolean));
+    } catch {
+      choices.push(...raw.split(/[|;,]+/).map(text).filter(Boolean));
+    }
+  }
+  return unique(choices);
+}
+
+function resolvedMetafieldChoice(definition, candidates) {
+  const cleanCandidates = unique((candidates || []).map(text).filter(Boolean));
+  if (!cleanCandidates.length) return "";
+  const allowed = definitionChoiceValues(definition);
+  if (!allowed.length) return cleanCandidates[0];
+  for (const candidate of cleanCandidates) {
+    const key = normalizeKey(candidate);
+    const exact = allowed.find((value) => normalizeKey(value) === key);
+    if (exact) return exact;
+  }
+  return "";
+}
+
+function metafieldTextValue(definition, candidates) {
+  const typeName = text(definition?.type?.name);
+  const value = resolvedMetafieldChoice(definition, candidates);
+  if (!value) return null;
+  if (["single_line_text_field", "multi_line_text_field"].includes(typeName)) return value;
+  if (typeName === "list.single_line_text_field") return JSON.stringify([value]);
   return null;
 }
 
-async function setShopifyCategoryBrand({ productId, categoryId, brand }) {
-  if (!text(productId) || !text(categoryId) || !text(brand)) {
-    return { updated: false, skipped: true, reason: "missing_product_category_or_brand" };
+function audienceCandidates(value) {
+  const audience = text(value);
+  if (normalizeKey(audience) === "femei") return ["Femei", "Feminin", "Women", "Female"];
+  if (normalizeKey(audience) === "barbati") return ["Bărbați", "Barbati", "Masculin", "Men", "Male"];
+  if (normalizeKey(audience) === "copii") return ["Copii", "Junior", "Kids", "Children"];
+  return [audience || "Unisex", "Unisex"];
+}
+
+function styleCandidates(value) {
+  return normalizeKey(value) === "sport"
+    ? ["Sport", "Sports"]
+    : ["Fashion", "Lifestyle"];
+}
+
+async function setShopifyProductMetadata({ productId, categoryId, brand, audience, style, definitionCache }) {
+  const product = text(productId);
+  if (!product) return { updatedFields: [], skippedFields: [{ field: "all", reason: "missing_product" }] };
+
+  const cacheKey = text(categoryId) || "__all__";
+  let definitions = definitionCache?.get(cacheKey);
+  if (!definitions) {
+    definitions = await applicableProductMetafieldDefinitions(categoryId);
+    definitionCache?.set(cacheKey, definitions);
   }
-  const definitions = await applicableProductMetafieldDefinitions(categoryId);
-  const definition = definitions.find(isBrandDefinition) || null;
-  if (!definition) {
-    return { updated: false, skipped: true, reason: "brand_definition_missing" };
+
+  const fields = [
+    {
+      field: "brand",
+      value: text(brand),
+      aliases: ["Brand", "Marcă", "Marca", "Márka"],
+      preferredNamespaces: ["shopify"],
+      candidates: [text(brand)],
+    },
+    {
+      field: "audience",
+      value: text(audience),
+      aliases: ["Public", "Audience", "Public țintă", "Target audience"],
+      preferredNamespaces: ["custom"],
+      candidates: audienceCandidates(audience),
+    },
+    {
+      field: "style",
+      value: text(style),
+      aliases: ["Stil", "Style"],
+      preferredNamespaces: ["custom"],
+      candidates: styleCandidates(style),
+    },
+  ];
+
+  const inputs = [];
+  const inputFields = [];
+  const skippedFields = [];
+  for (const field of fields) {
+    if (!field.value) {
+      skippedFields.push({ field: field.field, reason: "missing_value" });
+      continue;
+    }
+    const definition = findProductMetafieldDefinition(definitions, field.aliases, field.preferredNamespaces);
+    if (!definition) {
+      skippedFields.push({ field: field.field, reason: "definition_missing" });
+      continue;
+    }
+    const value = metafieldTextValue(definition, field.candidates);
+    if (value === null) {
+      skippedFields.push({
+        field: field.field,
+        reason: definitionChoiceValues(definition).length ? "choice_not_allowed" : "definition_type_unsupported",
+        definition: { name: definition.name, namespace: definition.namespace, key: definition.key, type: text(definition.type?.name) },
+      });
+      continue;
+    }
+    inputs.push({
+      ownerId: product,
+      namespace: text(definition.namespace),
+      key: text(definition.key),
+      type: text(definition.type?.name),
+      value,
+    });
+    inputFields.push(field.field);
   }
-  const typeName = text(definition.type?.name);
-  const value = metafieldTextValue(typeName, brand);
-  if (value === null) {
-    return {
-      updated: false,
-      skipped: true,
-      reason: "brand_definition_type_unsupported",
-      definition: { name: definition.name, namespace: definition.namespace, key: definition.key, type: typeName },
-    };
-  }
-  const mutation = `mutation AifSetImportedProductBrand($metafields: [MetafieldsSetInput!]!) {
+
+  if (!inputs.length) return { updatedFields: [], skippedFields };
+
+  const mutation = `mutation AifSetImportedProductMetadata($metafields: [MetafieldsSetInput!]!) {
     metafieldsSet(metafields: $metafields) {
       metafields { id namespace key value type }
       userErrors { field message code }
     }
   }`;
-  const response = await shopifyGraphql(mutation, {
-    metafields: [{
-      ownerId: text(productId),
-      namespace: text(definition.namespace),
-      key: text(definition.key),
-      type: typeName,
-      value,
-    }],
-  });
+  const response = await shopifyGraphql(mutation, { metafields: inputs });
   const payload = response.data?.metafieldsSet;
   if (payload?.userErrors?.length) {
     throw Object.assign(new Error(payload.userErrors.map((row) => row.message).join(" | ")), {
-      code: "shopify_category_brand_set_failed",
+      code: "shopify_product_metadata_set_failed",
       payload,
-      definition,
+      inputs,
     });
   }
+
   return {
-    updated: Boolean(payload?.metafields?.length),
-    skipped: false,
-    definition: { name: definition.name, namespace: definition.namespace, key: definition.key, type: typeName },
+    updatedFields: inputFields,
+    skippedFields,
+    metafields: payload?.metafields || [],
   };
 }
 
@@ -1387,16 +1546,25 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       if (options.enqueueStock !== false) {
         await enqueueInitialMiercureaProductExportStock(client, item.variant_id, item.snapshot?.availableQty, "product_export_reconcile");
       }
-      if (!productTasks.has(productId)) {
-        productTasks.set(productId, {
-          productId,
-          modelId: item.model_id,
-          brand: text(item.snapshot?.brand),
-          categoryId: text(variant.product?.category?.id),
-          categoryName: text(variant.product?.category?.fullName || variant.product?.category?.name),
-          currentStatus: text(variant.product?.status),
-        });
-      }
+      const taskData = {
+        productId,
+        modelId: item.model_id,
+        brand: text(item.snapshot?.brand),
+        audience: text(item.snapshot?.audience) || (text(item.snapshot?.gender) ? shopifyAudience(item.snapshot?.gender) : ""),
+        style: text(item.snapshot?.style),
+        categoryId: text(variant.product?.category?.id),
+        categoryName: text(variant.product?.category?.fullName || variant.product?.category?.name),
+        currentStatus: text(variant.product?.status),
+      };
+      const existingTask = productTasks.get(productId);
+      productTasks.set(productId, existingTask ? {
+        ...existingTask,
+        brand: existingTask.brand || taskData.brand,
+        audience: existingTask.audience || taskData.audience,
+        style: existingTask.style || taskData.style,
+        categoryId: existingTask.categoryId || taskData.categoryId,
+        categoryName: existingTask.categoryName || taskData.categoryName,
+      } : taskData);
       mapped += 1;
     } catch (error) {
       const message = error?.message || String(error);
@@ -1415,8 +1583,14 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   let publishedProducts = 0;
   let brandUpdatedProducts = 0;
   let brandSkippedProducts = 0;
+  let audienceUpdatedProducts = 0;
+  let audienceSkippedProducts = 0;
+  let styleUpdatedProducts = 0;
+  let styleSkippedProducts = 0;
+  let metadataUpdatedProducts = 0;
   const productErrors = [];
   const productWarnings = [];
+  const metadataDefinitionCache = new Map();
   let onlinePublicationId = "";
 
   if (exportRow.product_status === "active" && productTasks.size) {
@@ -1442,16 +1616,25 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
         }
       }
 
-      const brandResult = await setShopifyCategoryBrand(task);
-      if (brandResult.updated) brandUpdatedProducts += 1;
-      else if (brandResult.skipped) {
-        brandSkippedProducts += 1;
+      const metadataResult = await setShopifyProductMetadata({
+        ...task,
+        definitionCache: metadataDefinitionCache,
+      });
+      if (metadataResult.updatedFields.length) metadataUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("brand")) brandUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("audience")) audienceUpdatedProducts += 1;
+      if (metadataResult.updatedFields.includes("style")) styleUpdatedProducts += 1;
+
+      for (const skipped of metadataResult.skippedFields || []) {
+        if (skipped.field === "brand") brandSkippedProducts += 1;
+        if (skipped.field === "audience") audienceSkippedProducts += 1;
+        if (skipped.field === "style") styleSkippedProducts += 1;
         productWarnings.push({
-          scope: "brand",
+          scope: skipped.field,
           productId: task.productId,
           category: task.categoryName || task.categoryId || null,
-          reason: brandResult.reason,
-          definition: brandResult.definition || null,
+          reason: skipped.reason,
+          definition: skipped.definition || null,
         });
       }
     } catch (error) {
@@ -1484,6 +1667,11 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     publishedProducts,
     brandUpdatedProducts,
     brandSkippedProducts,
+    audienceUpdatedProducts,
+    audienceSkippedProducts,
+    styleUpdatedProducts,
+    styleSkippedProducts,
+    metadataUpdatedProducts,
     productErrors,
     productWarnings,
     onlinePublicationId: onlinePublicationId || null,
@@ -1512,6 +1700,11 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     publishedProducts,
     brandUpdatedProducts,
     brandSkippedProducts,
+    audienceUpdatedProducts,
+    audienceSkippedProducts,
+    styleUpdatedProducts,
+    styleSkippedProducts,
+    metadataUpdatedProducts,
     totals,
   };
 }
