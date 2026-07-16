@@ -79,16 +79,27 @@ const taxonomyInput = "h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 t
 const taxonomyTextarea = "min-h-[74px] rounded-xl border border-white/18 bg-[#3f4959] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/42 focus:border-[#7bd7d4]/55";
 const taxonomyRow = "relative flex items-center justify-between gap-3 rounded-xl border border-white/14 bg-[#495466] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]";
 
-function ShopifyBrandMark({ size = "sm", className = "" }: { size?: "xs" | "sm" | "md"; className?: string }) {
+function ShopifyBrandMark({
+  size = "sm",
+  className = "",
+  fill = false,
+}: {
+  size?: "xs" | "sm" | "md";
+  className?: string;
+  fill?: boolean;
+}) {
   const dimension = size === "xs" ? "h-5 w-5" : size === "md" ? "h-8 w-8" : "h-6 w-6";
   const fallbackSize = size === "xs" ? 12 : size === "md" ? 18 : 15;
+  const shellClass = fill
+    ? "rounded-none border-0 bg-transparent shadow-none"
+    : "rounded-md border border-[#95bf47]/75 bg-white shadow-sm";
   return (
-    <span className={`${dimension} relative inline-flex shrink-0 items-center justify-center rounded-md border border-[#95bf47]/75 bg-white shadow-sm ${className}`}>
+    <span className={`${dimension} relative inline-flex shrink-0 items-center justify-center ${shellClass} ${className}`}>
       <ShoppingBag size={fallbackSize} strokeWidth={1.9} className="absolute text-[#008060]" />
       <img
         src={AIF_SHOPIFY_ICON_URL}
         alt=""
-        className="relative h-[78%] w-[78%] object-contain"
+        className={`relative object-contain ${fill ? "h-full w-full" : "h-[78%] w-[78%]"}`}
         onError={(event) => { event.currentTarget.style.display = "none"; }}
       />
     </span>
@@ -1325,18 +1336,17 @@ function invoiceSupplierInfo(
   const rowId = String(row?.supplierId || "").trim() || null;
   const rowCode = String(row?.supplierCode || "").trim() || null;
   const rowName = String(row?.supplierName || "").trim() || null;
-  const rowKey = normalizeSearch(rowId || rowCode || rowName);
-  const itemMatch = rowKey
-    ? itemEntries.find((entry) => [entry.id, entry.code, entry.name].map(normalizeSearch).includes(rowKey))
-    : itemEntries[0];
+  const rowKeys = [rowId, rowCode, rowName].map(normalizeSearch).filter(Boolean);
+  const matchingEntries = rowKeys.length
+    ? itemEntries.filter((entry) => {
+        const entryKeys = [entry.id, entry.code, entry.name].map(normalizeSearch).filter(Boolean);
+        return entryKeys.some((key) => rowKeys.includes(key));
+      })
+    : itemEntries;
+  const itemMatch = matchingEntries[0] || null;
   const keys = Array.from(new Set([
-    rowId,
-    rowCode,
-    rowName,
-    itemMatch?.id,
-    itemMatch?.code,
-    itemMatch?.name,
-    ...itemEntries.flatMap((entry) => [entry.id, entry.code, entry.name]),
+    ...rowKeys,
+    ...matchingEntries.flatMap((entry) => [entry.id, entry.code, entry.name]),
   ].map(normalizeSearch).filter(Boolean)));
   return {
     id: rowId || itemMatch?.id || null,
@@ -5058,8 +5068,29 @@ export default function AllInWarehouse() {
       const supplierInfo = invoiceSupplierInfo(item, historyRow || null);
       if (selectedSupplier) {
         const selectedKeys = new Set([selectedSupplier.id, selectedSupplier.code, selectedSupplier.name].map(normalizeSearch).filter(Boolean));
-        const rowMatches = supplierInfo.keys.some((key) => selectedKeys.has(key));
-        if (historyRow && historyRow.supplierId && !rowMatches) return;
+        const directHistorySupplierKeys = [
+          historyRow?.supplierId,
+          historyRow?.supplierCode,
+          historyRow?.supplierName,
+        ].map(normalizeSearch).filter(Boolean);
+
+        if (directHistorySupplierKeys.length) {
+          // A számla saját beszállítóadata az elsődleges. Egy termék idővel több
+          // beszállítóhoz is kapcsolódhat, de ettől a Mayo Chix számla még nem
+          // válhat 4F számlává. A termékszintű kapcsolatok itt nem írhatják felül
+          // a receptió / számla konkrét beszállítóját.
+          if (!directHistorySupplierKeys.some((key) => selectedKeys.has(key))) return;
+        } else {
+          const itemSupplierRows = inventorySupplierEntries(item);
+          const matchingItemSuppliers = itemSupplierRows.filter((entry) =>
+            [entry.id, entry.code, entry.name].map(normalizeSearch).some((key) => selectedKeys.has(key))
+          );
+          if (!matchingItemSuppliers.length) return;
+          // Régi, beszállító nélküli számlaelőzménynél több termékszintű
+          // beszállító esetén nem találgatunk. Inkább kihagyjuk az ambivalens sort,
+          // mint hogy idegen számlát mutassunk a kiválasztott forgalmazó alatt.
+          if (itemSupplierRows.length > 1) return;
+        }
       }
       const receptionId = String(historyRow?.receptionId || "").trim();
       const batchId = String(historyRow?.batchId || "").trim();
@@ -8334,13 +8365,13 @@ export default function AllInWarehouse() {
               <button className={headerPrimaryBtn} onClick={openNewProductModal} type="button"><Plus size={15} /> Új termék</button>
               <button className={headerBtnSoft} onClick={() => setTaxonomyOpen(true)}><Edit3 size={15} /> Törzsadatok</button>
               <button
-                className="inline-flex h-8 w-9 items-center justify-center rounded-xl border border-white bg-white p-0 text-[#008060] shadow-[0_5px_14px_rgba(15,23,42,0.18)] transition hover:border-[#dfead0] hover:bg-[#f7fbf1] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/90 bg-white p-[2px] text-[#008060] shadow-[0_5px_14px_rgba(15,23,42,0.18)] transition hover:border-[#cfe1a8] hover:bg-[#fbfdf7] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45"
                 onClick={() => setShopifySyncCenterOpen(true)}
                 type="button"
                 title="Shopify központ: kapcsolatok, újraszinkron és exportelőzmények"
                 aria-label="Shopify központ"
               >
-                <ShopifyBrandMark size="md" className="border-0 bg-transparent shadow-none" />
+                <ShopifyBrandMark size="md" fill className="!h-7 !w-7" />
               </button>
               {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
               <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
@@ -8387,7 +8418,15 @@ export default function AllInWarehouse() {
                 <input className={input} value={snCodFilter} onChange={(e) => setSnCodFilter(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} placeholder="pl. S0626" />
               </label>
               <label className={label}>Beszállító
-                <select className={select} value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+                <select
+                  className={select}
+                  value={supplier}
+                  onChange={(e) => {
+                    setSupplier(e.target.value);
+                    setInvoiceFilter("all");
+                    closeInvoiceDetail();
+                  }}
+                >
                   <option value="all">Összes</option>
                   {suppliers.map((s) => <option key={s.id} value={s.code || s.name || s.id}>{s.name}</option>)}
                 </select>
