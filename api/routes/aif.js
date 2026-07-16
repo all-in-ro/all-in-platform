@@ -7512,7 +7512,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          GROUP BY sc.variant_id
        ),
        incoming_info AS (
-         SELECT sm.variant_id, max(sm.created_at) AS last_incoming_at
+         SELECT
+           sm.variant_id,
+           min(sm.created_at) AS first_incoming_at,
+           max(sm.created_at) AS last_incoming_at
          FROM aif_stock_movements sm
          WHERE sm.movement_type='incoming' OR sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit'
          GROUP BY sm.variant_id
@@ -7543,12 +7546,42 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            rw.sell_price,
            rw.sell_price_ron,
            rw.qty,
+           b.id AS last_import_batch_id,
+           b.reception_id AS last_reception_id,
+           COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) AS last_invoice_number,
+           r.invoice_date AS last_invoice_date,
+           r.reception_date AS last_reception_date,
+           b.source_file_name AS last_source_file_name,
            COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) AS last_import_at
          FROM aif_import_rows rw
          JOIN aif_import_batches b ON b.id=rw.batch_id
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE rw.status='committed'
            AND rw.variant_id IS NOT NULL
          ORDER BY rw.variant_id, COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) DESC, rw.updated_at DESC NULLS LAST, rw.row_no DESC
+       ),
+       invoice_info AS (
+         SELECT
+           rw.variant_id,
+           array_agg(DISTINCT COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')))
+             FILTER (WHERE COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) IS NOT NULL) AS invoice_numbers,
+           jsonb_agg(DISTINCT jsonb_build_object(
+             'invoiceNumber', COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')),
+             'invoiceDate', r.invoice_date,
+             'receptionDate', r.reception_date,
+             'importedAt', COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at),
+             'batchId', b.id,
+             'receptionId', b.reception_id,
+             'sourceFileName', b.source_file_name
+           )) FILTER (WHERE COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) IS NOT NULL) AS invoice_history,
+           min(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS first_import_at,
+           max(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS last_import_at
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
+         WHERE rw.status='committed'
+           AND rw.variant_id IS NOT NULL
+         GROUP BY rw.variant_id
        )
        SELECT
          v.id AS variant_id,
@@ -7570,6 +7603,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          svm.shopify_product_title,
          svm.shopify_variant_title,
          svm.shopify_product_status,
+         svm.created_at AS shopify_mapped_at,
+         svm.updated_at AS shopify_mapping_updated_at,
+         NULLIF(
+           GREATEST(
+             COALESCE(sxp.reconciled_at, 'epoch'::timestamptz),
+             COALESCE(svm.created_at, 'epoch'::timestamptz)
+           ),
+           'epoch'::timestamptz
+         ) AS shopify_connected_at,
          svm.last_synced_at AS shopify_last_synced_at,
          svm.last_error AS shopify_last_error,
          sso.last_error AS shopify_outbox_error,
@@ -7621,7 +7663,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
          COALESCE(st.available_qty, ci.committed_qty, lid.qty, 0) AS available_qty,
          COALESCE(st.last_stock_movement_at, ci.last_import_at, lid.last_import_at) AS last_stock_movement_at,
+         COALESCE(ii.first_incoming_at, inf.first_import_at, lid.last_import_at, st.last_stock_movement_at) AS first_incoming_at,
          COALESCE(ii.last_incoming_at, ci.last_import_at, lid.last_import_at, st.last_stock_movement_at) AS last_incoming_at,
+         lid.last_import_batch_id,
+         lid.last_reception_id,
+         lid.last_invoice_number,
+         lid.last_invoice_date,
+         lid.last_reception_date,
+         lid.last_source_file_name,
+         inf.invoice_numbers,
+         inf.invoice_history,
          si.supplier_names,
          si.supplier_codes,
          COALESCE(si.supplier_product_code, lid.supplier_product_code) AS supplier_product_code,
@@ -7636,6 +7687,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LEFT JOIN stock_totals st ON st.variant_id=v.id
        LEFT JOIN committed_import ci ON ci.variant_id=v.id
        LEFT JOIN latest_import_detail lid ON lid.variant_id=v.id
+       LEFT JOIN invoice_info inf ON inf.variant_id=v.id
        LEFT JOIN supplier_info si ON si.variant_id=v.id
        LEFT JOIN incoming_info ii ON ii.variant_id=v.id
        LEFT JOIN LATERAL (
