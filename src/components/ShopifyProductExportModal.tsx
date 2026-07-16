@@ -98,7 +98,7 @@ type ExportHistoryItem = {
   reconciled_at?: string | null;
 };
 
-const field = "h-10 rounded-xl border border-white/16 bg-[#303a4c] px-3 text-sm text-white outline-none focus:border-[#77d8d4]/55";
+const field = "h-10 min-w-0 w-full rounded-xl border border-white/16 bg-[#303a4c] px-3 text-sm text-white outline-none focus:border-[#77d8d4]/55";
 const softButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/16 bg-white/[0.07] px-3 text-xs text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-45";
 const primaryButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#77d8d4]/45 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45";
 
@@ -278,6 +278,11 @@ export default function ShopifyProductExportModal({
         publishedProducts?: number;
         brandUpdatedProducts?: number;
         brandSkippedProducts?: number;
+        audienceUpdatedProducts?: number;
+        audienceSkippedProducts?: number;
+        styleUpdatedProducts?: number;
+        styleSkippedProducts?: number;
+        metadataUpdatedProducts?: number;
         errorItems?: Array<{ sku?: string; error?: string }>;
         productErrors?: Array<{ scope?: string; error?: string }>;
       }>(
@@ -287,8 +292,12 @@ export default function ShopifyProductExportModal({
       const productSummary = [
         result.activatedProducts ? `${result.activatedProducts} termék aktiválva` : "",
         result.publishedProducts ? `${result.publishedProducts} termék közzétéve az Online áruházban` : "",
-        result.brandUpdatedProducts ? `${result.brandUpdatedProducts} Brand mező kitöltve` : "",
-        result.brandSkippedProducts ? `${result.brandSkippedProducts} Brand mező kihagyva` : "",
+        result.brandUpdatedProducts ? `${result.brandUpdatedProducts} Brand kitöltve` : "",
+        result.audienceUpdatedProducts ? `${result.audienceUpdatedProducts} Public kitöltve` : "",
+        result.styleUpdatedProducts ? `${result.styleUpdatedProducts} Stil kitöltve` : "",
+        result.brandSkippedProducts ? `${result.brandSkippedProducts} Brand kihagyva` : "",
+        result.audienceSkippedProducts ? `${result.audienceSkippedProducts} Public kihagyva` : "",
+        result.styleSkippedProducts ? `${result.styleSkippedProducts} Stil kihagyva` : "",
       ].filter(Boolean).join(" • ");
       setReconcileMessage(
         result.errors
@@ -329,9 +338,9 @@ export default function ShopifyProductExportModal({
           <button type="button" className={`${softButton} h-9 w-9 px-0`} onClick={onClose} aria-label="Bezárás"><X size={16} /></button>
         </header>
 
-        <div className="overflow-y-auto p-4">
-          <div className="grid gap-3 lg:grid-cols-[1.15fr,1.1fr,1fr,auto] lg:items-end">
-            <label className="grid gap-1.5 text-xs text-white/65">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
+          <div className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3 xl:items-end">
+            <label className="grid min-w-0 gap-1.5 text-xs text-white/65">
               Shopify csoportosítás
               <select
                 className={field}
@@ -346,30 +355,34 @@ export default function ShopifyProductExportModal({
                 <option value="product_code">Minden termékkód külön Shopify-termék</option>
               </select>
             </label>
-            <label className="grid gap-1.5 text-xs text-white/65">
+            <label className="grid min-w-0 gap-1.5 text-xs text-white/65">
               Export terjedelme
               <select className={field} value={selectionMode} onChange={(event) => setSelectionMode(event.target.value as typeof selectionMode)}>
                 <option value="all_model_variants">A kijelölt modellek minden aktív szín- és méretvariánsa</option>
                 <option value="selected_variants">Csak a pontosan kijelölt variánsok</option>
               </select>
             </label>
-            <label className="grid gap-1.5 text-xs text-white/65">
+            <label className="grid min-w-0 gap-1.5 text-xs text-white/65">
               Shopify termékállapot
               <select className={field} value={productStatus} onChange={(event) => setProductStatus(event.target.value as typeof productStatus)}>
                 <option value="active">Aktív, Online áruházban is közzétéve</option>
                 <option value="draft">Piszkozat, nem kerül az Online áruházba</option>
               </select>
             </label>
-            <label className="flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-white/14 bg-[#303a4c] px-3 text-xs text-white/72">
-              <input type="checkbox" checked={includeMapped} onChange={(event) => setIncludeMapped(event.target.checked)} className="h-4 w-4 accent-[#2a8d8b]" />
-              Már összekötötteket is exportálja
+            <label className="flex min-h-10 min-w-0 cursor-pointer items-center gap-2 rounded-xl border border-white/14 bg-[#303a4c] px-3 py-2 text-xs text-white/72 md:col-span-2 xl:col-span-3">
+              <input type="checkbox" checked={includeMapped} onChange={(event) => setIncludeMapped(event.target.checked)} className="h-4 w-4 shrink-0 accent-[#2a8d8b]" />
+              <span className="min-w-0">
+                <span className="block text-white/88">Már összekötötteket is exportálja</span>
+                <span className="mt-0.5 block text-[10px] leading-snug text-white/45">Teljes modell újraexportálásánál a már párosított színek és méretek is bekerülnek, így nem épül fél termék.</span>
+              </span>
             </label>
           </div>
 
           <div className="mt-3 rounded-2xl border border-[#77d8d4]/25 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-            {groupingMode === "model_colors"
+            <p>{groupingMode === "model_colors"
               ? "Egy AllIn modellből egy Shopify-termék készül. A Culoare az első, a Mărime a második variánsopció, ezért a ciklam / roz / turcoaz ugyanazon terméken belül választható."
-              : "A beszállítói termékkódok külön Shopify-termékek maradnak. Ezt csak akkor használd, amikor a színkódos cikkszám valóban külön terméket jelent."}
+              : "A beszállítói termékkódok külön Shopify-termékek maradnak. Ezt csak akkor használd, amikor a színkódos cikkszám valóban külön terméket jelent."}</p>
+            <p className="mt-1.5 text-[#bff3ef]">A CSV a román közönségcímkét is hozzáadja, például women → Femei. Import után a Párosítás automatikusan kitölti a Shopify Brand, Public és Stil mezőket, amikor ezek definíciói elérhetők.</p>
           </div>
 
           <div className="mt-2 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
