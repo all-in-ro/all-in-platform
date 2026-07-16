@@ -7498,6 +7498,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        supplier_info AS (
          SELECT
            sc.variant_id,
+           string_agg(DISTINCT s.id::text, ', ' ORDER BY s.id::text) FILTER (WHERE s.id IS NOT NULL) AS supplier_ids,
+           string_agg(DISTINCT s.code, ', ' ORDER BY s.code) FILTER (WHERE s.code IS NOT NULL AND s.code <> '') AS supplier_source_codes,
            string_agg(DISTINCT s.name, ', ' ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL AND s.name <> '') AS supplier_names,
            string_agg(DISTINCT NULLIF(concat_ws(' / ', sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_size), ''), ', ') AS supplier_codes,
            (array_agg(sc.supplier_product_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE sc.supplier_product_code IS NOT NULL AND sc.supplier_product_code <> ''))[1] AS supplier_product_code,
@@ -7572,13 +7574,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              'importedAt', COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at),
              'batchId', b.id,
              'receptionId', b.reception_id,
-             'sourceFileName', b.source_file_name
+             'sourceFileName', b.source_file_name,
+             'supplierId', COALESCE(r.supplier_id, b.supplier_id),
+             'supplierCode', invs.code,
+             'supplierName', invs.name,
+             'locationId', COALESCE(r.target_location_id, b.target_location_id),
+             'locationName', invl.name,
+             'currencyCode', COALESCE(r.currency_code, b.currency_code),
+             'invoiceGross', r.invoice_gross,
+             'receptionStatus', r.status
            )) FILTER (WHERE COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) IS NOT NULL) AS invoice_history,
            min(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS first_import_at,
            max(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS last_import_at
          FROM aif_import_rows rw
          JOIN aif_import_batches b ON b.id=rw.batch_id
          LEFT JOIN aif_receptions r ON r.id=b.reception_id
+         LEFT JOIN aif_suppliers invs ON invs.id=COALESCE(r.supplier_id, b.supplier_id)
+         LEFT JOIN aif_locations invl ON invl.id=COALESCE(r.target_location_id, b.target_location_id)
          WHERE rw.status='committed'
            AND rw.variant_id IS NOT NULL
          GROUP BY rw.variant_id
@@ -7673,6 +7685,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          lid.last_source_file_name,
          inf.invoice_numbers,
          inf.invoice_history,
+         si.supplier_ids,
+         si.supplier_source_codes,
          si.supplier_names,
          si.supplier_codes,
          COALESCE(si.supplier_product_code, lid.supplier_product_code) AS supplier_product_code,
