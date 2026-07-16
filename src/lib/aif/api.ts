@@ -327,6 +327,25 @@ export type AifInventoryItem = {
   total_qty: number;
   total_reserved_qty: number;
   available_qty: number;
+  first_incoming_at?: string | null;
+  last_incoming_at?: string | null;
+  last_stock_movement_at?: string | null;
+  last_import_batch_id?: string | null;
+  last_reception_id?: string | null;
+  last_invoice_number?: string | null;
+  last_invoice_date?: string | null;
+  last_reception_date?: string | null;
+  last_source_file_name?: string | null;
+  invoice_numbers?: string[] | string | null;
+  invoice_history?: Array<{
+    invoiceNumber?: string | null;
+    invoiceDate?: string | null;
+    receptionDate?: string | null;
+    importedAt?: string | null;
+    batchId?: string | null;
+    receptionId?: string | null;
+    sourceFileName?: string | null;
+  }> | string | null;
   shopify_mapped?: boolean | null;
   shopify_sync_status?: string | null;
   shopify_outbox_status?: string | null;
@@ -336,6 +355,9 @@ export type AifInventoryItem = {
   shopify_product_title?: string | null;
   shopify_variant_title?: string | null;
   shopify_product_status?: string | null;
+  shopify_mapped_at?: string | null;
+  shopify_mapping_updated_at?: string | null;
+  shopify_connected_at?: string | null;
   shopify_last_synced_at?: string | null;
   shopify_last_error?: string | null;
   shopify_outbox_error?: string | null;
