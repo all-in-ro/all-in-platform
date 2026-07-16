@@ -740,24 +740,26 @@ function buildReceptionVerificationHtml(
     <table>
       <colgroup>
         <col style="width: 3%" />
-        <col style="width: 8%" />
-        <col style="width: 19%" />
-        <col style="width: 9%" />
-        <col style="width: 9%" />
         <col style="width: 7%" />
-        <col style="width: 8%" />
+        <col style="width: 9%" />
+        <col style="width: 15%" />
+        <col style="width: 7%" />
+        <col style="width: 7%" />
+        <col style="width: 5%" />
         <col style="width: 7%" />
         <col style="width: 6%" />
+        <col style="width: 5%" />
         <col style="width: 6%" />
+        <col style="width: 6%" />
+        <col style="width: 3%" />
         <col style="width: 7%" />
-        <col style="width: 4%" />
-        <col style="width: 8%" />
-        <col style="width: 9%" />
+        <col style="width: 7%" />
       </colgroup>
       <thead>
         <tr>
           <th>Nr.</th>
           <th>Cod produs</th>
+          <th>S/N/COD</th>
           <th>Denumire produs</th>
           <th>Brand</th>
           <th>Categorie</th>
@@ -773,10 +775,10 @@ function buildReceptionVerificationHtml(
         </tr>
       </thead>
       <tbody>
-        ${lines || `<tr><td colspan="14" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
+        ${lines || `<tr><td colspan="15" style="text-align:center;padding:18px;">Nu exista linii de verificat.</td></tr>`}
       </tbody>
       <tfoot>
-        <tr class="totals"><td colspan="9">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="4"></td></tr>
+        <tr class="totals"><td colspan="10">TOTAL</td><td class="num">${pdfNumber(totalQty, 0)}</td><td colspan="4"></td></tr>
       </tfoot>
     </table>
     <div class="signatures">
