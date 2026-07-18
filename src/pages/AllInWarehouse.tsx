@@ -668,6 +668,7 @@ type StockTransferPrintLine = {
   title: string;
   brand: string;
   category: string;
+  productCode: string;
   barcode: string;
   color: string;
   size: string;
@@ -2119,7 +2120,7 @@ function warehouseLabelPrintDocumentHtml(
 function warehouseTransferDateTime(input: Date | string | number = new Date()) {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString("hu-HU", {
+  return d.toLocaleString("ro-RO", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -2128,96 +2129,191 @@ function warehouseTransferDateTime(input: Date | string | number = new Date()) {
   });
 }
 
+function warehouseTransferDocumentNumber(input: Date | string | number = new Date()) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return `TRF-${Date.now()}`;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `TRF-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
 function warehouseStockTransferPrintDocumentHtml(options: {
   title: string;
   note?: string;
   createdAt: string;
+  documentNumber?: string;
   lines: StockTransferPrintLine[];
 }) {
   const totalQty = options.lines.reduce((sum, line) => sum + line.qty, 0);
+  const fromLocations = Array.from(new Set(options.lines.map((line) => String(line.fromLocation || "").trim()).filter(Boolean)));
+  const toLocations = Array.from(new Set(options.lines.map((line) => String(line.toLocation || "").trim()).filter(Boolean)));
+  const fromSummary = fromLocations.length === 1 ? fromLocations[0] : "Conform tabelului";
+  const toSummary = toLocations.length === 1 ? toLocations[0] : "Conform tabelului";
+  const documentNumber = String(options.documentNumber || warehouseTransferDocumentNumber()).trim();
+  const documentObject = String(options.title || "Transfer intern de stoc").trim();
+
   const rowsHtml = options.lines.map((line) => {
     const imageHtml = line.imageUrl
       ? `<img class="aifTransferImg" src="${labelEscapeHtml(line.imageUrl)}" alt="" />`
-      : `<div class="aifTransferImg empty"></div>`;
+      : `<div class="aifTransferImg empty">Fără foto</div>`;
+    const variantMeta = [line.brand, line.category, line.color, line.size]
+      .map((value) => String(value || "").trim())
+      .filter((value) => value && value !== "-")
+      .join(" • ");
     return `
       <tr>
-        <td class="center">${line.index}</td>
+        <td class="center serial">${line.index}</td>
         <td>
           <div class="productCell">
             ${imageHtml}
-            <div>
-              <strong>${labelEscapeHtml(line.title)}</strong>
-              <small>${labelEscapeHtml([line.brand, line.category, line.color, line.size].filter(Boolean).join(" • "))}</small>
-              <small>Vonalkód: ${labelEscapeHtml(line.barcode || "-")}</small>
+            <div class="productText">
+              <strong>${labelEscapeHtml(line.title || "Produs")}</strong>
+              ${variantMeta ? `<small>${labelEscapeHtml(variantMeta)}</small>` : ""}
             </div>
           </div>
         </td>
-        <td>${labelEscapeHtml(line.fromLocation)}</td>
-        <td>${labelEscapeHtml(line.toLocation)}</td>
+        <td class="code">${labelEscapeHtml(line.productCode || "-")}</td>
+        <td class="code">${labelEscapeHtml(line.barcode || "-")}</td>
+        <td>${labelEscapeHtml(line.fromLocation || "-")}</td>
+        <td>${labelEscapeHtml(line.toLocation || "-")}</td>
+        <td class="center unit">buc.</td>
         <td class="qty">${line.qty}</td>
       </tr>`;
   }).join("");
 
   return `<!doctype html>
-<html>
+<html lang="ro">
 <head>
   <meta charset="utf-8" />
-  <title>${labelEscapeHtml(options.title || "Készlet átadási lista")}</title>
+  <title>${labelEscapeHtml(`Proces-verbal transfer stoc ${documentNumber}`)}</title>
   <style>
-    @page { size: A4; margin: 12mm; }
+    @page { size: A4 portrait; margin: 10mm; }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Arial, sans-serif; color: #111827; background: #fff; }
-    .header { display: flex; justify-content: space-between; gap: 18px; border-bottom: 2px solid #2a8d8b; padding-bottom: 10px; margin-bottom: 14px; }
-    .brand { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #2a8d8b; font-weight: 700; }
-    h1 { margin: 4px 0 0; font-size: 22px; line-height: 1.18; }
-    .meta { text-align: right; font-size: 12px; color: #4b5563; line-height: 1.55; }
-    .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 14px; }
-    .summary div { border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; font-size: 12px; }
-    .summary strong { display: block; margin-top: 3px; font-size: 18px; color: #111827; }
-    .note { border: 1px solid #d1d5db; border-radius: 10px; padding: 9px 10px; margin-bottom: 14px; font-size: 12px; color: #374151; }
+    html, body { margin: 0; padding: 0; background: #ffffff; color: #172033; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page { width: 100%; }
+    .topGrid { display: grid; grid-template-columns: minmax(0,1fr) minmax(70mm,.86fr); gap: 10mm; align-items: start; padding-bottom: 5mm; border-bottom: 2px solid #255f54; }
+    .companyName { color: #183d36; font-size: 17px; font-weight: 700; letter-spacing: .03em; }
+    .companyMeta { margin-top: 2.5mm; color: #465467; font-size: 10px; line-height: 1.45; }
+    .companyMeta div { margin-top: .6mm; }
+    .docBox { border: 1px solid #b9c7c4; border-radius: 3mm; overflow: hidden; }
+    .docBoxTitle { padding: 2.2mm 3mm; background: #255f54; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .docBoxBody { display: grid; grid-template-columns: 1fr; gap: 1.4mm; padding: 2.7mm 3mm; background: #f5f8f7; }
+    .docLine { display: flex; justify-content: space-between; gap: 5mm; border-bottom: 1px solid #d8e0de; padding-bottom: 1.1mm; }
+    .docLine:last-child { border-bottom: 0; padding-bottom: 0; }
+    .docLine span { color: #667382; }
+    .docLine strong { color: #172033; text-align: right; }
+    .titleBlock { padding: 6mm 0 4mm; text-align: center; }
+    .eyebrow { color: #255f54; font-size: 9px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+    h1 { margin: 1.5mm 0 0; font-size: 20px; line-height: 1.15; letter-spacing: .02em; color: #172033; }
+    .subtitle { margin-top: 1.5mm; color: #526070; font-size: 11px; }
+    .routeGrid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 3mm; margin: 1mm 0 4mm; }
+    .routeCard { border: 1px solid #ccd7d4; border-radius: 2.5mm; padding: 2.5mm 3mm; background: #f7faf9; }
+    .routeCard span { display: block; color: #6a7683; font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase; }
+    .routeCard strong { display: block; margin-top: 1mm; color: #172033; font-size: 11px; line-height: 1.3; }
+    .declaration { margin-bottom: 3.5mm; border-left: 3px solid #255f54; background: #f5f8f7; padding: 2.5mm 3mm; color: #354353; line-height: 1.45; }
+    .note { margin-bottom: 3.5mm; border: 1px solid #d3dcda; border-radius: 2.5mm; padding: 2.5mm 3mm; color: #354353; background: #fff; }
+    .note strong { color: #172033; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    th { background: #233047; color: white; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 8px 6px; text-align: left; }
-    td { border-bottom: 1px solid #d1d5db; padding: 7px 6px; font-size: 12px; vertical-align: middle; }
-    th:nth-child(1), td:nth-child(1) { width: 9mm; }
-    th:nth-child(3), td:nth-child(3), th:nth-child(4), td:nth-child(4) { width: 35mm; }
-    th:nth-child(5), td:nth-child(5) { width: 15mm; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    th { background: #26384b; color: #fff; border: 1px solid #26384b; padding: 2.2mm 1.5mm; font-size: 8px; line-height: 1.2; letter-spacing: .035em; text-transform: uppercase; text-align: left; }
+    td { border: 1px solid #d4dcdf; padding: 1.8mm 1.5mm; font-size: 8.7px; line-height: 1.25; vertical-align: middle; overflow-wrap: anywhere; }
+    tbody tr:nth-child(even) td { background: #f8fafb; }
+    th:nth-child(1), td:nth-child(1) { width: 7mm; }
+    th:nth-child(2), td:nth-child(2) { width: 51mm; }
+    th:nth-child(3), td:nth-child(3) { width: 24mm; }
+    th:nth-child(4), td:nth-child(4) { width: 27mm; }
+    th:nth-child(5), td:nth-child(5), th:nth-child(6), td:nth-child(6) { width: 27mm; }
+    th:nth-child(7), td:nth-child(7) { width: 10mm; }
+    th:nth-child(8), td:nth-child(8) { width: 12mm; }
     .center { text-align: center; }
-    .qty { text-align: center; font-weight: 800; font-size: 16px; color: #2a8d8b; }
-    .productCell { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    .productCell strong { display: block; font-size: 12px; line-height: 1.2; }
-    .productCell small { display: block; margin-top: 2px; color: #4b5563; font-size: 10px; line-height: 1.2; }
-    .aifTransferImg { width: 34px; height: 42px; border: 1px solid #d1d5db; border-radius: 8px; object-fit: contain; background: #fff; flex: 0 0 auto; }
-    .aifTransferImg.empty { display: inline-block; }
-    .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 20mm; page-break-inside: avoid; }
-    .sig { border-top: 1px solid #111827; padding-top: 6px; text-align: center; font-size: 12px; color: #374151; }
-    .footer { margin-top: 10px; font-size: 10px; color: #6b7280; }
+    .serial { color: #536171; }
+    .unit { white-space: nowrap; }
+    .qty { text-align: center; font-size: 11px; font-weight: 700; color: #255f54; }
+    .code { font-family: "Courier New", monospace; font-size: 8px; }
+    .productCell { display: flex; align-items: center; gap: 2mm; min-width: 0; }
+    .productText { min-width: 0; }
+    .productCell strong { display: block; color: #172033; font-size: 9px; line-height: 1.2; }
+    .productCell small { display: block; margin-top: .7mm; color: #667382; font-size: 7.7px; line-height: 1.25; }
+    .aifTransferImg { width: 9mm; height: 11mm; flex: 0 0 auto; object-fit: contain; border: 1px solid #d4dcdf; border-radius: 1.5mm; background: #fff; }
+    .aifTransferImg.empty { display: flex; align-items: center; justify-content: center; padding: 1mm; color: #9aa4ae; font-size: 5.5px; text-align: center; }
+    .totalRow { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; margin-top: 2.5mm; border: 1px solid #b9c7c4; border-radius: 2.5mm; overflow: hidden; }
+    .totalRow span { padding: 2.4mm 3mm; color: #536171; background: #f5f8f7; }
+    .totalRow strong { min-width: 30mm; padding: 2.4mm 3mm; text-align: center; color: #fff; background: #255f54; font-size: 13px; }
+    .signatures { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 4mm; margin-top: 13mm; break-inside: avoid; page-break-inside: avoid; }
+    .signature { min-height: 27mm; border: 1px solid #ccd7d4; border-radius: 2.5mm; padding: 2.5mm; }
+    .signatureTitle { color: #255f54; font-size: 8.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+    .signatureLine { margin-top: 9mm; border-top: 1px solid #667382; padding-top: 1.3mm; color: #667382; font-size: 7.5px; text-align: center; }
+    .signatureDate { margin-top: 2.5mm; color: #7b8793; font-size: 7.5px; text-align: center; }
+    .footer { display: flex; justify-content: space-between; gap: 8mm; margin-top: 5mm; padding-top: 2.5mm; border-top: 1px solid #d7dfdd; color: #7b8793; font-size: 7.5px; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div><div class="brand">AllInFashion</div><h1>${labelEscapeHtml(options.title || "Készlet átadási lista")}</h1></div>
-    <div class="meta">
-      <div>Készült: <strong>${labelEscapeHtml(options.createdAt)}</strong></div>
-      <div>Terméksorok: <strong>${options.lines.length}</strong></div>
-      <div>Összes darab: <strong>${totalQty}</strong></div>
+  <div class="page">
+    <div class="topGrid">
+      <div>
+        <div class="companyName">TITAN EURO-COM SRL</div>
+        <div class="companyMeta">
+          <div><strong>CUI:</strong> RO17495362</div>
+          <div><strong>Nr. Reg. Com.:</strong> J19/420/2005</div>
+          <div><strong>Sediu:</strong> Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita, România</div>
+        </div>
+      </div>
+      <div class="docBox">
+        <div class="docBoxTitle">Datele documentului</div>
+        <div class="docBoxBody">
+          <div class="docLine"><span>Nr. document</span><strong>${labelEscapeHtml(documentNumber)}</strong></div>
+          <div class="docLine"><span>Data emiterii</span><strong>${labelEscapeHtml(options.createdAt)}</strong></div>
+          <div class="docLine"><span>Tip operațiune</span><strong>Transfer intern de stoc</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="titleBlock">
+      <div class="eyebrow">Document intern de gestiune</div>
+      <h1>PROCES-VERBAL DE PREDARE-PRIMIRE</h1>
+      <div class="subtitle">${labelEscapeHtml(documentObject)}</div>
+    </div>
+
+    <div class="routeGrid">
+      <div class="routeCard"><span>Gestiune predătoare</span><strong>${labelEscapeHtml(fromSummary)}</strong></div>
+      <div class="routeCard"><span>Gestiune primitoare</span><strong>${labelEscapeHtml(toSummary)}</strong></div>
+    </div>
+
+    <div class="declaration">Prin prezentul document se confirmă predarea și primirea produselor enumerate mai jos, în cantitățile indicate, pentru transfer intern între gestiuni. Persoanele semnatare confirmă verificarea cantitativă a bunurilor.</div>
+    ${options.note ? `<div class="note"><strong>Observații:</strong> ${labelEscapeHtml(options.note)}</div>` : ""}
+
+    <table>
+      <thead>
+        <tr>
+          <th>Nr. crt.</th>
+          <th>Denumirea produsului / varianta</th>
+          <th>Cod produs</th>
+          <th>Cod de bare</th>
+          <th>Gestiune predătoare</th>
+          <th>Gestiune primitoare</th>
+          <th>U.M.</th>
+          <th>Cant.</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+
+    <div class="totalRow"><span>Total produse transferate: ${options.lines.length} poziții</span><strong>${totalQty} buc.</strong></div>
+
+    <div class="signatures">
+      <div class="signature"><div class="signatureTitle">Predat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+      <div class="signature"><div class="signatureTitle">Transportat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+      <div class="signature"><div class="signatureTitle">Primit de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+      <div class="signature"><div class="signatureTitle">Verificat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
+    </div>
+
+    <div class="footer">
+      <span>Document generat din sistemul AllInFashion.</span>
+      <span>${labelEscapeHtml(documentNumber)} • ${labelEscapeHtml(options.createdAt)}</span>
     </div>
   </div>
-  <div class="summary">
-    <div>Terméksor<strong>${options.lines.length}</strong></div>
-    <div>Összes darab<strong>${totalQty}</strong></div>
-    <div>Bizonylat típusa<strong>Készletmozgatás</strong></div>
-  </div>
-  ${options.note ? `<div class="note"><strong>Megjegyzés:</strong> ${labelEscapeHtml(options.note)}</div>` : ""}
-  <table>
-    <thead><tr><th>#</th><th>Termék</th><th>Honnan</th><th>Hová</th><th>Db</th></tr></thead>
-    <tbody>${rowsHtml}</tbody>
-  </table>
-  <div class="signatures">
-    <div class="sig">Átadó</div>
-    <div class="sig">Átvevő</div>
-    <div class="sig">Ellenőrizte</div>
-  </div>
-  <div class="footer">A lista az AllInFashion raktármodulból készült.</div>
 </body>
 </html>`;
 }
@@ -4289,7 +4385,7 @@ export default function AllInWarehouse() {
   const [shopifySyncCenterOpen, setShopifySyncCenterOpen] = useState(false);
   const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
   const [stockMoveNote, setStockMoveNote] = useState("");
-  const [stockMoveDocumentTitle, setStockMoveDocumentTitle] = useState("Készlet átadási lista");
+  const [stockMoveDocumentTitle, setStockMoveDocumentTitle] = useState("Aviz intern de transfer stoc");
   const [stockMoveBulkFrom, setStockMoveBulkFrom] = useState("");
   const [stockMoveBulkTo, setStockMoveBulkTo] = useState("");
   const [stockMoveConfirmOpen, setStockMoveConfirmOpen] = useState(false);
@@ -6457,7 +6553,8 @@ export default function AllInWarehouse() {
       title: row.item.title_ro || "-",
       brand: row.item.brand_name || "-",
       category: row.item.category_name_hu || row.item.category_name_ro || "-",
-      barcode: row.item.barcode || row.item.internal_sku || "-",
+      productCode: itemProductCode(row.item) || "-",
+      barcode: visibleWarehouseBarcode(row.item) || row.item.barcode || row.item.internal_sku || "-",
       color: colorDisplay(row.item.color_name, row.item.color_code),
       size: String(row.item.size || "-"),
       imageUrl: row.item.image_url || null,
@@ -6472,10 +6569,12 @@ export default function AllInWarehouse() {
       setMessage("A PDF előtt javítsd a készletmozgatási sorokat.");
       return;
     }
+    const issuedAt = new Date();
     const printHtml = warehouseStockTransferPrintDocumentHtml({
-      title: stockMoveDocumentTitle.trim() || "Készlet átadási lista",
+      title: stockMoveDocumentTitle.trim() || "Aviz intern de transfer stoc",
       note: stockMoveNote.trim(),
-      createdAt: warehouseTransferDateTime(),
+      createdAt: warehouseTransferDateTime(issuedAt),
+      documentNumber: warehouseTransferDocumentNumber(issuedAt),
       lines: movePrintLines(),
     });
 
@@ -6528,7 +6627,7 @@ export default function AllInWarehouse() {
       qty: row.qty,
     }));
     return {
-      title: stockMoveDocumentTitle.trim() || "Készlet átadási lista",
+      title: stockMoveDocumentTitle.trim() || "Aviz intern de transfer stoc",
       note: stockMoveNote.trim(),
       lines,
     };
@@ -9459,7 +9558,7 @@ export default function AllInWarehouse() {
                   <div className="grid gap-2 rounded-2xl border border-white/14 bg-[#3f4959] p-2.5 xl:grid-cols-[minmax(190px,0.9fr),minmax(280px,1.3fr),auto] xl:items-end">
                     <label className={moveLabel}>
                       PDF / bizonylat címe
-                      <input className={moveInput} value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Készlet átadási lista" />
+                      <input className={moveInput} value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Aviz intern de transfer stoc" />
                     </label>
                     <label className={moveLabel}>
                       Megjegyzés a PDF-re és a naplóba
