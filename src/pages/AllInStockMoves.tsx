@@ -840,18 +840,6 @@ export default function AllInStockMoves() {
 
   useEffect(() => {
     if (!historyTarget) return;
-    const onHistoryEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setHistoryTarget(null);
-      setVariantHistory(null);
-      setVariantHistoryError(null);
-    };
-    window.addEventListener("keydown", onHistoryEscape);
-    return () => window.removeEventListener("keydown", onHistoryEscape);
-  }, [historyTarget]);
-
-  useEffect(() => {
-    if (!historyTarget) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeVariantHistory();
     };
