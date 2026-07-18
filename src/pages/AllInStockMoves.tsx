@@ -401,6 +401,117 @@ function historyEventBadge(event: AifVariantHistoryEvent) {
   return { label: "Korrekció", cls: "border-amber-300/30 bg-amber-500/14 text-amber-50" };
 }
 
+function isTransferHistoryEvent(event: AifVariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const source = String(event.source_type || "").toLowerCase();
+  const reason = String(event.raw?.reason || "").toLowerCase();
+  return type === "transfer" || source.includes("stock_transfer") || reason === "stock_transfer";
+}
+
+function historyEventTimestamp(value?: string | null) {
+  if (!value) return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function firstHistoryValue<T>(...values: Array<T | null | undefined | "">): T | null {
+  for (const value of values) {
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value as T;
+  }
+  return null;
+}
+
+/**
+ * Egy készletáthelyezés az adatbázisban helyesen két technikai naplósor:
+ *  - mínusz a forráshelyen
+ *  - plusz a célhelyen
+ *
+ * A Termék History viszont üzleti eseményeket mutat, ezért a két oldalt a
+ * transferId + lineNo alapján egyetlen áthelyezéssé vonjuk össze. Külön
+ * transferId-ket nem mosunk össze, mert azok valóban külön mentések lehetnek.
+ */
+function logicalVariantHistoryEvents(rows: AifVariantHistoryEvent[]) {
+  const normalEvents: AifVariantHistoryEvent[] = [];
+  const transferGroups = new Map<string, AifVariantHistoryEvent[]>();
+
+  for (const event of rows || []) {
+    if (!isTransferHistoryEvent(event)) {
+      normalEvents.push(event);
+      continue;
+    }
+
+    const raw = event.raw && typeof event.raw === "object" ? event.raw : {};
+    const transferId = String(raw.transferId || raw.transfer_id || "").trim();
+    const lineNo = String(raw.lineNo || raw.line_no || "1").trim() || "1";
+
+    // Régi, transferId nélküli rekordnál nem találgatunk. Inkább megmarad külön,
+    // mint hogy két valódi áthelyezést véletlenül egy eseménnyé gyúrjunk.
+    const key = transferId ? `${transferId}:${lineNo}` : `movement:${event.id}`;
+    const group = transferGroups.get(key) || [];
+    group.push(event);
+    transferGroups.set(key, group);
+  }
+
+  const logicalTransfers = Array.from(transferGroups.entries()).map(([key, group]) => {
+    const sourceLeg = group.find((event) => String(event.raw?.side || "").toLowerCase() === "source")
+      || group.find((event) => n(event.qty_delta) < 0)
+      || group[0];
+    const targetLeg = group.find((event) => String(event.raw?.side || "").toLowerCase() === "target")
+      || group.find((event) => n(event.qty_delta) > 0)
+      || group[group.length - 1]
+      || sourceLeg;
+    const newest = group.slice().sort((a, b) => historyEventTimestamp(b.created_at) - historyEventTimestamp(a.created_at))[0] || sourceLeg;
+    const rawSource = sourceLeg?.raw && typeof sourceLeg.raw === "object" ? sourceLeg.raw : {};
+    const rawTarget = targetLeg?.raw && typeof targetLeg.raw === "object" ? targetLeg.raw : {};
+    const quantity = Math.max(0, ...group.map((event) => Math.abs(n(event.qty_delta))));
+    const fromLocationName = String(firstHistoryValue(
+      rawSource.fromLocationName,
+      rawTarget.fromLocationName,
+      sourceLeg?.from_location_name,
+      targetLeg?.from_location_name,
+      sourceLeg?.location_name,
+    ) || "");
+    const toLocationName = String(firstHistoryValue(
+      rawSource.toLocationName,
+      rawTarget.toLocationName,
+      sourceLeg?.to_location_name,
+      targetLeg?.to_location_name,
+      targetLeg?.location_name,
+    ) || "");
+
+    return {
+      ...sourceLeg,
+      id: `logical-transfer:${key}`,
+      created_at: newest?.created_at || sourceLeg?.created_at || null,
+      event_type: "transfer",
+      direction: "adjust",
+      movement_type: "transfer",
+      source_type: "stock_transfer",
+      qty_delta: quantity,
+      qty_before: sourceLeg?.qty_before ?? null,
+      qty_after: targetLeg?.qty_after ?? null,
+      from_location_name: fromLocationName || sourceLeg?.from_location_name || null,
+      to_location_name: toLocationName || targetLeg?.to_location_name || null,
+      location_name: fromLocationName || sourceLeg?.location_name || null,
+      effective_buy_price: firstHistoryValue(sourceLeg?.effective_buy_price, targetLeg?.effective_buy_price),
+      effective_sell_price: firstHistoryValue(sourceLeg?.effective_sell_price, targetLeg?.effective_sell_price),
+      supplier_name: firstHistoryValue(sourceLeg?.supplier_name, targetLeg?.supplier_name),
+      invoice_number: firstHistoryValue(sourceLeg?.invoice_number, targetLeg?.invoice_number),
+      source_file_name: firstHistoryValue(sourceLeg?.source_file_name, targetLeg?.source_file_name),
+      raw: {
+        ...rawTarget,
+        ...rawSource,
+        logicalTransfer: true,
+        pairedMovementIds: group.map((event) => event.id),
+        pairedMovementCount: group.length,
+      },
+    } satisfies AifVariantHistoryEvent;
+  });
+
+  return [...normalEvents, ...logicalTransfers]
+    .sort((a, b) => historyEventTimestamp(b.created_at) - historyEventTimestamp(a.created_at));
+}
+
 function ProductHistoryOverlay({
   target,
   history,
@@ -419,7 +530,7 @@ function ProductHistoryOverlay({
   if (!target) return null;
   const item = { ...(target as any), ...(history?.item || {}) } as AifStockItem & AifStockMoveItem & Record<string, any>;
   const summary = history?.summary || {};
-  const events = history?.events || [];
+  const events = logicalVariantHistoryEvents(history?.events || []);
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-3 backdrop-blur-sm lg:items-center">
       <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
@@ -454,7 +565,14 @@ function ProductHistoryOverlay({
                 <div key={event.id} className="grid gap-3 px-4 py-3 md:grid-cols-[128px,1fr,150px]">
                   <div className="text-xs text-white/55">{formatDateTime(event.created_at)}</div>
                   <div>
-                    <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full border px-2 py-1 text-xs ${badge.cls}`}>{badge.label}</span><span className="text-sm text-white">{n(event.qty_delta) > 0 ? "+" : ""}{formatQty(event.qty_delta)}</span></div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full border px-2 py-1 text-xs ${badge.cls}`}>{badge.label}</span>
+                      <span className="text-sm text-white">
+                        {isTransferHistoryEvent(event)
+                          ? `${formatQty(Math.abs(n(event.qty_delta)))} db`
+                          : `${n(event.qty_delta) > 0 ? "+" : ""}${formatQty(event.qty_delta)}`}
+                      </span>
+                    </div>
                     <p className="mt-2 text-xs text-white/60">{route}</p>
                     {event.supplier_name || event.invoice_number || event.source_file_name ? <p className="mt-1 truncate text-xs text-white/42">{[event.supplier_name, event.invoice_number, event.source_file_name].filter(Boolean).join(" • ")}</p> : null}
                   </div>
