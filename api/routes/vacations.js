@@ -284,7 +284,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename=cerere-concediu-${safeEmployee}-${dayFrom}-${dayTo}.pdf`);
 
-      const doc = new PDFDocument({ size: "A4", margin: 46 });
+      const doc = new PDFDocument({ size: "A4", margin: 0 });
       doc.pipe(res);
 
       const regularCandidates = [
@@ -304,63 +304,181 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       const roDate = (value) => {
         const date = new Date(`${value}T12:00:00Z`);
-        return new Intl.DateTimeFormat("ro-RO", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" }).format(date);
+        return new Intl.DateTimeFormat("ro-RO", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          timeZone: "UTC",
+        }).format(date);
       };
-      const generated = new Intl.DateTimeFormat("ro-RO", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
-      const schedule = settings.dayNamesRo.join(", ");
+      const generated = new Intl.DateTimeFormat("ro-RO", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }).format(new Date());
+      const schedule = settings.dayNamesRo.join(" - ");
 
-      doc.font(fontBold).fontSize(15).fillColor("#183d36").text("TITAN EURO-COM SRL", { align: "left" });
-      doc.font(fontRegular).fontSize(9.5).fillColor("#4b5563").text("CUI: RO17495362  |  Nr. Reg. Com.: J19/420/2005");
-      doc.text("Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita");
-      doc.moveDown(1.2);
-      doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor("#2a8d8b").lineWidth(2).stroke();
-      doc.moveDown(1.4);
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const frameX = 48;
+      const frameY = 36;
+      const contentX = 60;
+      const contentWidth = pageWidth - 120;
+      const teal = "#2a8d8b";
+      const darkTeal = "#173f3d";
+      const ink = "#172033";
+      const muted = "#64748b";
+      const border = "#d5e2df";
+      const pale = "#f2f8f7";
+      const lighter = "#f8fafb";
 
-      doc.font(fontBold).fontSize(18).fillColor("#111827").text("CERERE DE CONCEDIU DE ODIHNA", { align: "center" });
-      doc.moveDown(1.6);
-      doc.font(fontRegular).fontSize(11.5).fillColor("#1f2937").text("Catre conducerea TITAN EURO-COM SRL", { align: "left" });
-      doc.moveDown(1.2);
-      doc.text(`Subsemnatul/Subsemnata ${employee}, va rog sa aprobati efectuarea concediului de odihna in perioada ${roDate(dayFrom)} - ${roDate(dayTo)}.`, { align: "justify", lineGap: 4 });
-      doc.moveDown(1.2);
+      const requestText = `Subsemnatul/Subsemnata ${employee}, va rog sa aprobati efectuarea concediului de odihna in perioada ${roDate(dayFrom)} - ${roDate(dayTo)}.`;
+      doc.font(fontRegular).fontSize(9.5);
+      const requestHeight = doc.heightOfString(requestText, { width: contentWidth, lineGap: 2 });
+      const noteTextWidth = contentWidth - 112;
+      const noteHeight = note
+        ? Math.min(68, Math.max(32, doc.heightOfString(note, { width: noteTextWidth, lineGap: 2 }) + 18))
+        : 0;
+      const declaration = "Declar ca am luat la cunostinta obligatia de a reveni la serviciu in prima zi lucratoare dupa incheierea perioadei aprobate.";
+      doc.font(fontRegular).fontSize(8.8);
+      const declarationHeight = Math.max(38, doc.heightOfString(declaration, { width: contentWidth - 24, lineGap: 2 }) + 18);
 
-      const x = doc.page.margins.left;
-      const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      const rows = [
-        ["Perioada solicitata", `${roDate(dayFrom)} - ${roDate(dayTo)}`],
-        ["Zile calendaristice", String(info.calendarDays)],
-        ["Zile lucratoare de concediu", String(info.workingDays)],
-        ["Zile nelucratoare excluse", String(info.excludedDays)],
-        ["Program de lucru utilizat", schedule],
+      const headerY = 54;
+      const titleY = 128;
+      const recipientY = 164;
+      const requestY = 188;
+      const cardY = requestY + requestHeight + 17;
+      const cardHeight = 106;
+      const noteY = cardY + cardHeight + 12;
+      const declarationY = noteY + (note ? noteHeight + 12 : 0);
+      const dateY = declarationY + declarationHeight + 14;
+      const signatureTitleY = dateY + 46;
+      const signatureLineY = signatureTitleY + 42;
+      const footerY = signatureLineY + 30;
+      const frameHeight = Math.min(pageHeight - frameY - 34, footerY - frameY + 20);
+
+      // Compact document frame. The form intentionally occupies only the useful upper part of A4.
+      doc.save();
+      doc.roundedRect(frameX, frameY, pageWidth - frameX * 2, frameHeight, 10)
+        .lineWidth(1)
+        .strokeColor(border)
+        .stroke();
+      doc.restore();
+
+      // Company header.
+      doc.font(fontBold).fontSize(12.5).fillColor(darkTeal)
+        .text("TITAN EURO-COM SRL", contentX, headerY, { width: contentWidth * 0.7 });
+      doc.font(fontRegular).fontSize(8.2).fillColor(muted)
+        .text("CUI: RO17495362  |  Nr. Reg. Com.: J19/420/2005", contentX, headerY + 18, { width: contentWidth * 0.72 });
+      doc.text("Str. Mihail Sadoveanu nr. 33, Miercurea-Ciuc, jud. Harghita", contentX, headerY + 31, { width: contentWidth * 0.78 });
+
+      const topBadgeWidth = 96;
+      const topBadgeX = contentX + contentWidth - topBadgeWidth;
+      doc.save();
+      doc.roundedRect(topBadgeX, headerY + 1, topBadgeWidth, 24, 6)
+        .fillAndStroke(pale, teal);
+      doc.restore();
+      doc.font(fontBold).fontSize(7.4).fillColor(darkTeal)
+        .text("CERERE INTERNA", topBadgeX, headerY + 9, { width: topBadgeWidth, align: "center" });
+
+      doc.moveTo(contentX, headerY + 50)
+        .lineTo(contentX + contentWidth, headerY + 50)
+        .lineWidth(1.5)
+        .strokeColor(teal)
+        .stroke();
+
+      // Compact title, no billboard-sized typography.
+      doc.font(fontBold).fontSize(13.2).fillColor(ink)
+        .text("CERERE DE CONCEDIU DE ODIHNA", contentX, titleY, { width: contentWidth, align: "center" });
+
+      doc.font(fontRegular).fontSize(9.4).fillColor(ink)
+        .text("Catre conducerea TITAN EURO-COM SRL", contentX, recipientY, { width: contentWidth });
+      doc.font(fontRegular).fontSize(9.5).fillColor(ink)
+        .text(requestText, contentX, requestY, { width: contentWidth, lineGap: 2 });
+
+      // Main summary card.
+      doc.save();
+      doc.roundedRect(contentX, cardY, contentWidth, cardHeight, 8)
+        .fillAndStroke(pale, border);
+      doc.restore();
+
+      doc.font(fontRegular).fontSize(7.1).fillColor(muted)
+        .text("PERIOADA SOLICITATA", contentX + 14, cardY + 14, { width: contentWidth * 0.52 });
+      doc.font(fontBold).fontSize(11.3).fillColor(ink)
+        .text(`${roDate(dayFrom)} - ${roDate(dayTo)}`, contentX + 14, cardY + 31, { width: contentWidth * 0.58 });
+
+      const countBadgeWidth = 112;
+      const countBadgeX = contentX + contentWidth - countBadgeWidth - 12;
+      doc.save();
+      doc.roundedRect(countBadgeX, cardY + 14, countBadgeWidth, 30, 7).fill(teal);
+      doc.restore();
+      doc.font(fontBold).fontSize(8.2).fillColor("#ffffff")
+        .text(`${info.workingDays} ZILE LUCRATOARE`, countBadgeX + 4, cardY + 24, { width: countBadgeWidth - 8, align: "center" });
+
+      doc.moveTo(contentX + 12, cardY + 50)
+        .lineTo(contentX + contentWidth - 12, cardY + 50)
+        .lineWidth(0.8)
+        .strokeColor(border)
+        .stroke();
+
+      const metricGap = 14;
+      const metricWidth = (contentWidth - 28 - metricGap * 2) / 3;
+      const metrics = [
+        ["ZILE CALENDARISTICE", String(info.calendarDays)],
+        ["CONCEDIU", String(info.workingDays)],
+        ["EXCLUSE", String(info.excludedDays)],
       ];
-      let y = doc.y;
-      rows.forEach(([label, value], index) => {
-        const rowHeight = index === rows.length - 1 ? 34 : 27;
-        doc.save().roundedRect(x, y, width, rowHeight, 5).fill(index % 2 ? "#f7faf9" : "#eef6f4").restore();
-        doc.font(fontRegular).fontSize(10).fillColor("#64748b").text(label, x + 10, y + 8, { width: width * 0.43 });
-        doc.font(fontBold).fontSize(10).fillColor("#172033").text(value, x + width * 0.46, y + 8, { width: width * 0.51 - 10, align: "right" });
-        y += rowHeight + 3;
+      metrics.forEach(([metricLabel, metricValue], index) => {
+        const metricX = contentX + 14 + index * (metricWidth + metricGap);
+        doc.font(fontRegular).fontSize(6.8).fillColor(muted)
+          .text(metricLabel, metricX, cardY + 60, { width: metricWidth });
+        doc.font(fontBold).fontSize(10.4).fillColor(ink)
+          .text(metricValue, metricX, cardY + 76, { width: metricWidth });
       });
-      doc.y = y + 8;
+      doc.font(fontRegular).fontSize(7.1).fillColor(muted)
+        .text(`PROGRAM: ${schedule}`, contentX + 14, cardY + 95, { width: contentWidth - 28 });
+
+      let nextY = noteY;
       if (note) {
-        doc.font(fontBold).fontSize(10).fillColor("#183d36").text("Observatii:");
-        doc.font(fontRegular).fontSize(10).fillColor("#334155").text(note, { lineGap: 3 });
-        doc.moveDown(1);
+        doc.save();
+        doc.roundedRect(contentX, nextY, contentWidth, noteHeight, 6)
+          .fillAndStroke(lighter, border);
+        doc.restore();
+        doc.font(fontRegular).fontSize(7.1).fillColor(muted)
+          .text("OBSERVATII", contentX + 12, nextY + 11, { width: 82 });
+        doc.font(fontRegular).fontSize(8.8).fillColor(ink)
+          .text(note, contentX + 100, nextY + 10, { width: noteTextWidth, lineGap: 2 });
+        nextY += noteHeight + 12;
       }
 
-      doc.font(fontRegular).fontSize(10.5).fillColor("#1f2937").text("Declar ca am luat la cunostinta obligatia de a reveni la serviciu in prima zi lucratoare dupa incheierea perioadei aprobate.", { align: "justify", lineGap: 3 });
-      doc.moveDown(2);
-      doc.text(`Data cererii: ${generated}`);
+      doc.save();
+      doc.roundedRect(contentX, nextY, contentWidth, declarationHeight, 6)
+        .fillAndStroke("#fbfcfc", border);
+      doc.restore();
+      doc.font(fontRegular).fontSize(8.8).fillColor(ink)
+        .text(declaration, contentX + 12, nextY + 10, { width: contentWidth - 24, lineGap: 2 });
 
-      const signY = doc.page.height - 150;
-      const gap = 28;
-      const half = (width - gap) / 2;
-      doc.font(fontBold).fontSize(10).fillColor("#183d36").text("Solicitant", x, signY, { width: half, align: "center" });
-      doc.text("Aprobat / Administrator", x + half + gap, signY, { width: half, align: "center" });
-      doc.moveTo(x + 18, signY + 58).lineTo(x + half - 18, signY + 58).strokeColor("#64748b").lineWidth(1).stroke();
-      doc.moveTo(x + half + gap + 18, signY + 58).lineTo(x + width - 18, signY + 58).strokeColor("#64748b").lineWidth(1).stroke();
-      doc.font(fontRegular).fontSize(8.5).fillColor("#64748b").text("Nume, prenume si semnatura", x, signY + 64, { width: half, align: "center" });
-      doc.text("Nume, prenume si semnatura", x + half + gap, signY + 64, { width: half, align: "center" });
-      doc.fontSize(7.5).fillColor("#94a3b8").text("Document generat din sistemul AllInFashion.", x, doc.page.height - 55, { width, align: "center" });
+      doc.font(fontRegular).fontSize(9).fillColor(ink)
+        .text(`Data cererii: ${generated}`, contentX, dateY, { width: contentWidth });
+
+      const signatureGap = 34;
+      const signatureWidth = (contentWidth - signatureGap) / 2;
+      const signatures = ["Solicitant", "Aprobat / Administrator"];
+      signatures.forEach((signatureTitle, index) => {
+        const signatureX = contentX + index * (signatureWidth + signatureGap);
+        doc.font(fontBold).fontSize(9.1).fillColor(darkTeal)
+          .text(signatureTitle, signatureX, signatureTitleY, { width: signatureWidth, align: "center" });
+        doc.moveTo(signatureX + 18, signatureLineY)
+          .lineTo(signatureX + signatureWidth - 18, signatureLineY)
+          .lineWidth(1)
+          .strokeColor(muted)
+          .stroke();
+        doc.font(fontRegular).fontSize(7.2).fillColor(muted)
+          .text("Nume, prenume si semnatura", signatureX, signatureLineY + 8, { width: signatureWidth, align: "center" });
+      });
+
+      doc.font(fontRegular).fontSize(6.8).fillColor("#94a3b8")
+        .text("Document generat din sistemul AllInFashion.", contentX, footerY, { width: contentWidth, align: "center" });
       doc.end();
     } catch (e) {
       console.error("vacation request pdf failed", e);
