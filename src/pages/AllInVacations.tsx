@@ -10,10 +10,8 @@ import {
   ChevronRight,
   ClipboardList,
   Clock3,
-  FileText,
   History,
   Home,
-  Printer,
   RefreshCw,
   Save,
   Scale,
@@ -106,6 +104,27 @@ const WEEK_DAYS = [
   { id: 6, short: "Szo", label: "Szombat" },
   { id: 7, short: "V", label: "Vasárnap" },
 ];
+
+const MONTH_OPTIONS = [
+  { value: 1, label: "Január" },
+  { value: 2, label: "Február" },
+  { value: 3, label: "Március" },
+  { value: 4, label: "Április" },
+  { value: 5, label: "Május" },
+  { value: 6, label: "Június" },
+  { value: 7, label: "Július" },
+  { value: 8, label: "Augusztus" },
+  { value: 9, label: "Szeptember" },
+  { value: 10, label: "Október" },
+  { value: 11, label: "November" },
+  { value: 12, label: "December" },
+];
+
+const PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
+
+function PdfIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return <img src={PDF_ICON_URL} alt="" aria-hidden="true" className={`${className} shrink-0 object-contain`} />;
+}
 
 function normBase(s: string) {
   return s.replace(/\/+$/, "");
@@ -350,6 +369,33 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [pageNotice, setPageNotice] = useState("");
   const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
   const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
+
+  const archiveYear = Number(month.slice(0, 4)) || new Date().getFullYear();
+  const archiveMonth = Number(month.slice(5, 7)) || new Date().getMonth() + 1;
+  const archiveYears = useMemo(() => {
+    const years = new Set<number>([new Date().getFullYear(), archiveYear]);
+    for (const item of activityMonths) {
+      const year = Number(String(item.month || "").slice(0, 4));
+      if (Number.isFinite(year) && year >= 2000 && year <= 2100) years.add(year);
+    }
+    return Array.from(years).sort((a, b) => b - a);
+  }, [activityMonths, archiveYear]);
+  const activityMonthsForYear = useMemo(
+    () => activityMonths.filter((item) => String(item.month || "").startsWith(`${archiveYear}-`)),
+    [activityMonths, archiveYear]
+  );
+
+  const changeArchiveYear = (nextYear: number) => {
+    if (!Number.isFinite(nextYear)) return;
+    const firstActiveMonth = activityMonths.find((item) => String(item.month || "").startsWith(`${nextYear}-`));
+    const monthPart = String(archiveMonth).padStart(2, "0");
+    setMonth(firstActiveMonth?.month || `${nextYear}-${monthPart}`);
+  };
+
+  const changeArchiveMonth = (nextMonth: number) => {
+    if (!Number.isFinite(nextMonth) || nextMonth < 1 || nextMonth > 12) return;
+    setMonth(`${archiveYear}-${String(nextMonth).padStart(2, "0")}`);
+  };
 
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -1039,17 +1085,29 @@ export default function AllInVacations({ api }: { api?: string }) {
           <div className="text-white text-lg font-medium mt-1">{selected || "-"}</div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className={label}>Hónap</div>
-          <input
-            type="month"
-            className={
-              "h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
-            }
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-          />
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="grid gap-1 text-[10px] uppercase tracking-[0.1em] text-white/48">
+            Év
+            <select
+              className="h-11 min-w-[104px] rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+              value={archiveYear}
+              onChange={(event) => changeArchiveYear(Number(event.target.value))}
+            >
+              {archiveYears.map((year) => <option key={year} value={year}>{year}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1 text-[10px] uppercase tracking-[0.1em] text-white/48">
+            Hónap
+            <select
+              className="h-11 min-w-[150px] rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+              value={archiveMonth}
+              onChange={(event) => changeArchiveMonth(Number(event.target.value))}
+            >
+              {MONTH_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
           <Button type="button" className={btn} onClick={() => fetchList()} disabled={listBusy}>
+            <RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} />
             {listBusy ? "Frissítés…" : "Frissítés"}
           </Button>
         </div>
@@ -1060,12 +1118,12 @@ export default function AllInVacations({ api }: { api?: string }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="text-[10px] uppercase tracking-[0.14em] text-[#d7fffd]/58">Gyors visszakeresés</div>
-            <div className="mt-1 text-sm text-white">Hónapok, amelyekben szabadság volt</div>
+            <div className="mt-1 text-sm text-white">{archiveYear}. év szabadságos hónapjai</div>
           </div>
           {activityMonthsBusy ? <span className="text-xs text-white/48"><RefreshCw className="mr-1 inline h-3.5 w-3.5 animate-spin" />Betöltés…</span> : null}
         </div>
         <div className="mt-3 flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-          {activityMonths.length ? activityMonths.map((item) => (
+          {activityMonthsForYear.length ? activityMonthsForYear.map((item) => (
             <button
               key={item.month}
               type="button"
@@ -1076,7 +1134,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               <span className="block">{formatMonthLabel(item.month)}</span>
               <span className={`mt-0.5 block text-[10px] ${month === item.month ? "text-[#236d6b]/70" : "text-white/52"}`}>{item.vacationDays} nap</span>
             </button>
-          )) : !activityMonthsBusy ? <span className="text-xs text-white/48">Ennél a dolgozónál még nincs rögzített szabadság.</span> : null}
+          )) : !activityMonthsBusy ? <span className="text-xs text-white/48">{archiveYear}-ban ennél a dolgozónál nincs rögzített szabadság.</span> : null}
         </div>
       </section>
 
@@ -1230,7 +1288,7 @@ export default function AllInVacations({ api }: { api?: string }) {
         <div className="mt-4 flex flex-col-reverse items-stretch justify-end gap-2 sm:flex-row sm:items-center">
           {kind === "vacation" ? (
             <Button type="button" className={`${btnSoft} w-full sm:w-auto`} disabled={!selected || vacationPreview.workingDays <= 0} onClick={openVacationRequestPdf}>
-              <Printer className="h-4 w-4" />
+              <PdfIcon className="h-5 w-5" />
               Szabadságkérés PDF
             </Button>
           ) : null}
@@ -1546,7 +1604,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     onClick={() => openVacationRequestPdfForPeriod(period.dayFrom, period.dayTo, period.note)}
                     title="Szabadságkérés PDF újranyomtatása"
                   >
-                    <Printer className="h-4 w-4" />
+                    <PdfIcon className="h-5 w-5" />
                     PDF
                   </button>
                 </div>
@@ -1668,7 +1726,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 <span className="sm:hidden">Összesítés</span>
               </Button>
               <Button className={`${btnSoft} hidden sm:inline-flex`} type="button" onClick={openPdf} disabled={yearBusy}>
-                <FileText className="h-4 w-4" />
+                <PdfIcon className="h-5 w-5" />
                 PDF
               </Button>
               <Button
@@ -2062,6 +2120,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                   className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
                   onClick={downloadPdf}
                 >
+                  <PdfIcon className="h-5 w-5" />
                   PDF
                 </button>
 
