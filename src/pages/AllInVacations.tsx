@@ -8,6 +8,7 @@ import {
   CalendarPlus,
   CalendarRange,
   ChevronRight,
+  ChevronDown,
   ClipboardList,
   Clock3,
   History,
@@ -105,20 +106,6 @@ const WEEK_DAYS = [
   { id: 7, short: "V", label: "Vasárnap" },
 ];
 
-const MONTH_OPTIONS = [
-  { value: 1, label: "Január" },
-  { value: 2, label: "Február" },
-  { value: 3, label: "Március" },
-  { value: 4, label: "Április" },
-  { value: 5, label: "Május" },
-  { value: 6, label: "Június" },
-  { value: 7, label: "Július" },
-  { value: 8, label: "Augusztus" },
-  { value: 9, label: "Szeptember" },
-  { value: 10, label: "Október" },
-  { value: 11, label: "November" },
-  { value: 12, label: "December" },
-];
 
 const PDF_ICON_URL = "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png";
 
@@ -360,7 +347,9 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [pdfYear, setPdfYear] = useState<number>(new Date().getFullYear());
   const [pdfEmployee, setPdfEmployee] = useState<string>(""); // empty = all
   const [pdfEmpOpen, setPdfEmpOpen] = useState(false);
+  const [pdfYearOpen, setPdfYearOpen] = useState(false);
   const pdfEmpRef = useRef<HTMLDivElement | null>(null);
+  const pdfYearRef = useRef<HTMLDivElement | null>(null);
 
   const [vacationSettings, setVacationSettings] = useState<VacationSettings>({ workingDays: [1, 2, 3, 4, 5] });
   const [settingsDraft, setSettingsDraft] = useState<number[]>([1, 2, 3, 4, 5]);
@@ -369,32 +358,53 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [pageNotice, setPageNotice] = useState("");
   const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
   const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
+  const [archiveYearOpen, setArchiveYearOpen] = useState(false);
+  const [archiveMonthOpen, setArchiveMonthOpen] = useState(false);
+  const archiveYearRef = useRef<HTMLDivElement | null>(null);
+  const archiveMonthRef = useRef<HTMLDivElement | null>(null);
 
   const archiveYear = Number(month.slice(0, 4)) || new Date().getFullYear();
-  const archiveMonth = Number(month.slice(5, 7)) || new Date().getMonth() + 1;
   const archiveYears = useMemo(() => {
-    const years = new Set<number>([new Date().getFullYear(), archiveYear]);
+    const years = Array.from(
+      new Set(
+        activityMonths
+          .map((item) => Number(String(item.month || "").slice(0, 4)))
+          .filter((year) => Number.isFinite(year) && year >= 2000 && year <= 2100)
+      )
+    ).sort((a, b) => b - a);
+    return years.length ? years : [new Date().getFullYear()];
+  }, [activityMonths]);
+  const activityMonthsForYear = useMemo(
+    () => activityMonths.filter((item) => String(item.month || "").startsWith(`${archiveYear}-`)),
+    [activityMonths, archiveYear]
+  );
+  const activeArchiveMonth = useMemo(
+    () => activityMonthsForYear.find((item) => item.month === month) || activityMonthsForYear[0] || null,
+    [activityMonthsForYear, month]
+  );
+  const pdfYearOptions = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const years = new Set<number>([currentYear, pdfYear, summaryYear]);
+    for (let offset = 0; offset <= 10; offset += 1) years.add(currentYear - offset);
     for (const item of activityMonths) {
       const year = Number(String(item.month || "").slice(0, 4));
       if (Number.isFinite(year) && year >= 2000 && year <= 2100) years.add(year);
     }
     return Array.from(years).sort((a, b) => b - a);
-  }, [activityMonths, archiveYear]);
-  const activityMonthsForYear = useMemo(
-    () => activityMonths.filter((item) => String(item.month || "").startsWith(`${archiveYear}-`)),
-    [activityMonths, archiveYear]
-  );
+  }, [activityMonths, pdfYear, summaryYear]);
 
   const changeArchiveYear = (nextYear: number) => {
     if (!Number.isFinite(nextYear)) return;
     const firstActiveMonth = activityMonths.find((item) => String(item.month || "").startsWith(`${nextYear}-`));
-    const monthPart = String(archiveMonth).padStart(2, "0");
-    setMonth(firstActiveMonth?.month || `${nextYear}-${monthPart}`);
+    if (firstActiveMonth) setMonth(firstActiveMonth.month);
+    setArchiveYearOpen(false);
+    setArchiveMonthOpen(false);
   };
 
-  const changeArchiveMonth = (nextMonth: number) => {
-    if (!Number.isFinite(nextMonth) || nextMonth < 1 || nextMonth > 12) return;
-    setMonth(`${archiveYear}-${String(nextMonth).padStart(2, "0")}`);
+  const changeArchiveMonth = (nextMonth: string) => {
+    if (!/^\d{4}-\d{2}$/.test(nextMonth)) return;
+    setMonth(nextMonth);
+    setArchiveMonthOpen(false);
   };
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -413,21 +423,27 @@ export default function AllInVacations({ api }: { api?: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [confirmOpen, summaryOpen, pdfOpen, settingsOpen]);
 
-  // Custom dropdowns for Compensation + PDF (avoid OS/browser blue highlights)
+  // Custom dropdowns use only the AllIn palette, never the browser's blue native menu.
   useEffect(() => {
-    if (!compDirOpen && !compUnitOpen && !pdfEmpOpen) return;
+    if (!compDirOpen && !compUnitOpen && !pdfEmpOpen && !pdfYearOpen && !archiveYearOpen && !archiveMonthOpen) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node | null;
       if (!t) return;
       if (compDirOpen && compDirRef.current && !compDirRef.current.contains(t)) setCompDirOpen(false);
       if (compUnitOpen && compUnitRef.current && !compUnitRef.current.contains(t)) setCompUnitOpen(false);
       if (pdfEmpOpen && pdfEmpRef.current && !pdfEmpRef.current.contains(t)) setPdfEmpOpen(false);
+      if (pdfYearOpen && pdfYearRef.current && !pdfYearRef.current.contains(t)) setPdfYearOpen(false);
+      if (archiveYearOpen && archiveYearRef.current && !archiveYearRef.current.contains(t)) setArchiveYearOpen(false);
+      if (archiveMonthOpen && archiveMonthRef.current && !archiveMonthRef.current.contains(t)) setArchiveMonthOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setCompDirOpen(false);
         setCompUnitOpen(false);
         setPdfEmpOpen(false);
+        setPdfYearOpen(false);
+        setArchiveYearOpen(false);
+        setArchiveMonthOpen(false);
       }
     };
     window.addEventListener("mousedown", onDown);
@@ -436,7 +452,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [compDirOpen, compUnitOpen, pdfEmpOpen]);
+  }, [compDirOpen, compUnitOpen, pdfEmpOpen, pdfYearOpen, archiveYearOpen, archiveMonthOpen]);
 
   // Custom "Típus" dropdown: force ONLY our colors (no OS/browser blue highlight).
   useEffect(() => {
@@ -517,7 +533,11 @@ export default function AllInVacations({ api }: { api?: string }) {
       const response = await fetch(`${apiBase}/admin/vacations/activity-months?employee=${encodeURIComponent(employee)}`, { credentials: "include", cache: "no-store" });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
-      setActivityMonths(Array.isArray(body?.items) ? body.items : []);
+      const nextItems: VacationActivityMonth[] = Array.isArray(body?.items) ? body.items : [];
+      setActivityMonths(nextItems);
+      if (nextItems.length && !nextItems.some((item) => item.month === month)) {
+        setMonth(nextItems[0].month);
+      }
     } catch (error: any) {
       setListErr(String(error?.message || error || "A szabadságos hónapok nem tölthetők be."));
       setActivityMonths([]);
@@ -1086,26 +1106,64 @@ export default function AllInVacations({ api }: { api?: string }) {
         </div>
 
         <div className="flex flex-wrap items-end gap-2">
-          <label className="grid gap-1 text-[10px] uppercase tracking-[0.1em] text-white/48">
-            Év
-            <select
-              className="h-11 min-w-[104px] rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-              value={archiveYear}
-              onChange={(event) => changeArchiveYear(Number(event.target.value))}
+          <div ref={archiveYearRef} className="relative grid gap-1">
+            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Év</div>
+            <button
+              type="button"
+              className="flex h-11 min-w-[112px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+              onClick={() => { setArchiveYearOpen((value) => !value); setArchiveMonthOpen(false); }}
+              aria-haspopup="listbox"
+              aria-expanded={archiveYearOpen}
             >
-              {archiveYears.map((year) => <option key={year} value={year}>{year}</option>)}
-            </select>
-          </label>
-          <label className="grid gap-1 text-[10px] uppercase tracking-[0.1em] text-white/48">
-            Hónap
-            <select
-              className="h-11 min-w-[150px] rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-              value={archiveMonth}
-              onChange={(event) => changeArchiveMonth(Number(event.target.value))}
+              <span>{archiveYear}</span>
+              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveYearOpen ? "rotate-180" : ""}`} />
+            </button>
+            {archiveYearOpen ? (
+              <div className="absolute right-0 top-full z-[210] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+                {archiveYears.map((year) => (
+                  <button
+                    key={year}
+                    type="button"
+                    className={`block w-full px-4 py-2.5 text-left text-sm transition ${year === archiveYear ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                    onClick={() => changeArchiveYear(year)}
+                  >
+                    {year}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div ref={archiveMonthRef} className="relative grid gap-1">
+            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Szabadságos hónap</div>
+            <button
+              type="button"
+              className="flex h-11 min-w-[178px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!activityMonthsForYear.length}
+              onClick={() => { setArchiveMonthOpen((value) => !value); setArchiveYearOpen(false); }}
+              aria-haspopup="listbox"
+              aria-expanded={archiveMonthOpen}
             >
-              {MONTH_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-          </label>
+              <span>{activeArchiveMonth ? formatMonthLabel(activeArchiveMonth.month).replace(`${archiveYear}. `, "") : "Nincs rögzített hónap"}</span>
+              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveMonthOpen ? "rotate-180" : ""}`} />
+            </button>
+            {archiveMonthOpen && activityMonthsForYear.length ? (
+              <div className="absolute right-0 top-full z-[210] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+                {activityMonthsForYear.map((item) => (
+                  <button
+                    key={item.month}
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left text-sm transition ${item.month === month ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                    onClick={() => changeArchiveMonth(item.month)}
+                  >
+                    <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
+                    <span className="text-[10px] text-white/55">{item.vacationDays} nap</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
           <Button type="button" className={btn} onClick={() => fetchList()} disabled={listBusy}>
             <RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} />
             {listBusy ? "Frissítés…" : "Frissítés"}
@@ -2041,100 +2099,92 @@ export default function AllInVacations({ api }: { api?: string }) {
       )}
 
       {pdfOpen && (
-        <div className="fixed inset-0 z-[125] grid place-items-center bg-slate-950/74 px-3 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-[24px] border border-white/18 bg-[#4b5362] p-5 shadow-2xl">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="fixed inset-0 z-[125] grid place-items-center bg-slate-950/74 px-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setPdfOpen(false); }}>
+          <div className="w-full max-w-[620px] overflow-visible rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="flex items-start justify-between gap-3 rounded-t-[24px] border-b border-white/12 bg-[#303a4c] px-4 py-3.5">
               <div>
-                <div className="text-white font-medium">PDF generálás</div>
-                <div className="text-white/70 text-sm mt-1">
-                  Év + (opcionálisan) alkalmazott. Ha választasz alkalmazottat, lesz aláírási rész is.
-                </div>
+                <div className="flex items-center gap-2 text-base text-white"><PdfIcon className="h-6 w-6" /> PDF generálás</div>
+                <div className="mt-1 text-xs text-white/55">Éves kimutatás minden dolgozóról vagy egy kiválasztott alkalmazottról.</div>
               </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={2000}
-                  max={2100}
-                  className="h-10 w-28 rounded-xl px-3 border border-white/30 bg-white/5 text-white outline-none focus:ring-2 focus:ring-white/20"
-                  value={pdfYear}
-                  onChange={(e) => setPdfYear(Number(e.target.value))}
-                />
-
-                <div ref={pdfEmpRef} className="relative">
-                  <button
-                    type="button"
-                    className="h-10 min-w-[220px] px-3 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10 flex items-center justify-between gap-2"
-                    onClick={() => setPdfEmpOpen((v) => !v)}
-                    aria-haspopup="listbox"
-                    aria-expanded={pdfEmpOpen}
-                  >
-                    <span className="text-sm truncate">
-                      {pdfEmployee.trim() ? pdfEmployee.trim() : "Összes dolgozó"}
-                    </span>
-                    <span className="text-white/70 text-xs">▾</span>
-                  </button>
-
-                  {pdfEmpOpen && (
-                    <div
-                      role="listbox"
-                      className="absolute right-0 z-[200] mt-2 w-full overflow-hidden rounded-xl border border-white/30"
-                      style={{ backgroundColor: "#354153" }}
-                    >
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={!pdfEmployee.trim()}
-                        className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-                        style={{ backgroundColor: !pdfEmployee.trim() ? "#208d8b" : "#354153" }}
-                        onClick={() => {
-                          setPdfEmployee("");
-                          setPdfEmpOpen(false);
-                        }}
-                      >
-                        Összes dolgozó
-                      </button>
-
-                      {employees.map((e) => (
-                        <button
-                          key={e.name}
-                          type="button"
-                          role="option"
-                          aria-selected={pdfEmployee.trim() === e.name}
-                          className="w-full text-left px-4 py-3 text-sm text-white border-t border-white/10 first:border-t-0"
-                          style={{ backgroundColor: pdfEmployee.trim() === e.name ? "#208d8b" : "#354153" }}
-                          onClick={() => {
-                            setPdfEmployee(e.name);
-                            setPdfEmpOpen(false);
-                          }}
-                        >
-                          {e.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
-                  onClick={downloadPdf}
-                >
-                  <PdfIcon className="h-5 w-5" />
-                  PDF
-                </button>
-
-                <button
-                  type="button"
-                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
-                  onClick={() => setPdfOpen(false)}
-                >
-                  Mégse
-                </button>
-              </div>
+              <button type="button" className={iconBtn} onClick={() => setPdfOpen(false)} aria-label="Bezárás"><X className="h-4 w-4" /></button>
             </div>
 
-            {yearErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{yearErr}</div> : null}
+            <div className="grid gap-3 p-4 sm:grid-cols-[132px_minmax(220px,1fr)_44px] sm:items-end">
+              <div ref={pdfYearRef} className="relative grid gap-1">
+                <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Év</div>
+                <button
+                  type="button"
+                  className="flex h-10 w-full items-center justify-between rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                  onClick={() => { setPdfYearOpen((value) => !value); setPdfEmpOpen(false); }}
+                  aria-haspopup="listbox"
+                  aria-expanded={pdfYearOpen}
+                >
+                  <span>{pdfYear}</span>
+                  <ChevronDown className={`h-4 w-4 text-white/55 transition ${pdfYearOpen ? "rotate-180" : ""}`} />
+                </button>
+                {pdfYearOpen ? (
+                  <div className="absolute bottom-full left-0 z-[300] mb-2 max-h-64 min-w-full overflow-y-auto rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+                    {pdfYearOptions.map((year) => (
+                      <button
+                        key={year}
+                        type="button"
+                        className={`block w-full px-4 py-2.5 text-left text-sm transition ${year === pdfYear ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                        onClick={() => { setPdfYear(year); setPdfYearOpen(false); }}
+                      >
+                        {year}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <div ref={pdfEmpRef} className="relative grid gap-1">
+                <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Alkalmazott</div>
+                <button
+                  type="button"
+                  className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                  onClick={() => { setPdfEmpOpen((value) => !value); setPdfYearOpen(false); }}
+                  aria-haspopup="listbox"
+                  aria-expanded={pdfEmpOpen}
+                >
+                  <span className="truncate">{pdfEmployee.trim() ? pdfEmployee.trim() : "Összes dolgozó"}</span>
+                  <ChevronDown className={`h-4 w-4 shrink-0 text-white/55 transition ${pdfEmpOpen ? "rotate-180" : ""}`} />
+                </button>
+                {pdfEmpOpen ? (
+                  <div className="absolute bottom-full left-0 z-[300] mb-2 max-h-72 w-full overflow-y-auto rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+                    <button
+                      type="button"
+                      className={`block w-full px-4 py-2.5 text-left text-sm transition ${!pdfEmployee.trim() ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                      onClick={() => { setPdfEmployee(""); setPdfEmpOpen(false); }}
+                    >
+                      Összes dolgozó
+                    </button>
+                    {employees.map((employee) => (
+                      <button
+                        key={employee.name}
+                        type="button"
+                        className={`block w-full px-4 py-2.5 text-left text-sm transition ${pdfEmployee.trim() === employee.name ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                        onClick={() => { setPdfEmployee(employee.name); setPdfEmpOpen(false); }}
+                      >
+                        {employee.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] transition hover:bg-[#319c99]"
+                onClick={downloadPdf}
+                title="PDF létrehozása"
+                aria-label="PDF létrehozása"
+              >
+                <PdfIcon className="h-6 w-6" />
+              </button>
+            </div>
+
+            {yearErr ? <div className="mx-4 mb-4 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{yearErr}</div> : null}
           </div>
         </div>
       )}
