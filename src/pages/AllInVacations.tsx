@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
   BarChart3,
+  CheckCircle2,
   CalendarDays,
   CalendarPlus,
   CalendarRange,
@@ -12,13 +13,16 @@ import {
   FileText,
   History,
   Home,
+  Printer,
   RefreshCw,
   Save,
   Scale,
   Search,
+  Settings2,
   Trash2,
   UserRound,
   Users2,
+  X,
 } from "lucide-react";
 
 type Employee = { name: string };
@@ -70,6 +74,30 @@ type YearSummaryRow = {
   compBalanceHours?: number;
 };
 
+type VacationSettings = {
+  workingDays: number[];
+  dayNames?: string[];
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+};
+
+type VacationActivityMonth = {
+  month: string;
+  vacationDays: number;
+  firstDay?: string | null;
+  lastDay?: string | null;
+};
+
+const WEEK_DAYS = [
+  { id: 1, short: "H", label: "Hétfő" },
+  { id: 2, short: "K", label: "Kedd" },
+  { id: 3, short: "Sze", label: "Szerda" },
+  { id: 4, short: "Cs", label: "Csütörtök" },
+  { id: 5, short: "P", label: "Péntek" },
+  { id: 6, short: "Szo", label: "Szombat" },
+  { id: 7, short: "V", label: "Vasárnap" },
+];
+
 function normBase(s: string) {
   return s.replace(/\/+$/, "");
 }
@@ -99,6 +127,25 @@ function formatMonthLabel(value: string) {
 function initials(name: string) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
   return (parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "-").slice(0, 2);
+}
+
+function countVacationPeriod(dayFrom: string, dayTo: string, workingDays: number[]) {
+  const start = new Date(`${dayFrom}T00:00:00Z`);
+  const end = new Date(`${dayTo || dayFrom}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+    return { calendarDays: 0, workingDays: 0, excludedDays: 0 };
+  }
+  const enabled = new Set((workingDays?.length ? workingDays : [1, 2, 3, 4, 5]).map(Number));
+  let calendarDays = 0;
+  let counted = 0;
+  for (let time = start.getTime(); time <= end.getTime(); time += 24 * 60 * 60 * 1000) {
+    const current = new Date(time);
+    const jsDay = current.getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    calendarDays += 1;
+    if (enabled.has(isoDay)) counted += 1;
+  }
+  return { calendarDays, workingDays: counted, excludedDays: calendarDays - counted };
 }
 
 function useIsMobile(breakpointPx = 640) {
@@ -253,20 +300,29 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [pdfEmpOpen, setPdfEmpOpen] = useState(false);
   const pdfEmpRef = useRef<HTMLDivElement | null>(null);
 
+  const [vacationSettings, setVacationSettings] = useState<VacationSettings>({ workingDays: [1, 2, 3, 4, 5] });
+  const [settingsDraft, setSettingsDraft] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [pageNotice, setPageNotice] = useState("");
+  const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
+  const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
+
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!confirmOpen && !summaryOpen && !pdfOpen) return;
+    if (!confirmOpen && !summaryOpen && !pdfOpen && !settingsOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setConfirmOpen(false);
         setSummaryOpen(false);
         setPdfOpen(false);
+        setSettingsOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen, summaryOpen, pdfOpen]);
+  }, [confirmOpen, summaryOpen, pdfOpen, settingsOpen]);
 
   // Custom dropdowns for Compensation + PDF (avoid OS/browser blue highlights)
   useEffect(() => {
@@ -314,6 +370,99 @@ export default function AllInVacations({ api }: { api?: string }) {
       window.removeEventListener("keydown", onKey);
     };
   }, [kindOpen]);
+
+  const fetchVacationSettings = async () => {
+    try {
+      const response = await fetch(`${apiBase}/admin/vacations/settings`, { credentials: "include", cache: "no-store" });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      const settings: VacationSettings = body?.settings || { workingDays: [1, 2, 3, 4, 5] };
+      const workingDays = Array.isArray(settings.workingDays) && settings.workingDays.length ? settings.workingDays.map(Number) : [1, 2, 3, 4, 5];
+      setVacationSettings({ ...settings, workingDays });
+      setSettingsDraft(workingDays);
+    } catch (error: any) {
+      setYearErr(String(error?.message || error || "A munkanap-beállítás nem tölthető be."));
+    }
+  };
+
+  const saveVacationSettings = async () => {
+    if (!settingsDraft.length) {
+      setYearErr("Legalább egy munkanapot ki kell választani.");
+      return;
+    }
+    setSettingsBusy(true);
+    setYearErr("");
+    try {
+      const response = await fetch(`${apiBase}/admin/vacations/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", Accept: "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ workingDays: settingsDraft }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      const settings: VacationSettings = body?.settings || { workingDays: settingsDraft };
+      setVacationSettings(settings);
+      setSettingsDraft(settings.workingDays || settingsDraft);
+      setSettingsOpen(false);
+      const removed = Number(body?.removedVacationRows || 0);
+      setPageNotice(removed > 0 ? `${removed} korábbi, nem munkanapra eső szabadságsor törölve. Az összesítések frissültek.` : "Munkanap-beállítás elmentve. Az összesítések frissültek.");
+      await fetchList();
+      if (selected) await fetchActivityMonths(selected);
+      if (summaryOpen) await fetchYearSummary(summaryYear);
+    } catch (error: any) {
+      setYearErr(String(error?.message || error || "A munkanap-beállítás mentése nem sikerült."));
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const fetchActivityMonths = async (employeeName?: string) => {
+    const employee = String(employeeName ?? selected).trim();
+    if (!employee) {
+      setActivityMonths([]);
+      return;
+    }
+    setActivityMonthsBusy(true);
+    try {
+      const response = await fetch(`${apiBase}/admin/vacations/activity-months?employee=${encodeURIComponent(employee)}`, { credentials: "include", cache: "no-store" });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      setActivityMonths(Array.isArray(body?.items) ? body.items : []);
+    } catch (error: any) {
+      setListErr(String(error?.message || error || "A szabadságos hónapok nem tölthetők be."));
+      setActivityMonths([]);
+    } finally {
+      setActivityMonthsBusy(false);
+    }
+  };
+
+  const openVacationRequestPdf = () => {
+    setSaveErr("");
+    const employee = selected.trim();
+    const end = (dayTo || day).trim();
+    if (!employee) {
+      setSaveErr("Válassz dolgozót a szabadságkéréshez.");
+      return;
+    }
+    if (kind !== "vacation") {
+      setSaveErr("Hivatalos szabadságkérés csak szabadság időszakra készül.");
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < day) {
+      setSaveErr("Ellenőrizd a szabadság kezdő és záró dátumát.");
+      return;
+    }
+    const preview = countVacationPeriod(day, end, vacationSettings.workingDays);
+    if (preview.workingDays <= 0) {
+      setSaveErr("A kiválasztott időszakban nincs elszámolható munkanap.");
+      return;
+    }
+    const params = new URLSearchParams({ employee, dayFrom: day, dayTo: end });
+    if (note.trim()) params.set("note", note.trim());
+    const win = window.open(`${apiBase}/admin/vacations/request.pdf?${params.toString()}`, "_blank", "noopener,noreferrer");
+    if (!win) setSaveErr("A böngésző letiltotta a PDF megnyitását.");
+  };
 
   const fetchEmployees = async () => {
     setEmpErr("");
@@ -422,13 +571,15 @@ export default function AllInVacations({ api }: { api?: string }) {
   };
 
   useEffect(() => {
-    fetchEmployees();
+    void fetchEmployees();
+    void fetchVacationSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase]);
 
   useEffect(() => {
     if (!month) return;
-    fetchList();
+    void fetchList();
+    if (selected) void fetchActivityMonths(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month, selected, apiBase]);
 
@@ -453,6 +604,10 @@ export default function AllInVacations({ api }: { api?: string }) {
   }, [compSummary, selected]);
 
   const monthLabel = useMemo(() => formatMonthLabel(month), [month]);
+  const vacationPreview = useMemo(
+    () => countVacationPeriod(day, dayTo || day, vacationSettings.workingDays),
+    [day, dayTo, vacationSettings.workingDays]
+  );
 
   const selectedShortHours = useMemo(() => {
     const emp = selected.trim();
@@ -524,7 +679,13 @@ export default function AllInVacations({ api }: { api?: string }) {
       if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
 
       setNote("");
+      if (kind === "vacation") {
+        const savedDays = Number(j?.savedDays ?? vacationPreview.workingDays);
+        const skippedDays = Number(j?.skippedDays ?? vacationPreview.excludedDays);
+        setPageNotice(`${savedDays} szabadságnap rögzítve${skippedDays > 0 ? `, ${skippedDays} pihenőnap kihagyva` : ""}.`);
+      }
       await fetchList(emp);
+      await fetchActivityMonths(emp);
     } catch (e: any) {
       setSaveErr(String(e?.message || e || "Hiba"));
     } finally {
@@ -639,6 +800,7 @@ export default function AllInVacations({ api }: { api?: string }) {
         const j = await r.json().catch(() => null);
         if (!r.ok) throw new Error(String(j?.error || j?.message || `HTTP ${r.status}`));
         await fetchList();
+        if (selected) await fetchActivityMonths(selected);
       } catch (e: any) {
         setListErr(String(e?.message || e || "Hiba törlésnél"));
       }
@@ -689,8 +851,8 @@ export default function AllInVacations({ api }: { api?: string }) {
   }, [selected]);
 
   const EmployeesPane = (
-    <section className={panel}>
-      <div className={panelHead}>
+    <section className={`${panel} border-[#7bd7d4]/22 bg-gradient-to-b from-[#496b70] via-[#455f68] to-[#3f5360]`}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#7bd7d4]/18 bg-gradient-to-r from-[#2a8d8b] via-[#347f7d] to-[#426775] px-4 py-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Dolgozói törzs</div>
           <div className="mt-1 flex items-center gap-2 text-base text-white">
@@ -755,8 +917,8 @@ export default function AllInVacations({ api }: { api?: string }) {
                   className={
                     "group w-full rounded-2xl border px-3 py-3 text-left transition " +
                     (active
-                      ? "border-[#7bd7d4]/48 bg-[#2a8d8b]/22 shadow-[0_10px_26px_rgba(21,92,91,0.20)]"
-                      : "border-white/10 bg-white/[0.045] hover:border-white/18 hover:bg-white/[0.075]")
+                      ? "border-[#b7f1ed]/62 bg-[#247f7d] shadow-[0_10px_26px_rgba(21,92,91,0.24)]"
+                      : "border-[#b7f1ed]/18 bg-[#55717a] hover:border-[#b7f1ed]/34 hover:bg-[#607d84]")
                   }
                   onClick={() => {
                     setSelected(e.name);
@@ -768,8 +930,8 @@ export default function AllInVacations({ api }: { api?: string }) {
                       className={
                         "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm " +
                         (active
-                          ? "border-[#7bd7d4]/38 bg-[#2a8d8b]/26 text-[#d7fffd]"
-                          : "border-white/12 bg-[#354153] text-white/65")
+                          ? "border-white/45 bg-white text-[#247f7d]"
+                          : "border-white/25 bg-[#e7faf8] text-[#247f7d]")
                       }
                     >
                       {initials(e.name)}
@@ -791,15 +953,15 @@ export default function AllInVacations({ api }: { api?: string }) {
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
-                    <span className="rounded-lg bg-sky-500/10 px-1.5 py-1.5 text-[10px] text-sky-100">
+                    <span className="rounded-lg border border-white/12 bg-white/[0.14] px-1.5 py-1.5 text-[10px] text-white/80">
                       <strong className="block text-xs font-normal text-white">{vacationDays}</strong>
                       szab. nap
                     </span>
-                    <span className="rounded-lg bg-amber-500/10 px-1.5 py-1.5 text-[10px] text-amber-100">
+                    <span className="rounded-lg border border-[#b7f1ed]/18 bg-[#174c55]/52 px-1.5 py-1.5 text-[10px] text-[#d7fffd]">
                       <strong className="block text-xs font-normal text-white">{shortDaysValue} / {shortHoursValue}</strong>
                       nap / óra
                     </span>
-                    <span className="rounded-lg bg-[#2a8d8b]/14 px-1.5 py-1.5 text-[10px] text-[#d7fffd]">
+                    <span className="rounded-lg border border-white/10 bg-white/[0.09] px-1.5 py-1.5 text-[10px] text-white/78">
                       <strong className="block text-xs font-normal text-white">{balanceDays}n / {balanceHours}ó</strong>
                       egyenleg
                     </span>
@@ -836,6 +998,30 @@ export default function AllInVacations({ api }: { api?: string }) {
             {listBusy ? "Frissítés…" : "Frissítés"}
           </Button>
         </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-[#7bd7d4]/20 bg-[#315c62]/72 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.14em] text-[#d7fffd]/58">Gyors visszakeresés</div>
+            <div className="mt-1 text-sm text-white">Hónapok, amelyekben szabadság volt</div>
+          </div>
+          {activityMonthsBusy ? <span className="text-xs text-white/48"><RefreshCw className="mr-1 inline h-3.5 w-3.5 animate-spin" />Betöltés…</span> : null}
+        </div>
+        <div className="mt-3 flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+          {activityMonths.length ? activityMonths.map((item) => (
+            <button
+              key={item.month}
+              type="button"
+              className={`rounded-xl border px-3 py-2 text-left text-xs transition ${month === item.month ? "border-white/55 bg-white text-[#236d6b]" : "border-[#b7f1ed]/24 bg-[#2a8d8b]/28 text-[#e5fffd] hover:bg-[#2a8d8b]/45"}`}
+              onClick={() => setMonth(item.month)}
+              title={`${item.vacationDays} szabadságnap`}
+            >
+              <span className="block">{formatMonthLabel(item.month)}</span>
+              <span className={`mt-0.5 block text-[10px] ${month === item.month ? "text-[#236d6b]/70" : "text-white/52"}`}>{item.vacationDays} nap</span>
+            </button>
+          )) : !activityMonthsBusy ? <span className="text-xs text-white/48">Ennél a dolgozónál még nincs rögzített szabadság.</span> : null}
         </div>
       </section>
 
@@ -975,10 +1161,25 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
         </div>
 
+        {kind === "vacation" ? (
+          <div className="mt-3 grid gap-2 rounded-2xl border border-[#7bd7d4]/22 bg-[#174c55]/52 p-3 sm:grid-cols-3">
+            <div><div className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/50">Naptári időszak</div><div className="mt-1 text-lg text-white">{vacationPreview.calendarDays} nap</div></div>
+            <div><div className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/50">Elszámolt szabadság</div><div className="mt-1 text-lg text-[#d7fffd]">{vacationPreview.workingDays} nap</div></div>
+            <div><div className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/50">Kihagyott pihenőnap</div><div className="mt-1 text-lg text-white">{vacationPreview.excludedDays} nap</div></div>
+            <div className="sm:col-span-3 text-[11px] text-white/58">Munkanapok: {WEEK_DAYS.filter((item) => vacationSettings.workingDays.includes(item.id)).map((item) => item.label).join(", ")}.</div>
+          </div>
+        ) : null}
+
         {saveErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{saveErr}</div> : null}
 
-        <div className="mt-4 flex items-center justify-end">
-          <Button type="button" className={`${btnPrimary} w-full sm:w-auto`} disabled={saveBusy || !selected} onClick={save}>
+        <div className="mt-4 flex flex-col-reverse items-stretch justify-end gap-2 sm:flex-row sm:items-center">
+          {kind === "vacation" ? (
+            <Button type="button" className={`${btnSoft} w-full sm:w-auto`} disabled={!selected || vacationPreview.workingDays <= 0} onClick={openVacationRequestPdf}>
+              <Printer className="h-4 w-4" />
+              Szabadságkérés PDF
+            </Button>
+          ) : null}
+          <Button type="button" className={`${btnPrimary} w-full sm:w-auto`} disabled={saveBusy || !selected || (kind === "vacation" && vacationPreview.workingDays <= 0)} onClick={save}>
             <Save className="h-4 w-4" />
             {saveBusy ? "Mentés…" : "Bejegyzés mentése"}
           </Button>
@@ -1382,6 +1583,15 @@ export default function AllInVacations({ api }: { api?: string }) {
                 PDF
               </Button>
               <Button
+                className={iconBtn}
+                type="button"
+                title="Munkanapok beállítása"
+                aria-label="Munkanapok beállítása"
+                onClick={() => { setSettingsDraft(vacationSettings.workingDays); setSettingsOpen(true); }}
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
+              <Button
                 className={btnSoft}
                 type="button"
                 onClick={() => {
@@ -1400,6 +1610,13 @@ export default function AllInVacations({ api }: { api?: string }) {
             </div>
           </div>
         </header>
+
+        {pageNotice ? (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#7bd7d4]/28 bg-[#174c55]/72 px-4 py-3 text-sm text-[#e5fffd]">
+            <span><CheckCircle2 className="mr-2 inline h-4 w-4" />{pageNotice}</span>
+            <button type="button" className="text-white/55 hover:text-white" onClick={() => setPageNotice("")}><X className="h-4 w-4" /></button>
+          </div>
+        ) : null}
 
         {yearErr ? (
           <div className="rounded-2xl border border-rose-200/25 bg-rose-500/12 px-4 py-3 text-sm text-rose-50 whitespace-pre-wrap">
@@ -1504,6 +1721,45 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
         </main>
       </div>
+
+      {settingsOpen && (
+        <div className="fixed inset-0 z-[118] grid place-items-center bg-slate-950/76 px-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !settingsBusy) setSettingsOpen(false); }}>
+          <div className="w-full max-w-2xl overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#236d6b] via-[#2a8d8b] to-[#426775] px-4 py-3.5">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/30 bg-white/[0.14] text-white"><Settings2 className="h-5 w-5" /></span>
+                <div><div className="text-[10px] uppercase tracking-[0.18em] text-white/65">Admin settings</div><div className="mt-0.5 text-xl text-white">Heti munkanapok</div><div className="mt-1 text-xs text-white/62">Csak a kijelölt napok számítanak bele a szabadságkeretbe.</div></div>
+              </div>
+              <button type="button" className={iconBtn} disabled={settingsBusy} onClick={() => setSettingsOpen(false)}><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-4 p-4">
+              <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#174c55]/54 px-4 py-3 text-sm leading-6 text-[#e5fffd]">A kikapcsolt napokra eső korábbi szabadságsorok törlődnek az elszámolásból. A vasárnap alapból pihenőnap, a szombat pedig itt külön kapcsolható.</div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                {WEEK_DAYS.map((item) => {
+                  const active = settingsDraft.includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`rounded-2xl border px-3 py-3 text-center transition ${active ? "border-[#b7f1ed]/55 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.23)]" : "border-white/12 bg-[#3f5360] text-white/52 hover:bg-[#4d6570]"}`}
+                      onClick={() => setSettingsDraft((current) => active ? current.filter((dayId) => dayId !== item.id) : [...current, item.id].sort((a, b) => a - b))}
+                    >
+                      <span className="block text-lg">{item.short}</span>
+                      <span className="mt-1 block text-[10px]">{item.label}</span>
+                      <span className="mt-2 inline-flex h-5 items-center rounded-full border border-current/20 px-2 text-[9px]">{active ? "Munkanap" : "Pihenőnap"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="rounded-2xl border border-white/12 bg-white/[0.05] px-4 py-3 text-xs text-white/58">Aktív munkanapok: <span className="text-white">{WEEK_DAYS.filter((item) => settingsDraft.includes(item.id)).map((item) => item.label).join(", ") || "nincs kiválasztva"}</span></div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-white/12 bg-[#303a4c] px-4 py-3">
+              <button type="button" className={btnSoft} disabled={settingsBusy} onClick={() => setSettingsOpen(false)}>Mégse</button>
+              <button type="button" className={btnPrimary} disabled={settingsBusy || settingsDraft.length === 0} onClick={() => void saveVacationSettings()}><CheckCircle2 className="h-4 w-4" />{settingsBusy ? "Mentés…" : "Beállítás mentése"}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {summaryOpen && (
         <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/74 px-3 backdrop-blur-sm">
