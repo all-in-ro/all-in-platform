@@ -1097,9 +1097,9 @@ export default function AllInVacations({ api }: { api?: string }) {
   );
 
   const DetailsPane = (
-    <div className="space-y-4">
-      <section className={panel}>
-        <div className="flex flex-col gap-3 bg-gradient-to-r from-[#303a4c] via-[#354153] to-[#2a8d8b]/34 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="relative space-y-4">
+      <section className="relative z-[220] overflow-visible rounded-2xl border border-white/14 bg-white/[0.06] shadow-sm">
+        <div className="flex flex-col gap-3 rounded-2xl bg-gradient-to-r from-[#303a4c] via-[#354153] to-[#2a8d8b]/34 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-white/80 text-sm">Kiválasztva</div>
           <div className="text-white text-lg font-medium mt-1">{selected || "-"}</div>
@@ -1119,7 +1119,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveYearOpen ? "rotate-180" : ""}`} />
             </button>
             {archiveYearOpen ? (
-              <div className="absolute right-0 top-full z-[210] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+              <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
                 {archiveYears.map((year) => (
                   <button
                     key={year}
@@ -1148,7 +1148,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveMonthOpen ? "rotate-180" : ""}`} />
             </button>
             {archiveMonthOpen && activityMonthsForYear.length ? (
-              <div className="absolute right-0 top-full z-[210] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+              <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
                 {activityMonthsForYear.map((item) => (
                   <button
                     key={item.month}
@@ -1172,7 +1172,7 @@ export default function AllInVacations({ api }: { api?: string }) {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-[#7bd7d4]/20 bg-[#315c62]/72 p-3">
+      <section className="relative z-0 rounded-2xl border border-[#7bd7d4]/20 bg-[#315c62]/72 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="text-[10px] uppercase tracking-[0.14em] text-[#d7fffd]/58">Gyors visszakeresés</div>
