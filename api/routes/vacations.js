@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import fs from "fs";
 
 // ALL IN – Vacations / time-off
 // Admin-only endpoints.
@@ -16,6 +17,66 @@ import crypto from "crypto";
 
 export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
   const router = express.Router();
+
+  const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5];
+  const DAY_NAMES_HU = { 1: "Hétfő", 2: "Kedd", 3: "Szerda", 4: "Csütörtök", 5: "Péntek", 6: "Szombat", 7: "Vasárnap" };
+  const DAY_NAMES_RO = { 1: "Luni", 2: "Marti", 3: "Miercuri", 4: "Joi", 5: "Vineri", 6: "Sambata", 7: "Duminica" };
+
+  function normalizeWorkingDays(value) {
+    const raw = Array.isArray(value) ? value : DEFAULT_WORKING_DAYS;
+    const unique = Array.from(new Set(raw.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item >= 1 && item <= 7))).sort((a, b) => a - b);
+    return unique.length ? unique : [...DEFAULT_WORKING_DAYS];
+  }
+
+  function isoDow(date) {
+    const utc = date.getUTCDay();
+    return utc === 0 ? 7 : utc;
+  }
+
+  function periodInfo(startDay, endDay, workingDays) {
+    const start = new Date(`${startDay}T00:00:00Z`);
+    const end = new Date(`${endDay}T00:00:00Z`);
+    const days = [];
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+      return { calendarDays: 0, workingDays: 0, excludedDays: 0, dates: [] };
+    }
+    const enabled = new Set(normalizeWorkingDays(workingDays));
+    for (let time = start.getTime(); time <= end.getTime(); time += 24 * 3600 * 1000) {
+      const current = new Date(time);
+      const day = current.toISOString().slice(0, 10);
+      days.push({ day, isoDow: isoDow(current), working: enabled.has(isoDow(current)) });
+    }
+    const counted = days.filter((item) => item.working).length;
+    return { calendarDays: days.length, workingDays: counted, excludedDays: days.length - counted, dates: days };
+  }
+
+  async function loadVacationSettings() {
+    const result = await pool.query(`
+      SELECT working_days AS "workingDays", updated_at AS "updatedAt", updated_by AS "updatedBy"
+      FROM allin_vacation_settings
+      WHERE id = 1
+    `);
+    const row = result.rows?.[0] || {};
+    const workingDays = normalizeWorkingDays(row.workingDays);
+    return {
+      workingDays,
+      dayNames: workingDays.map((day) => DAY_NAMES_HU[day]),
+      dayNamesRo: workingDays.map((day) => DAY_NAMES_RO[day]),
+      updatedAt: row.updatedAt || null,
+      updatedBy: row.updatedBy || null,
+    };
+  }
+
+  async function cleanupDisabledVacationRows(workingDays) {
+    const enabled = normalizeWorkingDays(workingDays);
+    const result = await pool.query(
+      `DELETE FROM allin_time_events
+       WHERE kind = 'vacation'
+         AND NOT ((EXTRACT(ISODOW FROM day))::int = ANY($1::int[]))`,
+      [enabled]
+    );
+    return Number(result.rowCount || 0);
+  }
 
   let ready = false;
   async function ensureTables() {
@@ -79,7 +140,20 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       CREATE INDEX IF NOT EXISTS allin_comp_events_employee
         ON allin_comp_events (employee_name);
+
+      CREATE TABLE IF NOT EXISTS allin_vacation_settings (
+        id smallint PRIMARY KEY CHECK (id = 1),
+        working_days smallint[] NOT NULL DEFAULT ARRAY[1,2,3,4,5]::smallint[],
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        updated_by text NULL
+      );
+
+      INSERT INTO allin_vacation_settings (id, working_days)
+      VALUES (1, ARRAY[1,2,3,4,5]::smallint[])
+      ON CONFLICT (id) DO NOTHING;
     `);
+    const settings = await loadVacationSettings();
+    await cleanupDisabledVacationRows(settings.workingDays);
     ready = true;
   }
 
@@ -116,6 +190,181 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     } catch (e) {
       console.error("vacations employees failed", e);
       res.status(500).json({ error: "Failed to load employees" });
+    }
+  });
+
+  // GET /api/admin/vacations/settings
+  router.get("/settings", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const settings = await loadVacationSettings();
+      res.json({ settings });
+    } catch (e) {
+      console.error("vacations settings load failed", e);
+      res.status(500).json({ error: "Failed to load vacation settings" });
+    }
+  });
+
+  // PUT /api/admin/vacations/settings
+  router.put("/settings", requireAdminOrSecret, express.json(), async (req, res) => {
+    try {
+      await ensureTables();
+      const workingDays = normalizeWorkingDays(req.body?.workingDays);
+      if (!Array.isArray(req.body?.workingDays) || !req.body.workingDays.length) {
+        return res.status(400).json({ error: "At least one working day is required" });
+      }
+      const updatedBy = String(req.session?.actor || req.session?.role || "ADMIN");
+      await pool.query(
+        `UPDATE allin_vacation_settings
+         SET working_days = $1::smallint[], updated_at = now(), updated_by = $2
+         WHERE id = 1`,
+        [workingDays, updatedBy]
+      );
+      const removedVacationRows = await cleanupDisabledVacationRows(workingDays);
+      const settings = await loadVacationSettings();
+      res.json({ ok: true, settings, removedVacationRows });
+    } catch (e) {
+      console.error("vacations settings save failed", e);
+      res.status(500).json({ error: "Failed to save vacation settings" });
+    }
+  });
+
+  // GET /api/admin/vacations/activity-months?employee=...
+  router.get("/activity-months", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const employee = norm(req.query.employee);
+      if (!employee) return res.status(400).json({ error: "employee required" });
+      const result = await pool.query(
+        `SELECT to_char(day, 'YYYY-MM') AS month,
+                COUNT(*)::int AS "vacationDays",
+                MIN(day)::text AS "firstDay",
+                MAX(day)::text AS "lastDay"
+         FROM allin_time_events
+         WHERE employee_name = $1 AND kind = 'vacation'
+         GROUP BY to_char(day, 'YYYY-MM')
+         ORDER BY month DESC
+         LIMIT 120`,
+        [employee]
+      );
+      res.json({ items: result.rows });
+    } catch (e) {
+      console.error("vacations activity months failed", e);
+      res.status(500).json({ error: "Failed to load vacation months" });
+    }
+  });
+
+  // GET /api/admin/vacations/request.pdf?employee=...&dayFrom=YYYY-MM-DD&dayTo=YYYY-MM-DD&note=...
+  router.get("/request.pdf", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const employee = norm(req.query.employee);
+      const dayFrom = norm(req.query.dayFrom);
+      const dayTo = norm(req.query.dayTo || req.query.dayFrom);
+      const note = norm(req.query.note);
+      if (!employee) return res.status(400).json({ error: "employee required" });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dayTo)) {
+        return res.status(400).json({ error: "dayFrom/dayTo must be YYYY-MM-DD" });
+      }
+      const settings = await loadVacationSettings();
+      const info = periodInfo(dayFrom, dayTo, settings.workingDays);
+      if (!info.calendarDays || info.workingDays <= 0) {
+        return res.status(400).json({ error: "The selected period contains no working days" });
+      }
+
+      let PDFDocument;
+      try {
+        const mod = await import("pdfkit");
+        PDFDocument = mod.default || mod;
+      } catch {
+        return res.status(500).json({ error: "PDF engine (pdfkit) is not installed on the server." });
+      }
+
+      const safeEmployee = employee.replace(/[^a-zA-Z0-9._ -]+/g, "").trim().replace(/\s+/g, "-") || "angajat";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename=cerere-concediu-${safeEmployee}-${dayFrom}-${dayTo}.pdf`);
+
+      const doc = new PDFDocument({ size: "A4", margin: 46 });
+      doc.pipe(res);
+
+      const regularCandidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+      ];
+      const boldCandidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+      ];
+      const regular = regularCandidates.find((candidate) => fs.existsSync(candidate));
+      const bold = boldCandidates.find((candidate) => fs.existsSync(candidate));
+      if (regular) doc.registerFont("AllInRegular", regular);
+      if (bold) doc.registerFont("AllInBold", bold);
+      const fontRegular = regular ? "AllInRegular" : "Helvetica";
+      const fontBold = bold ? "AllInBold" : "Helvetica-Bold";
+
+      const roDate = (value) => {
+        const date = new Date(`${value}T12:00:00Z`);
+        return new Intl.DateTimeFormat("ro-RO", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" }).format(date);
+      };
+      const generated = new Intl.DateTimeFormat("ro-RO", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
+      const schedule = settings.dayNamesRo.join(", ");
+
+      doc.font(fontBold).fontSize(15).fillColor("#183d36").text("TITAN EURO-COM SRL", { align: "left" });
+      doc.font(fontRegular).fontSize(9.5).fillColor("#4b5563").text("CUI: RO17495362  |  Nr. Reg. Com.: J19/420/2005");
+      doc.text("Str. Mihail Sadoveanu nr. 33, sc. C, et. 4, ap. 17, Miercurea-Ciuc, jud. Harghita");
+      doc.moveDown(1.2);
+      doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor("#2a8d8b").lineWidth(2).stroke();
+      doc.moveDown(1.4);
+
+      doc.font(fontBold).fontSize(18).fillColor("#111827").text("CERERE DE CONCEDIU DE ODIHNA", { align: "center" });
+      doc.moveDown(1.6);
+      doc.font(fontRegular).fontSize(11.5).fillColor("#1f2937").text("Catre conducerea TITAN EURO-COM SRL", { align: "left" });
+      doc.moveDown(1.2);
+      doc.text(`Subsemnatul/Subsemnata ${employee}, va rog sa aprobati efectuarea concediului de odihna in perioada ${roDate(dayFrom)} - ${roDate(dayTo)}.`, { align: "justify", lineGap: 4 });
+      doc.moveDown(1.2);
+
+      const x = doc.page.margins.left;
+      const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const rows = [
+        ["Perioada solicitata", `${roDate(dayFrom)} - ${roDate(dayTo)}`],
+        ["Zile calendaristice", String(info.calendarDays)],
+        ["Zile lucratoare de concediu", String(info.workingDays)],
+        ["Zile nelucratoare excluse", String(info.excludedDays)],
+        ["Program de lucru utilizat", schedule],
+      ];
+      let y = doc.y;
+      rows.forEach(([label, value], index) => {
+        const rowHeight = index === rows.length - 1 ? 34 : 27;
+        doc.save().roundedRect(x, y, width, rowHeight, 5).fill(index % 2 ? "#f7faf9" : "#eef6f4").restore();
+        doc.font(fontRegular).fontSize(10).fillColor("#64748b").text(label, x + 10, y + 8, { width: width * 0.43 });
+        doc.font(fontBold).fontSize(10).fillColor("#172033").text(value, x + width * 0.46, y + 8, { width: width * 0.51 - 10, align: "right" });
+        y += rowHeight + 3;
+      });
+      doc.y = y + 8;
+      if (note) {
+        doc.font(fontBold).fontSize(10).fillColor("#183d36").text("Observatii:");
+        doc.font(fontRegular).fontSize(10).fillColor("#334155").text(note, { lineGap: 3 });
+        doc.moveDown(1);
+      }
+
+      doc.font(fontRegular).fontSize(10.5).fillColor("#1f2937").text("Declar ca am luat la cunostinta obligatia de a reveni la serviciu in prima zi lucratoare dupa incheierea perioadei aprobate.", { align: "justify", lineGap: 3 });
+      doc.moveDown(2);
+      doc.text(`Data cererii: ${generated}`);
+
+      const signY = doc.page.height - 150;
+      const gap = 28;
+      const half = (width - gap) / 2;
+      doc.font(fontBold).fontSize(10).fillColor("#183d36").text("Solicitant", x, signY, { width: half, align: "center" });
+      doc.text("Aprobat / Administrator", x + half + gap, signY, { width: half, align: "center" });
+      doc.moveTo(x + 18, signY + 58).lineTo(x + half - 18, signY + 58).strokeColor("#64748b").lineWidth(1).stroke();
+      doc.moveTo(x + half + gap + 18, signY + 58).lineTo(x + width - 18, signY + 58).strokeColor("#64748b").lineWidth(1).stroke();
+      doc.font(fontRegular).fontSize(8.5).fillColor("#64748b").text("Nume, prenume si semnatura", x, signY + 64, { width: half, align: "center" });
+      doc.text("Nume, prenume si semnatura", x + half + gap, signY + 64, { width: half, align: "center" });
+      doc.fontSize(7.5).fillColor("#94a3b8").text("Document generat din sistemul AllInFashion.", x, doc.page.height - 55, { width, align: "center" });
+      doc.end();
+    } catch (e) {
+      console.error("vacation request pdf failed", e);
+      if (!res.headersSent) res.status(500).json({ error: "Failed to generate vacation request PDF" });
     }
   });
 
@@ -769,16 +1018,16 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
           [id, employeeName, startDay, kind, hours, note, createdBy]
         );
       } else {
+        const settings = await loadVacationSettings();
+        const period = periodInfo(startDay, endDay, settings.workingDays);
+        if (period.workingDays <= 0) {
+          return res.status(400).json({ error: "The selected period contains no working days" });
+        }
         await pool.query("BEGIN");
         try {
-          for (let n = 0; n < diffDays; n++) {
-            const d = new Date(startDate.getTime() + n * 24 * 3600 * 1000);
-            const yyyy = d.getUTCFullYear();
-            const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-            const dd = String(d.getUTCDate()).padStart(2, "0");
-            const dayStr = `${yyyy}-${mm}-${dd}`;
+          for (const item of period.dates) {
+            if (!item.working) continue;
             const id = crypto.randomUUID();
-
             await pool.query(
               `
               INSERT INTO allin_time_events (id, employee_name, day, kind, hours_off, note, created_by)
@@ -786,10 +1035,17 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
               ON CONFLICT (employee_name, day, kind)
               DO UPDATE SET note = EXCLUDED.note
               `,
-              [id, employeeName, dayStr, note, createdBy]
+              [id, employeeName, item.day, note, createdBy]
             );
           }
           await pool.query("COMMIT");
+          return res.json({
+            ok: true,
+            savedDays: period.workingDays,
+            skippedDays: period.excludedDays,
+            calendarDays: period.calendarDays,
+            workingDays: settings.workingDays,
+          });
         } catch (e) {
           await pool.query("ROLLBACK");
           throw e;
