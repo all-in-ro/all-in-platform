@@ -3917,7 +3917,7 @@ function stockTransferPayloadFingerprint(payload: Omit<StockTransferApiPayload, 
 }
 
 async function apiStockTransfer(payload: StockTransferApiPayload) {
-  return fetchJSON<{ ok: true; duplicate?: boolean; idempotencyKey?: string | null; transferId: string; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; items?: any[] }>("/api/aif/stock-transfers", {
+  return fetchJSON<{ ok: true; duplicate?: boolean; idempotencyKey?: string | null; transferId: string; documentId?: string | null; documentNumber?: string | null; documentCreatedAt?: string | null; documentTitle?: string | null; documentSubtitle?: string | null; document?: Record<string, any> | null; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; items?: any[] }>("/api/aif/stock-transfers", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -6574,7 +6574,7 @@ export default function AllInWarehouse() {
       title: stockMoveDocumentTitle.trim() || "Aviz intern de transfer stoc",
       note: stockMoveNote.trim(),
       createdAt: warehouseTransferDateTime(issuedAt),
-      documentNumber: warehouseTransferDocumentNumber(issuedAt),
+      documentNumber: `PREVIZUALIZARE-${warehouseTransferDocumentNumber(issuedAt)}`,
       lines: movePrintLines(),
     });
 
@@ -6698,10 +6698,11 @@ export default function AllInWarehouse() {
       setStockMoveConfirmOpen(false);
       stockMoveIdempotencyKeyRef.current = "";
       stockMovePayloadFingerprintRef.current = "";
+      const officialDocumentNumber = String(result.documentNumber || "").trim();
       setMessage(
         result.duplicate
-          ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
-          : `Készletmozgatás rögzítve: ${movedLines} sor, ${movedQty} db. A mozgatott sorokat levettem a készletmozgatási listáról, hogy ne lehessen véletlenül még egyszer ugyanazt átküldeni.`
+          ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. ${officialDocumentNumber ? `Proces-verbal: ${officialDocumentNumber}. ` : ""}A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
+          : `Készletmozgatás és hivatalos átadási bizonylat rögzítve: ${officialDocumentNumber || result.transferId}. ${movedLines} sor, ${movedQty} db. A bizonylat bármikor újranyomtatható a Termékátadások oldalon.`
       );
     } catch (e: any) {
       // Hálózati bizonytalanságnál ugyanaz a kulcs marad. Újrapróbáláskor a backend
@@ -9632,7 +9633,7 @@ export default function AllInWarehouse() {
                   </details>
 
                   <div className="flex flex-wrap gap-1.5 text-[11px] text-white/58">
-                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><FileText size={12} /> PDF = csak nyomtatás</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><FileText size={12} /> PDF előnézet = még nem hivatalos bizonylat</span>
                     <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><PackageCheck size={12} /> Készlet mozgatása = valódi készletmozgás, megerősítéssel</span>
                     <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><ArrowRight size={12} /> Soronként: Forrás → Cél → Db</span>
                   </div>
@@ -9771,7 +9772,7 @@ export default function AllInWarehouse() {
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     <button className={btnSoft} onClick={printStockMoveTransferPdf} type="button" disabled={!moveAllRowsValid}>
-                      <Printer size={15} /> PDF / nyomtatás
+                      <Printer size={15} /> PDF előnézet
                     </button>
                     <button className={primaryBtn} onClick={requestSaveSelectedMoveTransfers} type="button" disabled={!moveCanSave} title="Végleges művelet: készletet módosít és mozgásnaplóba ír, előtte megerősítést kér.">
                       <PackageCheck size={15} /> {stockMoveSaving ? "Mentés..." : "Véglegesítés: készlet mozgatása"}
