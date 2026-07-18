@@ -1,6 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Trash2, Users2, ClipboardList, ArrowLeft } from "lucide-react";
+import {
+  ArrowLeft,
+  BarChart3,
+  CalendarDays,
+  CalendarPlus,
+  CalendarRange,
+  ChevronRight,
+  ClipboardList,
+  Clock3,
+  FileText,
+  History,
+  Home,
+  RefreshCw,
+  Save,
+  Scale,
+  Search,
+  Trash2,
+  UserRound,
+  Users2,
+} from "lucide-react";
 
 type Employee = { name: string };
 
@@ -70,6 +89,18 @@ function empKey(name: string) {
   return String(name || "").trim().replace(/\s+/g, " " ).toLowerCase();
 }
 
+function formatMonthLabel(value: string) {
+  if (!/^\d{4}-\d{2}$/.test(value)) return value || "-";
+  const [year, month] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, 1);
+  return new Intl.DateTimeFormat("hu-HU", { year: "numeric", month: "long" }).format(date);
+}
+
+function initials(name: string) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return (parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "-").slice(0, 2);
+}
+
 function useIsMobile(breakpointPx = 640) {
   const [isMobile, setIsMobile] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -104,13 +135,22 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const isMobile = useIsMobile();
 
-  const card = "rounded-lg border border-white/30 bg-white/5 shadow-sm px-4 sm:px-6 py-6 sm:py-8";
-  const label = "text-white/80 text-sm";
+  const card = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.07] shadow-lg";
+  const panel = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.06] shadow-sm";
+  const panelHead = "flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-[#404a5b] px-4 py-3";
+  const label = "text-white/65 text-xs";
   const input =
-    "w-full h-11 rounded-xl px-4 border border-white/30 bg-white/5 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-white/20";
+    "w-full h-10 rounded-xl px-3 border border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18";
   const btn =
-    "h-9 sm:h-10 px-3 sm:px-4 rounded-xl text-white bg-[#354153] hover:bg-[#3c5069] border border-white/30 text-xs sm:text-sm whitespace-nowrap";
-  const btnPrimary = btn + " !bg-[#208d8b] hover:!bg-[#1b7a78] border-transparent";
+    "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-45 whitespace-nowrap";
+  const btnPrimary =
+    "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45 whitespace-nowrap";
+  const btnSoft =
+    "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/14 bg-white/[0.07] px-3 text-xs text-white transition hover:bg-white/[0.11] disabled:cursor-not-allowed disabled:opacity-45 whitespace-nowrap";
+  const iconBtn =
+    "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-45";
+  const dangerIconBtn =
+    "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-600 text-white transition hover:bg-rose-500";
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [empErr, setEmpErr] = useState("");
@@ -412,6 +452,8 @@ export default function AllInVacations({ api }: { api?: string }) {
     );
   }, [compSummary, selected]);
 
+  const monthLabel = useMemo(() => formatMonthLabel(month), [month]);
+
   const selectedShortHours = useMemo(() => {
     const emp = selected.trim();
     if (!emp) return 0;
@@ -647,60 +689,134 @@ export default function AllInVacations({ api }: { api?: string }) {
   }, [selected]);
 
   const EmployeesPane = (
-    <div>
-      <div className="text-white/80 text-sm">Alkalmazottak</div>
-      <div className="mt-2">
-        <input className={input} placeholder="Keresés név szerint…" value={q} onChange={(e) => setQ(e.target.value)} />
+    <section className={panel}>
+      <div className={panelHead}>
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Dolgozói törzs</div>
+          <div className="mt-1 flex items-center gap-2 text-base text-white">
+            <Users2 className="h-4 w-4" />
+            Alkalmazott kiválasztása
+          </div>
+        </div>
+        <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[11px] text-[#d7fffd]">
+          {employees.length} fő
+        </span>
       </div>
 
-      {empErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{empErr}</div> : null}
+      <div className="border-b border-white/10 p-3">
+        <div className={label}>Név szerinti keresés</div>
+        <div className="relative mt-1.5">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/36" />
+          <input
+            className={`${input} pl-9`}
+            placeholder="Kezdj el gépelni…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+        {empErr ? (
+          <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">
+            {empErr}
+          </div>
+        ) : null}
+      </div>
 
-      <div ref={listRef} className="mt-3 rounded-xl border border-white/30 bg-white/5 max-h-[60vh] overflow-y-auto">
-        {filteredEmployees.length === 0 ? (
-          <div className="px-4 py-4 text-white/60 text-sm">Nincs dolgozó a listában.</div>
+      <div
+        ref={listRef}
+        className="max-h-[calc(100vh-300px)] min-h-[280px] overflow-y-auto p-2 sm:max-h-[720px]"
+      >
+        {empBusy ? (
+          <div className="flex min-h-[220px] items-center justify-center text-sm text-white/48">
+            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+            Dolgozók betöltése…
+          </div>
+        ) : filteredEmployees.length === 0 ? (
+          <div className="flex min-h-[220px] flex-col items-center justify-center px-5 text-center">
+            <Users2 className="h-8 w-8 text-white/22" />
+            <div className="mt-3 text-sm text-white/55">Nincs dolgozó a listában.</div>
+          </div>
         ) : (
-          filteredEmployees.map((e) => {
-            const active = e.name === selected;
-            const s = summary.find((x) => empKey(x.employeeName) === empKey(e.name));
-            const c = compSummary.find((x) => empKey(x.employeeName) === empKey(e.name));
-            const v = s?.vacationDays ?? 0;
-            const sh = s?.shortDays ?? 0;
-            const shh = s?.shortHours ?? 0;
-            const bd = c?.balanceDays ?? 0;
-            const bh = c?.balanceHours ?? 0;
-            return (
-              <button
-                key={e.name}
-                data-emp={e.name}
-                type="button"
-                className={
-                  "w-full px-4 py-3 text-left flex items-center justify-between gap-3 border-t border-white/10 first:border-t-0 " +
-                  (active ? "bg-white/10" : "hover:bg-white/5")
-                }
-                onClick={() => {
-                  setSelected(e.name);
-                  if (isMobile) setMobilePane("details");
-                }}
-              >
-                <div>
-                  <div className="text-white text-sm">{e.name}</div>
-                  <div className="text-white/60 text-xs mt-1">
-                    {month} · Szabadság: {v} · Elkérezés: {sh} ({shh} óra)
+          <div className="grid gap-2">
+            {filteredEmployees.map((e) => {
+              const active = empKey(e.name) === empKey(selected);
+              const employeeSummary = summary.find((x) => empKey(x.employeeName) === empKey(e.name));
+              const employeeComp = compSummary.find((x) => empKey(x.employeeName) === empKey(e.name));
+              const vacationDays = employeeSummary?.vacationDays ?? 0;
+              const shortDaysValue = employeeSummary?.shortDays ?? 0;
+              const shortHoursValue = employeeSummary?.shortHours ?? 0;
+              const balanceDays = employeeComp?.balanceDays ?? 0;
+              const balanceHours = employeeComp?.balanceHours ?? 0;
+
+              return (
+                <button
+                  key={e.name}
+                  data-emp={e.name}
+                  type="button"
+                  className={
+                    "group w-full rounded-2xl border px-3 py-3 text-left transition " +
+                    (active
+                      ? "border-[#7bd7d4]/48 bg-[#2a8d8b]/22 shadow-[0_10px_26px_rgba(21,92,91,0.20)]"
+                      : "border-white/10 bg-white/[0.045] hover:border-white/18 hover:bg-white/[0.075]")
+                  }
+                  onClick={() => {
+                    setSelected(e.name);
+                    if (isMobile) setMobilePane("details");
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={
+                        "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm " +
+                        (active
+                          ? "border-[#7bd7d4]/38 bg-[#2a8d8b]/26 text-[#d7fffd]"
+                          : "border-white/12 bg-[#354153] text-white/65")
+                      }
+                    >
+                      {initials(e.name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="truncate text-sm text-white">{e.name}</div>
+                        <ChevronRight
+                          className={
+                            "h-4 w-4 " +
+                            (active
+                              ? "text-[#7bd7d4]"
+                              : "text-white/28 transition group-hover:text-white/55")
+                          }
+                        />
+                      </div>
+                      <div className="mt-1 text-[10px] text-white/42">{monthLabel}</div>
+                    </div>
                   </div>
-                  <div className="text-white/50 text-xs mt-1">Tartozás: {bd} nap, {bh} óra</div>
-                </div>
-                <div className="text-white/40 text-xs">▸</div>
-              </button>
-            );
-          })
+
+                  <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
+                    <span className="rounded-lg bg-sky-500/10 px-1.5 py-1.5 text-[10px] text-sky-100">
+                      <strong className="block text-xs font-normal text-white">{vacationDays}</strong>
+                      szab. nap
+                    </span>
+                    <span className="rounded-lg bg-amber-500/10 px-1.5 py-1.5 text-[10px] text-amber-100">
+                      <strong className="block text-xs font-normal text-white">{shortDaysValue} / {shortHoursValue}</strong>
+                      nap / óra
+                    </span>
+                    <span className="rounded-lg bg-[#2a8d8b]/14 px-1.5 py-1.5 text-[10px] text-[#d7fffd]">
+                      <strong className="block text-xs font-normal text-white">{balanceDays}n / {balanceHours}ó</strong>
+                      egyenleg
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
-    </div>
+    </section>
   );
 
   const DetailsPane = (
-    <div>
-      <div className="flex items-center justify-between gap-2 flex-wrap">
+    <div className="space-y-4">
+      <section className={panel}>
+        <div className="flex flex-col gap-3 bg-gradient-to-r from-[#303a4c] via-[#354153] to-[#2a8d8b]/34 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-white/80 text-sm">Kiválasztva</div>
           <div className="text-white text-lg font-medium mt-1">{selected || "-"}</div>
@@ -720,20 +836,37 @@ export default function AllInVacations({ api }: { api?: string }) {
             {listBusy ? "Frissítés…" : "Frissítés"}
           </Button>
         </div>
-      </div>
+        </div>
+      </section>
 
-      <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
-        <div className="text-white/80 text-sm">Gyors összegzés ({month})</div>
-        <div className="mt-2 text-white/70 text-sm">
-          Szabadság napok: <span className="text-white">{selectedSummary.vacationDays}</span> · Elkérezés órák:{" "}
-          <span className="text-white">{selectedShortHours}</span>
-          <span className="text-white/50"> · </span>
-          Tartozás egyenleg: <span className="text-white">{selectedComp.balanceDays}</span> nap, <span className="text-white">{selectedComp.balanceHours}</span> óra
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="rounded-2xl border border-sky-200/20 bg-sky-500/9 p-3">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.1em] text-sky-100/60"><CalendarRange className="h-4 w-4" /> Szabadság</div>
+          <div className="mt-2 text-xl text-white">{selectedSummary.vacationDays} nap</div>
+        </div>
+        <div className="rounded-2xl border border-amber-200/20 bg-amber-500/9 p-3">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.1em] text-amber-100/60"><Clock3 className="h-4 w-4" /> Elkérezés</div>
+          <div className="mt-2 text-xl text-white">{selectedShortHours} óra</div>
+        </div>
+        <div className="rounded-2xl border border-white/12 bg-white/[0.055] p-3">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.1em] text-white/42"><ClipboardList className="h-4 w-4" /> Elkérezési nap</div>
+          <div className="mt-2 text-xl text-white">{selectedSummary.shortDays} nap</div>
+        </div>
+        <div className="rounded-2xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 p-3">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.1em] text-[#d7fffd]/60"><Scale className="h-4 w-4" /> Kompenzáció</div>
+          <div className="mt-2 text-xl text-white">{selectedComp.balanceDays}n / {selectedComp.balanceHours}ó</div>
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
-        <div className="text-white/80 text-sm">Új bejegyzés</div>
+      <section id="vacation-new-entry" className={panel}>
+        <div className={panelHead}>
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Új távollét</div>
+            <div className="mt-1 flex items-center gap-2 text-base"><CalendarPlus className="h-4 w-4" /> Szabadság vagy elkérezés rögzítése</div>
+          </div>
+          <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/55">{selected || "Nincs kiválasztva"}</span>
+        </div>
+        <div className="p-4">
 
         <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-3">
           {kind === "vacation" ? (
@@ -842,16 +975,19 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
         </div>
 
-        {saveErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{saveErr}</div> : null}
+        {saveErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{saveErr}</div> : null}
 
         <div className="mt-4 flex items-center justify-end">
-          <Button type="button" className={btnPrimary} disabled={saveBusy || !selected} onClick={save}>
-            {saveBusy ? "Mentés…" : "Mentés"}
+          <Button type="button" className={`${btnPrimary} w-full sm:w-auto`} disabled={saveBusy || !selected} onClick={save}>
+            <Save className="h-4 w-4" />
+            {saveBusy ? "Mentés…" : "Bejegyzés mentése"}
           </Button>
         </div>
-      </div>
+        </div>
+      </section>
 
-      <div className="mt-4 rounded-xl border border-white/30 bg-white/5 p-4">
+      <section id="vacation-compensation" className={panel}>
+        <div className={panelHead}>
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <div className="text-white/80 text-sm">Kompenzáció (tartozás)</div>
@@ -859,13 +995,13 @@ export default function AllInVacations({ api }: { api?: string }) {
               Ha hivatalos szabadság alatt dolgozik vagy túlórázik: te tartozol. Ha kiadod/kompenzálod: kiegyenlítés.
             </div>
           </div>
-          <div className="text-white/70 text-sm">
-            Egyenleg ({month}):{" "}
-            <span className="text-white">{selectedComp.balanceDays}</span> nap, <span className="text-white">{selectedComp.balanceHours}</span> óra
+          <div className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[11px] text-[#d7fffd]">
+            Egyenleg: {selectedComp.balanceDays} nap, {selectedComp.balanceHours} óra
           </div>
         </div>
+        <div className="p-4">
 
-        <div className="mt-3 grid gap-3 grid-cols-1 sm:grid-cols-4">
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-4">
           <div className="grid gap-2">
             <div className={label}>Dátum</div>
             <input type="date" className={input} value={compDay} onChange={(e) => setCompDay(e.target.value)} />
@@ -1015,7 +1151,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
             <Button
               type="button"
-              className={btnPrimary}
+              className={`${btnPrimary} w-full sm:w-auto`}
               disabled={compBusy || !selected}
               onClick={() => {
                 setCompErr("");
@@ -1026,14 +1162,15 @@ export default function AllInVacations({ api }: { api?: string }) {
                 openSaveCompConfirm();
               }}
             >
-              {compBusy ? "Mentés…" : "Mentés"}
+              <Save className="h-4 w-4" />
+              {compBusy ? "Mentés…" : "Kompenzáció mentése"}
             </Button>
           </div>
         </div>
 
-        {compErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{compErr}</div> : null}
+        {compErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{compErr}</div> : null}
 
-        <div className="mt-4 rounded-xl border border-white/30 overflow-hidden">
+        <div className="mt-4 overflow-hidden rounded-2xl border border-white/12 bg-white/[0.035]">
           {isMobile ? (
             <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
               <div className="col-span-4">Dátum</div>
@@ -1068,7 +1205,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                       type="button"
                       aria-label="Törlés"
                       title="Törlés"
-                      className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                      className={dangerIconBtn}
                       onClick={() => openDeleteComp(it.id)}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -1095,7 +1232,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                         type="button"
                         aria-label="Törlés"
                         title="Törlés"
-                        className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                        className={dangerIconBtn}
                         onClick={() => openDeleteComp(it.id)}
                       >
                         <Trash2 className="h-4 w-4" />
@@ -1114,11 +1251,19 @@ export default function AllInVacations({ api }: { api?: string }) {
         </div>
       </div>
 
-      <div className="mt-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-white/80 text-sm">Bejegyzések ({month})</div>
         </div>
-        {listErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-2">{listErr}</div> : null}
+      </section>
+
+      <section id="vacation-history" className={panel}>
+        <div className={panelHead}>
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Havi előzmények</div>
+            <div className="mt-1 flex items-center gap-2 text-base"><History className="h-4 w-4" /> Bejegyzések ({monthLabel})</div>
+          </div>
+          <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/55">{items.length + compItems.length} esemény</span>
+        </div>
+        <div className="p-4">
+        {listErr ? <div className="mt-2 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{listErr}</div> : null}
 
         <div className="mt-3 rounded-xl border border-white/30 overflow-hidden">
           {isMobile ? (
@@ -1161,7 +1306,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                           type="button"
                           aria-label="Törlés"
                           title="Törlés"
-                          className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                          className={dangerIconBtn}
                           onClick={() => openDeleteTime(it.id)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1181,7 +1326,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                           type="button"
                           aria-label="Törlés"
                           title="Törlés"
-                          className="inline-flex items-center justify-center rounded-md p-1 bg-red-600 hover:bg-red-700 text-white"
+                          className={dangerIconBtn}
                           onClick={() => openDeleteTime(it.id)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1195,123 +1340,174 @@ export default function AllInVacations({ api }: { api?: string }) {
           )}
         </div>
 
-        <div className="pt-4 text-xs text-white/60">
-          API base: <span className="text-white/70">{apiBase}</span>
+        <div className="hidden" aria-hidden="true">
+          API base: <span>{apiBase}</span>
         </div>
-      </div>
+        </div>
+      </section>
     </div>
   );
 
   return (
-    <div className="min-h-screen w-screen" style={{ backgroundColor: "#474c59" }}>
-      {/* Native <select> dropdowns love forcing bright blue highlights.
-          Override option backgrounds so the dropdown uses our palette. */}
+    <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5">
       <style>{`
-        select.allin-select { color-scheme: dark; accent-color: #208d8b; }
+        input[type="date"], input[type="month"] { color-scheme: dark; }
+        select.allin-select { color-scheme: dark; accent-color: #2a8d8b; }
         select.allin-select option { background-color: #354153 !important; color: #ffffff !important; }
-        select.allin-select option:hover,
-        select.allin-select option:focus,
-        select.allin-select option:active { background-color: #3c5069 !important; color: #ffffff !important; }
-        select.allin-select option:checked,
-        select.allin-select option:checked:hover { background-color: #208d8b !important; color: #ffffff !important; }
+        select.allin-select option:checked { background-color: #2a8d8b !important; color: #ffffff !important; }
       `}</style>
 
-      <div className="w-full max-w-6xl mx-auto px-4 py-6">
-        <div className={card}>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <div className="text-white text-xl font-medium">SZABADSÁGOK</div>
-              <div className="text-white/60 text-xs mt-1">Szabadság napok és Elkérezés órák külön kezelve.</div>
+      <div className="mx-auto max-w-[1500px] space-y-4">
+        <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-[240px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+                <CalendarDays className="h-5 w-5" />
+              </span>
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</div>
+                <h1 className="mt-0.5 text-xl leading-tight">Szabadságok</h1>
+                <div className="mt-0.5 text-[11px] text-white/48">Távollét, elkérezés és kompenzáció kezelése</div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 ml-auto">
-              {/* Mobilon a PDF generálás nem kell. */}
-              <Button className={btn + " hidden sm:inline-flex"} type="button" onClick={openPdf} disabled={yearBusy}>
-                <span className="inline-flex items-center gap-2">
-                  <img
-                    src="https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/PDF.png"
-                    alt="PDF"
-                    className="h-5 w-5"
-                  />
-                  <span>{yearBusy ? "PDF…" : "PDF"}</span>
-                </span>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+              <Button className={btnSoft} type="button" onClick={openYearSummary} disabled={yearBusy}>
+                <BarChart3 className="h-4 w-4" />
+                <span className="hidden sm:inline">Éves összesítés</span>
+                <span className="sm:hidden">Összesítés</span>
               </Button>
-              <Button className={btnPrimary} type="button" onClick={openYearSummary} disabled={yearBusy}>
-                {yearBusy ? "Frissítés…" : "Összesítés"}
+              <Button className={`${btnSoft} hidden sm:inline-flex`} type="button" onClick={openPdf} disabled={yearBusy}>
+                <FileText className="h-4 w-4" />
+                PDF
+              </Button>
+              <Button
+                className={btnSoft}
+                type="button"
+                onClick={() => {
+                  void fetchEmployees();
+                  void fetchList();
+                }}
+                disabled={empBusy || listBusy}
+              >
+                <RefreshCw className={`h-4 w-4 ${empBusy || listBusy ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">Frissítés</span>
               </Button>
               <Button className={btn} onClick={() => (window.location.hash = "#allinadmin")} type="button">
-                Vissza
+                <Home className="h-4 w-4" />
+                <span className="hidden sm:inline">Kezdőlap</span>
               </Button>
             </div>
           </div>
+        </header>
 
-          {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
-
-          {/* Desktop/tablet layout */}
-          <div className="mt-6 hidden sm:grid gap-4 grid-cols-1 lg:grid-cols-12">
-            <div className="lg:col-span-4">{EmployeesPane}</div>
-            <div className="lg:col-span-8">{DetailsPane}</div>
+        {yearErr ? (
+          <div className="rounded-2xl border border-rose-200/25 bg-rose-500/12 px-4 py-3 text-sm text-rose-50 whitespace-pre-wrap">
+            {yearErr}
           </div>
+        ) : null}
 
-          {/* Mobile layout (automatic) */}
-          <div className="mt-6 sm:hidden">
-            <div className="rounded-xl border border-white/30 bg-white/5 overflow-hidden">
-              <div className="flex items-center">
-                <button
-                  type="button"
-                  className={
-                    "flex-1 h-11 px-3 text-sm text-white border-r border-white/10 flex items-center justify-center gap-2 " +
-                    (mobilePane === "employees" ? "bg-white/10" : "bg-transparent")
-                  }
-                  onClick={() => setMobilePane("employees")}
-                >
-                  <Users2 className="h-4 w-4" />
-                  Dolgozók
-                </button>
-                <button
-                  type="button"
-                  className={
-                    "flex-1 h-11 px-3 text-sm text-white flex items-center justify-center gap-2 " +
-                    (mobilePane === "details" ? "bg-white/10" : "bg-transparent")
-                  }
-                  onClick={() => setMobilePane("details")}
-                  disabled={!selected}
-                  aria-disabled={!selected}
-                  title={!selected ? "Előbb válassz dolgozót" : ""}
-                >
-                  <ClipboardList className="h-4 w-4" />
-                  Részletek
-                </button>
-              </div>
+        <section className={card}>
+          <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.15em] text-white/40">Munkafolyamat</div>
+              <div className="mt-1 text-base text-white">1. Dolgozó kiválasztása → 2. Művelet → 3. Mentés vagy visszakeresés</div>
+              <div className="mt-1 text-xs text-white/42">A hónap és a kiválasztott dolgozó minden kapcsolódó adatot együtt tart.</div>
             </div>
+            <div className="grid grid-cols-3 gap-2 sm:flex">
+              <button
+                type="button"
+                className={btnSoft}
+                disabled={!selected}
+                onClick={() => document.getElementById("vacation-new-entry")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              >
+                <CalendarPlus className="h-4 w-4" />
+                <span className="hidden sm:inline">Új távollét</span>
+                <span className="sm:hidden">Új</span>
+              </button>
+              <button
+                type="button"
+                className={btnSoft}
+                disabled={!selected}
+                onClick={() => document.getElementById("vacation-compensation")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              >
+                <Scale className="h-4 w-4" />
+                <span className="hidden sm:inline">Kompenzáció</span>
+                <span className="sm:hidden">Komp.</span>
+              </button>
+              <button
+                type="button"
+                className={btnSoft}
+                disabled={!selected}
+                onClick={() => document.getElementById("vacation-history")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              >
+                <History className="h-4 w-4" />
+                <span className="hidden sm:inline">Előzmények</span>
+                <span className="sm:hidden">Előz.</span>
+              </button>
+            </div>
+          </div>
+        </section>
 
-            {mobilePane === "employees" ? (
-              <div className="mt-4">{EmployeesPane}</div>
-            ) : (
-              <div className="mt-4">
-                <div className="mb-3 flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-2 h-10 px-3 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
-                    onClick={() => setMobilePane("employees")}
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    Dolgozók
-                  </button>
-                  <div className="text-white/70 text-sm truncate">
-                    {selected ? `Kiválasztva: ${selected}` : "Nincs kiválasztva"}
-                  </div>
-                </div>
-                {DetailsPane}
-              </div>
-            )}
+        <div className="grid gap-2 rounded-2xl border border-white/12 bg-[#303a4c] p-1.5 sm:hidden">
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              className={
+                "inline-flex h-10 items-center justify-center gap-2 rounded-xl text-xs transition " +
+                (mobilePane === "employees" ? "bg-[#2a8d8b] text-white" : "text-white/55")
+              }
+              onClick={() => setMobilePane("employees")}
+            >
+              <Users2 className="h-4 w-4" />
+              Dolgozók
+            </button>
+            <button
+              type="button"
+              className={
+                "inline-flex h-10 items-center justify-center gap-2 rounded-xl text-xs transition disabled:opacity-35 " +
+                (mobilePane === "details" ? "bg-[#2a8d8b] text-white" : "text-white/55")
+              }
+              onClick={() => setMobilePane("details")}
+              disabled={!selected}
+            >
+              <ClipboardList className="h-4 w-4" />
+              Munkalap
+            </button>
           </div>
         </div>
+
+        <main className="grid items-start gap-4 sm:grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]">
+          <div className={`${mobilePane === "employees" ? "block" : "hidden"} sm:block`}>
+            {EmployeesPane}
+          </div>
+          <div className={`${mobilePane === "details" ? "block" : "hidden"} sm:block`}>
+            {isMobile && selected ? (
+              <button type="button" className={`${btnSoft} mb-3`} onClick={() => setMobilePane("employees")}>
+                <ArrowLeft className="h-4 w-4" />
+                Dolgozóváltás
+              </button>
+            ) : null}
+            {selected ? (
+              DetailsPane
+            ) : (
+              <section className={`${panel} flex min-h-[430px] items-center justify-center p-6 text-center`}>
+                <div className="max-w-md">
+                  <span className="mx-auto inline-flex h-16 w-16 items-center justify-center rounded-3xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]">
+                    <UserRound className="h-8 w-8" />
+                  </span>
+                  <div className="mt-4 text-xl text-white">Válassz egy dolgozót</div>
+                  <div className="mt-2 text-sm leading-6 text-white/48">A listából válaszd ki, kinek szeretnél szabadságot, elkérezést vagy kompenzációt rögzíteni.</div>
+                </div>
+              </section>
+            )}
+          </div>
+        </main>
       </div>
 
       {summaryOpen && (
-        <div className="fixed inset-0 z-[120] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-3xl rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/74 px-3 backdrop-blur-sm">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-auto rounded-[24px] border border-white/18 bg-[#4b5362] p-5 shadow-2xl">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <div className="text-white font-medium">Összesítés ({summaryYear})</div>
@@ -1345,7 +1541,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               </div>
             </div>
 
-            {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
+            {yearErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{yearErr}</div> : null}
 
             <div className="mt-4 rounded-xl border border-white/30 overflow-hidden">
               {isMobile ? (
@@ -1441,8 +1637,8 @@ export default function AllInVacations({ api }: { api?: string }) {
       )}
 
       {pdfOpen && (
-        <div className="fixed inset-0 z-[125] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-2xl rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+        <div className="fixed inset-0 z-[125] grid place-items-center bg-slate-950/74 px-3 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[24px] border border-white/18 bg-[#4b5362] p-5 shadow-2xl">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <div className="text-white font-medium">PDF generálás</div>
@@ -1533,14 +1729,14 @@ export default function AllInVacations({ api }: { api?: string }) {
               </div>
             </div>
 
-            {yearErr ? <div className="text-red-400 text-sm whitespace-pre-wrap mt-3">{yearErr}</div> : null}
+            {yearErr ? <div className="mt-3 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{yearErr}</div> : null}
           </div>
         </div>
       )}
 
       {confirmOpen && (
-        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/78 px-3 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[24px] border border-white/18 bg-[#4b5362] p-5 shadow-2xl">
             <div className="text-white font-medium">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
