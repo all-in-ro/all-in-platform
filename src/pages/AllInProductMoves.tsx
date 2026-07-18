@@ -8,8 +8,6 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Download,
-  FileSpreadsheet,
   FileText,
   Home,
   MapPin,
@@ -18,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Trash2,
   ShieldCheck,
   SlidersHorizontal,
   X,
@@ -31,6 +30,8 @@ const btn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border
 const btnSoft = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/14 bg-white/[0.07] px-3 text-xs text-white transition hover:bg-white/[0.11] disabled:cursor-not-allowed disabled:opacity-50";
 const primaryBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const iconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50";
+const dangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/35 bg-rose-600 text-white shadow-[0_7px_18px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
+const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white shadow-[0_7px_18px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20";
 const select = "h-10 w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20";
 const label = "grid min-w-0 gap-1.5 text-xs text-white/65";
@@ -183,12 +184,6 @@ function escapeHtml(value: unknown) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function safeCsv(value: unknown) {
-  const text = String(value ?? "");
-  if (/[;\n\r"]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -372,41 +367,6 @@ function printDetail(detail: TransferDocumentDetail) {
   }));
 }
 
-function downloadDetailCsv(detail: TransferDocumentDetail) {
-  const rows = [
-    ["Număr document", detail.document.document_number],
-    ["Data emiterii", roDateTime(detail.document.created_at)],
-    ["Gestiune predătoare", detail.document.from_location_summary || ""],
-    ["Gestiune primitoare", detail.document.to_location_summary || ""],
-    ["Observații", detail.document.note || ""],
-    [],
-    ["Nr. crt.", "Denumire produs", "Marcă", "Categorie", "Cod produs", "Cod de bare", "Culoare", "Mărime", "Gestiune predătoare", "Gestiune primitoare", "Cantitate"],
-    ...detail.lines.map((line, index) => [
-      index + 1,
-      line.product_title || "",
-      line.brand_name || "",
-      line.category_name || "",
-      line.product_code || "",
-      line.barcode || "",
-      line.color_name || "",
-      line.size || "",
-      line.from_location_name || "",
-      line.to_location_name || "",
-      qty(line.qty),
-    ]),
-  ];
-  const csv = "\ufeff" + rows.map((row) => row.map(safeCsv).join(";")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `proces_verbal_${detail.document.document_number.replace(/[^a-zA-Z0-9._-]+/g, "_")}.csv`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
-
 function SummaryCard({ labelText, value, hint, tone = "neutral" }: { labelText: string; value: React.ReactNode; hint: string; tone?: "neutral" | "green" | "amber" | "blue" }) {
   const toneClass = tone === "green"
     ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/13"
@@ -441,6 +401,8 @@ export default function AllInProductMoves() {
   const [settingsDraft, setSettingsDraft] = useState<TransferDocumentSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TransferDocumentListItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const loadSettings = useCallback(async () => {
     const result = await fetchJson<{ settings: TransferDocumentSettings }>("/stock-transfer-documents/settings");
@@ -483,16 +445,17 @@ export default function AllInProductMoves() {
   }, [loadSettings]);
 
   useEffect(() => {
-    if (!detail && !settingsOpen) return;
+    if (!detail && !settingsOpen && !deleteTarget) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (settingsOpen) setSettingsOpen(false);
+      if (deleteTarget && !deleting) setDeleteTarget(null);
+      else if (settingsOpen) setSettingsOpen(false);
       else setDetail(null);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [detail, settingsOpen]);
+  }, [deleteTarget, deleting, detail, settingsOpen]);
 
   const openDetail = useCallback(async (item: TransferDocumentListItem) => {
     setDetailLoading(true);
@@ -521,12 +484,30 @@ export default function AllInProductMoves() {
     }
   }
 
-  async function csvItem(item: TransferDocumentListItem) {
+  function requestPermanentDelete(item: TransferDocumentListItem) {
+    setError("");
+    setMessage("");
+    setDeleteTarget(item);
+  }
+
+  async function confirmPermanentDelete() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setError("");
+    setMessage("");
     try {
-      const current = await ensureDetail(item);
-      downloadDetailCsv(current);
-    } catch (csvError: any) {
-      setError(csvError?.message || "A CSV export nem sikerült.");
+      await fetchJson<{ ok: boolean }>(`/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}`, {
+        method: "DELETE",
+      });
+      const deletedNumber = deleteTarget.document_number;
+      if (detail?.document.id === deleteTarget.id) setDetail(null);
+      setDeleteTarget(null);
+      setMessage(`${deletedNumber} véglegesen törölve az átadási archívumból. A készletmennyiség nem változott.`);
+      await loadList();
+    } catch (deleteError: any) {
+      setError(deleteError?.message || "A bizonylat végleges törlése nem sikerült.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -630,7 +611,7 @@ export default function AllInProductMoves() {
                   <td className="px-4 py-3 text-center"><span className="rounded-full border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2.5 py-1 text-xs text-[#d7fffd]">{qty(item.line_count)} sor • {qty(item.total_qty)} db</span></td>
                   <td className="px-4 py-3 text-white/65">{item.actor || "-"}</td>
                   <td className="max-w-[240px] px-4 py-3"><p className="truncate text-white/58" title={item.note || item.subtitle || ""}>{item.note || item.subtitle || "-"}</p></td>
-                  <td className="px-4 py-3"><div className="flex justify-end gap-1.5"><button type="button" className={btnSoft} onClick={() => void openDetail(item)}><PackageCheck size={14} /> Részletek</button><button type="button" className={iconBtn} onClick={() => void printItem(item)} title="PDF / nyomtatás"><Printer size={15} /></button><button type="button" className={iconBtn} onClick={() => void csvItem(item)} title="CSV"><FileSpreadsheet size={15} /></button></div></td>
+                  <td className="px-4 py-3"><div className="flex justify-end gap-1.5"><button type="button" className={btnSoft} onClick={() => void openDetail(item)}><PackageCheck size={14} /> Részletek</button><button type="button" className={iconBtn} onClick={() => void printItem(item)} title="PDF / nyomtatás"><Printer size={15} /></button><button type="button" className={dangerIconBtn} onClick={() => requestPermanentDelete(item)} title="Végleges törlés" aria-label={`${item.document_number} végleges törlése`}><Trash2 size={15} /></button></div></td>
                 </tr>;
               })}
               {!items.length && !loading ? <tr><td colSpan={7} className="px-4 py-14 text-center text-white/45">Nincs találat a megadott szűrésre.</td></tr> : null}
@@ -645,7 +626,7 @@ export default function AllInProductMoves() {
             return <article key={item.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
               <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{item.document_number}</p><p className="mt-1 text-xs text-white/48">{dateTime(item.created_at)}</p></div><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span></div>
               <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl bg-[#354153] px-3 py-2"><span className="text-white/42">Forrás</span><p className="mt-0.5 text-white/78">{item.from_location_summary || "Conform tabelului"}</p></div><div className="rounded-xl bg-[#354153] px-3 py-2"><span className="text-white/42">Cél</span><p className="mt-0.5 text-white/78">{item.to_location_summary || "Conform tabelului"}</p></div></div>
-              <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-[#d7fffd]">{qty(item.line_count)} sor • {qty(item.total_qty)} db</span><div className="flex gap-1.5"><button type="button" className={btnSoft} onClick={() => void openDetail(item)}>Részletek</button><button type="button" className={iconBtn} onClick={() => void printItem(item)}><Printer size={15} /></button><button type="button" className={iconBtn} onClick={() => void csvItem(item)}><Download size={15} /></button></div></div>
+              <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-[#d7fffd]">{qty(item.line_count)} sor • {qty(item.total_qty)} db</span><div className="flex gap-1.5"><button type="button" className={btnSoft} onClick={() => void openDetail(item)}>Részletek</button><button type="button" className={iconBtn} onClick={() => void printItem(item)}><Printer size={15} /></button><button type="button" className={dangerIconBtn} onClick={() => requestPermanentDelete(item)} title="Végleges törlés" aria-label={`${item.document_number} végleges törlése`}><Trash2 size={15} /></button></div></div>
             </article>;
           })}
           {!items.length && !loading ? <div className="rounded-2xl border border-white/12 bg-white/[0.05] p-8 text-center text-sm text-white/45">Nincs találat.</div> : null}
@@ -664,7 +645,7 @@ export default function AllInProductMoves() {
       <div className="flex max-h-[95vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
           <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><FileText size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">Proces-verbal részletei</p><h2 className="mt-0.5 truncate text-[22px]">{detail.document.document_number}</h2><p className="mt-1 truncate text-xs text-white/58">{detail.document.subtitle || "Transfer intern de stoc"}</p></div></div>
-          <div className="flex flex-wrap gap-2"><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button><button type="button" className={btnSoft} onClick={() => downloadDetailCsv(detail)}><FileSpreadsheet size={15} /> CSV</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+          <div className="flex flex-wrap gap-2"><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button><button type="button" className={dangerBtn} onClick={() => requestPermanentDelete(detail.document)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-3.5">
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-6">
@@ -684,6 +665,20 @@ export default function AllInProductMoves() {
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/42"><span>ESC: bezárás • a PDF román nyelvű hivatalos átadás-átvételi formátum</span><button type="button" className={btnSoft} onClick={() => setDetail(null)}><X size={14} /> Bezárás</button></div>
+      </div>
+    </div> : null}
+
+    {deleteTarget ? <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !deleting) setDeleteTarget(null); }}>
+      <div className="w-full max-w-xl overflow-hidden rounded-[24px] border border-rose-300/25 bg-[#4b5362] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+        <div className="flex items-start justify-between gap-3 border-b border-rose-300/18 bg-gradient-to-r from-[#3a2633] via-[#4b3342] to-rose-700/70 px-4 py-3.5">
+          <div className="flex items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/30 bg-rose-500/18 text-rose-50"><Trash2 size={21} /></span><div><p className="text-[10px] uppercase tracking-[0.18em] text-rose-100/65">Végleges törlés</p><h2 className="mt-0.5 text-xl text-white">{deleteTarget.document_number}</h2><p className="mt-1 text-xs text-white/55">{deleteTarget.isLegacy ? "Régi átadás" : "Hivatalos proces-verbal"}</p></div></div>
+          <button type="button" className={iconBtn} disabled={deleting} onClick={() => setDeleteTarget(null)} aria-label="Bezárás"><X size={16} /></button>
+        </div>
+        <div className="space-y-3 p-4">
+          <div className="rounded-2xl border border-rose-200/22 bg-rose-500/10 px-4 py-3 text-sm leading-6 text-rose-50">A bizonylat eltűnik az átadási archívumból, és innen nem állítható vissza. <strong>A készletmennyiséget és az üzletek közötti tényleges készletállapotot a törlés nem módosítja.</strong></div>
+          <div className="grid gap-2 rounded-2xl border border-white/12 bg-white/[0.05] p-3 text-xs sm:grid-cols-2"><div><span className="text-white/42">Útvonal</span><p className="mt-1 text-white/78">{deleteTarget.from_location_summary || "-"} → {deleteTarget.to_location_summary || "-"}</p></div><div><span className="text-white/42">Tartalom</span><p className="mt-1 text-white/78">{qty(deleteTarget.line_count)} sor • {qty(deleteTarget.total_qty)} db</p></div></div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/12 bg-[#303a4c] px-4 py-3"><button type="button" className={btnSoft} disabled={deleting} onClick={() => setDeleteTarget(null)}>Mégse</button><button type="button" className={dangerBtn} disabled={deleting} onClick={() => void confirmPermanentDelete()}><Trash2 size={15} /> {deleting ? "Törlés..." : "Véglegesen törlöm"}</button></div>
       </div>
     </div> : null}
 
