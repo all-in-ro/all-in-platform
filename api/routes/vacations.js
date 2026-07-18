@@ -254,14 +254,13 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     }
   });
 
-  // GET /api/admin/vacations/request.pdf?employee=...&dayFrom=YYYY-MM-DD&dayTo=YYYY-MM-DD&note=...
+  // GET /api/admin/vacations/request.pdf?employee=...&dayFrom=YYYY-MM-DD&dayTo=YYYY-MM-DD
   router.get("/request.pdf", requireAdminOrSecret, async (req, res) => {
     try {
       await ensureTables();
       const employee = norm(req.query.employee);
       const dayFrom = norm(req.query.dayFrom);
       const dayTo = norm(req.query.dayTo || req.query.dayFrom);
-      const note = norm(req.query.note);
       if (!employee) return res.status(400).json({ error: "employee required" });
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dayFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dayTo)) {
         return res.status(400).json({ error: "dayFrom/dayTo must be YYYY-MM-DD" });
@@ -330,15 +329,11 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       const muted = "#64748b";
       const border = "#d5e2df";
       const pale = "#f2f8f7";
-      const lighter = "#f8fafb";
 
       const requestText = `Subsemnatul/Subsemnata ${employee}, va rog sa aprobati efectuarea concediului de odihna in perioada ${roDate(dayFrom)} - ${roDate(dayTo)}.`;
       doc.font(fontRegular).fontSize(9.5);
       const requestHeight = doc.heightOfString(requestText, { width: contentWidth, lineGap: 2 });
-      const noteTextWidth = contentWidth - 112;
-      const noteHeight = note
-        ? Math.min(68, Math.max(32, doc.heightOfString(note, { width: noteTextWidth, lineGap: 2 }) + 18))
-        : 0;
+      // The internal note remains stored in AllIn, but is intentionally not printed on the official request.
       const declaration = "Declar ca am luat la cunostinta obligatia de a reveni la serviciu in prima zi lucratoare dupa incheierea perioadei aprobate.";
       doc.font(fontRegular).fontSize(8.8);
       const declarationHeight = Math.max(38, doc.heightOfString(declaration, { width: contentWidth - 24, lineGap: 2 }) + 18);
@@ -349,8 +344,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       const requestY = 188;
       const cardY = requestY + requestHeight + 17;
       const cardHeight = 106;
-      const noteY = cardY + cardHeight + 12;
-      const declarationY = noteY + (note ? noteHeight + 12 : 0);
+      const declarationY = cardY + cardHeight + 12;
       const dateY = declarationY + declarationHeight + 14;
       const signatureTitleY = dateY + 46;
       const signatureLineY = signatureTitleY + 42;
@@ -366,20 +360,28 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       doc.restore();
 
       // Company header.
-      doc.font(fontBold).fontSize(12.5).fillColor(darkTeal)
-        .text("TITAN EURO-COM SRL", contentX, headerY, { width: contentWidth * 0.7 });
-      doc.font(fontRegular).fontSize(8.2).fillColor(muted)
-        .text("CUI: RO17495362  |  Nr. Reg. Com.: J19/420/2005", contentX, headerY + 18, { width: contentWidth * 0.72 });
-      doc.text("Str. Mihail Sadoveanu nr. 33, Miercurea-Ciuc, jud. Harghita", contentX, headerY + 31, { width: contentWidth * 0.78 });
+      const registryWidth = 154;
+      const registryX = contentX + contentWidth - registryWidth;
+      const companyHeaderWidth = contentWidth - registryWidth - 18;
 
-      const topBadgeWidth = 96;
-      const topBadgeX = contentX + contentWidth - topBadgeWidth;
+      doc.font(fontBold).fontSize(12.5).fillColor(darkTeal)
+        .text("TITAN EURO-COM SRL", contentX, headerY, { width: companyHeaderWidth });
+      doc.font(fontRegular).fontSize(8.2).fillColor(muted)
+        .text("CUI: RO17495362  |  Nr. Reg. Com.: J19/420/2005", contentX, headerY + 18, { width: companyHeaderWidth });
+      doc.font(fontRegular).fontSize(7.8).fillColor(muted)
+        .text("Str. Mihail Sadoveanu nr. 33, Miercurea-Ciuc, jud. Harghita", contentX, headerY + 31, { width: companyHeaderWidth });
+
+      // Official registration area, completed by the company when the request is filed.
       doc.save();
-      doc.roundedRect(topBadgeX, headerY + 1, topBadgeWidth, 24, 6)
+      doc.roundedRect(registryX, headerY + 1, registryWidth, 40, 6)
         .fillAndStroke(pale, teal);
       doc.restore();
-      doc.font(fontBold).fontSize(7.4).fillColor(darkTeal)
-        .text("CERERE INTERNA", topBadgeX, headerY + 9, { width: topBadgeWidth, align: "center" });
+      doc.font(fontBold).fontSize(7.2).fillColor(darkTeal)
+        .text("NR. DE INREGISTRARE", registryX + 8, headerY + 7, { width: registryWidth - 16, align: "center" });
+      doc.font(fontRegular).fontSize(8.2).fillColor(ink)
+        .text("Nr. ______________", registryX + 10, headerY + 21, { width: registryWidth - 20 });
+      doc.font(fontRegular).fontSize(7.8).fillColor(muted)
+        .text("Data ____ / ____ / ________", registryX + 10, headerY + 31, { width: registryWidth - 20 });
 
       doc.moveTo(contentX, headerY + 50)
         .lineTo(contentX + contentWidth, headerY + 50)
@@ -438,25 +440,12 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       doc.font(fontRegular).fontSize(7.1).fillColor(muted)
         .text(`PROGRAM: ${schedule}`, contentX + 14, cardY + 95, { width: contentWidth - 28 });
 
-      let nextY = noteY;
-      if (note) {
-        doc.save();
-        doc.roundedRect(contentX, nextY, contentWidth, noteHeight, 6)
-          .fillAndStroke(lighter, border);
-        doc.restore();
-        doc.font(fontRegular).fontSize(7.1).fillColor(muted)
-          .text("OBSERVATII", contentX + 12, nextY + 11, { width: 82 });
-        doc.font(fontRegular).fontSize(8.8).fillColor(ink)
-          .text(note, contentX + 100, nextY + 10, { width: noteTextWidth, lineGap: 2 });
-        nextY += noteHeight + 12;
-      }
-
       doc.save();
-      doc.roundedRect(contentX, nextY, contentWidth, declarationHeight, 6)
+      doc.roundedRect(contentX, declarationY, contentWidth, declarationHeight, 6)
         .fillAndStroke("#fbfcfc", border);
       doc.restore();
       doc.font(fontRegular).fontSize(8.8).fillColor(ink)
-        .text(declaration, contentX + 12, nextY + 10, { width: contentWidth - 24, lineGap: 2 });
+        .text(declaration, contentX + 12, declarationY + 10, { width: contentWidth - 24, lineGap: 2 });
 
       doc.font(fontRegular).fontSize(9).fillColor(ink)
         .text(`Data cererii: ${generated}`, contentX, dateY, { width: contentWidth });
