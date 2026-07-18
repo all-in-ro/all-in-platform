@@ -1,5 +1,10 @@
 import express from "express";
 import { createHash } from "node:crypto";
+import {
+  createAifStockTransferDocument,
+  ensureAifStockTransferDocumentSchema,
+  registerAifStockTransferDocumentRoutes,
+} from "../lib/aifStockTransferDocuments.js";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
   listAifShopifyInboundEvents,
@@ -7863,6 +7868,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     ).slice(0, 200);
     if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletmozgatási sor." });
 
+    try {
+      await ensureAifStockTransferDocumentSchema(pool);
+    } catch (schemaError) {
+      console.error("AIF stock transfer document schema failed", schemaError);
+      return res.status(500).json({
+        error: "A hivatalos transferbizonylat-regiszter előkészítése nem sikerült.",
+        code: schemaError?.code || "stock_transfer_document_schema_failed",
+      });
+    }
+
     if (idempotencyKey) {
       try {
         await ensureAifStockTransferIdempotencySchema();
@@ -7952,11 +7967,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (qty === null || qty <= 0) throw Object.assign(new Error(`A(z) ${index + 1}. sor mennyisége érvénytelen.`), { statusCode: 400 });
 
         const variant = await client.query(
-          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status,
-                  m.title_ro, b.name AS brand_name
+          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.color_code, v.image_url, v.status,
+                  m.title_ro, m.model_code, m.product_type,
+                  b.name AS brand_name,
+                  c.name_ro AS category_name,
+                  sc.supplier_product_code
            FROM aif_product_variants v
            JOIN aif_product_models m ON m.id=v.model_id
            LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN aif_categories c ON c.id=m.category_id
+           LEFT JOIN LATERAL (
+             SELECT x.supplier_product_code
+             FROM aif_variant_supplier_codes x
+             WHERE x.variant_id=v.id AND x.is_active=true
+             ORDER BY x.updated_at DESC
+             LIMIT 1
+           ) sc ON true
            WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
            FOR UPDATE OF v`,
           [variantInput]
@@ -8065,9 +8091,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         movedItems.push({
           variantId: variantRow.id,
           title: variantRow.title_ro,
+          brand: variantRow.brand_name,
+          category: variantRow.category_name || variantRow.product_type,
+          productCode: variantRow.supplier_product_code || variantRow.model_code || variantRow.internal_sku,
           barcode: variantRow.barcode,
+          color: variantRow.color_name || variantRow.color_code,
+          size: variantRow.size,
+          imageUrl: variantRow.image_url,
           qty,
+          fromLocationId: fromLocation.id,
           fromLocation: fromLocation.name || fromLocation.code,
+          toLocationId: toLocation.id,
           toLocation: toLocation.name || toLocation.code,
           sourceBefore,
           sourceAfter,
@@ -8076,11 +8110,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
+      const transferDocument = await createAifStockTransferDocument(client, {
+        transferId,
+        idempotencyKey: idempotencyKey || null,
+        title,
+        note,
+        actor,
+        items: movedItems,
+      });
+
       const responsePayload = {
         ok: true,
         duplicate: false,
         idempotencyKey: idempotencyKey || null,
         transferId,
+        documentId: transferDocument.id,
+        documentNumber: transferDocument.document_number,
+        document: {
+          id: transferDocument.id,
+          transferId: transferDocument.transfer_id,
+          documentNumber: transferDocument.document_number,
+          documentTitle: transferDocument.document_title,
+          documentSubtitle: transferDocument.document_subtitle,
+          createdAt: transferDocument.created_at,
+          lineCount: transferDocument.line_count,
+          totalQty: transferDocument.total_qty,
+        },
         title,
         lineCount: movedItems.length,
         movedRows: movedItems.length,
@@ -8114,6 +8169,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.post("/stock-transfers", requireAuthed, handleStockTransfer);
   router.post("/stock/transfers", requireAuthed, handleStockTransfer);
+  registerAifStockTransferDocumentRoutes(router, { pool, requireAuthed, requireAdminOrSecret });
 
 
   async function listStockMovements(req, res) {
