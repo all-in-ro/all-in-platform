@@ -2930,6 +2930,89 @@ function dedupeVariantHistoryEvents(events: VariantHistoryEvent[]) {
   });
 }
 
+
+function historyIsTransferEvent(event: VariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const source = String(event.source_type || "").toLowerCase();
+  const reason = String(event.raw?.reason || "").toLowerCase();
+  return type === "transfer" || source.includes("stock_transfer") || reason === "stock_transfer";
+}
+
+function logicalWarehouseVariantHistoryEvents(rows: VariantHistoryEvent[]) {
+  const regular: VariantHistoryEvent[] = [];
+  const transferGroups = new Map<string, VariantHistoryEvent[]>();
+
+  for (const event of rows || []) {
+    if (!historyIsTransferEvent(event)) {
+      regular.push(event);
+      continue;
+    }
+    const raw = event.raw && typeof event.raw === "object" ? event.raw : {};
+    const transferId = firstWarehouseText(raw.transferId, raw.transfer_id);
+    const lineNo = firstWarehouseText(raw.lineNo, raw.line_no, "1");
+    const key = transferId ? `${transferId}:${lineNo}` : `movement:${event.id}`;
+    const group = transferGroups.get(key) || [];
+    group.push(event);
+    transferGroups.set(key, group);
+  }
+
+  const transfers = Array.from(transferGroups.entries()).map(([key, group]) => {
+    const sourceLeg = group.find((event) => String(event.raw?.side || "").toLowerCase() === "source")
+      || group.find((event) => n(event.qty_delta) < 0)
+      || group[0];
+    const targetLeg = group.find((event) => String(event.raw?.side || "").toLowerCase() === "target")
+      || group.find((event) => n(event.qty_delta) > 0)
+      || group[group.length - 1]
+      || sourceLeg;
+    const newest = group.slice().sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at))[0] || sourceLeg;
+    const sourceRaw = sourceLeg?.raw && typeof sourceLeg.raw === "object" ? sourceLeg.raw : {};
+    const targetRaw = targetLeg?.raw && typeof targetLeg.raw === "object" ? targetLeg.raw : {};
+    const qty = Math.max(0, ...group.map((event) => Math.abs(n(event.qty_delta))));
+    const fromLocation = firstWarehouseText(
+      sourceRaw.fromLocationName,
+      targetRaw.fromLocationName,
+      sourceLeg?.from_location_name,
+      targetLeg?.from_location_name,
+      sourceLeg?.location_name,
+    );
+    const toLocation = firstWarehouseText(
+      sourceRaw.toLocationName,
+      targetRaw.toLocationName,
+      sourceLeg?.to_location_name,
+      targetLeg?.to_location_name,
+      targetLeg?.location_name,
+    );
+
+    return {
+      ...sourceLeg,
+      id: `logical-transfer:${key}`,
+      created_at: newest?.created_at || sourceLeg?.created_at || null,
+      event_type: "transfer",
+      direction: "adjust",
+      movement_type: "transfer",
+      source_type: "stock_transfer",
+      qty_delta: qty,
+      qty_before: sourceLeg?.qty_before ?? null,
+      qty_after: targetLeg?.qty_after ?? null,
+      from_location_name: fromLocation || sourceLeg?.from_location_name || null,
+      to_location_name: toLocation || targetLeg?.to_location_name || null,
+      location_name: fromLocation || sourceLeg?.location_name || null,
+      effective_buy_price: sourceLeg?.effective_buy_price ?? targetLeg?.effective_buy_price ?? null,
+      effective_sell_price: sourceLeg?.effective_sell_price ?? targetLeg?.effective_sell_price ?? null,
+      raw: {
+        ...targetRaw,
+        ...sourceRaw,
+        logicalTransfer: true,
+        pairedMovementIds: group.map((event) => event.id),
+        pairedMovementCount: group.length,
+      },
+    } satisfies VariantHistoryEvent;
+  });
+
+  return [...regular, ...transfers]
+    .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
+}
+
 function priceHistoryEventsFromItem(item?: (InventoryItem & Record<string, any>) | null): VariantHistoryEvent[] {
   const entries = warehousePriceHistoryFromAttributes(item?.attributes);
   return entries.map((entry) => {
@@ -2972,8 +3055,9 @@ function priceHistoryEventsFromItem(item?: (InventoryItem & Record<string, any>)
 
 function mergeVariantHistoryPriceEvents(data: VariantHistoryResponse): VariantHistoryResponse {
   const priceEvents = priceHistoryEventsFromItem(data.item || null);
-  const events = dedupeVariantHistoryEvents([...(data.events || []), ...priceEvents])
-    .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
+  const events = logicalWarehouseVariantHistoryEvents(
+    dedupeVariantHistoryEvents([...(data.events || []), ...priceEvents])
+  );
   return { ...data, events };
 }
 
@@ -2984,7 +3068,7 @@ function historyEventMeta(event: VariantHistoryEvent) {
   const reason = String(event.raw?.reason || "").toLowerCase();
   const movement = String(event.movement_type || "").toLowerCase();
   const isPrice = type === "price" || source.includes("price") || movement.includes("price");
-  const isTransfer = type === "transfer" || source.includes("transfer") || reason.includes("transfer") || source.includes("redistribution");
+  const isTransfer = historyIsTransferEvent(event) || source.includes("redistribution");
   const isInventory = type === "inventory" || source.includes("inventory");
   const isIncoming = type === "incoming" || direction === "in";
   const isOutgoing = type === "outgoing" || direction === "out";
@@ -3285,6 +3369,7 @@ function VariantHistoryPanel({
                 const file = event.source_file_name ? `Forrás: ${event.source_file_name}` : "";
                 const note = historyEventNote(event);
                 const isPriceEvent = historyIsPriceEvent(event);
+                const isTransferEvent = historyIsTransferEvent(event);
                 const priceChangedFields = priceChangeRowsForHistory(event).map((row) => row.label).join(", ");
                 return (
                   <div key={event.id} className={`relative overflow-hidden rounded-2xl border p-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.06)] ${meta.card}`}>
@@ -3297,7 +3382,7 @@ function VariantHistoryPanel({
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.cls}`}><span className={`h-2 w-2 rounded-full ${meta.dot}`} />{meta.label}</span>
-                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : historyQty(event.qty_delta, true)}</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[12px] text-slate-700">{isPriceEvent ? "Ár" : historyQty(event.qty_delta, !isTransferEvent)}</span>
                           <span className="rounded-full border border-slate-200 bg-white/100 px-2.5 py-1 text-[11px] text-slate-500">{historySourceLabel(event)}</span>
                         </div>
                         <div className="mt-2 grid gap-1.5 text-[12px] leading-snug text-slate-600 sm:grid-cols-2">
@@ -3305,6 +3390,11 @@ function VariantHistoryPanel({
                             <>
                               <div className="rounded-xl bg-white px-3 py-2">Módosított mező: <span className="text-slate-800">{priceChangedFields || "Ár"}</span></div>
                               <div className="rounded-xl bg-white px-3 py-2">Művelet: <span className="text-slate-800">Ár módosítás</span></div>
+                            </>
+                          ) : isTransferEvent ? (
+                            <>
+                              <div className="rounded-xl bg-white px-3 py-2">Honnan / hová: <span className="text-slate-800">{transferText}</span></div>
+                              <div className="rounded-xl bg-white px-3 py-2">Áthelyezett mennyiség: <span className="text-slate-800">{historyQty(Math.abs(n(event.qty_delta)))}</span></div>
                             </>
                           ) : (
                             <>
@@ -3703,14 +3793,40 @@ async function apiVariantStockUpdate(
   });
 }
 
-async function apiStockTransfer(payload: {
+type StockTransferApiPayload = {
   title?: string;
   note?: string;
+  idempotencyKey: string;
   lines: Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }>;
-}) {
-  return fetchJSON<{ ok: true; transferId: string; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; items?: any[] }>("/api/aif/stock-transfers", {
+};
+
+function createStockTransferIdempotencyKey() {
+  if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `stock-transfer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function stockTransferPayloadFingerprint(payload: Omit<StockTransferApiPayload, "idempotencyKey">) {
+  return JSON.stringify({
+    title: String(payload.title || "").trim(),
+    note: String(payload.note || "").trim(),
+    lines: payload.lines.map((line) => ({
+      variantId: String(line.variantId || "").trim(),
+      fromLocationId: String(line.fromLocationId || "").trim(),
+      toLocationId: String(line.toLocationId || "").trim(),
+      qty: Number(line.qty || 0),
+    })),
+  });
+}
+
+async function apiStockTransfer(payload: StockTransferApiPayload) {
+  return fetchJSON<{ ok: true; duplicate?: boolean; idempotencyKey?: string | null; transferId: string; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; items?: any[] }>("/api/aif/stock-transfers", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": payload.idempotencyKey,
+    },
     body: JSON.stringify(payload),
   });
 }
@@ -4178,6 +4294,9 @@ export default function AllInWarehouse() {
   const [stockMoveBulkTo, setStockMoveBulkTo] = useState("");
   const [stockMoveConfirmOpen, setStockMoveConfirmOpen] = useState(false);
   const [stockMoveSaving, setStockMoveSaving] = useState(false);
+  const stockMoveSubmitLockRef = useRef(false);
+  const stockMoveIdempotencyKeyRef = useRef("");
+  const stockMovePayloadFingerprintRef = useRef("");
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
   const [labelWidth, setLabelWidth] = useState("40");
@@ -6401,38 +6520,62 @@ export default function AllInWarehouse() {
     printWindow.requestAnimationFrame(() => printWindow.requestAnimationFrame(runPrint));
   }
 
-  function requestSaveSelectedMoveTransfers() {
-    if (!moveCanSave) {
-      setMessage(moveInvalidCount ? `${moveInvalidCount} készletmozgatási sor még hibás. Javítsd őket mentés előtt.` : "Nincs menthető készletmozgatás.");
-      return;
-    }
-    setStockMoveConfirmOpen(true);
-  }
-
-  async function saveSelectedMoveTransfers() {
-    if (!moveCanSave) {
-      setMessage(moveInvalidCount ? `${moveInvalidCount} készletmozgatási sor még hibás. Javítsd őket mentés előtt.` : "Nincs menthető készletmozgatás.");
-      return;
-    }
-
-    const rowsToMove = moveValidRows.map((row) => ({
+  function selectedMoveTransferPayload() {
+    const lines = moveValidRows.map((row) => ({
       variantId: row.variantId,
       fromLocationId: row.fromLocationId,
       toLocationId: row.toLocationId,
       qty: row.qty,
     }));
-    const qtyToMove = rowsToMove.reduce((sum, row) => sum + row.qty, 0);
-    setStockMoveConfirmOpen(false);
+    return {
+      title: stockMoveDocumentTitle.trim() || "Készlet átadási lista",
+      note: stockMoveNote.trim(),
+      lines,
+    };
+  }
 
+  function ensureStockMoveIdempotencyKey(payload: ReturnType<typeof selectedMoveTransferPayload>) {
+    const fingerprint = stockTransferPayloadFingerprint(payload);
+    if (
+      !stockMoveIdempotencyKeyRef.current ||
+      stockMovePayloadFingerprintRef.current !== fingerprint
+    ) {
+      stockMoveIdempotencyKeyRef.current = createStockTransferIdempotencyKey();
+      stockMovePayloadFingerprintRef.current = fingerprint;
+    }
+    return stockMoveIdempotencyKeyRef.current;
+  }
+
+  function requestSaveSelectedMoveTransfers() {
+    if (!moveCanSave || stockMoveSubmitLockRef.current) {
+      setMessage(moveInvalidCount ? `${moveInvalidCount} készletmozgatási sor még hibás. Javítsd őket mentés előtt.` : stockMoveSubmitLockRef.current ? "A készletmozgatás mentése már folyamatban van." : "Nincs menthető készletmozgatás.");
+      return;
+    }
+    ensureStockMoveIdempotencyKey(selectedMoveTransferPayload());
+    setStockMoveConfirmOpen(true);
+  }
+
+  async function saveSelectedMoveTransfers() {
+    // A React state csak a következő rendernél tiltja le a gombot. A ref az első
+    // kattintás pillanatában zár, így gyors dupla kattintással sem indul két POST.
+    if (stockMoveSubmitLockRef.current) return;
+    if (!moveCanSave) {
+      setMessage(moveInvalidCount ? `${moveInvalidCount} készletmozgatási sor még hibás. Javítsd őket mentés előtt.` : "Nincs menthető készletmozgatás.");
+      return;
+    }
+
+    const payload = selectedMoveTransferPayload();
+    const rowsToMove = payload.lines;
+    const qtyToMove = rowsToMove.reduce((sum, row) => sum + row.qty, 0);
+    const idempotencyKey = ensureStockMoveIdempotencyKey(payload);
+
+    stockMoveSubmitLockRef.current = true;
     setStockMoveSaving(true);
+    setStockMoveConfirmOpen(false);
     setMessage("");
     try {
-      const result = await apiStockTransfer({
-        title: stockMoveDocumentTitle.trim() || "Készlet átadási lista",
-        note: stockMoveNote.trim(),
-        lines: rowsToMove,
-      });
-      notifyStockMovesChanged({ source: "warehouse_transfer", transferId: result.transferId });
+      const result = await apiStockTransfer({ ...payload, idempotencyKey });
+      notifyStockMovesChanged({ source: "warehouse_transfer", transferId: result.transferId, duplicate: Boolean(result.duplicate) });
       await load();
       const movedLines = Number(result.movedLines ?? result.movedRows ?? result.lineCount ?? rowsToMove.length);
       const movedQty = Number(result.movedQty ?? result.totalQty ?? qtyToMove);
@@ -6454,10 +6597,19 @@ export default function AllInWarehouse() {
       setStockMoveBulkFrom("");
       setStockMoveBulkTo("");
       setStockMoveConfirmOpen(false);
-      setMessage(`Készletmozgatás rögzítve: ${movedLines} sor, ${movedQty} db. A mozgatott sorokat levettem a készletmozgatási listáról, hogy ne lehessen véletlenül még egyszer ugyanazt átküldeni.`);
+      stockMoveIdempotencyKeyRef.current = "";
+      stockMovePayloadFingerprintRef.current = "";
+      setMessage(
+        result.duplicate
+          ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
+          : `Készletmozgatás rögzítve: ${movedLines} sor, ${movedQty} db. A mozgatott sorokat levettem a készletmozgatási listáról, hogy ne lehessen véletlenül még egyszer ugyanazt átküldeni.`
+      );
     } catch (e: any) {
+      // Hálózati bizonytalanságnál ugyanaz a kulcs marad. Újrapróbáláskor a backend
+      // visszaadja a korábbi eredményt, de nem írja át még egyszer a készletet.
       setMessage(e?.message || "A készletmozgatás mentése nem sikerült.");
     } finally {
+      stockMoveSubmitLockRef.current = false;
       setStockMoveSaving(false);
     }
   }
