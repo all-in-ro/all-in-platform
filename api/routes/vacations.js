@@ -78,6 +78,92 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     return Number(result.rowCount || 0);
   }
 
+  function bucharestYear(date = new Date()) {
+    return Number(new Intl.DateTimeFormat("en-CA", { year: "numeric", timeZone: "Europe/Bucharest" }).format(date));
+  }
+
+  function formatVacationRegistryNumber(series, year, sequenceNumber, digits) {
+    const safeSeries = String(series || "CO").trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, "") || "CO";
+    const width = Math.min(9, Math.max(3, Number(digits) || 5));
+    return `${safeSeries}/${year}/${String(sequenceNumber).padStart(width, "0")}`;
+  }
+
+  async function ensureVacationRequestRegistration({ employee, dayFrom, dayTo, createdBy }) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      let existing = await client.query(
+        `SELECT registry_number AS "registryNumber", registered_at AS "registeredAt"
+         FROM allin_vacation_requests
+         WHERE employee_name = $1 AND day_from = $2::date AND day_to = $3::date
+         ORDER BY registered_at ASC
+         LIMIT 1`,
+        [employee, dayFrom, dayTo]
+      );
+      if (existing.rowCount) {
+        await client.query("COMMIT");
+        return existing.rows[0];
+      }
+
+      const settingsResult = await client.query(
+        `SELECT series, current_year AS "currentYear", next_number AS "nextNumber", digits
+         FROM allin_vacation_request_numbering
+         WHERE id = 1
+         FOR UPDATE`
+      );
+      const settings = settingsResult.rows[0] || { series: "CO", currentYear: bucharestYear(), nextNumber: 1, digits: 5 };
+
+      // Recheck after acquiring the numbering lock. This prevents two simultaneous prints
+      // of the same request from consuming two official numbers.
+      existing = await client.query(
+        `SELECT registry_number AS "registryNumber", registered_at AS "registeredAt"
+         FROM allin_vacation_requests
+         WHERE employee_name = $1 AND day_from = $2::date AND day_to = $3::date
+         ORDER BY registered_at ASC
+         LIMIT 1`,
+        [employee, dayFrom, dayTo]
+      );
+      if (existing.rowCount) {
+        await client.query("COMMIT");
+        return existing.rows[0];
+      }
+
+      const currentYear = bucharestYear();
+      const sequenceNumber = Number(settings.currentYear) === currentYear ? Math.max(1, Number(settings.nextNumber) || 1) : 1;
+      const registryNumber = formatVacationRegistryNumber(settings.series, currentYear, sequenceNumber, settings.digits);
+      const id = crypto.randomUUID();
+
+      const inserted = await client.query(
+        `INSERT INTO allin_vacation_requests (
+           id, employee_name, day_from, day_to, registry_number, registry_year,
+           sequence_number, created_by
+         )
+         VALUES ($1,$2,$3::date,$4::date,$5,$6,$7,$8)
+         RETURNING registry_number AS "registryNumber", registered_at AS "registeredAt"`,
+        [id, employee, dayFrom, dayTo, registryNumber, currentYear, sequenceNumber, createdBy]
+      );
+
+      await client.query(
+        `UPDATE allin_vacation_request_numbering
+         SET current_year = $1,
+             next_number = $2,
+             updated_at = now(),
+             updated_by = $3
+         WHERE id = 1`,
+        [currentYear, sequenceNumber + 1, createdBy]
+      );
+
+      await client.query("COMMIT");
+      return inserted.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   let ready = false;
   async function ensureTables() {
     if (ready) return;
@@ -151,6 +237,40 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       INSERT INTO allin_vacation_settings (id, working_days)
       VALUES (1, ARRAY[1,2,3,4,5]::smallint[])
       ON CONFLICT (id) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS allin_vacation_request_numbering (
+        id smallint PRIMARY KEY CHECK (id = 1),
+        series text NOT NULL DEFAULT 'CO',
+        current_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM now())::integer,
+        next_number integer NOT NULL DEFAULT 1 CHECK (next_number > 0),
+        digits smallint NOT NULL DEFAULT 5 CHECK (digits BETWEEN 3 AND 9),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        updated_by text NULL
+      );
+
+      INSERT INTO allin_vacation_request_numbering (id, series, current_year, next_number, digits)
+      VALUES (1, 'CO', EXTRACT(YEAR FROM now())::integer, 1, 5)
+      ON CONFLICT (id) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS allin_vacation_requests (
+        id uuid PRIMARY KEY,
+        employee_name text NOT NULL,
+        day_from date NOT NULL,
+        day_to date NOT NULL,
+        registry_number text NOT NULL UNIQUE,
+        registry_year integer NOT NULL,
+        sequence_number integer NOT NULL,
+        registered_at timestamptz NOT NULL DEFAULT now(),
+        created_by text NULL,
+        CHECK (day_to >= day_from),
+        UNIQUE (employee_name, day_from, day_to)
+      );
+
+      CREATE INDEX IF NOT EXISTS allin_vacation_requests_employee_period_idx
+        ON allin_vacation_requests (employee_name, day_from DESC, day_to DESC);
+
+      CREATE INDEX IF NOT EXISTS allin_vacation_requests_registered_idx
+        ON allin_vacation_requests (registered_at DESC);
     `);
     const settings = await loadVacationSettings();
     await cleanupDisabledVacationRows(settings.workingDays);
@@ -270,6 +390,8 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       if (!info.calendarDays || info.workingDays <= 0) {
         return res.status(400).json({ error: "The selected period contains no working days" });
       }
+      const createdBy = String(req.session?.actor || req.session?.role || "ADMIN");
+      const registration = await ensureVacationRequestRegistration({ employee, dayFrom, dayTo, createdBy });
 
       let PDFDocument;
       try {
@@ -315,6 +437,13 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
         month: "2-digit",
         year: "numeric",
       }).format(new Date());
+      const registeredDate = new Intl.DateTimeFormat("ro-RO", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        timeZone: "Europe/Bucharest",
+      }).format(new Date(registration.registeredAt));
+      const registryNumber = String(registration.registryNumber || "-");
       const schedule = settings.dayNamesRo.join(" - ");
 
       const pageWidth = doc.page.width;
@@ -371,17 +500,18 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
       doc.font(fontRegular).fontSize(7.8).fillColor(muted)
         .text("Str. Mihail Sadoveanu nr. 33, Miercurea-Ciuc, jud. Harghita", contentX, headerY + 31, { width: companyHeaderWidth });
 
-      // Official registration area, completed by the company when the request is filed.
+      // Persisted official registration number. Reprinting the same employee/period
+      // reuses the same number instead of generating another one.
       doc.save();
-      doc.roundedRect(registryX, headerY + 1, registryWidth, 40, 6)
-        .fillAndStroke(pale, teal);
+      doc.roundedRect(registryX, headerY + 1, registryWidth, 44, 6)
+        .fillAndStroke("#ffffff", border);
       doc.restore();
-      doc.font(fontBold).fontSize(7.2).fillColor(darkTeal)
-        .text("NR. DE INREGISTRARE", registryX + 8, headerY + 7, { width: registryWidth - 16, align: "center" });
-      doc.font(fontRegular).fontSize(8.2).fillColor(ink)
-        .text("Nr. ______________", registryX + 10, headerY + 21, { width: registryWidth - 20 });
-      doc.font(fontRegular).fontSize(7.8).fillColor(muted)
-        .text("Data ____ / ____ / ________", registryX + 10, headerY + 31, { width: registryWidth - 20 });
+      doc.font(fontBold).fontSize(6.8).fillColor(muted)
+        .text("NR. DE INREGISTRARE", registryX + 10, headerY + 7, { width: registryWidth - 20, align: "left" });
+      doc.font(fontBold).fontSize(10.2).fillColor(darkTeal)
+        .text(registryNumber, registryX + 10, headerY + 19, { width: registryWidth - 20, align: "left" });
+      doc.font(fontRegular).fontSize(7.2).fillColor(muted)
+        .text(`Data inregistrarii: ${registeredDate}`, registryX + 10, headerY + 34, { width: registryWidth - 20, align: "left" });
 
       doc.moveTo(contentX, headerY + 50)
         .lineTo(contentX + contentWidth, headerY + 50)
