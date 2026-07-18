@@ -149,6 +149,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_stock_transfer_document_lines (document_id, line_no)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_lines_variant_idx
           ON aif_stock_transfer_document_lines (variant_id)`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_transfer_document_deletions (
+          transfer_id text PRIMARY KEY,
+          document_number text NULL,
+          source text NOT NULL DEFAULT 'archive' CHECK (source IN ('official','legacy','archive')),
+          deleted_at timestamptz NOT NULL DEFAULT now(),
+          deleted_by text NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_deletions_deleted_idx
+          ON aif_stock_transfer_document_deletions (deleted_at DESC)`);
         return true;
       })().catch((error) => {
         aifStockTransferDocumentsSchemaPromise = null;
@@ -8066,7 +8076,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT id::text, transfer_id, document_number, series, sequence_number, sequence_year,
                 title, subtitle, note, status, actor, owner_key, line_count, total_qty,
                 from_location_summary, to_location_summary, raw, created_at, updated_at
-         FROM aif_stock_transfer_documents
+         FROM aif_stock_transfer_documents d
+         WHERE NOT EXISTS (
+           SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=d.transfer_id
+         )
          ORDER BY created_at DESC
          LIMIT 4000`
       );
@@ -8093,6 +8106,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            AND COALESCE(sm.raw->>'transferId','') <> ''
            AND NOT EXISTS (
              SELECT 1 FROM aif_stock_transfer_documents d WHERE d.transfer_id=sm.raw->>'transferId'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=sm.raw->>'transferId'
            )
          GROUP BY sm.raw->>'transferId'
          ORDER BY min(sm.created_at) DESC
@@ -8180,6 +8196,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (!id) return res.status(400).json({ error: 'document id required' });
       if (id.startsWith('legacy:')) {
         const transferId = id.slice('legacy:'.length);
+        const deleted = await pool.query(
+          `SELECT 1 FROM aif_stock_transfer_document_deletions WHERE transfer_id=$1 LIMIT 1`,
+          [transferId]
+        );
+        if (deleted.rowCount) return res.status(404).json({ error: 'A készletátadási bizonylat már törölve lett.' });
         const rows = await pool.query(
           `SELECT sm.id::text, sm.created_at, sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
                   v.id::text AS variant_id, v.internal_sku, v.barcode, v.size, v.color_name, v.image_url,
@@ -8267,6 +8288,90 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (error) {
       console.error('AIF stock transfer document detail failed', error);
       res.status(500).json({ error: 'A készletátadási bizonylat részleteinek betöltése nem sikerült.' });
+    }
+  });
+
+
+  router.delete('/stock-transfer-documents/:id', requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'document id required' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifStockTransferDocumentsSchema();
+      const deletedBy = actorFrom(req);
+
+      if (id.startsWith('legacy:')) {
+        const transferId = id.slice('legacy:'.length);
+        const movement = await client.query(
+          `SELECT min(created_at) AS created_at
+           FROM aif_stock_movements
+           WHERE source_type='stock_transfer' AND raw->>'transferId'=$1`,
+          [transferId]
+        );
+        if (!movement.rows[0]?.created_at) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'A régi készletátadás nem található.' });
+        }
+        const documentNumber = legacyAifTransferDocumentNumber(transferId, movement.rows[0].created_at);
+        await client.query(
+          `INSERT INTO aif_stock_transfer_document_deletions (
+             transfer_id, document_number, source, deleted_by, raw, deleted_at
+           )
+           VALUES ($1,$2,'legacy',$3,$4::jsonb,now())
+           ON CONFLICT (transfer_id) DO UPDATE SET
+             document_number=EXCLUDED.document_number,
+             source='legacy',
+             deleted_by=EXCLUDED.deleted_by,
+             raw=EXCLUDED.raw,
+             deleted_at=now()`,
+          [transferId, documentNumber, deletedBy, JSON.stringify({ deletedFrom: 'product_moves_archive' })]
+        );
+        await client.query('COMMIT');
+        return res.json({ ok: true, mode: 'permanently_deleted', source: 'legacy', transferId, documentNumber });
+      }
+
+      const document = await client.query(
+        `SELECT id, transfer_id, document_number
+         FROM aif_stock_transfer_documents
+         WHERE id::text=$1 OR transfer_id=$1 OR document_number=$1
+         FOR UPDATE`,
+        [id]
+      );
+      if (!document.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'A készletátadási bizonylat nem található.' });
+      }
+      const item = document.rows[0];
+      await client.query(
+        `INSERT INTO aif_stock_transfer_document_deletions (
+           transfer_id, document_number, source, deleted_by, raw, deleted_at
+         )
+         VALUES ($1,$2,'official',$3,$4::jsonb,now())
+         ON CONFLICT (transfer_id) DO UPDATE SET
+           document_number=EXCLUDED.document_number,
+           source='official',
+           deleted_by=EXCLUDED.deleted_by,
+           raw=EXCLUDED.raw,
+           deleted_at=now()`,
+        [item.transfer_id, item.document_number, deletedBy, JSON.stringify({ documentId: item.id, deletedFrom: 'product_moves_archive' })]
+      );
+      await client.query(`DELETE FROM aif_stock_transfer_documents WHERE id=$1`, [item.id]);
+      await client.query('COMMIT');
+      return res.json({
+        ok: true,
+        mode: 'permanently_deleted',
+        source: 'official',
+        transferId: item.transfer_id,
+        documentNumber: item.document_number,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF stock transfer document permanent delete failed', error);
+      return res.status(500).json({ error: error?.message || 'A készletátadási bizonylat végleges törlése nem sikerült.' });
+    } finally {
+      client.release();
     }
   });
 
