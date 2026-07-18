@@ -1,4 +1,5 @@
 import express from "express";
+import { createHash } from "node:crypto";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
   listAifShopifyInboundEvents,
@@ -42,6 +43,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   const AIF_JSON_BODY_LIMIT = "80mb";
   let aifShopifyInventorySchemaPromise = null;
+
+  let aifStockTransferIdempotencySchemaPromise = null;
+
+  function ensureAifStockTransferIdempotencySchema() {
+    if (!aifStockTransferIdempotencySchemaPromise) {
+      aifStockTransferIdempotencySchemaPromise = (async () => {
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_transfer_requests (
+          owner_key text NOT NULL,
+          idempotency_key text NOT NULL,
+          request_hash text NOT NULL,
+          status text NOT NULL DEFAULT 'processing',
+          transfer_id text NULL,
+          response jsonb NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (owner_key, idempotency_key),
+          CHECK (status IN ('processing','completed'))
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_requests_updated_idx
+          ON aif_stock_transfer_requests (updated_at DESC)`);
+        return true;
+      })().catch((error) => {
+        aifStockTransferIdempotencySchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifStockTransferIdempotencySchemaPromise;
+  }
 
   function ensureAifShopifyInventorySchema() {
     if (!aifShopifyInventorySchemaPromise) {
@@ -7806,6 +7835,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
+  function stockTransferRequestHash(rowsInput, title, note) {
+    const lines = (rowsInput || []).map((input = {}) => ({
+      variantId: text(input.variantId || input.variant_id || input.variant || input.id),
+      fromLocationId: text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id),
+      toLocationId: text(input.toLocationId || input.to_location_id || input.toLocationCode || input.to_location_code || input.to || input.targetLocationId || input.target_location_id),
+      qty: toInt(input.qty ?? input.quantity ?? input.count),
+    }));
+    return createHash("sha256")
+      .update(JSON.stringify({ title: title || null, note: note || null, lines }))
+      .digest("hex");
+  }
+
   async function handleStockTransfer(req, res) {
     const body = req.body || {};
     const rowsInput = Array.isArray(body.rows)
@@ -7817,18 +7858,86 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           : [];
     const note = emptyToNull(body.note);
     const title = emptyToNull(body.title || body.documentTitle || body.document_title);
+    const idempotencyKey = text(
+      req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key
+    ).slice(0, 200);
     if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletmozgatási sor." });
 
+    if (idempotencyKey) {
+      try {
+        await ensureAifStockTransferIdempotencySchema();
+      } catch (schemaError) {
+        console.error("AIF stock transfer idempotency schema failed", schemaError);
+        return res.status(500).json({
+          error: "A készletmozgatás ismétlésvédelmének előkészítése nem sikerült.",
+          code: schemaError?.code || "stock_transfer_idempotency_schema_failed",
+        });
+      }
+    }
+
     const client = await pool.connect();
-    const transferId = stockMovementSourceId("transfer", "batch", "stock");
     const actor = actorFrom(req);
+    const ownerKey = selectionOwnerKey(req);
+    const requestHash = idempotencyKey ? stockTransferRequestHash(rowsInput, title, note) : null;
     const movedItems = [];
     let movedQty = 0;
     let movementRows = 0;
+    let transferId = null;
 
     try {
       await client.query("BEGIN");
       try { await client.query("SELECT set_config('aif.actor', $1, true)", [actor]); } catch {}
+
+      if (idempotencyKey) {
+        const claim = await client.query(
+          `INSERT INTO aif_stock_transfer_requests (
+             owner_key, idempotency_key, request_hash, status, created_at, updated_at
+           ) VALUES ($1,$2,$3,'processing',now(),now())
+           ON CONFLICT (owner_key, idempotency_key) DO NOTHING
+           RETURNING owner_key, idempotency_key`,
+          [ownerKey, idempotencyKey, requestHash]
+        );
+
+        if (!claim.rowCount) {
+          const existing = await client.query(
+            `SELECT request_hash, status, transfer_id, response
+             FROM aif_stock_transfer_requests
+             WHERE owner_key=$1 AND idempotency_key=$2
+             FOR UPDATE`,
+            [ownerKey, idempotencyKey]
+          );
+          const row = existing.rows[0] || null;
+          if (!row) {
+            throw Object.assign(new Error("Az ismétlésvédelmi rekord nem található."), {
+              statusCode: 409,
+              code: "stock_transfer_idempotency_record_missing",
+            });
+          }
+          if (text(row.request_hash) !== text(requestHash)) {
+            throw Object.assign(new Error("Ezt az ismétlésvédelmi kulcsot már egy másik készletmozgatáshoz használták."), {
+              statusCode: 409,
+              code: "stock_transfer_idempotency_key_reused",
+            });
+          }
+          if (row.status === "completed" && row.response) {
+            const previousResponse = typeof row.response === "object" ? row.response : {};
+            await client.query("COMMIT");
+            return res.json({
+              ...previousResponse,
+              ok: true,
+              duplicate: true,
+              idempotencyKey,
+              transferId: previousResponse.transferId || row.transfer_id,
+            });
+          }
+          throw Object.assign(new Error("Ez a készletmozgatás már feldolgozás alatt van. Várj néhány másodpercet, majd frissíts."), {
+            statusCode: 409,
+            code: "stock_transfer_already_processing",
+          });
+        }
+      }
+
+      transferId = stockMovementSourceId("transfer", "batch", "stock");
 
       for (let index = 0; index < rowsInput.length; index++) {
         const input = rowsInput[index] || {};
@@ -7907,6 +8016,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const rawBase = {
           reason: "stock_transfer",
           transferId,
+          idempotencyKey: idempotencyKey || null,
           lineNo: index + 1,
           note,
           title,
@@ -7966,8 +8076,32 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
+      const responsePayload = {
+        ok: true,
+        duplicate: false,
+        idempotencyKey: idempotencyKey || null,
+        transferId,
+        title,
+        lineCount: movedItems.length,
+        movedRows: movedItems.length,
+        movedLines: movedItems.length,
+        movedQty,
+        totalQty: movedQty,
+        movements: movementRows,
+        items: movedItems,
+      };
+
+      if (idempotencyKey) {
+        await client.query(
+          `UPDATE aif_stock_transfer_requests
+           SET status='completed', transfer_id=$3, response=$4::jsonb, updated_at=now()
+           WHERE owner_key=$1 AND idempotency_key=$2`,
+          [ownerKey, idempotencyKey, transferId, JSON.stringify(responsePayload)]
+        );
+      }
+
       await client.query("COMMIT");
-      res.json({ ok: true, transferId, title, lineCount: movedItems.length, movedRows: movedItems.length, movedLines: movedItems.length, movedQty, totalQty: movedQty, movements: movementRows, items: movedItems });
+      res.json(responsePayload);
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF stock transfer failed", e);
