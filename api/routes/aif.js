@@ -1,10 +1,5 @@
 import express from "express";
 import { createHash } from "node:crypto";
-import {
-  createAifStockTransferDocument,
-  ensureAifStockTransferDocumentSchema,
-  registerAifStockTransferDocumentRoutes,
-} from "../lib/aifStockTransferDocuments.js";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
   listAifShopifyInboundEvents,
@@ -50,6 +45,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   let aifShopifyInventorySchemaPromise = null;
 
   let aifStockTransferIdempotencySchemaPromise = null;
+  let aifStockTransferDocumentsSchemaPromise = null;
 
   function ensureAifStockTransferIdempotencySchema() {
     if (!aifStockTransferIdempotencySchemaPromise) {
@@ -75,6 +71,175 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     }
     return aifStockTransferIdempotencySchemaPromise;
+  }
+
+
+  function ensureAifStockTransferDocumentsSchema() {
+    if (!aifStockTransferDocumentsSchemaPromise) {
+      aifStockTransferDocumentsSchemaPromise = (async () => {
+        await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_transfer_document_settings (
+          id smallint PRIMARY KEY DEFAULT 1 CHECK (id=1),
+          series text NOT NULL DEFAULT 'PV',
+          next_number bigint NOT NULL DEFAULT 1 CHECK (next_number > 0),
+          digits integer NOT NULL DEFAULT 6 CHECK (digits BETWEEN 3 AND 10),
+          include_year boolean NOT NULL DEFAULT true,
+          yearly_reset boolean NOT NULL DEFAULT true,
+          sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+          document_title text NOT NULL DEFAULT 'PROCES-VERBAL DE PREDARE-PRIMIRE',
+          document_subtitle text NOT NULL DEFAULT 'Transfer intern de stoc',
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          updated_by text NULL
+        )`);
+        await pool.query(`INSERT INTO aif_stock_transfer_document_settings (id)
+          VALUES (1) ON CONFLICT (id) DO NOTHING`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_transfer_documents (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          transfer_id text NOT NULL UNIQUE,
+          document_number text NOT NULL UNIQUE,
+          series text NOT NULL,
+          sequence_number bigint NOT NULL,
+          sequence_year integer NULL,
+          title text NOT NULL,
+          subtitle text NULL,
+          note text NULL,
+          status text NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','cancelled')),
+          actor text NULL,
+          owner_key text NULL,
+          line_count integer NOT NULL DEFAULT 0,
+          total_qty integer NOT NULL DEFAULT 0,
+          from_location_summary text NULL,
+          to_location_summary text NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_created_idx
+          ON aif_stock_transfer_documents (created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_number_idx
+          ON aif_stock_transfer_documents (document_number)`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_transfer_document_lines (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          document_id uuid NOT NULL REFERENCES aif_stock_transfer_documents(id) ON DELETE CASCADE,
+          line_no integer NOT NULL,
+          variant_id text NULL,
+          product_title text NULL,
+          brand_name text NULL,
+          category_name text NULL,
+          product_code text NULL,
+          barcode text NULL,
+          color_name text NULL,
+          size text NULL,
+          image_url text NULL,
+          from_location_id text NULL,
+          from_location_name text NULL,
+          to_location_id text NULL,
+          to_location_name text NULL,
+          qty integer NOT NULL CHECK (qty > 0),
+          source_before integer NULL,
+          source_after integer NULL,
+          target_before integer NULL,
+          target_after integer NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (document_id, line_no)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_lines_document_idx
+          ON aif_stock_transfer_document_lines (document_id, line_no)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_lines_variant_idx
+          ON aif_stock_transfer_document_lines (variant_id)`);
+        return true;
+      })().catch((error) => {
+        aifStockTransferDocumentsSchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifStockTransferDocumentsSchemaPromise;
+  }
+
+  function cleanAifTransferDocumentSeries(value) {
+    return text(value || 'PV')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]+/g, '')
+      .slice(0, 20) || 'PV';
+  }
+
+  function aifTransferDocumentNumber(settings, sequenceNumber, year) {
+    const series = cleanAifTransferDocumentSeries(settings?.series || 'PV');
+    const digits = Math.min(10, Math.max(3, Number(settings?.digits || 6)));
+    const sequence = String(Math.max(1, Number(sequenceNumber || 1))).padStart(digits, '0');
+    return settings?.include_year === false ? `${series}/${sequence}` : `${series}/${year}/${sequence}`;
+  }
+
+  function aifTransferSettingsResponse(row = {}) {
+    const year = Number(row.sequence_year || new Date().getFullYear());
+    const nextNumber = Math.max(1, Number(row.next_number || 1));
+    const settings = {
+      series: cleanAifTransferDocumentSeries(row.series || 'PV'),
+      nextNumber,
+      digits: Math.min(10, Math.max(3, Number(row.digits || 6))),
+      includeYear: row.include_year !== false,
+      yearlyReset: row.yearly_reset !== false,
+      sequenceYear: year,
+      documentTitle: text(row.document_title || 'PROCES-VERBAL DE PREDARE-PRIMIRE'),
+      documentSubtitle: text(row.document_subtitle || 'Transfer intern de stoc'),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedBy: row.updated_by || null,
+    };
+    return {
+      ...settings,
+      previewNumber: aifTransferDocumentNumber(
+        { series: settings.series, digits: settings.digits, include_year: settings.includeYear },
+        nextNumber,
+        year,
+      ),
+    };
+  }
+
+  async function readAifTransferDocumentSettings(client = pool) {
+    await ensureAifStockTransferDocumentsSchema();
+    const result = await client.query(`SELECT * FROM aif_stock_transfer_document_settings WHERE id=1 LIMIT 1`);
+    return aifTransferSettingsResponse(result.rows[0] || {});
+  }
+
+  async function allocateAifTransferDocumentNumber(client) {
+    const currentYearResult = await client.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
+    const currentYear = Number(currentYearResult.rows[0]?.year || new Date().getFullYear());
+    const locked = await client.query(`SELECT * FROM aif_stock_transfer_document_settings WHERE id=1 FOR UPDATE`);
+    let row = locked.rows[0] || {};
+    let nextNumber = Math.max(1, Number(row.next_number || 1));
+    let sequenceYear = Number(row.sequence_year || currentYear);
+    if (row.yearly_reset !== false && sequenceYear !== currentYear) {
+      nextNumber = 1;
+      sequenceYear = currentYear;
+    }
+    const number = aifTransferDocumentNumber(row, nextNumber, sequenceYear);
+    await client.query(
+      `UPDATE aif_stock_transfer_document_settings
+       SET next_number=$1, sequence_year=$2, updated_at=now()
+       WHERE id=1`,
+      [nextNumber + 1, sequenceYear]
+    );
+    return {
+      documentNumber: number,
+      sequenceNumber: nextNumber,
+      sequenceYear,
+      series: cleanAifTransferDocumentSeries(row.series || 'PV'),
+      title: text(row.document_title || 'PROCES-VERBAL DE PREDARE-PRIMIRE'),
+      subtitle: text(row.document_subtitle || 'Transfer intern de stoc'),
+    };
+  }
+
+  function legacyAifTransferDocumentNumber(transferId, createdAt) {
+    const date = createdAt ? new Date(createdAt) : new Date();
+    const safeDate = Number.isNaN(date.getTime())
+      ? '00000000'
+      : `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+    const suffix = createHash('sha1').update(String(transferId || '')).digest('hex').slice(0, 6).toUpperCase();
+    return `ARH/${safeDate}/${suffix}`;
   }
 
   function ensureAifShopifyInventorySchema() {
@@ -7840,6 +8005,271 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     res.json({ items: r.rows });
   });
 
+
+  router.get('/stock-transfer-documents/settings', requireAuthed, async (_req, res) => {
+    try {
+      const settings = await readAifTransferDocumentSettings(pool);
+      res.json({ ok: true, settings });
+    } catch (error) {
+      console.error('AIF stock transfer document settings load failed', error);
+      res.status(500).json({ error: 'A proces-verbal számozási beállításainak betöltése nem sikerült.' });
+    }
+  });
+
+  router.put('/stock-transfer-documents/settings', requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+      const body = req.body?.settings && typeof req.body.settings === 'object' ? req.body.settings : req.body || {};
+      const series = cleanAifTransferDocumentSeries(body.series || 'PV');
+      const nextNumber = Math.max(1, Number.parseInt(String(body.nextNumber ?? body.next_number ?? 1), 10) || 1);
+      const digits = Math.min(10, Math.max(3, Number.parseInt(String(body.digits ?? 6), 10) || 6));
+      const includeYear = body.includeYear === undefined && body.include_year === undefined ? true : Boolean(body.includeYear ?? body.include_year);
+      const yearlyReset = body.yearlyReset === undefined && body.yearly_reset === undefined ? true : Boolean(body.yearlyReset ?? body.yearly_reset);
+      const documentTitle = text(body.documentTitle || body.document_title || 'PROCES-VERBAL DE PREDARE-PRIMIRE').slice(0, 180);
+      const documentSubtitle = text(body.documentSubtitle || body.document_subtitle || 'Transfer intern de stoc').slice(0, 180);
+      const yearResult = await pool.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
+      const sequenceYear = Number(yearResult.rows[0]?.year || new Date().getFullYear());
+      const preview = aifTransferDocumentNumber({ series, digits, include_year: includeYear }, nextNumber, sequenceYear);
+      const collision = await pool.query(`SELECT 1 FROM aif_stock_transfer_documents WHERE document_number=$1 LIMIT 1`, [preview]);
+      if (collision.rowCount) {
+        return res.status(409).json({ error: `Ez a következő bizonylatszám már foglalt: ${preview}. Állíts magasabb következő sorszámot.` });
+      }
+      const result = await pool.query(
+        `UPDATE aif_stock_transfer_document_settings
+         SET series=$1, next_number=$2, digits=$3, include_year=$4, yearly_reset=$5,
+             sequence_year=$6, document_title=$7, document_subtitle=$8,
+             updated_at=now(), updated_by=$9
+         WHERE id=1
+         RETURNING *`,
+        [series, nextNumber, digits, includeYear, yearlyReset, sequenceYear, documentTitle, documentSubtitle, actorFrom(req)]
+      );
+      res.json({ ok: true, settings: aifTransferSettingsResponse(result.rows[0] || {}) });
+    } catch (error) {
+      console.error('AIF stock transfer document settings save failed', error);
+      res.status(500).json({ error: error?.message || 'A proces-verbal számozási beállításainak mentése nem sikerült.' });
+    }
+  });
+
+  router.get('/stock-transfer-documents', requireAuthed, async (req, res) => {
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+      const search = text(req.query.q || req.query.search).toLowerCase();
+      const from = emptyToNull(req.query.from);
+      const to = emptyToNull(req.query.to);
+      const fromLocation = text(req.query.fromLocation || req.query.from_location);
+      const toLocation = text(req.query.toLocation || req.query.to_location);
+      const type = normCode(req.query.type || 'all');
+      const page = Math.max(1, Number.parseInt(String(req.query.page || 1), 10) || 1);
+      const limit = Math.min(100, Math.max(10, Number.parseInt(String(req.query.limit || 30), 10) || 30));
+
+      const official = await pool.query(
+        `SELECT id::text, transfer_id, document_number, series, sequence_number, sequence_year,
+                title, subtitle, note, status, actor, owner_key, line_count, total_qty,
+                from_location_summary, to_location_summary, raw, created_at, updated_at
+         FROM aif_stock_transfer_documents
+         ORDER BY created_at DESC
+         LIMIT 4000`
+      );
+
+      const legacy = await pool.query(
+        `SELECT
+           sm.raw->>'transferId' AS transfer_id,
+           min(sm.created_at) AS created_at,
+           max(sm.actor) AS actor,
+           max(NULLIF(sm.raw->>'title','')) AS title,
+           max(NULLIF(sm.raw->>'note','')) AS note,
+           count(DISTINCT COALESCE(NULLIF(sm.raw->>'lineNo',''),'1'))::int AS line_count,
+           COALESCE(sum(CASE WHEN COALESCE(sm.raw->>'side','')='source' OR sm.qty_delta < 0 THEN abs(sm.qty_delta) ELSE 0 END),0)::int AS total_qty,
+           string_agg(DISTINCT NULLIF(sm.raw->>'fromLocationName',''), ' • ') AS from_location_summary,
+           string_agg(DISTINCT NULLIF(sm.raw->>'toLocationName',''), ' • ') AS to_location_summary,
+           string_agg(DISTINCT COALESCE(NULLIF(sm.raw->>'productTitle',''), m.title_ro, ''), ' ') AS product_search,
+           string_agg(DISTINCT COALESCE(NULLIF(sm.raw->>'barcode',''), v.barcode, ''), ' ') AS barcode_search,
+           string_agg(DISTINCT COALESCE(NULLIF(sm.raw->>'fromLocationId',''), ''), ',') AS from_location_ids,
+           string_agg(DISTINCT COALESCE(NULLIF(sm.raw->>'toLocationId',''), ''), ',') AS to_location_ids
+         FROM aif_stock_movements sm
+         LEFT JOIN aif_product_variants v ON v.id=sm.variant_id
+         LEFT JOIN aif_product_models m ON m.id=v.model_id
+         WHERE sm.source_type='stock_transfer'
+           AND COALESCE(sm.raw->>'transferId','') <> ''
+           AND NOT EXISTS (
+             SELECT 1 FROM aif_stock_transfer_documents d WHERE d.transfer_id=sm.raw->>'transferId'
+           )
+         GROUP BY sm.raw->>'transferId'
+         ORDER BY min(sm.created_at) DESC
+         LIMIT 4000`
+      );
+
+      const officialItems = official.rows.map((row) => ({
+        ...row,
+        source: 'official',
+        isLegacy: false,
+      }));
+      const legacyItems = legacy.rows.map((row) => ({
+        id: `legacy:${row.transfer_id}`,
+        transfer_id: row.transfer_id,
+        document_number: legacyAifTransferDocumentNumber(row.transfer_id, row.created_at),
+        series: 'ARH',
+        sequence_number: null,
+        sequence_year: row.created_at ? new Date(row.created_at).getFullYear() : null,
+        title: 'PROCES-VERBAL DE PREDARE-PRIMIRE',
+        subtitle: row.title || 'Transfer intern de stoc',
+        note: row.note || null,
+        status: 'legacy',
+        actor: row.actor || null,
+        owner_key: null,
+        line_count: Number(row.line_count || 0),
+        total_qty: Number(row.total_qty || 0),
+        from_location_summary: row.from_location_summary || null,
+        to_location_summary: row.to_location_summary || null,
+        raw: {
+          productSearch: row.product_search || '',
+          barcodeSearch: row.barcode_search || '',
+          fromLocationIds: String(row.from_location_ids || '').split(',').filter(Boolean),
+          toLocationIds: String(row.to_location_ids || '').split(',').filter(Boolean),
+        },
+        created_at: row.created_at,
+        updated_at: row.created_at,
+        source: 'legacy',
+        isLegacy: true,
+      }));
+
+      let items = [...officialItems, ...legacyItems];
+      if (type === 'official') items = items.filter((item) => !item.isLegacy);
+      if (type === 'legacy') items = items.filter((item) => item.isLegacy);
+      if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
+      if (from) items = items.filter((item) => new Date(item.created_at).getTime() >= new Date(`${from}T00:00:00`).getTime());
+      if (to) items = items.filter((item) => new Date(item.created_at).getTime() < new Date(`${to}T00:00:00`).getTime() + 86400000);
+      if (fromLocation) {
+        const key = fromLocation.toLowerCase();
+        items = items.filter((item) => `${item.from_location_summary || ''} ${JSON.stringify(item.raw || {})}`.toLowerCase().includes(key));
+      }
+      if (toLocation) {
+        const key = toLocation.toLowerCase();
+        items = items.filter((item) => `${item.to_location_summary || ''} ${JSON.stringify(item.raw || {})}`.toLowerCase().includes(key));
+      }
+      if (search) {
+        items = items.filter((item) => [
+          item.document_number, item.transfer_id, item.title, item.subtitle, item.note,
+          item.actor, item.from_location_summary, item.to_location_summary, JSON.stringify(item.raw || {}),
+        ].join(' ').toLowerCase().includes(search));
+      }
+      items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const total = items.length;
+      const pages = Math.max(1, Math.ceil(total / limit));
+      const safePage = Math.min(page, pages);
+      const pageItems = items.slice((safePage - 1) * limit, safePage * limit);
+      const totals = {
+        total,
+        official: items.filter((item) => !item.isLegacy).length,
+        legacy: items.filter((item) => item.isLegacy).length,
+        cancelled: items.filter((item) => item.status === 'cancelled').length,
+        totalQty: items.reduce((sum, item) => sum + Number(item.total_qty || 0), 0),
+      };
+      const locations = await pool.query(`SELECT id::text, code, name FROM aif_locations WHERE COALESCE(is_active,true)=true ORDER BY name ASC`);
+      res.json({ items: pageItems, totals, page: safePage, pages, limit, total, locations: locations.rows });
+    } catch (error) {
+      console.error('AIF stock transfer documents list failed', error);
+      res.status(500).json({ error: 'A készletátadási bizonylatok betöltése nem sikerült.' });
+    }
+  });
+
+  router.get('/stock-transfer-documents/:id', requireAuthed, async (req, res) => {
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+      const id = text(req.params.id);
+      if (!id) return res.status(400).json({ error: 'document id required' });
+      if (id.startsWith('legacy:')) {
+        const transferId = id.slice('legacy:'.length);
+        const rows = await pool.query(
+          `SELECT sm.id::text, sm.created_at, sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
+                  v.id::text AS variant_id, v.internal_sku, v.barcode, v.size, v.color_name, v.image_url,
+                  m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
+                  sc.supplier_product_code, sc.supplier_barcode
+           FROM aif_stock_movements sm
+           LEFT JOIN aif_product_variants v ON v.id=sm.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN aif_categories c ON c.id=m.category_id
+           LEFT JOIN LATERAL (
+             SELECT supplier_product_code, supplier_barcode
+             FROM aif_variant_supplier_codes x
+             WHERE x.variant_id=v.id AND COALESCE(x.is_active,true)=true
+             LIMIT 1
+           ) sc ON true
+           WHERE sm.source_type='stock_transfer' AND sm.raw->>'transferId'=$1
+           ORDER BY sm.created_at ASC, COALESCE((sm.raw->>'lineNo')::integer,1) ASC, sm.id ASC`,
+          [transferId]
+        );
+        if (!rows.rowCount) return res.status(404).json({ error: 'A régi készletátadás nem található.' });
+        const groups = new Map();
+        for (const row of rows.rows) {
+          const raw = row.raw && typeof row.raw === 'object' ? row.raw : {};
+          const lineNo = Number(raw.lineNo || raw.line_no || 1);
+          const group = groups.get(lineNo) || [];
+          group.push(row);
+          groups.set(lineNo, group);
+        }
+        const lines = Array.from(groups.entries()).sort((a,b) => a[0]-b[0]).map(([lineNo, group]) => {
+          const source = group.find((row) => String(row.raw?.side || '').toLowerCase() === 'source') || group.find((row) => Number(row.qty_delta || 0) < 0) || group[0];
+          const target = group.find((row) => String(row.raw?.side || '').toLowerCase() === 'target') || group.find((row) => Number(row.qty_delta || 0) > 0) || group[group.length - 1];
+          const raw = { ...(target?.raw || {}), ...(source?.raw || {}) };
+          return {
+            id: `legacy-line:${transferId}:${lineNo}`,
+            line_no: lineNo,
+            variant_id: source?.variant_id || target?.variant_id || null,
+            product_title: raw.productTitle || source?.title_ro || target?.title_ro || 'Produs',
+            brand_name: source?.brand_name || target?.brand_name || null,
+            category_name: source?.category_name || target?.category_name || null,
+            product_code: source?.supplier_product_code || target?.supplier_product_code || String(source?.model_code || target?.model_code || '').split(':').pop() || source?.internal_sku || null,
+            barcode: raw.barcode || source?.barcode || source?.supplier_barcode || target?.barcode || target?.supplier_barcode || null,
+            color_name: source?.color_name || target?.color_name || null,
+            size: source?.size || target?.size || null,
+            image_url: source?.image_url || target?.image_url || null,
+            from_location_id: raw.fromLocationId || null,
+            from_location_name: raw.fromLocationName || source?.raw?.fromLocationName || null,
+            to_location_id: raw.toLocationId || null,
+            to_location_name: raw.toLocationName || target?.raw?.toLocationName || null,
+            qty: Math.max(...group.map((row) => Math.abs(Number(row.qty_delta || 0))), 0),
+            source_before: source?.qty_before ?? null,
+            source_after: source?.qty_after ?? null,
+            target_before: target?.qty_before ?? null,
+            target_after: target?.qty_after ?? null,
+            raw,
+          };
+        });
+        const first = rows.rows[0];
+        const firstRaw = first.raw && typeof first.raw === 'object' ? first.raw : {};
+        const document = {
+          id,
+          transfer_id: transferId,
+          document_number: legacyAifTransferDocumentNumber(transferId, first.created_at),
+          title: 'PROCES-VERBAL DE PREDARE-PRIMIRE',
+          subtitle: firstRaw.title || 'Transfer intern de stoc',
+          note: firstRaw.note || null,
+          status: 'legacy',
+          actor: first.actor || null,
+          line_count: lines.length,
+          total_qty: lines.reduce((sum, line) => sum + Number(line.qty || 0), 0),
+          from_location_summary: Array.from(new Set(lines.map((line) => line.from_location_name).filter(Boolean))).join(' • '),
+          to_location_summary: Array.from(new Set(lines.map((line) => line.to_location_name).filter(Boolean))).join(' • '),
+          created_at: first.created_at,
+          updated_at: first.created_at,
+          isLegacy: true,
+          source: 'legacy',
+        };
+        return res.json({ document, lines });
+      }
+
+      const document = await pool.query(`SELECT * FROM aif_stock_transfer_documents WHERE id::text=$1 OR transfer_id=$1 OR document_number=$1 LIMIT 1`, [id]);
+      if (!document.rowCount) return res.status(404).json({ error: 'A készletátadási bizonylat nem található.' });
+      const lines = await pool.query(`SELECT * FROM aif_stock_transfer_document_lines WHERE document_id=$1 ORDER BY line_no ASC`, [document.rows[0].id]);
+      res.json({ document: { ...document.rows[0], isLegacy: false, source: 'official' }, lines: lines.rows });
+    } catch (error) {
+      console.error('AIF stock transfer document detail failed', error);
+      res.status(500).json({ error: 'A készletátadási bizonylat részleteinek betöltése nem sikerült.' });
+    }
+  });
+
   function stockTransferRequestHash(rowsInput, title, note) {
     const lines = (rowsInput || []).map((input = {}) => ({
       variantId: text(input.variantId || input.variant_id || input.variant || input.id),
@@ -7869,11 +8299,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletmozgatási sor." });
 
     try {
-      await ensureAifStockTransferDocumentSchema(pool);
+      await ensureAifStockTransferDocumentsSchema();
     } catch (schemaError) {
       console.error("AIF stock transfer document schema failed", schemaError);
       return res.status(500).json({
-        error: "A hivatalos transferbizonylat-regiszter előkészítése nem sikerült.",
+        error: "A készletátadási bizonylatok előkészítése nem sikerült.",
         code: schemaError?.code || "stock_transfer_document_schema_failed",
       });
     }
@@ -7898,6 +8328,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let movedQty = 0;
     let movementRows = 0;
     let transferId = null;
+    let transferDocument = null;
 
     try {
       await client.query("BEGIN");
@@ -7953,6 +8384,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       transferId = stockMovementSourceId("transfer", "batch", "stock");
+      const documentSequence = await allocateAifTransferDocumentNumber(client);
+      const insertedDocument = await client.query(
+        `INSERT INTO aif_stock_transfer_documents (
+           transfer_id, document_number, series, sequence_number, sequence_year,
+           title, subtitle, note, actor, owner_key, raw, created_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,now(),now())
+         RETURNING id::text, transfer_id, document_number, series, sequence_number, sequence_year,
+                   title, subtitle, note, status, actor, owner_key, created_at, updated_at`,
+        [
+          transferId,
+          documentSequence.documentNumber,
+          documentSequence.series,
+          documentSequence.sequenceNumber,
+          documentSequence.sequenceYear,
+          documentSequence.title,
+          title || documentSequence.subtitle,
+          note,
+          actor,
+          ownerKey,
+          JSON.stringify({ idempotencyKey: idempotencyKey || null, requestTitle: title, requestNote: note }),
+        ]
+      );
+      transferDocument = insertedDocument.rows[0];
 
       for (let index = 0; index < rowsInput.length; index++) {
         const input = rowsInput[index] || {};
@@ -7967,20 +8421,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (qty === null || qty <= 0) throw Object.assign(new Error(`A(z) ${index + 1}. sor mennyisége érvénytelen.`), { statusCode: 400 });
 
         const variant = await client.query(
-          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.color_code, v.image_url, v.status,
-                  m.title_ro, m.model_code, m.product_type,
-                  b.name AS brand_name,
-                  c.name_ro AS category_name,
-                  sc.supplier_product_code
+          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status, v.image_url,
+                  m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
+                  sc.supplier_product_code, sc.supplier_barcode
            FROM aif_product_variants v
            JOIN aif_product_models m ON m.id=v.model_id
            LEFT JOIN aif_brands b ON b.id=m.brand_id
            LEFT JOIN aif_categories c ON c.id=m.category_id
            LEFT JOIN LATERAL (
-             SELECT x.supplier_product_code
+             SELECT supplier_product_code, supplier_barcode
              FROM aif_variant_supplier_codes x
-             WHERE x.variant_id=v.id AND x.is_active=true
-             ORDER BY x.updated_at DESC
+             WHERE x.variant_id=v.id AND COALESCE(x.is_active,true)=true
              LIMIT 1
            ) sc ON true
            WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
@@ -8042,6 +8493,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const rawBase = {
           reason: "stock_transfer",
           transferId,
+          documentId: transferDocument?.id || null,
+          documentNumber: transferDocument?.document_number || null,
           idempotencyKey: idempotencyKey || null,
           lineNo: index + 1,
           note,
@@ -8087,21 +8540,55 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
         if (inLogged) movementRows++;
 
+        const productCode = variantRow.supplier_product_code || String(variantRow.model_code || "").split(":").pop() || variantRow.internal_sku || null;
+        const displayBarcode = variantRow.barcode || variantRow.supplier_barcode || null;
+        await client.query(
+          `INSERT INTO aif_stock_transfer_document_lines (
+             document_id, line_no, variant_id, product_title, brand_name, category_name,
+             product_code, barcode, color_name, size, image_url,
+             from_location_id, from_location_name, to_location_id, to_location_name,
+             qty, source_before, source_after, target_before, target_after, raw
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb)`,
+          [
+            transferDocument.id,
+            index + 1,
+            String(variantRow.id),
+            variantRow.title_ro,
+            variantRow.brand_name,
+            variantRow.category_name,
+            productCode,
+            displayBarcode,
+            variantRow.color_name,
+            variantRow.size,
+            variantRow.image_url,
+            String(fromLocation.id),
+            fromLocation.name || fromLocation.code,
+            String(toLocation.id),
+            toLocation.name || toLocation.code,
+            qty,
+            sourceBefore,
+            sourceAfter,
+            targetBefore,
+            targetAfter,
+            JSON.stringify(rawBase),
+          ]
+        );
+
         movedQty += qty;
         movedItems.push({
           variantId: variantRow.id,
           title: variantRow.title_ro,
-          brand: variantRow.brand_name,
-          category: variantRow.category_name || variantRow.product_type,
-          productCode: variantRow.supplier_product_code || variantRow.model_code || variantRow.internal_sku,
-          barcode: variantRow.barcode,
-          color: variantRow.color_name || variantRow.color_code,
+          brandName: variantRow.brand_name,
+          categoryName: variantRow.category_name,
+          productCode,
+          barcode: displayBarcode,
+          colorName: variantRow.color_name,
           size: variantRow.size,
           imageUrl: variantRow.image_url,
           qty,
-          fromLocationId: fromLocation.id,
+          fromLocationId: String(fromLocation.id),
           fromLocation: fromLocation.name || fromLocation.code,
-          toLocationId: toLocation.id,
+          toLocationId: String(toLocation.id),
           toLocation: toLocation.name || toLocation.code,
           sourceBefore,
           sourceAfter,
@@ -8110,32 +8597,45 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
-      const transferDocument = await createAifStockTransferDocument(client, {
-        transferId,
-        idempotencyKey: idempotencyKey || null,
-        title,
-        note,
-        actor,
-        items: movedItems,
-      });
+      const fromLocations = Array.from(new Set(movedItems.map((item) => item.fromLocation).filter(Boolean)));
+      const toLocations = Array.from(new Set(movedItems.map((item) => item.toLocation).filter(Boolean)));
+      const fromLocationSummary = fromLocations.length === 1 ? fromLocations[0] : "Conform tabelului";
+      const toLocationSummary = toLocations.length === 1 ? toLocations[0] : "Conform tabelului";
+      const updatedDocument = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET line_count=$2, total_qty=$3, from_location_summary=$4, to_location_summary=$5,
+             raw=COALESCE(raw,'{}'::jsonb) || $6::jsonb, updated_at=now()
+         WHERE id=$1::uuid
+         RETURNING id::text, transfer_id, document_number, series, sequence_number, sequence_year,
+                   title, subtitle, note, status, actor, owner_key, line_count, total_qty,
+                   from_location_summary, to_location_summary, created_at, updated_at`,
+        [
+          transferDocument.id,
+          movedItems.length,
+          movedQty,
+          fromLocationSummary,
+          toLocationSummary,
+          JSON.stringify({
+            idempotencyKey: idempotencyKey || null,
+            fromLocationIds: Array.from(new Set(movedItems.map((item) => item.fromLocationId).filter(Boolean))),
+            toLocationIds: Array.from(new Set(movedItems.map((item) => item.toLocationId).filter(Boolean))),
+            items: movedItems,
+          }),
+        ]
+      );
+      transferDocument = updatedDocument.rows[0] || transferDocument;
 
       const responsePayload = {
         ok: true,
         duplicate: false,
         idempotencyKey: idempotencyKey || null,
         transferId,
-        documentId: transferDocument.id,
-        documentNumber: transferDocument.document_number,
-        document: {
-          id: transferDocument.id,
-          transferId: transferDocument.transfer_id,
-          documentNumber: transferDocument.document_number,
-          documentTitle: transferDocument.document_title,
-          documentSubtitle: transferDocument.document_subtitle,
-          createdAt: transferDocument.created_at,
-          lineCount: transferDocument.line_count,
-          totalQty: transferDocument.total_qty,
-        },
+        documentId: transferDocument?.id || null,
+        documentNumber: transferDocument?.document_number || null,
+        documentCreatedAt: transferDocument?.created_at || null,
+        documentTitle: transferDocument?.title || null,
+        documentSubtitle: transferDocument?.subtitle || null,
+        document: transferDocument,
         title,
         lineCount: movedItems.length,
         movedRows: movedItems.length,
@@ -8169,7 +8669,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.post("/stock-transfers", requireAuthed, handleStockTransfer);
   router.post("/stock/transfers", requireAuthed, handleStockTransfer);
-  registerAifStockTransferDocumentRoutes(router, { pool, requireAuthed, requireAdminOrSecret });
 
 
   async function listStockMovements(req, res) {
