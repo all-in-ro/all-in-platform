@@ -88,6 +88,15 @@ type VacationActivityMonth = {
   lastDay?: string | null;
 };
 
+type SavedVacationPeriod = {
+  key: string;
+  dayFrom: string;
+  dayTo: string;
+  workingDays: number;
+  calendarDays: number;
+  note: string | null;
+};
+
 const WEEK_DAYS = [
   { id: 1, short: "H", label: "Hétfő" },
   { id: 2, short: "K", label: "Kedd" },
@@ -146,6 +155,40 @@ function countVacationPeriod(dayFrom: string, dayTo: string, workingDays: number
     if (enabled.has(isoDay)) counted += 1;
   }
   return { calendarDays, workingDays: counted, excludedDays: calendarDays - counted };
+}
+
+function buildSavedVacationPeriods(items: TimeEvent[], workingDays: number[]): SavedVacationPeriod[] {
+  const vacationItems = items
+    .filter((item) => item.kind === "vacation" && /^\d{4}-\d{2}-\d{2}$/.test(item.day))
+    .slice()
+    .sort((a, b) => a.day.localeCompare(b.day));
+
+  const groupedByRequest = new Map<string, TimeEvent[]>();
+  for (const item of vacationItems) {
+    const createdKey = item.createdAt ? new Date(item.createdAt).toISOString() : item.id;
+    const key = `${createdKey}__${String(item.note || "").trim()}`;
+    const current = groupedByRequest.get(key) || [];
+    current.push(item);
+    groupedByRequest.set(key, current);
+  }
+
+  return Array.from(groupedByRequest.entries())
+    .map(([key, rows]) => {
+      const ordered = rows.slice().sort((a, b) => a.day.localeCompare(b.day));
+      const dayFrom = ordered[0]?.day || "";
+      const dayTo = ordered[ordered.length - 1]?.day || dayFrom;
+      const preview = countVacationPeriod(dayFrom, dayTo, workingDays);
+      return {
+        key,
+        dayFrom,
+        dayTo,
+        workingDays: rows.length || preview.workingDays,
+        calendarDays: preview.calendarDays,
+        note: ordered.find((row) => String(row.note || "").trim())?.note || null,
+      };
+    })
+    .filter((period) => period.dayFrom && period.dayTo)
+    .sort((a, b) => b.dayFrom.localeCompare(a.dayFrom));
 }
 
 function useIsMobile(breakpointPx = 640) {
@@ -437,31 +480,38 @@ export default function AllInVacations({ api }: { api?: string }) {
     }
   };
 
-  const openVacationRequestPdf = () => {
+  const openVacationRequestPdfForPeriod = (dayFrom: string, dayUntil: string, noteValue?: string | null) => {
     setSaveErr("");
+    setListErr("");
     const employee = selected.trim();
-    const end = (dayTo || day).trim();
+    const start = String(dayFrom || "").trim();
+    const end = String(dayUntil || dayFrom || "").trim();
     if (!employee) {
       setSaveErr("Válassz dolgozót a szabadságkéréshez.");
       return;
     }
-    if (kind !== "vacation") {
-      setSaveErr("Hivatalos szabadságkérés csak szabadság időszakra készül.");
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < day) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) {
       setSaveErr("Ellenőrizd a szabadság kezdő és záró dátumát.");
       return;
     }
-    const preview = countVacationPeriod(day, end, vacationSettings.workingDays);
+    const preview = countVacationPeriod(start, end, vacationSettings.workingDays);
     if (preview.workingDays <= 0) {
       setSaveErr("A kiválasztott időszakban nincs elszámolható munkanap.");
       return;
     }
-    const params = new URLSearchParams({ employee, dayFrom: day, dayTo: end });
-    if (note.trim()) params.set("note", note.trim());
+    const params = new URLSearchParams({ employee, dayFrom: start, dayTo: end });
+    const pdfNote = String(noteValue || "").trim();
+    if (pdfNote) params.set("note", pdfNote);
     const win = window.open(`${apiBase}/admin/vacations/request.pdf?${params.toString()}`, "_blank", "noopener,noreferrer");
     if (!win) setSaveErr("A böngésző letiltotta a PDF megnyitását.");
+  };
+
+  const openVacationRequestPdf = () => {
+    if (kind !== "vacation") {
+      setSaveErr("Hivatalos szabadságkérés csak szabadság időszakra készül.");
+      return;
+    }
+    openVacationRequestPdfForPeriod(day, (dayTo || day).trim(), note);
   };
 
   const fetchEmployees = async () => {
@@ -840,6 +890,11 @@ export default function AllInVacations({ api }: { api?: string }) {
     const keys = Array.from(byDay.keys()).sort((a, b) => (a < b ? 1 : -1));
     return keys.map((k) => ({ day: k, items: byDay.get(k) || [] }));
   }, [items]);
+
+  const savedVacationPeriods = useMemo(
+    () => buildSavedVacationPeriods(items, vacationSettings.workingDays),
+    [items, vacationSettings.workingDays]
+  );
 
   const scrollToSelected = () => {
     const el = listRef.current?.querySelector<HTMLButtonElement>(`button[data-emp="${CSS.escape(selected)}"]`);
@@ -1466,6 +1521,40 @@ export default function AllInVacations({ api }: { api?: string }) {
         <div className="p-4">
         {listErr ? <div className="mt-2 rounded-xl border border-rose-200/25 bg-rose-500/12 px-3 py-2 text-sm text-rose-50 whitespace-pre-wrap">{listErr}</div> : null}
 
+        {savedVacationPeriods.length ? (
+          <div className="mt-3 overflow-hidden rounded-2xl border border-[#7bd7d4]/22 bg-[#174c55]/38">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#7bd7d4]/16 bg-[#315c62]/72 px-3 py-2.5">
+              <div>
+                <div className="text-[9px] uppercase tracking-[0.13em] text-[#d7fffd]/52">Utólagos nyomtatás</div>
+                <div className="mt-0.5 text-sm text-white">Mentett szabadságkérelmek</div>
+              </div>
+              <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/22 px-2 py-0.5 text-[10px] text-[#e5fffd]">{savedVacationPeriods.length} időszak</span>
+            </div>
+            <div className="grid gap-2 p-2 sm:grid-cols-2">
+              {savedVacationPeriods.map((period) => (
+                <div key={period.key} className="flex items-center gap-3 rounded-xl border border-white/12 bg-white/[0.07] px-3 py-2.5">
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/22 text-[#d7fffd]">
+                    <CalendarRange className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm text-white">{period.dayFrom === period.dayTo ? period.dayFrom : `${period.dayFrom} – ${period.dayTo}`}</div>
+                    <div className="mt-0.5 truncate text-[10px] text-white/48">{period.workingDays} szabadságnap{period.calendarDays > period.workingDays ? ` • ${period.calendarDays - period.workingDays} pihenőnap kihagyva` : ""}{period.note ? ` • ${period.note}` : ""}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className={btnSoft}
+                    onClick={() => openVacationRequestPdfForPeriod(period.dayFrom, period.dayTo, period.note)}
+                    title="Szabadságkérés PDF újranyomtatása"
+                  >
+                    <Printer className="h-4 w-4" />
+                    PDF
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="mt-3 rounded-xl border border-white/30 overflow-hidden">
           {isMobile ? (
             <div className="grid grid-cols-12 gap-0 bg-white/5 text-white/70 text-xs px-3 py-2">
@@ -1583,13 +1672,14 @@ export default function AllInVacations({ api }: { api?: string }) {
                 PDF
               </Button>
               <Button
-                className={iconBtn}
+                className={btnSoft}
                 type="button"
-                title="Munkanapok beállítása"
+                title="Munkanapok és hétvégi elszámolás beállítása"
                 aria-label="Munkanapok beállítása"
                 onClick={() => { setSettingsDraft(vacationSettings.workingDays); setSettingsOpen(true); }}
               >
                 <Settings2 className="h-4 w-4" />
+                <span>Munkanapok</span>
               </Button>
               <Button
                 className={btnSoft}
