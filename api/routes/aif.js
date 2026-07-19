@@ -159,6 +159,88 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_deletions_deleted_idx
           ON aif_stock_transfer_document_deletions (deleted_at DESC)`);
+
+        // A korábbi transfer-táblákból általános készletbizonylat-központ lett.
+        // Az ALTER-ek szándékosan idempotensek, mert a Renderen a régi és az új
+        // adatbázisverziók is ugyanazzal a kóddal indulhatnak.
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS document_type text NOT NULL DEFAULT 'internal_transfer'`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS source_location_id text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS target_location_id text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS supplier_id text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS supplier_name text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reception_id text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS external_reference text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reason_code text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reason_text text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS operation_direction text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS price_basis text NOT NULL DEFAULT 'selling_price'`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS total_value numeric(14,2) NOT NULL DEFAULT 0`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS line_total numeric(14,2) NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS price_basis text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS qty_delta integer NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_type_created_idx
+          ON aif_stock_transfer_documents (document_type, created_at DESC)`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
+          document_type text PRIMARY KEY,
+          series text NOT NULL,
+          next_number bigint NOT NULL DEFAULT 1 CHECK (next_number > 0),
+          digits integer NOT NULL DEFAULT 6 CHECK (digits BETWEEN 3 AND 10),
+          include_year boolean NOT NULL DEFAULT true,
+          yearly_reset boolean NOT NULL DEFAULT true,
+          sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+          document_title text NOT NULL,
+          document_subtitle text NULL,
+          updated_by text NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`INSERT INTO aif_stock_document_settings (
+            document_type, series, next_number, digits, include_year, yearly_reset,
+            sequence_year, document_title, document_subtitle
+          ) VALUES
+            ('internal_transfer','PV',1,6,true,true,EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,'PROCES-VERBAL DE PREDARE-PRIMIRE','Transfer intern de stoc'),
+            ('supplier_return','RET',1,6,true,true,EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,'AVIZ DE RETUR CĂTRE FURNIZOR','Retur de marfă către furnizor'),
+            ('damaged_writeoff','DET',1,6,true,true,EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,'PROCES-VERBAL DE CONSTATARE ȘI SCOATERE DIN GESTIUNE','Produse deteriorate / scoatere din gestiune'),
+            ('stock_correction','COR',1,6,true,true,EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,'NOTĂ DE CORECȚIE A STOCULUI','Corecție justificată de stoc')
+          ON CONFLICT (document_type) DO NOTHING`);
+        await pool.query(`UPDATE aif_stock_document_settings g
+          SET series=s.series,
+              next_number=GREATEST(g.next_number,s.next_number),
+              digits=s.digits,
+              include_year=s.include_year,
+              yearly_reset=s.yearly_reset,
+              sequence_year=CASE WHEN s.sequence_year > g.sequence_year THEN s.sequence_year ELSE g.sequence_year END,
+              document_title=s.document_title,
+              document_subtitle=s.document_subtitle,
+              updated_at=now()
+          FROM aif_stock_transfer_document_settings s
+          WHERE g.document_type='internal_transfer' AND s.id=1`);
+
+        // Régi átadások értékpillanatképe kizárólag az ELADÁSI árból készül.
+        await pool.query(`UPDATE aif_stock_transfer_document_lines l
+          SET unit_price=round(v.sell_price::numeric,2),
+              line_total=round(l.qty::numeric * v.sell_price::numeric,2),
+              currency_code='RON',
+              price_basis=COALESCE(l.price_basis,'selling_price')
+          FROM aif_product_variants v
+          WHERE l.variant_id::text=v.id::text
+            AND l.unit_price IS NULL
+            AND v.sell_price IS NOT NULL`);
+        await pool.query(`UPDATE aif_stock_transfer_document_lines
+          SET line_total=round(qty::numeric * unit_price::numeric,2)
+          WHERE line_total IS NULL AND unit_price IS NOT NULL`);
+        await pool.query(`UPDATE aif_stock_transfer_documents d
+          SET total_value=x.total_value, currency_code='RON'
+          FROM (
+            SELECT document_id, round(COALESCE(sum(line_total),0)::numeric,2) AS total_value
+            FROM aif_stock_transfer_document_lines
+            GROUP BY document_id
+          ) x
+          WHERE x.document_id=d.id AND d.total_value IS DISTINCT FROM x.total_value`);
         return true;
       })().catch((error) => {
         aifStockTransferDocumentsSchemaPromise = null;
@@ -240,6 +322,159 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       series: cleanAifTransferDocumentSeries(row.series || 'PV'),
       title: text(row.document_title || 'PROCES-VERBAL DE PREDARE-PRIMIRE'),
       subtitle: text(row.document_subtitle || 'Transfer intern de stoc'),
+    };
+  }
+
+  const AIF_STOCK_DOCUMENT_TYPES = Object.freeze({
+    internal_transfer: {
+      series: 'PV',
+      title: 'PROCES-VERBAL DE PREDARE-PRIMIRE',
+      subtitle: 'Transfer intern de stoc',
+      priceBasis: 'selling_price',
+    },
+    supplier_return: {
+      series: 'RET',
+      title: 'AVIZ DE RETUR CĂTRE FURNIZOR',
+      subtitle: 'Retur de marfă către furnizor',
+      priceBasis: 'purchase_price',
+    },
+    damaged_writeoff: {
+      series: 'DET',
+      title: 'PROCES-VERBAL DE CONSTATARE ȘI SCOATERE DIN GESTIUNE',
+      subtitle: 'Produse deteriorate / scoatere din gestiune',
+      priceBasis: 'purchase_price',
+    },
+    stock_correction: {
+      series: 'COR',
+      title: 'NOTĂ DE CORECȚIE A STOCULUI',
+      subtitle: 'Corecție justificată de stoc',
+      priceBasis: 'purchase_price',
+    },
+  });
+
+  function cleanAifStockDocumentType(value, fallback = null) {
+    const raw = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const aliases = {
+      transfer: 'internal_transfer',
+      stock_transfer: 'internal_transfer',
+      internal: 'internal_transfer',
+      aviz: 'internal_transfer',
+      retur: 'supplier_return',
+      return: 'supplier_return',
+      supplier_retur: 'supplier_return',
+      damaged: 'damaged_writeoff',
+      deteriorated: 'damaged_writeoff',
+      produse_deteriorate: 'damaged_writeoff',
+      writeoff: 'damaged_writeoff',
+      correction: 'stock_correction',
+      stock_adjustment: 'stock_correction',
+      adjustment: 'stock_correction',
+    };
+    const normalized = aliases[raw] || raw;
+    return Object.prototype.hasOwnProperty.call(AIF_STOCK_DOCUMENT_TYPES, normalized) ? normalized : fallback;
+  }
+
+  function aifStockDocumentSettingsResponse(row = {}) {
+    const type = cleanAifStockDocumentType(row.document_type, 'internal_transfer');
+    const defaults = AIF_STOCK_DOCUMENT_TYPES[type];
+    const year = Number(row.sequence_year || new Date().getFullYear());
+    const nextNumber = Math.max(1, Number(row.next_number || 1));
+    const digits = Math.min(10, Math.max(3, Number(row.digits || 6)));
+    const includeYear = row.include_year !== false;
+    const series = cleanAifTransferDocumentSeries(row.series || defaults.series);
+    return {
+      documentType: type,
+      series,
+      nextNumber,
+      digits,
+      includeYear,
+      yearlyReset: row.yearly_reset !== false,
+      sequenceYear: year,
+      documentTitle: text(row.document_title || defaults.title),
+      documentSubtitle: text(row.document_subtitle || defaults.subtitle),
+      previewNumber: aifTransferDocumentNumber({ series, digits, include_year: includeYear }, nextNumber, year),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedBy: row.updated_by || null,
+    };
+  }
+
+  async function readAifStockDocumentSettings(client = pool, type = null, lock = false) {
+    await ensureAifStockTransferDocumentsSchema();
+    const normalizedType = cleanAifStockDocumentType(type, null);
+    const args = [];
+    let where = '';
+    if (normalizedType) {
+      args.push(normalizedType);
+      where = `WHERE document_type=$1`;
+    }
+    const result = await client.query(
+      `SELECT * FROM aif_stock_document_settings ${where} ORDER BY document_type ${lock ? 'FOR UPDATE' : ''}`,
+      args
+    );
+    return normalizedType
+      ? aifStockDocumentSettingsResponse(result.rows[0] || { document_type: normalizedType })
+      : result.rows.map(aifStockDocumentSettingsResponse);
+  }
+
+  async function allocateAifStockDocumentNumber(client, type) {
+    const documentType = cleanAifStockDocumentType(type, null);
+    if (!documentType) throw Object.assign(new Error('Érvénytelen készletbizonylat-típus.'), { statusCode: 400 });
+    const defaults = AIF_STOCK_DOCUMENT_TYPES[documentType];
+    const currentYearResult = await client.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
+    const currentYear = Number(currentYearResult.rows[0]?.year || new Date().getFullYear());
+    const locked = await client.query(`SELECT * FROM aif_stock_document_settings WHERE document_type=$1 FOR UPDATE`, [documentType]);
+    const row = locked.rows[0] || {
+      document_type: documentType,
+      series: defaults.series,
+      next_number: 1,
+      digits: 6,
+      include_year: true,
+      yearly_reset: true,
+      sequence_year: currentYear,
+      document_title: defaults.title,
+      document_subtitle: defaults.subtitle,
+    };
+    let nextNumber = Math.max(1, Number(row.next_number || 1));
+    let sequenceYear = Number(row.sequence_year || currentYear);
+    if (row.yearly_reset !== false && sequenceYear !== currentYear) {
+      nextNumber = 1;
+      sequenceYear = currentYear;
+    }
+    const documentNumber = aifTransferDocumentNumber(row, nextNumber, sequenceYear);
+    await client.query(
+      `UPDATE aif_stock_document_settings
+       SET next_number=$2, sequence_year=$3, updated_at=now()
+       WHERE document_type=$1`,
+      [documentType, nextNumber + 1, sequenceYear]
+    );
+    if (documentType === 'internal_transfer') {
+      await client.query(
+        `UPDATE aif_stock_transfer_document_settings
+         SET series=$1, next_number=$2, digits=$3, include_year=$4,
+             yearly_reset=$5, sequence_year=$6, document_title=$7,
+             document_subtitle=$8, updated_at=now()
+         WHERE id=1`,
+        [
+          cleanAifTransferDocumentSeries(row.series || defaults.series),
+          nextNumber + 1,
+          Math.min(10, Math.max(3, Number(row.digits || 6))),
+          row.include_year !== false,
+          row.yearly_reset !== false,
+          sequenceYear,
+          text(row.document_title || defaults.title),
+          text(row.document_subtitle || defaults.subtitle),
+        ]
+      );
+    }
+    return {
+      documentType,
+      documentNumber,
+      sequenceNumber: nextNumber,
+      sequenceYear,
+      series: cleanAifTransferDocumentSeries(row.series || defaults.series),
+      title: text(row.document_title || defaults.title),
+      subtitle: text(row.document_subtitle || defaults.subtitle),
+      priceBasis: defaults.priceBasis,
     };
   }
 
@@ -6000,6 +6235,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const modeRaw = normCode(req.body?.mode || req.body?.stockMode || req.body?.stock_mode || req.body?.adjustmentMode || req.body?.adjustment_mode || req.query?.mode || "redistribute");
     const correctionMode = ["correction", "manual_correction", "stock_correction", "adjustment", "manual_adjustment"].includes(modeRaw)
       || boolFrom(req.body?.allowTotalChange ?? req.body?.allow_total_change, false);
+    const correctionReasonCode = normCode(
+      req.body?.reasonCode ?? req.body?.reason_code ?? req.body?.correctionReasonCode ?? req.body?.correction_reason_code
+    );
+    const correctionReasonText = emptyToNull(
+      req.body?.reasonText ?? req.body?.reason_text ?? req.body?.correctionReasonText ?? req.body?.correction_reason_text
+    );
+    const correctionNote = emptyToNull(req.body?.note ?? req.body?.correctionNote ?? req.body?.correction_note);
 
     if (!id) return res.status(400).json({ error: "variant id required" });
     if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletsor." });
@@ -6089,6 +6331,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
+      if (correctionMode && afterTotal !== beforeTotal && !correctionReasonCode) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: "A készletkorrekció okának kiválasztása kötelező.",
+          code: "stock_correction_reason_required",
+          beforeTotal,
+          afterTotal,
+        });
+      }
+      if (correctionMode && afterTotal !== beforeTotal && correctionReasonCode === "other" && !correctionReasonText) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: "Az Egyéb készletkorrekció okát szövegesen is meg kell adni.",
+          code: "stock_correction_reason_text_required",
+          beforeTotal,
+          afterTotal,
+        });
+      }
+
       const sourceType = correctionMode ? "manual_stock_correction" : "manual_stock_redistribution";
       const reason = correctionMode ? "manual_location_stock_correction" : "manual_location_stock_redistribution";
       let changed = 0;
@@ -6118,6 +6379,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             actor,
             raw: {
               reason,
+              documentType: correctionMode ? "stock_correction" : null,
+              reasonCode: correctionMode ? correctionReasonCode || null : null,
+              reasonText: correctionMode ? correctionReasonText : null,
+              note: correctionMode ? correctionNote : null,
               mode: correctionMode ? "correction" : "redistribute",
               direction: diff > 0 ? "in" : diff < 0 ? "out" : "adjust",
               locationCode: row.location.code,
@@ -6135,7 +6400,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const freshStock = await readVariantStockRows(client, variantId);
       await client.query("COMMIT");
-      res.json({ ok: true, changed, mode: correctionMode ? "correction" : "redistribute", beforeTotal, afterTotal, stock: freshStock });
+      res.json({ ok: true, changed, mode: correctionMode ? "correction" : "redistribute", beforeTotal, afterTotal, totalDelta: afterTotal - beforeTotal, stock: freshStock });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF update variant stock failed", e);
@@ -8177,6 +8442,69 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   });
 
 
+  router.get('/stock-documents/settings', requireAuthed, async (_req, res) => {
+    try {
+      const settings = await readAifStockDocumentSettings(pool, null, false);
+      res.json({
+        ok: true,
+        items: settings,
+        settings: Object.fromEntries(settings.map((row) => [row.documentType, row])),
+      });
+    } catch (error) {
+      console.error('AIF stock document settings load failed', error);
+      res.status(500).json({ error: 'A készletbizonylatok számozási beállításainak betöltése nem sikerült.' });
+    }
+  });
+
+  async function saveAifStockDocumentSettings(req, res) {
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+      const documentType = cleanAifStockDocumentType(req.params.type || req.body?.documentType || req.body?.document_type, null);
+      if (!documentType) return res.status(400).json({ error: 'Érvénytelen készletbizonylat-típus.' });
+      const current = await readAifStockDocumentSettings(pool, documentType, false);
+      const body = req.body?.settings && typeof req.body.settings === 'object' ? req.body.settings : (req.body || {});
+      const defaults = AIF_STOCK_DOCUMENT_TYPES[documentType];
+      const series = cleanAifTransferDocumentSeries(body.series || current.series || defaults.series);
+      const nextNumber = Math.max(1, Number.parseInt(String(body.nextNumber ?? body.next_number ?? current.nextNumber ?? 1), 10) || 1);
+      const digits = Math.min(10, Math.max(3, Number.parseInt(String(body.digits ?? current.digits ?? 6), 10) || 6));
+      const includeYear = body.includeYear === undefined && body.include_year === undefined ? current.includeYear !== false : Boolean(body.includeYear ?? body.include_year);
+      const yearlyReset = body.yearlyReset === undefined && body.yearly_reset === undefined ? current.yearlyReset !== false : Boolean(body.yearlyReset ?? body.yearly_reset);
+      const sequenceYear = Math.max(2000, Math.min(2100, Number.parseInt(String(body.sequenceYear ?? body.sequence_year ?? current.sequenceYear ?? new Date().getFullYear()), 10) || new Date().getFullYear()));
+      const documentTitle = text(body.documentTitle || body.document_title || current.documentTitle || defaults.title).slice(0, 220);
+      const documentSubtitle = text(body.documentSubtitle || body.document_subtitle || current.documentSubtitle || defaults.subtitle).slice(0, 220);
+      const preview = aifTransferDocumentNumber({ series, digits, include_year: includeYear }, nextNumber, sequenceYear);
+      const collision = await pool.query(`SELECT 1 FROM aif_stock_transfer_documents WHERE document_number=$1 LIMIT 1`, [preview]);
+      if (collision.rowCount) return res.status(409).json({ error: `Ez a következő bizonylatszám már foglalt: ${preview}. Állíts magasabb következő sorszámot.` });
+      const result = await pool.query(
+        `UPDATE aif_stock_document_settings
+         SET series=$2, next_number=$3, digits=$4, include_year=$5, yearly_reset=$6,
+             sequence_year=$7, document_title=$8, document_subtitle=$9,
+             updated_by=$10, updated_at=now()
+         WHERE document_type=$1
+         RETURNING *`,
+        [documentType, series, nextNumber, digits, includeYear, yearlyReset, sequenceYear, documentTitle, documentSubtitle, actorFrom(req)]
+      );
+      if (documentType === 'internal_transfer') {
+        await pool.query(
+          `UPDATE aif_stock_transfer_document_settings
+           SET series=$1, next_number=$2, digits=$3, include_year=$4, yearly_reset=$5,
+               sequence_year=$6, document_title=$7, document_subtitle=$8,
+               updated_by=$9, updated_at=now()
+           WHERE id=1`,
+          [series, nextNumber, digits, includeYear, yearlyReset, sequenceYear, documentTitle, documentSubtitle, actorFrom(req)]
+        );
+      }
+      const settings = aifStockDocumentSettingsResponse(result.rows[0] || { document_type: documentType });
+      res.json({ ok: true, settings, item: settings });
+    } catch (error) {
+      console.error('AIF stock document settings save failed', error);
+      res.status(500).json({ error: error?.message || 'A készletbizonylat számozási beállításainak mentése nem sikerült.' });
+    }
+  }
+
+  router.put('/stock-documents/settings/:type', requireAdminOrSecret, saveAifStockDocumentSettings);
+  router.patch('/stock-documents/settings/:type', requireAdminOrSecret, saveAifStockDocumentSettings);
+
   router.get('/stock-transfer-documents/settings', requireAuthed, async (_req, res) => {
     try {
       const settings = await readAifTransferDocumentSettings(pool);
@@ -8214,6 +8542,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          RETURNING *`,
         [series, nextNumber, digits, includeYear, yearlyReset, sequenceYear, documentTitle, documentSubtitle, actorFrom(req)]
       );
+      await pool.query(
+        `UPDATE aif_stock_document_settings
+         SET series=$1, next_number=$2, digits=$3, include_year=$4, yearly_reset=$5,
+             sequence_year=$6, document_title=$7, document_subtitle=$8,
+             updated_at=now(), updated_by=$9
+         WHERE document_type='internal_transfer'`,
+        [series, nextNumber, digits, includeYear, yearlyReset, sequenceYear, documentTitle, documentSubtitle, actorFrom(req)]
+      );
       res.json({ ok: true, settings: aifTransferSettingsResponse(result.rows[0] || {}) });
     } catch (error) {
       console.error('AIF stock transfer document settings save failed', error);
@@ -8236,7 +8572,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const official = await pool.query(
         `SELECT id::text, transfer_id, document_number, series, sequence_number, sequence_year,
                 title, subtitle, note, status, actor, owner_key, line_count, total_qty,
-                from_location_summary, to_location_summary, raw, created_at, updated_at
+                from_location_summary, to_location_summary, raw, created_at, updated_at,
+                document_type, source_location_id, target_location_id,
+                supplier_id, supplier_name, reception_id, external_reference,
+                reason_code, reason_text, operation_direction, price_basis,
+                total_value, currency_code
          FROM aif_stock_transfer_documents d
          WHERE NOT EXISTS (
            SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=d.transfer_id
@@ -8254,6 +8594,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            max(NULLIF(sm.raw->>'note','')) AS note,
            count(DISTINCT COALESCE(NULLIF(sm.raw->>'lineNo',''),'1'))::int AS line_count,
            COALESCE(sum(CASE WHEN COALESCE(sm.raw->>'side','')='source' OR sm.qty_delta < 0 THEN abs(sm.qty_delta) ELSE 0 END),0)::int AS total_qty,
+           round(COALESCE(sum(CASE WHEN COALESCE(sm.raw->>'side','')='source' OR sm.qty_delta < 0 THEN abs(sm.qty_delta)::numeric * COALESCE(v.sell_price,0)::numeric ELSE 0 END),0)::numeric,2) AS total_value,
            string_agg(DISTINCT NULLIF(sm.raw->>'fromLocationName',''), ' • ') AS from_location_summary,
            string_agg(DISTINCT NULLIF(sm.raw->>'toLocationName',''), ' • ') AS to_location_summary,
            string_agg(DISTINCT COALESCE(NULLIF(sm.raw->>'productTitle',''), m.title_ro, ''), ' ') AS product_search,
@@ -8306,14 +8647,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         },
         created_at: row.created_at,
         updated_at: row.created_at,
+        document_type: 'internal_transfer',
+        source_location_id: null,
+        target_location_id: null,
+        supplier_id: null,
+        supplier_name: null,
+        reception_id: null,
+        external_reference: null,
+        reason_code: null,
+        reason_text: null,
+        operation_direction: 'transfer',
+        price_basis: 'selling_price',
+        total_value: Number(row.total_value || 0),
+        currency_code: 'RON',
         source: 'legacy',
         isLegacy: true,
       }));
 
       let items = [...officialItems, ...legacyItems];
       if (type === 'official') items = items.filter((item) => !item.isLegacy);
-      if (type === 'legacy') items = items.filter((item) => item.isLegacy);
-      if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
+      else if (type === 'legacy') items = items.filter((item) => item.isLegacy);
+      else if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
+      else {
+        const requestedDocumentType = cleanAifStockDocumentType(type, null);
+        if (requestedDocumentType) items = items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
+      }
       if (from) items = items.filter((item) => new Date(item.created_at).getTime() >= new Date(`${from}T00:00:00`).getTime());
       if (to) items = items.filter((item) => new Date(item.created_at).getTime() < new Date(`${to}T00:00:00`).getTime() + 86400000);
       if (fromLocation) {
@@ -8327,7 +8685,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (search) {
         items = items.filter((item) => [
           item.document_number, item.transfer_id, item.title, item.subtitle, item.note,
-          item.actor, item.from_location_summary, item.to_location_summary, JSON.stringify(item.raw || {}),
+          item.actor, item.from_location_summary, item.to_location_summary,
+          item.document_type, item.supplier_name, item.external_reference,
+          item.reason_code, item.reason_text, JSON.stringify(item.raw || {}),
         ].join(' ').toLowerCase().includes(search));
       }
       items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -8341,6 +8701,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         legacy: items.filter((item) => item.isLegacy).length,
         cancelled: items.filter((item) => item.status === 'cancelled').length,
         totalQty: items.reduce((sum, item) => sum + Number(item.total_qty || 0), 0),
+        totalValue: Math.round((items.reduce((sum, item) => sum + Number(item.total_value || 0), 0) + Number.EPSILON) * 100) / 100,
+        internalTransfer: items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === 'internal_transfer').length,
+        supplierReturn: items.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'supplier_return').length,
+        damagedWriteoff: items.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'damaged_writeoff').length,
+        stockCorrection: items.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'stock_correction').length,
+        currencyCode: 'RON',
       };
       const locations = await pool.query(`SELECT id::text, code, name FROM aif_locations WHERE COALESCE(is_active,true)=true ORDER BY name ASC`);
       res.json({ items: pageItems, totals, page: safePage, pages, limit, total, locations: locations.rows });
@@ -8365,6 +8731,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const rows = await pool.query(
           `SELECT sm.id::text, sm.created_at, sm.qty_delta, sm.qty_before, sm.qty_after, sm.actor, sm.raw,
                   v.id::text AS variant_id, v.internal_sku, v.barcode, v.size, v.color_name, v.image_url,
+                  v.sell_price,
                   m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
                   sc.supplier_product_code, sc.supplier_barcode
            FROM aif_stock_movements sm
@@ -8412,6 +8779,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             to_location_id: raw.toLocationId || null,
             to_location_name: raw.toLocationName || target?.raw?.toLocationName || null,
             qty: Math.max(...group.map((row) => Math.abs(Number(row.qty_delta || 0))), 0),
+            unit_price: toMoney(source?.sell_price ?? target?.sell_price),
+            line_total: (() => {
+              const q = Math.max(...group.map((row) => Math.abs(Number(row.qty_delta || 0))), 0);
+              const p = toMoney(source?.sell_price ?? target?.sell_price);
+              return p === null ? null : Math.round((q * p + Number.EPSILON) * 100) / 100;
+            })(),
+            currency_code: 'RON',
+            price_basis: 'selling_price',
+            qty_delta: 0,
             source_before: source?.qty_before ?? null,
             source_after: source?.qty_after ?? null,
             target_before: target?.qty_before ?? null,
@@ -8436,6 +8812,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           to_location_summary: Array.from(new Set(lines.map((line) => line.to_location_name).filter(Boolean))).join(' • '),
           created_at: first.created_at,
           updated_at: first.created_at,
+          document_type: 'internal_transfer',
+          price_basis: 'selling_price',
+          currency_code: 'RON',
+          total_value: Math.round((lines.reduce((sum, line) => sum + Number(line.line_total || 0), 0) + Number.EPSILON) * 100) / 100,
+          operation_direction: 'transfer',
           isLegacy: true,
           source: 'legacy',
         };
@@ -8535,6 +8916,553 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
+
+  function stockDocumentRequestHash(payload = {}) {
+    const lines = (payload.lines || []).map((input = {}) => ({
+      variantId: text(input.variantId || input.variant_id || input.variant || input.id),
+      qty: toInt(input.qty ?? input.quantity ?? input.count),
+    }));
+    return createHash("sha256")
+      .update(JSON.stringify({
+        documentType: payload.documentType,
+        sourceLocationId: payload.sourceLocationId,
+        targetLocationId: payload.targetLocationId || null,
+        supplierId: payload.supplierId || null,
+        receptionId: payload.receptionId || null,
+        reasonCode: payload.reasonCode || null,
+        reasonText: payload.reasonText || null,
+        operationDirection: payload.operationDirection || null,
+        externalReference: payload.externalReference || null,
+        note: payload.note || null,
+        lines,
+      }))
+      .digest("hex");
+  }
+
+  async function aifStockDocumentPurchasePrice(client, variantId, receptionId, fallbackPrice) {
+    if (receptionId) {
+      const linked = await client.query(
+        `SELECT COALESCE(rw.buy_price_ron, rw.buy_price) AS unit_price
+         FROM aif_import_rows rw
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         WHERE rw.variant_id::text=$1
+           AND b.reception_id::text=$2
+           AND rw.status='committed'
+           AND COALESCE(rw.buy_price_ron, rw.buy_price) IS NOT NULL
+         ORDER BY COALESCE(b.committed_at,b.created_at) DESC, rw.row_no DESC, rw.id DESC
+         LIMIT 1`,
+        [String(variantId), String(receptionId)]
+      );
+      const linkedPrice = toMoney(linked.rows[0]?.unit_price);
+      if (linkedPrice !== null) return linkedPrice;
+    }
+    return toMoney(fallbackPrice);
+  }
+
+  function stockDocumentCounterpartySummary({ documentType, supplierName, reasonText, operationDirection, targetLocationName }) {
+    if (documentType === 'internal_transfer') return targetLocationName || null;
+    if (documentType === 'supplier_return') return supplierName || 'Furnizor';
+    if (documentType === 'damaged_writeoff') return reasonText || 'Scoatere din gestiune';
+    if (documentType === 'stock_correction') return operationDirection === 'increase' ? 'Corecție pozitivă' : 'Corecție negativă';
+    return null;
+  }
+
+  async function handleCreateStockDocument(req, res) {
+    const body = req.body || {};
+    const documentType = cleanAifStockDocumentType(body.documentType || body.document_type || body.type, null);
+    if (!documentType) return res.status(400).json({ error: 'Válassz érvényes készletbizonylat-típust.' });
+
+    const linesInput = Array.isArray(body.lines)
+      ? body.lines
+      : Array.isArray(body.items)
+        ? body.items
+        : Array.isArray(body.rows)
+          ? body.rows
+          : [];
+    if (!linesInput.length) return res.status(400).json({ error: 'Nincs terméksor a bizonylaton.' });
+
+    const sourceLocationInput = text(body.sourceLocationId || body.source_location_id || body.locationId || body.location_id || body.fromLocationId || body.from_location_id);
+    const targetLocationInput = text(body.targetLocationId || body.target_location_id || body.toLocationId || body.to_location_id);
+    const supplierInput = text(body.supplierId || body.supplier_id || body.supplier);
+    const receptionInput = text(body.receptionId || body.reception_id);
+    const reasonCode = normCode(body.reasonCode || body.reason_code || body.reason);
+    const reasonText = emptyToNull(body.reasonText || body.reason_text || body.reasonLabel || body.reason_label);
+    const note = emptyToNull(body.note);
+    const externalReference = emptyToNull(body.externalReference || body.external_reference || body.reference);
+    const operationDirection = documentType === 'stock_correction'
+      ? (normCode(body.operationDirection || body.operation_direction || body.correctionDirection || body.correction_direction) === 'increase' ? 'increase' : 'decrease')
+      : documentType === 'internal_transfer'
+        ? 'transfer'
+        : 'decrease';
+    const idempotencyKey = text(req.get('Idempotency-Key') || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+
+    if (!sourceLocationInput) return res.status(400).json({ error: 'A forráshely / érintett készlethely kötelező.' });
+    if (documentType === 'internal_transfer' && !targetLocationInput) return res.status(400).json({ error: 'A célhely kötelező.' });
+    if (documentType === 'supplier_return' && !supplierInput) return res.status(400).json({ error: 'A beszállító kiválasztása kötelező.' });
+    if (documentType !== 'internal_transfer' && !reasonCode) return res.status(400).json({ error: 'A művelet oka kötelező.' });
+    if (reasonCode === 'other' && !reasonText) return res.status(400).json({ error: 'Az Egyéb ok rövid leírása kötelező.' });
+
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+      if (idempotencyKey) await ensureAifStockTransferIdempotencySchema();
+    } catch (schemaError) {
+      console.error('AIF stock document schema failed', schemaError);
+      return res.status(500).json({ error: 'A készletbizonylatok előkészítése nem sikerült.', code: schemaError?.code || null });
+    }
+
+    const actor = actorFrom(req);
+    const ownerKey = selectionOwnerKey(req);
+    const requestPayload = {
+      documentType,
+      sourceLocationId: sourceLocationInput,
+      targetLocationId: targetLocationInput,
+      supplierId: supplierInput,
+      receptionId: receptionInput,
+      reasonCode,
+      reasonText,
+      operationDirection,
+      externalReference,
+      note,
+      lines: linesInput,
+    };
+    const requestHash = idempotencyKey ? stockDocumentRequestHash(requestPayload) : null;
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      try { await client.query("SELECT set_config('aif.actor', $1, true)", [actor]); } catch {}
+
+      if (idempotencyKey) {
+        const claim = await client.query(
+          `INSERT INTO aif_stock_transfer_requests (
+             owner_key, idempotency_key, request_hash, status, created_at, updated_at
+           ) VALUES ($1,$2,$3,'processing',now(),now())
+           ON CONFLICT (owner_key,idempotency_key) DO NOTHING
+           RETURNING owner_key`,
+          [ownerKey, idempotencyKey, requestHash]
+        );
+        if (!claim.rowCount) {
+          const existing = await client.query(
+            `SELECT request_hash,status,transfer_id,response
+             FROM aif_stock_transfer_requests
+             WHERE owner_key=$1 AND idempotency_key=$2
+             FOR UPDATE`,
+            [ownerKey, idempotencyKey]
+          );
+          const saved = existing.rows[0];
+          if (!saved) throw Object.assign(new Error('Az ismétlésvédelmi rekord nem található.'), { statusCode: 409 });
+          if (text(saved.request_hash) !== text(requestHash)) throw Object.assign(new Error('Ezt az ismétlésvédelmi kulcsot már másik művelethez használták.'), { statusCode: 409 });
+          if (saved.status === 'completed' && saved.response) {
+            await client.query('COMMIT');
+            return res.json({ ...(saved.response || {}), ok: true, duplicate: true, idempotencyKey });
+          }
+          throw Object.assign(new Error('Ez a bizonylat már feldolgozás alatt van.'), { statusCode: 409 });
+        }
+      }
+
+      const sourceLocation = await findByIdOrCode(client, 'aif_locations', sourceLocationInput);
+      if (!sourceLocation || sourceLocation.is_active === false) throw Object.assign(new Error('A forráshely érvénytelen vagy inaktív.'), { statusCode: 400 });
+
+      let targetLocation = null;
+      if (documentType === 'internal_transfer') {
+        targetLocation = await findByIdOrCode(client, 'aif_locations', targetLocationInput);
+        if (!targetLocation || targetLocation.is_active === false) throw Object.assign(new Error('A célhely érvénytelen vagy inaktív.'), { statusCode: 400 });
+        if (String(targetLocation.id) === String(sourceLocation.id)) throw Object.assign(new Error('A forrás és a cél nem lehet ugyanaz.'), { statusCode: 400 });
+      }
+
+      let supplier = null;
+      if (documentType === 'supplier_return') {
+        supplier = await findByIdOrCode(client, 'aif_suppliers', supplierInput);
+        if (!supplier || supplier.is_active === false) throw Object.assign(new Error('A beszállító érvénytelen vagy inaktív.'), { statusCode: 400 });
+      }
+
+      let reception = null;
+      if (receptionInput) {
+        const receptionResult = await client.query(
+          `SELECT r.id, r.invoice_number, r.supplier_id, s.name AS supplier_name
+           FROM aif_receptions r
+           LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
+           WHERE r.id::text=$1
+           LIMIT 1`,
+          [receptionInput]
+        );
+        reception = receptionResult.rows[0] || null;
+        if (!reception) throw Object.assign(new Error('A kapcsolt receptió nem található.'), { statusCode: 404 });
+        if (supplier && reception.supplier_id && String(reception.supplier_id) !== String(supplier.id)) {
+          throw Object.assign(new Error('A kiválasztott receptió másik beszállítóhoz tartozik.'), { statusCode: 400 });
+        }
+      }
+
+      const sequence = await allocateAifStockDocumentNumber(client, documentType);
+      const operationId = stockMovementSourceId(`doc_${documentType}`, 'document', sourceLocation.id);
+      const sourceSummary = sourceLocation.name || sourceLocation.code;
+      const counterpartySummary = stockDocumentCounterpartySummary({
+        documentType,
+        supplierName: supplier?.name,
+        reasonText,
+        operationDirection,
+        targetLocationName: targetLocation?.name || targetLocation?.code,
+      });
+      const insertedDocument = await client.query(
+        `INSERT INTO aif_stock_transfer_documents (
+           transfer_id, document_number, series, sequence_number, sequence_year,
+           title, subtitle, note, status, actor, owner_key, line_count, total_qty,
+           from_location_summary, to_location_summary, raw,
+           document_type, source_location_id, target_location_id,
+           supplier_id, supplier_name, reception_id, external_reference,
+           reason_code, reason_text, operation_direction, price_basis,
+           total_value, currency_code, created_at, updated_at
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,'issued',$9,$10,0,0,$11,$12,$13::jsonb,
+           $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,0,'RON',now(),now()
+         )
+         RETURNING *`,
+        [
+          operationId,
+          sequence.documentNumber,
+          sequence.series,
+          sequence.sequenceNumber,
+          sequence.sequenceYear,
+          sequence.title,
+          sequence.subtitle,
+          note,
+          actor,
+          ownerKey,
+          sourceSummary,
+          counterpartySummary,
+          JSON.stringify({
+            source: 'stock_document',
+            documentType,
+            idempotencyKey: idempotencyKey || null,
+            supplierId: supplier?.id || null,
+            supplierName: supplier?.name || null,
+            receptionId: reception?.id || null,
+            receptionInvoiceNumber: reception?.invoice_number || null,
+            reasonCode,
+            reasonText,
+            operationDirection,
+            externalReference,
+          }),
+          documentType,
+          String(sourceLocation.id),
+          targetLocation ? String(targetLocation.id) : null,
+          supplier ? String(supplier.id) : null,
+          supplier?.name || null,
+          reception ? String(reception.id) : null,
+          externalReference || reception?.invoice_number || null,
+          reasonCode || null,
+          reasonText,
+          operationDirection,
+          sequence.priceBasis,
+        ]
+      );
+      let document = insertedDocument.rows[0];
+      const completedLines = [];
+      let totalQty = 0;
+      let totalValue = 0;
+      let movementCount = 0;
+
+      for (let index = 0; index < linesInput.length; index += 1) {
+        const input = linesInput[index] || {};
+        const variantInput = text(input.variantId || input.variant_id || input.variant || input.id || input.barcode);
+        const quantity = toInt(input.qty ?? input.quantity ?? input.count);
+        if (!variantInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a termék.`), { statusCode: 400 });
+        if (quantity === null || quantity <= 0) throw Object.assign(new Error(`A(z) ${index + 1}. sor mennyisége érvénytelen.`), { statusCode: 400 });
+
+        const variantResult = await client.query(
+          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status, v.image_url,
+                  v.buy_price, v.sell_price,
+                  m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
+                  sc.supplier_product_code, sc.supplier_barcode
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN aif_categories c ON c.id=m.category_id
+           LEFT JOIN LATERAL (
+             SELECT supplier_product_code, supplier_barcode
+             FROM aif_variant_supplier_codes x
+             WHERE x.variant_id=v.id AND COALESCE(x.is_active,true)=true
+             ORDER BY x.updated_at DESC NULLS LAST
+             LIMIT 1
+           ) sc ON true
+           WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1 OR sc.supplier_barcode=$1
+           FOR UPDATE OF v`,
+          [variantInput]
+        );
+        if (!variantResult.rowCount) throw Object.assign(new Error(`A(z) ${index + 1}. sor terméke nem található.`), { statusCode: 404 });
+        const variant = variantResult.rows[0];
+        if (String(variant.status || '') === 'archived') throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: archivált termék nem módosítható.`), { statusCode: 400 });
+
+        const currentSource = await client.query(
+          `SELECT qty,reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+          [sourceLocation.id, variant.id]
+        );
+        const sourceBefore = currentSource.rowCount ? Number(currentSource.rows[0].qty || 0) : 0;
+        const sourceReserved = currentSource.rowCount ? Number(currentSource.rows[0].reserved_qty || 0) : 0;
+        const outgoing = documentType !== 'stock_correction' || operationDirection === 'decrease';
+        if (outgoing && !currentSource.rowCount) throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: nincs készlet a kiválasztott helyen.`), { statusCode: 400 });
+        const sourceAvailable = Math.max(0, sourceBefore - sourceReserved);
+        if (outgoing && quantity > sourceAvailable) throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: csak ${sourceAvailable} db szabad készlet áll rendelkezésre.`), { statusCode: 400 });
+
+        let sourceAfter = sourceBefore;
+        let targetBefore = null;
+        let targetAfter = null;
+        let quantityDelta = 0;
+        if (documentType === 'internal_transfer') {
+          sourceAfter = sourceBefore - quantity;
+          const currentTarget = await client.query(
+            `SELECT qty,reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+            [targetLocation.id, variant.id]
+          );
+          targetBefore = currentTarget.rowCount ? Number(currentTarget.rows[0].qty || 0) : 0;
+          const targetReserved = currentTarget.rowCount ? Number(currentTarget.rows[0].reserved_qty || 0) : 0;
+          targetAfter = targetBefore + quantity;
+          await client.query(
+            `UPDATE aif_stock SET qty=$3,reserved_qty=$4,updated_at=now() WHERE location_id=$1 AND variant_id=$2`,
+            [sourceLocation.id, variant.id, sourceAfter, sourceReserved]
+          );
+          await client.query(
+            `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+             VALUES ($1,$2,$3,$4,now())
+             ON CONFLICT (location_id,variant_id) DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+            [targetLocation.id, variant.id, targetAfter, targetReserved]
+          );
+        } else {
+          quantityDelta = operationDirection === 'increase' ? quantity : -quantity;
+          sourceAfter = sourceBefore + quantityDelta;
+          if (sourceAfter < sourceReserved) throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: a korrekció a foglalt készlet alá vinné az állományt.`), { statusCode: 400 });
+          await client.query(
+            `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+             VALUES ($1,$2,$3,$4,now())
+             ON CONFLICT (location_id,variant_id) DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+            [sourceLocation.id, variant.id, sourceAfter, sourceReserved]
+          );
+        }
+
+        const priceBasis = sequence.priceBasis;
+        const unitPrice = priceBasis === 'selling_price'
+          ? toMoney(variant.sell_price)
+          : await aifStockDocumentPurchasePrice(client, variant.id, reception?.id || null, variant.buy_price);
+        const lineTotal = unitPrice === null ? null : Math.round((quantity * unitPrice + Number.EPSILON) * 100) / 100;
+        const productCode = variant.supplier_product_code || String(variant.model_code || '').split(':').pop() || variant.internal_sku || null;
+        const displayBarcode = variant.barcode || variant.supplier_barcode || null;
+        const lineTargetName = documentType === 'internal_transfer'
+          ? (targetLocation.name || targetLocation.code)
+          : counterpartySummary;
+        const rawBase = {
+          reason: documentType,
+          reasonCode,
+          reasonText,
+          documentType,
+          documentId: document.id,
+          documentNumber: document.document_number,
+          documentTitle: document.title,
+          documentOperationId: operationId,
+          transferId: documentType === 'internal_transfer' ? operationId : null,
+          idempotencyKey: idempotencyKey || null,
+          lineNo: index + 1,
+          note,
+          productTitle: variant.title_ro,
+          productCode,
+          barcode: displayBarcode,
+          sourceLocationId: String(sourceLocation.id),
+          sourceLocationName: sourceSummary,
+          fromLocationId: String(sourceLocation.id),
+          fromLocationName: sourceSummary,
+          targetLocationId: targetLocation ? String(targetLocation.id) : null,
+          targetLocationName: lineTargetName,
+          toLocationId: targetLocation ? String(targetLocation.id) : null,
+          toLocationName: lineTargetName,
+          supplierId: supplier ? String(supplier.id) : null,
+          supplierName: supplier?.name || null,
+          receptionId: reception ? String(reception.id) : null,
+          externalReference: externalReference || reception?.invoice_number || null,
+          operationDirection,
+          qty: quantity,
+          qtyDelta: documentType === 'internal_transfer' ? 0 : quantityDelta,
+          unitPrice,
+          lineTotal,
+          priceBasis,
+          currencyCode: 'RON',
+        };
+
+        if (documentType === 'internal_transfer') {
+          if (await insertStockMovementSafe(client, {
+            movementType: 'manual_adjustment',
+            sourceType: 'stock_transfer',
+            sourcePrefix: 'transfer_out',
+            locationId: sourceLocation.id,
+            variantId: variant.id,
+            qtyDelta: -quantity,
+            qtyBefore: sourceBefore,
+            qtyAfter: sourceAfter,
+            actor,
+            raw: { ...rawBase, direction: 'out', side: 'source' },
+          })) movementCount += 1;
+          if (await insertStockMovementSafe(client, {
+            movementType: 'incoming',
+            sourceType: 'stock_transfer',
+            sourcePrefix: 'transfer_in',
+            locationId: targetLocation.id,
+            variantId: variant.id,
+            qtyDelta: quantity,
+            qtyBefore: targetBefore,
+            qtyAfter: targetAfter,
+            actor,
+            raw: { ...rawBase, direction: 'in', side: 'target' },
+          })) movementCount += 1;
+        } else {
+          const sourceType = documentType;
+          if (await insertStockMovementSafe(client, {
+            movementType: quantityDelta > 0 ? 'incoming' : 'manual_adjustment',
+            sourceType,
+            sourcePrefix: sourceType,
+            locationId: sourceLocation.id,
+            variantId: variant.id,
+            qtyDelta: quantityDelta,
+            qtyBefore: sourceBefore,
+            qtyAfter: sourceAfter,
+            actor,
+            raw: { ...rawBase, direction: quantityDelta > 0 ? 'in' : 'out', side: 'source' },
+          })) movementCount += 1;
+        }
+
+        await client.query(
+          `INSERT INTO aif_stock_transfer_document_lines (
+             document_id,line_no,variant_id,product_title,brand_name,category_name,
+             product_code,barcode,color_name,size,image_url,
+             from_location_id,from_location_name,to_location_id,to_location_name,
+             qty,unit_price,line_total,currency_code,price_basis,qty_delta,
+             source_before,source_after,target_before,target_after,raw
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+             $16,$17,$18,'RON',$19,$20,$21,$22,$23,$24,$25::jsonb
+           )`,
+          [
+            document.id,
+            index + 1,
+            String(variant.id),
+            variant.title_ro,
+            variant.brand_name,
+            variant.category_name,
+            productCode,
+            displayBarcode,
+            variant.color_name,
+            variant.size,
+            variant.image_url,
+            String(sourceLocation.id),
+            sourceSummary,
+            targetLocation ? String(targetLocation.id) : null,
+            lineTargetName,
+            quantity,
+            unitPrice,
+            lineTotal,
+            priceBasis,
+            documentType === 'internal_transfer' ? 0 : quantityDelta,
+            sourceBefore,
+            sourceAfter,
+            targetBefore,
+            targetAfter,
+            JSON.stringify(rawBase),
+          ]
+        );
+
+        totalQty += quantity;
+        totalValue += lineTotal || 0;
+        completedLines.push({
+          variantId: String(variant.id),
+          title: variant.title_ro,
+          brandName: variant.brand_name,
+          categoryName: variant.category_name,
+          productCode,
+          barcode: displayBarcode,
+          colorName: variant.color_name,
+          size: variant.size,
+          imageUrl: variant.image_url,
+          qty: quantity,
+          qtyDelta: documentType === 'internal_transfer' ? 0 : quantityDelta,
+          unitPrice,
+          lineTotal,
+          currencyCode: 'RON',
+          priceBasis,
+          sourceBefore,
+          sourceAfter,
+          targetBefore,
+          targetAfter,
+        });
+      }
+
+      totalValue = Math.round((totalValue + Number.EPSILON) * 100) / 100;
+      const updated = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET line_count=$2,total_qty=$3,total_value=$4,currency_code='RON',
+             raw=COALESCE(raw,'{}'::jsonb) || $5::jsonb,updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [
+          document.id,
+          completedLines.length,
+          totalQty,
+          totalValue,
+          JSON.stringify({
+            documentType,
+            sourceLocationId: String(sourceLocation.id),
+            targetLocationId: targetLocation ? String(targetLocation.id) : null,
+            supplierId: supplier ? String(supplier.id) : null,
+            supplierName: supplier?.name || null,
+            receptionId: reception ? String(reception.id) : null,
+            receptionInvoiceNumber: reception?.invoice_number || null,
+            reasonCode,
+            reasonText,
+            operationDirection,
+            externalReference,
+            priceBasis: sequence.priceBasis,
+            totalValue,
+            currencyCode: 'RON',
+            items: completedLines,
+          }),
+        ]
+      );
+      document = updated.rows[0] || document;
+
+      const responsePayload = {
+        ok: true,
+        duplicate: false,
+        idempotencyKey: idempotencyKey || null,
+        documentId: String(document.id),
+        documentNumber: document.document_number,
+        documentType,
+        operationId,
+        lineCount: completedLines.length,
+        totalQty,
+        totalValue,
+        currencyCode: 'RON',
+        movementCount,
+        document,
+        items: completedLines,
+      };
+      if (idempotencyKey) {
+        await client.query(
+          `UPDATE aif_stock_transfer_requests
+           SET status='completed',transfer_id=$3,response=$4::jsonb,updated_at=now()
+           WHERE owner_key=$1 AND idempotency_key=$2`,
+          [ownerKey, idempotencyKey, operationId, JSON.stringify(responsePayload)]
+        );
+      }
+      await client.query('COMMIT');
+      res.json(responsePayload);
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF create stock document failed', error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A készletbizonylat mentése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post('/stock-documents', requireAuthed, handleCreateStockDocument);
+  router.post('/stock/documents', requireAuthed, handleCreateStockDocument);
 
   function stockTransferRequestHash(rowsInput, title, note) {
     const lines = (rowsInput || []).map((input = {}) => ({
@@ -8650,12 +9578,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       transferId = stockMovementSourceId("transfer", "batch", "stock");
-      const documentSequence = await allocateAifTransferDocumentNumber(client);
+      const documentSequence = await allocateAifStockDocumentNumber(client, 'internal_transfer');
       const insertedDocument = await client.query(
         `INSERT INTO aif_stock_transfer_documents (
            transfer_id, document_number, series, sequence_number, sequence_year,
-           title, subtitle, note, actor, owner_key, raw, created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,now(),now())
+           title, subtitle, note, actor, owner_key, raw,
+           document_type, price_basis, total_value, currency_code,
+           created_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,
+           'internal_transfer','selling_price',0,'RON',now(),now())
          RETURNING id::text, transfer_id, document_number, series, sequence_number, sequence_year,
                    title, subtitle, note, status, actor, owner_key, created_at, updated_at`,
         [
@@ -8688,6 +9619,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         const variant = await client.query(
           `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status, v.image_url,
+                  v.sell_price,
                   m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
                   sc.supplier_product_code, sc.supplier_barcode
            FROM aif_product_variants v
@@ -8758,6 +9690,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         const rawBase = {
           reason: "stock_transfer",
+          documentType: "internal_transfer",
+          priceBasis: "selling_price",
           transferId,
           documentId: transferDocument?.id || null,
           documentNumber: transferDocument?.document_number || null,
@@ -8808,13 +9742,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
         const productCode = variantRow.supplier_product_code || String(variantRow.model_code || "").split(":").pop() || variantRow.internal_sku || null;
         const displayBarcode = variantRow.barcode || variantRow.supplier_barcode || null;
+        const unitPrice = toMoney(variantRow.sell_price);
+        const lineTotal = unitPrice === null ? null : Math.round((qty * unitPrice + Number.EPSILON) * 100) / 100;
+        rawBase.unitPrice = unitPrice;
+        rawBase.lineTotal = lineTotal;
+        rawBase.currencyCode = "RON";
         await client.query(
           `INSERT INTO aif_stock_transfer_document_lines (
              document_id, line_no, variant_id, product_title, brand_name, category_name,
              product_code, barcode, color_name, size, image_url,
              from_location_id, from_location_name, to_location_id, to_location_name,
-             qty, source_before, source_after, target_before, target_after, raw
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb)`,
+             qty, unit_price, line_total, currency_code, price_basis, qty_delta,
+             source_before, source_after, target_before, target_after, raw
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'RON','selling_price',0,$19,$20,$21,$22,$23::jsonb)`,
           [
             transferDocument.id,
             index + 1,
@@ -8832,6 +9772,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             String(toLocation.id),
             toLocation.name || toLocation.code,
             qty,
+            unitPrice,
+            lineTotal,
             sourceBefore,
             sourceAfter,
             targetBefore,
@@ -8852,6 +9794,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           size: variantRow.size,
           imageUrl: variantRow.image_url,
           qty,
+          unitPrice,
+          lineTotal,
+          currencyCode: "RON",
+          priceBasis: "selling_price",
           fromLocationId: String(fromLocation.id),
           fromLocation: fromLocation.name || fromLocation.code,
           toLocationId: String(toLocation.id),
@@ -8870,7 +9816,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const updatedDocument = await client.query(
         `UPDATE aif_stock_transfer_documents
          SET line_count=$2, total_qty=$3, from_location_summary=$4, to_location_summary=$5,
-             raw=COALESCE(raw,'{}'::jsonb) || $6::jsonb, updated_at=now()
+             source_location_id=$6, target_location_id=$7,
+             total_value=$8, currency_code='RON', document_type='internal_transfer', price_basis='selling_price',
+             raw=COALESCE(raw,'{}'::jsonb) || $9::jsonb, updated_at=now()
          WHERE id=$1::uuid
          RETURNING id::text, transfer_id, document_number, series, sequence_number, sequence_year,
                    title, subtitle, note, status, actor, owner_key, line_count, total_qty,
@@ -8881,8 +9829,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           movedQty,
           fromLocationSummary,
           toLocationSummary,
+          movedItems[0]?.fromLocationId || null,
+          movedItems[0]?.toLocationId || null,
+          Math.round((movedItems.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0) + Number.EPSILON) * 100) / 100,
           JSON.stringify({
             idempotencyKey: idempotencyKey || null,
+            documentType: "internal_transfer",
+            priceBasis: "selling_price",
+            currencyCode: "RON",
+            totalValue: Math.round((movedItems.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0) + Number.EPSILON) * 100) / 100,
             fromLocationIds: Array.from(new Set(movedItems.map((item) => item.fromLocationId).filter(Boolean))),
             toLocationIds: Array.from(new Set(movedItems.map((item) => item.toLocationId).filter(Boolean))),
             items: movedItems,
@@ -8942,6 +9897,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const variant = text(req.query.variant || req.query.variantId || req.query.variant_id);
     const search = text(req.query.search || req.query.q);
     const direction = normCode(req.query.direction || req.query.type || "all");
+    const documentTypeFilter = cleanAifStockDocumentType(req.query.documentType || req.query.document_type || req.query.operationType || req.query.operation_type, null);
     const from = emptyToNull(req.query.from || req.query.dateFrom || req.query.date_from);
     const to = emptyToNull(req.query.to || req.query.dateTo || req.query.date_to);
     const limit = Math.min(3000, Math.max(1, Number(req.query.limit || 250)));
@@ -8971,7 +9927,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } else if (["out", "outgoing", "ki", "kimeno", "eladas", "levonas"].includes(direction)) {
       where.push(`sm.qty_delta < 0`);
     } else if (["adjust", "adjustment", "korrekcio", "manual"].includes(direction)) {
-      where.push(`(sm.qty_delta = 0 OR sm.movement_type IN ('manual_adjustment','adjustment') OR sm.source_type ILIKE '%manual%')`);
+      where.push(`(sm.qty_delta = 0 OR sm.movement_type IN ('manual_adjustment','adjustment') OR sm.source_type ILIKE '%manual%' OR sm.source_type='stock_correction')`);
+    }
+    if (documentTypeFilter) {
+      args.push(documentTypeFilter);
+      where.push(`(COALESCE(sm.raw->>'documentType','')=$${args.length} OR sm.source_type=$${args.length} OR ($${args.length}='internal_transfer' AND sm.source_type='stock_transfer'))`);
     }
     const searchWhere = aifStockProductSearchWhere(search, args);
     if (searchWhere) where.push(searchWhere);
