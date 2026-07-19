@@ -33,6 +33,7 @@ import {
   AifSupplier,
   AifBrandColorCode,
   AifColorType,
+  AifPurchaseOrderDetail,
   apiAifCommitImportBatch,
   apiAifAppendImportRows,
   apiAifDeleteImportBatchHistory,
@@ -46,6 +47,7 @@ import {
   apiAifListCurrencies,
   apiAifListReceptions,
   apiAifGetReception,
+  apiAifGetPurchaseOrder,
   apiAifListLocationTypes,
   apiAifUpdateLocation,
   apiAifUpdateLocationType,
@@ -204,6 +206,7 @@ async function apiIncomingInventoryLookupItems() {
 
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
+const AIF_PURCHASE_ORDER_RECEIVE_HANDOFF_KEY = "allinfashion:purchase-order-receive:v1";
 
 function notifyWarehouseShowAllAfterIncoming(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -606,7 +609,9 @@ function compactAifImportRowForSave(row: AifParsedRow): AifParsedRow {
     "size", "sizeTypeCode", "brandSizeCodeId", "qty", "quantity", "buyPrice", "buy_price", "sellPrice", "sell_price",
     "sellPriceGrossRon", "sell_price_gross_ron", "sellPriceRon", "sell_price_ron", "sellPriceCurrencyMode", "sell_price_currency_mode", "sellPriceCurrency", "sell_price_currency", "sellPriceIsRon", "sell_price_is_ron",
     "sellPriceIncludesTva", "sell_price_includes_tva", "salesPriceIncludesTva", "salesTvaRate", "sales_tva_rate", "saleTvaRate", "sale_tva_rate",
-    "compareAtPrice", "compare_at_price", "weightGrams", "weight_grams", "attributes"
+    "compareAtPrice", "compare_at_price", "weightGrams", "weight_grams", "attributes",
+    "purchaseOrderId", "purchase_order_id", "purchaseOrderNumber", "purchase_order_number",
+    "purchaseOrderLineId", "purchase_order_line_id", "orderedQty", "ordered_qty", "remainingQty", "remaining_qty"
   ];
   const nextNormalized: Record<string, unknown> = {};
   for (const key of keepKeys) {
@@ -1516,6 +1521,7 @@ export default function AllInIncoming(_props: Props) {
   const [selectedReceptionId, setSelectedReceptionId] = useState("");
   const [receptionPickerId, setReceptionPickerId] = useState("");
   const [loadedReception, setLoadedReception] = useState<AifReceptionDetail | null>(null);
+  const [purchaseOrderSource, setPurchaseOrderSource] = useState<AifPurchaseOrderDetail | null>(null);
   const [receptionListOpen, setReceptionListOpen] = useState(false);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [deleteImportBatchTarget, setDeleteImportBatchTarget] = useState<AifImportBatchSummary | null>(null);
@@ -2778,6 +2784,10 @@ export default function AllInIncoming(_props: Props) {
   }
 
   function startNewEmptyReception(showMessage = true) {
+    if (showMessage && typeof window !== "undefined") {
+      try { window.sessionStorage.removeItem(AIF_PURCHASE_ORDER_RECEIVE_HANDOFF_KEY); } catch {}
+    }
+    setPurchaseOrderSource(null);
     setSelectedReceptionId("");
     setReceptionPickerId("");
     setLoadedReception(null);
@@ -2828,6 +2838,14 @@ export default function AllInIncoming(_props: Props) {
     setShippingCost(String(item.shipping_cost ?? ""));
     setInvoiceGross(String(item.invoice_gross ?? ""));
     setNote(String((item as any).note || ""));
+    const purchaseOrderId = String((item as any).purchase_order_id || "").trim();
+    if (purchaseOrderId) {
+      void apiAifGetPurchaseOrder(purchaseOrderId)
+        .then((orderDetail) => setPurchaseOrderSource(orderDetail))
+        .catch(() => setPurchaseOrderSource(null));
+    } else {
+      setPurchaseOrderSource(null);
+    }
     const rawMeta = (item as any).raw_meta || {};
     const storedSellPriceMode = String(rawMeta.sellPriceCurrencyMode || rawMeta.sell_price_currency_mode || "").trim().toLowerCase();
     setSellPriceCurrencyMode(
@@ -3082,6 +3100,107 @@ export default function AllInIncoming(_props: Props) {
     return next;
   }
 
+
+  function purchaseOrderLineToIncomingRow(
+    line: NonNullable<AifPurchaseOrderDetail["lines"]>[number],
+    index: number,
+    order: AifPurchaseOrderDetail["item"]
+  ): AifParsedRow {
+    const remainingQty = Math.max(0, toNumber(line.qty_remaining ?? (toNumber(line.qty_ordered) - toNumber(line.qty_received))));
+    const supplierCode = firstNonEmptyText(line.supplier_product_code, line.model_code, line.barcode, `PO-${index + 1}`);
+    const normalized = {
+      purchaseOrderId: order.id,
+      purchase_order_id: order.id,
+      purchaseOrderNumber: order.order_number,
+      purchase_order_number: order.order_number,
+      purchaseOrderLineId: line.id,
+      purchase_order_line_id: line.id,
+      orderedQty: toNumber(line.qty_ordered),
+      ordered_qty: toNumber(line.qty_ordered),
+      remainingQty,
+      remaining_qty: remainingQty,
+      supplierProductCode: supplierCode,
+      supplierVariantCode: line.supplier_variant_code || "",
+      modelCode: firstNonEmptyText(line.model_code, line.supplier_product_code, line.barcode, supplierCode),
+      titleRo: line.product_title || "",
+      brandName: line.brand_name || "",
+      categoryName: line.category_name || "",
+      productType: line.product_type || line.category_name || "",
+      gender: line.gender || "",
+      descriptionRo: line.description_ro || "",
+      material: line.material || "",
+      imageUrl: line.image_url || "",
+      barcode: line.barcode || "",
+      snCod: line.sn_cod || "",
+      sn_cod: line.sn_cod || "",
+      customsTariffCode: line.customs_tariff_code || "",
+      customs_tariff_code: line.customs_tariff_code || "",
+      colorName: line.color_name || "",
+      colorCode: line.color_code || "",
+      size: normalizeAifSizeValue(line.size || ""),
+      qty: remainingQty,
+      buyPrice: line.unit_price === null || line.unit_price === undefined ? null : toNumber(line.unit_price),
+      sellPrice: line.sell_price === null || line.sell_price === undefined ? null : toNumber(line.sell_price),
+      source: "purchase_order",
+    } as Record<string, unknown>;
+    return {
+      rowNo: index + 1,
+      raw: {
+        source: "purchase_order",
+        purchaseOrderId: order.id,
+        purchaseOrderNumber: order.order_number,
+        purchaseOrderLineId: line.id,
+      },
+      normalized,
+    };
+  }
+
+  async function loadPurchaseOrderHandoff() {
+    if (typeof window === "undefined") return false;
+    let stored = "";
+    try { stored = window.sessionStorage.getItem(AIF_PURCHASE_ORDER_RECEIVE_HANDOFF_KEY) || ""; } catch {}
+    if (!stored) return false;
+    let orderId = stored;
+    try {
+      const parsed = JSON.parse(stored);
+      orderId = String(parsed?.id || parsed?.purchaseOrderId || parsed?.orderId || stored).trim();
+    } catch {}
+    if (!orderId) return false;
+
+    const detail = await apiAifGetPurchaseOrder(orderId);
+    const remainingLines = (detail.lines || []).filter((line) =>
+      Math.max(0, toNumber(line.qty_remaining ?? (toNumber(line.qty_ordered) - toNumber(line.qty_received)))) > 0
+    );
+    if (!remainingLines.length) {
+      setPurchaseOrderSource(detail);
+      setMessage(`${detail.item.order_number}: nincs hátralévő bevételezendő terméksor.`);
+      return true;
+    }
+
+    startNewEmptyReception(false);
+    setPurchaseOrderSource(detail);
+    setSupplierId(String(detail.item.supplier_id || ""));
+    setLocationId(String(detail.item.target_location_id || ""));
+    setCurrencyCode(String(detail.item.currency_code || "RON"));
+    setSellPriceCurrencyMode(String(detail.item.currency_code || "RON").toUpperCase() === "RON" ? "ron" : "invoice");
+    setInvoiceDate(todayIso());
+    setReceptionDate(todayIso());
+    setNote(`Kapcsolódó beszerzési rendelés: ${detail.item.order_number}${detail.item.note ? ` • ${detail.item.note}` : ""}`);
+    setFileName(`Rendelés ${detail.item.order_number}`);
+    const orderRows = remainingLines.map((line, index) => purchaseOrderLineToIncomingRow(line, index, detail.item));
+    setRows(orderRows);
+    const selected: Record<string, boolean> = {};
+    orderRows.forEach((row, index) => { selected[rowKey(row, index)] = true; });
+    setApprovedRows(selected);
+    setPreviewLimit(Math.max(25, orderRows.length));
+    setIncomingInputMode("manual");
+    setIncomingStep("reception");
+    setManualRowsOpen(false);
+    setWorkbenchOpen(false);
+    setMessage(`${detail.item.order_number} betöltve: ${remainingLines.length} terméksor, ${remainingLines.reduce((sum, line) => sum + Math.max(0, toNumber(line.qty_remaining ?? (toNumber(line.qty_ordered) - toNumber(line.qty_received)))), 0)} db vár bevételezésre. Töltsd ki a számla adatait, majd mentsd a receptiót.`);
+    return true;
+  }
+
   async function reloadAll() {
     setBusy(true);
     setMessage("");
@@ -3109,7 +3228,8 @@ export default function AllInIncoming(_props: Props) {
         await loadMeta();
         if (alive) {
           await Promise.all([loadBatches(), loadReceptions()]);
-          startNewEmptyReception(false);
+          const loadedPurchaseOrder = await loadPurchaseOrderHandoff();
+          if (!loadedPurchaseOrder) startNewEmptyReception(false);
         }
       } catch (e: any) {
         if (alive) setMessage(e.message || "Nem sikerült betölteni az adatokat.");
@@ -3293,7 +3413,8 @@ export default function AllInIncoming(_props: Props) {
         supplierId,
         targetLocationId: locationId,
         sourceFileName: fileName || "Manuális bevételezés",
-        sourceFormat: fileName && fileName !== "Manuális bevételezés" ? "xls" : "manual",
+        sourceFormat: purchaseOrderSource ? "purchase_order" : (fileName && fileName !== "Manuális bevételezés" ? "xls" : "manual"),
+        purchaseOrderId: purchaseOrderSource?.item.id || null,
         note,
         reception: {
           invoiceNumber,
@@ -3311,6 +3432,7 @@ export default function AllInIncoming(_props: Props) {
           lineCount: selectedCount,
           totalQty: selectedQty,
           note,
+          purchaseOrderId: purchaseOrderSource?.item.id || null,
           salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
           salesPriceIncludesTva,
           sellPriceCurrencyMode,
@@ -3342,6 +3464,9 @@ export default function AllInIncoming(_props: Props) {
         fillReceptionHeader(detail, { clearDraftRows: false });
       }
       setIncomingStep("review");
+      if (purchaseOrderSource && typeof window !== "undefined") {
+        try { window.sessionStorage.removeItem(AIF_PURCHASE_ORDER_RECEIVE_HANDOFF_KEY); } catch {}
+      }
       const differenceText = differenceMode === "distributed"
         ? " A számlaeltérés arányosan szét lett osztva a kijelölt vételárak között."
         : differenceMode === "kept"
@@ -4891,6 +5016,21 @@ export default function AllInIncoming(_props: Props) {
             </div>
           </div>
         </header>
+
+        {purchaseOrderSource && (
+          <section className="rounded-2xl border border-[#7bd7d4]/45 bg-[#173f48] px-4 py-3 shadow-lg shadow-slate-950/20">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-[#bff8f5]/70">Beszerzési rendelésből indított bevételezés</p>
+                <p className="mt-1 text-base text-white">{purchaseOrderSource.item.order_number} • {purchaseOrderSource.item.supplier_name || "-"}</p>
+                <p className="mt-1 text-xs text-white/65">A sorokból csak a még hátralévő mennyiség került az előnézetbe. Készletre vétel után a rendelés automatikusan részben vagy teljesen beérkezett állapotba vált.</p>
+              </div>
+              <button className={neutralBtn} onClick={() => (window.location.hash = "#allinorderhistory")} type="button">
+                <ArrowLeft size={14} /> Rendelések
+              </button>
+            </div>
+          </section>
+        )}
 
         {message && <div className="rounded-xl border border-emerald-200/30 bg-emerald-400/12 px-3 py-2 text-sm text-white/92">{message}</div>}
 
