@@ -165,6 +165,7 @@ type AifVariantHistoryResponse = {
 
 type RangePreset = "today" | "yesterday" | "last7" | "month" | "year" | "all" | "custom";
 type DirectionFilter = "all" | "in" | "out" | "adjust";
+type StockDocumentTypeFilter = "all" | "internal_transfer" | "supplier_return" | "damaged_writeoff" | "stock_correction";
 type TabKey = "moves" | "stock";
 type MessageTone = "info" | "error";
 
@@ -313,11 +314,49 @@ function escapeHtml(value: unknown) {
     .replace(/'/g, "&#039;");
 }
 
+function stockDocumentTypeFromMove(item: Pick<AifStockMoveItem, "source_type" | "raw">): StockDocumentTypeFilter {
+  const raw = item.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  const explicit = String(raw.documentType || raw.document_type || "").trim().toLowerCase();
+  if (explicit === "internal_transfer" || explicit === "supplier_return" || explicit === "damaged_writeoff" || explicit === "stock_correction") return explicit;
+  const source = String(item.source_type || "").trim().toLowerCase();
+  if (source === "stock_transfer") return "internal_transfer";
+  if (source === "supplier_return") return "supplier_return";
+  if (source === "damaged_writeoff") return "damaged_writeoff";
+  if (source === "stock_correction") return "stock_correction";
+  return "all";
+}
+
+function stockDocumentTypeLabel(value: StockDocumentTypeFilter) {
+  if (value === "internal_transfer") return "Belső átadás";
+  if (value === "supplier_return") return "Beszállítói retur";
+  if (value === "damaged_writeoff") return "Sérült / kivezetés";
+  if (value === "stock_correction") return "Készletkorrekció";
+  return "Minden bizonylat";
+}
+
+function movementDocumentNumber(item: Pick<AifStockMoveItem, "raw">) {
+  const raw = item.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  return String(raw.documentNumber || raw.document_number || "").trim();
+}
+
+function movementDocumentId(item: Pick<AifStockMoveItem, "raw">) {
+  const raw = item.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  return String(raw.documentId || raw.document_id || movementDocumentNumber(item)).trim();
+}
+
+function openMovementDocument(item: Pick<AifStockMoveItem, "raw">) {
+  const id = movementDocumentId(item);
+  if (!id) return;
+  window.location.hash = `#allinproductmoves?document=${encodeURIComponent(id)}`;
+}
+
 function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type" | "raw">) {
   const source = String(item.source_type || "").toLowerCase();
   const movement = String(item.movement_type || "").toLowerCase();
   const rawReason = String((item.raw as any)?.reason || "").toLowerCase();
   const rawDirection = String((item.raw as any)?.direction || "").toLowerCase();
+  const documentType = stockDocumentTypeFromMove(item);
+  if (documentType !== "all") return stockDocumentTypeLabel(documentType);
   if (
     source.includes("archive") ||
     source.includes("removal") ||
@@ -332,6 +371,33 @@ function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type
     return rawDirection === "out" ? "Kézi kivétel" : rawDirection === "in" ? "Kézi bevétel" : "Kézi módosítás";
   }
   return movement || source || "Mozgás";
+}
+
+function movementReasonText(item: Pick<AifStockMoveItem, "raw">) {
+  const raw = item.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  const code = String(raw.reasonCode || raw.reason_code || "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    inventory_difference: "Leltáreltérés",
+    incorrect_reception: "Téves bevételezés",
+    invoice_correction: "Számlakorrekció",
+    damaged_or_lost: "Sérült vagy elveszett termék",
+    admin_correction: "Adminisztrációs javítás",
+    invoice_error: "Hibás számla",
+    wrong_product: "Hibás termék",
+    damaged_on_delivery: "Sérülten érkezett",
+    quality_issue: "Minőségi probléma",
+    damaged: "Sérült termék",
+    lost: "Elveszett termék",
+    theft: "Lopás",
+    expired: "Lejárt / nem értékesíthető",
+    input_error: "Rögzítési hiba",
+    recount: "Újraszámolás",
+    other: "Egyéb",
+  };
+  const explicit = String(raw.reasonText || raw.reason_text || "").trim();
+  const note = String(raw.note || "").trim();
+  const reason = explicit || labels[code] || "";
+  return Array.from(new Set([reason, note].filter(Boolean))).join(" • ");
 }
 
 function directionMeta(item: AifStockMoveItem) {
@@ -640,7 +706,7 @@ function writeStockMovementPdfWindow(win: Window, params: {
         <td class="num">${escapeHtml(formatQty(row.qty_before ?? 0))}</td>
         <td class="num delta">${kind === "in" ? "+" : "-"}${escapeHtml(formatQty(qty))}</td>
         <td class="num">${escapeHtml(formatQty(row.qty_after ?? 0))}</td>
-        <td>${escapeHtml(sourceLabel(row))}</td>
+        <td>${escapeHtml([sourceLabel(row), movementReasonText(row)].filter(Boolean).join(" • "))}</td>
       </tr>`;
   }).join("");
 
@@ -794,6 +860,7 @@ export default function AllInStockMoves() {
   const [to, setTo] = useState(initialRange.to);
   const [search, setSearch] = useState("");
   const [direction, setDirection] = useState<DirectionFilter>("all");
+  const [documentType, setDocumentType] = useState<StockDocumentTypeFilter>("all");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<MessageTone>("info");
@@ -884,11 +951,12 @@ export default function AllInStockMoves() {
     if (search.trim()) q.set("search", search.trim());
     const nextDirection = override?.direction ?? direction;
     if (nextDirection !== "all") q.set("direction", nextDirection);
+    if (documentType !== "all") q.set("documentType", documentType);
     if (from) q.set("from", from);
     if (to) q.set("to", to);
     q.set("limit", String(override?.limit || 350));
     return q;
-  }, [direction, from, locationId, search, to]);
+  }, [direction, documentType, from, locationId, search, to]);
 
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
     if (refreshInFlightRef.current) return;
@@ -1110,7 +1178,7 @@ export default function AllInStockMoves() {
           </div>
 
           <div className="space-y-4 p-4">
-            <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.9fr)_minmax(220px,1.1fr)_minmax(260px,1.3fr)_minmax(160px,0.7fr)_auto] lg:items-end">
+            <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[minmax(190px,0.9fr)_minmax(220px,1.1fr)_minmax(260px,1.3fr)_minmax(150px,0.65fr)_minmax(180px,0.8fr)_auto] xl:items-end">
               <label className={label}>
                 Helyszín
                 <select value={locationId} onChange={(e) => setLocationId(e.target.value)} className={select}>
@@ -1163,6 +1231,17 @@ export default function AllInStockMoves() {
                   <option value="in">Csak bejött</option>
                   <option value="out">Csak kiment</option>
                   <option value="adjust">Korrekció</option>
+                </select>
+              </label>
+
+              <label className={label}>
+                Bizonylat / művelet
+                <select value={documentType} onChange={(e) => setDocumentType(e.target.value as StockDocumentTypeFilter)} className={select}>
+                  <option value="all">Minden típus</option>
+                  <option value="internal_transfer">Belső átadás</option>
+                  <option value="supplier_return">Beszállítói retur</option>
+                  <option value="damaged_writeoff">Sérült / kivezetés</option>
+                  <option value="stock_correction">Készletkorrekció</option>
                 </select>
               </label>
 
@@ -1264,7 +1343,21 @@ export default function AllInStockMoves() {
                         </td>
                         <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_before ?? 0)}</td>
                         <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
-                        <td className="px-4 py-3 text-white/70">{sourceLabel(row)}</td>
+                        <td className="px-4 py-3 text-white/70">
+                          <div className="grid gap-1">
+                            <span>{sourceLabel(row)}</span>
+                            {movementReasonText(row) ? <span className="text-[10px] leading-snug text-white/45">{movementReasonText(row)}</span> : null}
+                            {movementDocumentNumber(row) ? (
+                              <button
+                                type="button"
+                                onClick={() => openMovementDocument(row)}
+                                className="w-fit rounded-full border border-[#7bd7d4]/32 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd] hover:bg-[#2a8d8b]/28"
+                              >
+                                {movementDocumentNumber(row)}
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-2">
                             <button
@@ -1276,16 +1369,27 @@ export default function AllInStockMoves() {
                             >
                               <Clock3 size={15} className="shrink-0" /> Történet
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeleteCandidate(row)}
-                              disabled={deletingId === row.id}
-                              className={tinyDangerBtn}
-                              title="Naplóbejegyzés végleges törlése"
-                              aria-label="Naplóbejegyzés végleges törlése"
-                            >
-                              <Trash2 size={15} className="shrink-0" /> Törlés
-                            </button>
+                            {movementDocumentNumber(row) ? (
+                              <button
+                                type="button"
+                                onClick={() => openMovementDocument(row)}
+                                className={btnSoft}
+                                title="Kapcsolt készletbizonylat megnyitása"
+                              >
+                                <FileText size={15} className="shrink-0" /> Bizonylat
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setDeleteCandidate(row)}
+                                disabled={deletingId === row.id}
+                                className={tinyDangerBtn}
+                                title="Naplóbejegyzés végleges törlése"
+                                aria-label="Naplóbejegyzés végleges törlése"
+                              >
+                                <Trash2 size={15} className="shrink-0" /> Törlés
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1316,7 +1420,19 @@ export default function AllInStockMoves() {
                       <div className="rounded-xl bg-[#354153] px-3 py-2">{formatQty(row.qty_before ?? 0)} → {formatQty(row.qty_after ?? 0)}</div>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/62">
-                      <span>Forrás: {sourceLabel(row)}</span>
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        Forrás: {sourceLabel(row)}
+                        {movementReasonText(row) ? <span className="text-white/45">• {movementReasonText(row)}</span> : null}
+                        {movementDocumentNumber(row) ? (
+                          <button
+                            type="button"
+                            onClick={() => openMovementDocument(row)}
+                            className="rounded-full border border-[#7bd7d4]/32 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]"
+                          >
+                            {movementDocumentNumber(row)}
+                          </button>
+                        ) : null}
+                      </span>
                       <div className="flex gap-2">
                         <button
                           type="button"
@@ -1327,14 +1443,24 @@ export default function AllInStockMoves() {
                         >
                           <Clock3 size={15} className="shrink-0" /> Történet
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteCandidate(row)}
-                          disabled={deletingId === row.id}
-                          className={tinyDangerBtn}
-                        >
-                          <Trash2 size={15} className="shrink-0" /> Törlés
-                        </button>
+                        {movementDocumentNumber(row) ? (
+                          <button
+                            type="button"
+                            onClick={() => openMovementDocument(row)}
+                            className={btnSoft}
+                          >
+                            <FileText size={15} className="shrink-0" /> Bizonylat
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDeleteCandidate(row)}
+                            disabled={deletingId === row.id}
+                            className={tinyDangerBtn}
+                          >
+                            <Trash2 size={15} className="shrink-0" /> Törlés
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
