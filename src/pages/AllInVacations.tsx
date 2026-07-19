@@ -2046,7 +2046,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 <RefreshCw className={`h-4 w-4 ${empBusy || listBusy ? "animate-spin" : ""}`} />
                 <span className="hidden sm:inline">Frissítés</span>
               </Button>
-              <Button className={btn} onClick={() => (window.location.hash = "#allinadmin")} type="button">
+              <Button className={btn} onClick={() => (window.location.hash = "#allin")} type="button">
                 <Home className="h-4 w-4" />
                 <span className="hidden sm:inline">Kezdőlap</span>
               </Button>
