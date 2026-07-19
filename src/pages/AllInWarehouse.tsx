@@ -7235,6 +7235,7 @@ export default function AllInWarehouse() {
         id,
         barcode,
         copies,
+        imageUrl: firstWarehouseText(detailItem.image_url, detailItem.imageUrl, item.image_url) || null,
         title: detailItem.title_ro || item.title_ro || "-",
         brand: detailItem.brand_name || item.brand_name || "-",
         category: detailItem.category_name_ro || item.category_name_ro || detailItem.category_name_hu || item.category_name_hu || "-",
@@ -9677,13 +9678,21 @@ export default function AllInWarehouse() {
 
               <section className="grid gap-4 lg:grid-cols-[1.05fr,0.95fr]">
                 <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
-                  <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-white">Termékek és példányszám</p>
-                    <span className="text-xs text-white/55">A készletnél több címke is kérhető</span>
+                    <span className="text-xs text-white/55">A kép csak végső ellenőrzéshez látszik, a címkére nem kerül</span>
                   </div>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
-                      <div key={row.id} className="grid gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[1fr,148px] md:items-center">
+                      <div key={row.id} className="grid grid-cols-[56px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[56px,minmax(0,1fr),148px]">
+                        <div className="self-start md:self-center" title="Rámutatásra nagyítás">
+                          <WarehouseProductImage
+                            src={row.imageUrl}
+                            alt={row.title}
+                            thumbClassName="h-14 w-14 rounded-xl bg-white"
+                            iconSize={18}
+                          />
+                        </div>
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{row.title}</p>
                           <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • {row.color} • {row.size}</p>
@@ -9704,7 +9713,7 @@ export default function AllInWarehouse() {
                             </div>
                           )}
                         </div>
-                        <div>
+                        <div className="col-span-2 md:col-span-1">
                           <p className="mb-1 text-[11px] uppercase tracking-[0.05em] text-white/55">Címke darab</p>
                           <div className="flex h-9 overflow-hidden rounded-xl border border-white/20 bg-[#303a4c]">
                             <button className="flex h-full w-10 items-center justify-center border-r border-white/14 bg-white/[0.06] text-lg text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-35" onClick={() => adjustLabelCopies(row.id, -1)} disabled={labelInt(labelCopies[row.id], 1, 0, 999) <= 0} type="button">−</button>
