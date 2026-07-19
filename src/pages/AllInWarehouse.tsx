@@ -106,9 +106,6 @@ function ShopifyBrandMark({
   );
 }
 
-const selectedProductsStorageKey = "allinfashion:warehouse:selectedVariants:v1";
-const selectedProductActionsStorageKey = "allinfashion:warehouse:selectedVariantActions:v1";
-const selectedProductCloudMigrationStorageKey = "allinfashion:warehouse:selectedVariantsCloudMigrated:v1";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
@@ -141,93 +138,6 @@ const selectedWorkActionLabels: Record<SelectedWorkAction, string> = {
   shopify: "Shopify export",
 };
 
-function readSavedSelectedVariantActions(): Record<string, SelectedWorkAction> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(selectedProductActionsStorageKey);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const allowed = new Set(["label", "order", "move", "shopify"]);
-    return Object.entries(parsed).reduce<Record<string, SelectedWorkAction>>((acc, [id, value]) => {
-      const key = String(id || "").trim();
-      const action = String(value || "") as SelectedWorkAction;
-      if (key && allowed.has(action)) acc[key] = action;
-      return acc;
-    }, {});
-  } catch {
-    return {};
-  }
-}
-
-function saveSelectedVariantActionsToStorage(actions: Record<string, SelectedWorkAction>) {
-  if (typeof window === "undefined") return;
-  const clean = Object.entries(actions).reduce<Record<string, SelectedWorkAction>>((acc, [id, action]) => {
-    const key = String(id || "").trim();
-    if (key && ["label", "order", "move", "shopify"].includes(action)) acc[key] = action;
-    return acc;
-  }, {});
-  if (!Object.keys(clean).length) {
-    window.localStorage.removeItem(selectedProductActionsStorageKey);
-    return;
-  }
-  window.localStorage.setItem(selectedProductActionsStorageKey, JSON.stringify(clean));
-}
-
-function readSavedSelectedVariants(): Record<string, boolean> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(selectedProductsStorageKey);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed.reduce<Record<string, boolean>>((acc, id) => {
-        const key = String(id || "").trim();
-        if (key) acc[key] = true;
-        return acc;
-      }, {});
-    }
-    if (parsed && typeof parsed === "object") {
-      return Object.entries(parsed).reduce<Record<string, boolean>>((acc, [id, value]) => {
-        const key = String(id || "").trim();
-        if (key && value) acc[key] = true;
-        return acc;
-      }, {});
-    }
-  } catch {
-    return {};
-  }
-  return {};
-}
-
-function saveSelectedVariantsToStorage(selected: Record<string, boolean>) {
-  if (typeof window === "undefined") return;
-  const ids = Object.keys(selected).filter((id) => selected[id]);
-  if (!ids.length) {
-    window.localStorage.removeItem(selectedProductsStorageKey);
-    return;
-  }
-  window.localStorage.setItem(selectedProductsStorageKey, JSON.stringify(ids));
-}
-
-function selectedCloudMigrationDone() {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(selectedProductCloudMigrationStorageKey) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function markSelectedCloudMigrationDone() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(selectedProductCloudMigrationStorageKey, "1");
-  } catch {
-    // A localStorage hiba nem állíthatja meg a folyamatot.
-  }
-}
-
 function normalizeSelectedWorkAction(value: unknown): SelectedWorkAction | null {
   const raw = String(value || "").trim();
   return raw === "label" || raw === "order" || raw === "move" || raw === "shopify" ? raw : null;
@@ -237,11 +147,6 @@ function selectedVariantIdFromItem(item: Partial<InventoryItem> & { selected_var
   return String(item.variant_id || item.selected_variant_id || item.variantId || item.id || "").trim();
 }
 
-function selectedPayloadFromState(selected: Record<string, boolean>, actions: Record<string, SelectedWorkAction>) {
-  return Object.keys(selected)
-    .filter((id) => selected[id])
-    .map((id) => ({ variantId: id, action: actions[id] || null }));
-}
 
 function mergeInventoryItems(baseItems: InventoryItem[], extraItems: InventoryItem[]) {
   const map = new Map<string, InventoryItem>();
@@ -3996,20 +3901,49 @@ async function apiStockTransfer(payload: StockTransferApiPayload) {
   });
 }
 
+type SelectedVariantSelectionResponse = {
+  ok?: true;
+  count?: number;
+  owner?: string;
+  items?: PersistedSelectedWorkItem[];
+  selectedVariantIds?: string[];
+  actions?: Record<string, SelectedWorkAction>;
+  updatedAt?: string | null;
+  added?: number;
+  updated?: number;
+  removed?: number;
+};
+
 async function apiSelectedVariantSelection() {
-  return fetchJSON<{ items: PersistedSelectedWorkItem[] }>("/api/aif/selection");
+  return fetchJSON<SelectedVariantSelectionResponse>(`/api/aif/selection?_=${Date.now()}`);
 }
 
-async function apiSaveSelectedVariantSelection(items: Array<{ variantId: string; action?: SelectedWorkAction | null }>) {
-  return fetchJSON<{ ok: true; count: number; items?: PersistedSelectedWorkItem[]; owner?: string }>("/api/aif/selection", {
-    method: "PUT",
+async function apiAddSelectedVariantSelection(items: Array<{ variantId: string; action?: SelectedWorkAction | null }>) {
+  return fetchJSON<SelectedVariantSelectionResponse>("/api/aif/selection/items", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items }),
   });
 }
 
+async function apiUpdateSelectedVariantActions(items: Array<{ variantId: string; action?: SelectedWorkAction | null }>) {
+  return fetchJSON<SelectedVariantSelectionResponse>("/api/aif/selection/items", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+}
+
+async function apiRemoveSelectedVariantSelection(variantIds: string[]) {
+  return fetchJSON<SelectedVariantSelectionResponse>("/api/aif/selection/items", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variantIds }),
+  });
+}
+
 async function apiClearSelectedVariantSelection() {
-  return fetchJSON<{ ok: true; count?: number; owner?: string }>("/api/aif/selection", { method: "DELETE" });
+  return fetchJSON<SelectedVariantSelectionResponse>("/api/aif/selection", { method: "DELETE" });
 }
 
 
@@ -4443,10 +4377,10 @@ export default function AllInWarehouse() {
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
   const [stockEditorAllowTotalChange, setStockEditorAllowTotalChange] = useState(false);
   const [stockEditorWarning, setStockEditorWarning] = useState("");
-  const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>(() => readSavedSelectedVariants());
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>({});
   const [incomingSelectedVariants, setIncomingSelectedVariants] = useState<Record<string, boolean>>({});
   const [selectedPanelOpen, setSelectedPanelOpen] = useState(false);
-  const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>(() => readSavedSelectedVariantActions());
+  const [selectedWorkActions, setSelectedWorkActions] = useState<Record<string, SelectedWorkAction>>({});
   const [persistedSelectedItems, setPersistedSelectedItems] = useState<InventoryItem[]>([]);
   const [selectedActionTargets, setSelectedActionTargets] = useState<InventoryItem[]>([]);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
@@ -4488,9 +4422,9 @@ export default function AllInWarehouse() {
   const barcodeZxingControlsRef = useRef<WarehouseZxingControls | null>(null);
   const barcodeScanRafRef = useRef<number | null>(null);
   const barcodeScannerHandlingRef = useRef(false);
-  const selectedSyncReadyRef = useRef(false);
-  const selectedSyncTimerRef = useRef<number | null>(null);
-  const selectedSyncSilentRef = useRef(false);
+  const selectedMutationCountRef = useRef(0);
+  const selectedMutationSequenceRef = useRef(0);
+  const selectedFetchSequenceRef = useRef(0);
   const [pendingProductJumpId, setPendingProductJumpId] = useState("");
   const [highlightProductId, setHighlightProductId] = useState("");
   const [incomingFocus, setIncomingFocus] = useState<{ batchId: string; variantIds: string[]; rows: Array<Record<string, any>>; batch?: Record<string, any> | null; totalQty?: number; sourceFileName?: string | null; mode?: "import" | "activation" } | null>(null);
@@ -6871,14 +6805,53 @@ export default function AllInWarehouse() {
       nextItems.push({ ...row, variant_id: id });
     }
 
-    selectedSyncSilentRef.current = true;
     setPersistedSelectedItems(nextItems);
     setSelectedVariants(nextSelected);
     setSelectedWorkActions(nextActions);
-    window.setTimeout(() => {
-      selectedSyncSilentRef.current = false;
-      selectedSyncReadyRef.current = true;
-    }, 0);
+  }
+
+  async function refreshSelectedVariantSelection(options: { force?: boolean; quiet?: boolean } = {}) {
+    if (!options.force && selectedMutationCountRef.current > 0) return null;
+    const requestSequence = ++selectedFetchSequenceRef.current;
+    const mutationSequenceAtStart = selectedMutationSequenceRef.current;
+    try {
+      const saved = await apiSelectedVariantSelection();
+      if (requestSequence !== selectedFetchSequenceRef.current) return saved;
+      // Ha a GET indítása óta kattintás történt, a válasz már lehet régi.
+      // Ilyenkor nem alkalmazzuk, a művelet végén induló következő GET lesz az igazság.
+      if (mutationSequenceAtStart !== selectedMutationSequenceRef.current || selectedMutationCountRef.current > 0) return saved;
+      applyPersistedSelectedWorklist(saved.items || []);
+      return saved;
+    } catch (error) {
+      if (!options.quiet) console.error("AIF selected variants refresh failed", error);
+      return null;
+    }
+  }
+
+  async function runSelectedVariantMutation(
+    request: () => Promise<SelectedVariantSelectionResponse>,
+    errorText: string,
+  ) {
+    const mutationSequence = ++selectedMutationSequenceRef.current;
+    selectedMutationCountRef.current += 1;
+    try {
+      const saved = await request();
+      // Gyors egymás utáni kattintásoknál egy régebbi válasz nem írhatja felül
+      // az újabbat. A legutolsó művelet után külön GET hozza a végleges közös állapotot.
+      if (mutationSequence === selectedMutationSequenceRef.current) {
+        applyPersistedSelectedWorklist(saved.items || []);
+      }
+      return saved;
+    } catch (error) {
+      console.error("AIF selected variants mutation failed", error);
+      setMessage(error instanceof Error && error.message ? error.message : errorText);
+      throw error;
+    } finally {
+      selectedMutationCountRef.current = Math.max(0, selectedMutationCountRef.current - 1);
+      if (selectedMutationCountRef.current === 0) {
+        void refreshSelectedVariantSelection({ force: true, quiet: true });
+      }
+    }
   }
 
   const activeListSelectionMap = incomingFocus?.batchId ? incomingSelectedVariants : selectedVariants;
@@ -6929,6 +6902,10 @@ export default function AllInWarehouse() {
     });
     setSelectedActionTargets([]);
     setSelectedWorkPanel(action);
+    void runSelectedVariantMutation(
+      () => apiAddSelectedVariantSelection(ids.map((variantId) => ({ variantId, action }))),
+      "A kijelölt termékek műveletének mentése nem sikerült.",
+    ).catch(() => undefined);
   }
 
   function returnSelectedItemToMainList(id: string) {
@@ -6938,6 +6915,10 @@ export default function AllInWarehouse() {
       delete next[id];
       return next;
     });
+    void runSelectedVariantMutation(
+      () => apiUpdateSelectedVariantActions([{ variantId: id, action: null }]),
+      "A kijelölt termék műveletének törlése nem sikerült.",
+    ).catch(() => undefined);
   }
 
   function removeSelectedItemEverywhere(id: string) {
@@ -6952,6 +6933,11 @@ export default function AllInWarehouse() {
       delete next[id];
       return next;
     });
+    setPersistedSelectedItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
+    void runSelectedVariantMutation(
+      () => apiRemoveSelectedVariantSelection([id]),
+      "A kijelölt termék eltávolítása nem sikerült.",
+    ).catch(() => undefined);
   }
 
   function selectedItemsForAction(action: SelectedWorkAction) {
@@ -6985,10 +6971,13 @@ export default function AllInWarehouse() {
       return next;
     });
 
-    // Ne csak a böngészőből tűnjön el. Azonnal mentjük a maradék kijelölést a
-    // szerverre is, így frissítés vagy másik eszköz sem hozza vissza a kész sort.
+    // Csak a valóban elkészült variánsokat töröljük a közös szerveres listából.
+    // A többi gép saját, közben hozzáadott kijelöléséhez nem nyúlunk.
     try {
-      const saved = await apiSaveSelectedVariantSelection(selectedPayloadFromState(nextSelected, nextActions));
+      const saved = await runSelectedVariantMutation(
+        () => apiRemoveSelectedVariantSelection(Array.from(completedIds)),
+        "A kész termékek eltávolítása nem sikerült a közös munkalistából.",
+      );
       if (Array.isArray(saved.items)) applyPersistedSelectedWorklist(saved.items);
       return { removed, synced: true };
     } catch (error) {
@@ -7372,7 +7361,15 @@ export default function AllInWarehouse() {
         delete next[id];
         return next;
       });
+      setPersistedSelectedItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== id));
     }
+
+    void runSelectedVariantMutation(
+      () => checked
+        ? apiAddSelectedVariantSelection([{ variantId: id }])
+        : apiRemoveSelectedVariantSelection([id]),
+      checked ? "A termék kijelölése nem sikerült." : "A termék kijelölésének törlése nem sikerült.",
+    ).catch(() => undefined);
   }
 
   function toggleAllFilteredSelection(checked: boolean) {
@@ -7390,21 +7387,32 @@ export default function AllInWarehouse() {
       return;
     }
 
+    const ids = Array.from(new Set(filteredVariantIds.map((id) => String(id || "").trim()).filter(Boolean)));
+    if (!ids.length) return;
     setSelectedVariants((current) => {
       const next = { ...current };
-      for (const id of filteredVariantIds) {
+      for (const id of ids) {
         if (checked) next[id] = true;
         else delete next[id];
       }
       return next;
     });
     if (!checked) {
+      const removedSet = new Set(ids);
       setSelectedWorkActions((current) => {
         const next = { ...current };
-        for (const id of filteredVariantIds) delete next[id];
+        for (const id of ids) delete next[id];
         return next;
       });
+      setPersistedSelectedItems((current) => current.filter((item) => !removedSet.has(selectedVariantIdFromItem(item))));
     }
+
+    void runSelectedVariantMutation(
+      () => checked
+        ? apiAddSelectedVariantSelection(ids.map((variantId) => ({ variantId })))
+        : apiRemoveSelectedVariantSelection(ids),
+      checked ? "A szűrt termékek kijelölése nem sikerült." : "A szűrt kijelölések törlése nem sikerült.",
+    ).catch(() => undefined);
   }
 
   function clearIncomingSelection() {
@@ -7418,14 +7426,10 @@ export default function AllInWarehouse() {
     setSelectedActionTargets([]);
     setSelectedWorkPanel(null);
     setSelectedPanelOpen(false);
-    apiClearSelectedVariantSelection()
-      .then(() => {
-        selectedSyncReadyRef.current = true;
-        markSelectedCloudMigrationDone();
-      })
-      .catch((err) => {
-        console.error("AIF selected variants clear failed", err);
-      });
+    void runSelectedVariantMutation(
+      () => apiClearSelectedVariantSelection(),
+      "A kijelölések törlése nem sikerült.",
+    ).catch(() => undefined);
   }
 
   useEffect(() => {
@@ -7442,32 +7446,25 @@ export default function AllInWarehouse() {
   }, [selectedVariants]);
 
   useEffect(() => {
-    saveSelectedVariantsToStorage(selectedVariants);
-  }, [selectedVariants]);
-
-  useEffect(() => {
-    saveSelectedVariantActionsToStorage(selectedWorkActions);
-  }, [selectedWorkActions]);
-
-  useEffect(() => {
-    if (!selectedSyncReadyRef.current || selectedSyncSilentRef.current) return;
-    if (selectedSyncTimerRef.current !== null) window.clearTimeout(selectedSyncTimerRef.current);
-    selectedSyncTimerRef.current = window.setTimeout(() => {
-      selectedSyncTimerRef.current = null;
-      const payload = selectedPayloadFromState(selectedVariants, selectedWorkActions);
-      apiSaveSelectedVariantSelection(payload)
-        .then(() => markSelectedCloudMigrationDone())
-        .catch((err) => {
-          console.error("AIF selected variants sync failed", err);
-        });
-    }, 450);
-    return () => {
-      if (selectedSyncTimerRef.current !== null) {
-        window.clearTimeout(selectedSyncTimerRef.current);
-        selectedSyncTimerRef.current = null;
-      }
+    let disposed = false;
+    const refreshSharedSelection = () => {
+      if (disposed || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      void refreshSelectedVariantSelection({ quiet: true });
     };
-  }, [selectedVariants, selectedWorkActions]);
+    const timer = window.setInterval(refreshSharedSelection, 2000);
+    const onFocus = () => refreshSharedSelection();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshSharedSelection();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
@@ -7957,30 +7954,9 @@ export default function AllInWarehouse() {
 
       try {
         const savedSelection = await apiSelectedVariantSelection();
-        const savedRows = (savedSelection.items || []).filter((row) => selectedVariantIdFromItem(row));
-        if (savedRows.length) {
-          markSelectedCloudMigrationDone();
-          applyPersistedSelectedWorklist(savedRows);
-        } else {
-          setPersistedSelectedItems([]);
-          selectedSyncReadyRef.current = true;
-          const localPayload = selectedPayloadFromState(selectedVariants, selectedWorkActions);
-          if (localPayload.length && !selectedCloudMigrationDone()) {
-            markSelectedCloudMigrationDone();
-            apiSaveSelectedVariantSelection(localPayload)
-              .then((saved) => {
-                if (saved?.items?.length) applyPersistedSelectedWorklist(saved.items);
-              })
-              .catch((err) => {
-                console.error("AIF selected variants migration failed", err);
-              });
-          } else {
-            markSelectedCloudMigrationDone();
-          }
-        }
+        applyPersistedSelectedWorklist((savedSelection.items || []).filter((row) => selectedVariantIdFromItem(row)));
       } catch (selectionError) {
         console.error("AIF selected variants load skipped", selectionError);
-        selectedSyncReadyRef.current = true;
       }
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült betölteni a raktár adatait.");
@@ -8567,6 +8543,7 @@ export default function AllInWarehouse() {
       const result = await apiVariantDelete(deletedVariantId);
       notifyStockMovesChanged({ variantId: deletedVariantId, source: "warehouse_variant_permanent_delete", mode: result?.mode || "deleted" });
       removeVariantFromWarehouseClientState(deletedVariantId);
+      await removeCompletedSelectedItems([deletedVariantId]);
       setProductDeleteTarget(null);
       if (detail?.item?.id && String(detail.item.id) === deletedVariantId) setDetail(null);
       await load();
@@ -8602,6 +8579,7 @@ export default function AllInWarehouse() {
     setMessage("");
     const activeIncomingBatchId = String(incomingFocus?.batchId || "").trim();
     const failures: string[] = [];
+    const successfullyDeletedIds: string[] = [];
     let archivedCount = 0;
     let permanentlyDeletedCount = 0;
 
@@ -8613,6 +8591,7 @@ export default function AllInWarehouse() {
           if (mode === "archived" || mode === "archived_after_delete_fallback") archivedCount += 1;
           else permanentlyDeletedCount += 1;
           notifyStockMovesChanged({ variantId: id, source: "warehouse_selected_variants_delete", mode });
+          successfullyDeletedIds.push(id);
           removeVariantFromWarehouseClientState(id);
         } catch (error: any) {
           failures.push(`${id}: ${error?.message || "törlési hiba"}`);
@@ -8624,20 +8603,11 @@ export default function AllInWarehouse() {
       if (deleteContext === "incoming") {
         setIncomingSelectedVariants((current) => {
           const next = { ...current };
-          for (const id of ids) delete next[id];
+          for (const id of successfullyDeletedIds) delete next[id];
           return next;
         });
-      } else {
-        setSelectedVariants((current) => {
-          const next = { ...current };
-          for (const id of ids) delete next[id];
-          return next;
-        });
-        setSelectedWorkActions((current) => {
-          const next = { ...current };
-          for (const id of ids) delete next[id];
-          return next;
-        });
+      } else if (successfullyDeletedIds.length) {
+        await removeCompletedSelectedItems(successfullyDeletedIds);
       }
       if (detail?.item?.id && ids.includes(String(detail.item.id))) setDetail(null);
       if (historyTarget?.variant_id && ids.includes(String(historyTarget.variant_id))) {
