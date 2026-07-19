@@ -7080,6 +7080,27 @@ export default function AllInWarehouse() {
     return labelCleanText(clean, 48);
   }
 
+  function labelComposerImageUrl(item: InventoryItem, detailItem?: Record<string, any> | null) {
+    const detailAttributes = detailItem?.attributes && typeof detailItem.attributes === "object"
+      ? detailItem.attributes as Record<string, unknown>
+      : {};
+    const itemAttributes = item.attributes && typeof item.attributes === "object"
+      ? item.attributes as Record<string, unknown>
+      : {};
+    return firstWarehouseText(
+      detailItem?.image_url,
+      detailItem?.imageUrl,
+      detailItem?.photo_url,
+      detailItem?.photoUrl,
+      detailAttributes.image_url,
+      detailAttributes.imageUrl,
+      item.image_url,
+      (item as any).imageUrl,
+      itemAttributes.image_url,
+      itemAttributes.imageUrl,
+    ) || null;
+  }
+
   function toggleLabelContent(key: WarehouseLabelContentKey) {
     setLabelContent((current) => ({ ...current, [key]: !current[key] }));
   }
@@ -7235,7 +7256,7 @@ export default function AllInWarehouse() {
         id,
         barcode,
         copies,
-        imageUrl: firstWarehouseText(detailItem.image_url, detailItem.imageUrl, item.image_url) || null,
+        imageUrl: labelComposerImageUrl(item, detailItem),
         title: detailItem.title_ro || item.title_ro || "-",
         brand: detailItem.brand_name || item.brand_name || "-",
         category: detailItem.category_name_ro || item.category_name_ro || detailItem.category_name_hu || item.category_name_hu || "-",
@@ -9684,13 +9705,13 @@ export default function AllInWarehouse() {
                   </div>
                   <div className="grid gap-2">
                     {labelRowsForPrint.map((row) => (
-                      <div key={row.id} className="grid grid-cols-[56px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[56px,minmax(0,1fr),148px]">
-                        <div className="self-start md:self-center" title="Rámutatásra nagyítás">
+                      <div key={row.id} className="grid grid-cols-[64px,minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/12 bg-[#465163] p-3 md:grid-cols-[64px,minmax(0,1fr),148px]">
+                        <div className="self-start md:self-center" title={row.imageUrl ? "Rámutatásra nagyítás" : "Ehhez a termékhez nincs mentett kép"}>
                           <WarehouseProductImage
                             src={row.imageUrl}
                             alt={row.title}
-                            thumbClassName="h-14 w-14 rounded-xl bg-white"
-                            iconSize={18}
+                            thumbClassName="h-16 w-16 rounded-xl bg-white"
+                            iconSize={20}
                           />
                         </div>
                         <div className="min-w-0">
