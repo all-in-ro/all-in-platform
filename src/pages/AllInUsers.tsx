@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 
-
 type Shop = { id: string; name: string };
 
 type CodeItem = {
@@ -478,7 +477,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <RefreshCw className={`h-4 w-4 ${listBusy ? "animate-spin" : ""}`} />
                 <span className="hidden sm:inline">Frissítés</span>
               </Button>
-              <Button className={btn} type="button" onClick={() => (window.location.hash = "#allinadmin")}>
+              <Button className={btn} type="button" onClick={() => (window.location.hash = "#allin")}>
                 <Home className="h-4 w-4" />
                 <span className="hidden sm:inline">Kezdőlap</span>
               </Button>
