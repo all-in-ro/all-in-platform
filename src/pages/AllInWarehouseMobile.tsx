@@ -1686,7 +1686,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
         {!pageItems.length ? (
           <div className="rounded-[24px] border border-white/14 bg-white/[0.06] px-4 py-8 text-center text-sm text-white/62">
-            Nincs találat. Az Excel nyilván most is ártatlan, mint mindig.
+            Nincs találat.
           </div>
         ) : null}
 
