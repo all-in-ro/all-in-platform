@@ -329,7 +329,21 @@ function AllInCarExpenses() {
 
   return (
     <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5" style={cssVars}>
-      <style>{`input[type="date"]{color-scheme:dark}.allin-select{color-scheme:dark}.allin-select option{background:#354153;color:#fff}`}</style>
+      <style>{`
+        input[type="date"].allin-date {
+          color-scheme: dark !important;
+          background-color: #3f4959 !important;
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+        input[type="date"].allin-date::-webkit-calendar-picker-indicator {
+          filter: invert(1) brightness(1.8);
+          opacity: 0.82;
+          cursor: pointer;
+        }
+        .allin-select { color-scheme: dark; }
+        .allin-select option { background: #354153; color: #fff; }
+      `}</style>
       <div className="mx-auto max-w-[1500px] space-y-4">
       {/* Header */}
       <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
@@ -347,7 +361,7 @@ function AllInCarExpenses() {
           <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
             <Button
               type="button"
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99]"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 !bg-[#2a8d8b] px-3 text-xs !text-white transition hover:!bg-[#319c99]"
               onClick={() => onEdit()}
             >
               <PlusCircle className="h-4 w-4" /> Új tétel
@@ -387,7 +401,7 @@ function AllInCarExpenses() {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/36" />
                 <Input
-                  className="h-10 min-w-[280px] rounded-xl border border-white/18 bg-[#3f4959] pl-9 text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                  className="h-10 min-w-[280px] rounded-xl border border-white/18 !bg-[#3f4959] pl-9 !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   placeholder="Keresés (leírás, számla, beszállító)"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
@@ -400,7 +414,7 @@ function AllInCarExpenses() {
               <select
                 value={carId}
                 onChange={(e) => setCarId(e.target.value === "" ? "" : Number(e.target.value))}
-                className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                className="allin-select h-10 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
               >
                 <option value="">Autó: mind</option>
                 {cars.map((c) => (
@@ -413,7 +427,7 @@ function AllInCarExpenses() {
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                className="allin-select h-10 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
               >
                 <option value="">Kategória: mind</option>
                 {["Kötelező szerviz", "Olajcsere", "Gumicsere", "Javítás", "Vizsga", "Egyéb"].map((c) => (
@@ -426,14 +440,14 @@ function AllInCarExpenses() {
               <div className="flex items-center gap-2">
                 <Input
                   type="date"
-                  className="h-10 rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                  className="allin-date h-10 rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(justDate(e.target.value))}
                 />
                 <span className="text-white/35 text-sm">→</span>
                 <Input
                   type="date"
-                  className="h-10 rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                  className="allin-date h-10 rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   value={dateTo}
                   onChange={(e) => setDateTo(justDate(e.target.value))}
                 />
@@ -568,7 +582,7 @@ function AllInCarExpenses() {
               <form onSubmit={onSubmit} className="grid grid-cols-2 gap-3">
                 <Field label="Autó">
                   <select
-                    className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="allin-select h-10 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.car_id ?? ""}
                     onChange={(e) => setItem((s) => ({ ...s, car_id: e.target.value === "" ? null : Number(e.target.value) }))}
                     required
@@ -584,7 +598,7 @@ function AllInCarExpenses() {
                 <Field label="Dátum">
                   <Input
                     type="date"
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.date || ""}
                     onChange={(e) => setItem((s) => ({ ...s, date: justDate(e.target.value) }))}
                     required
@@ -593,7 +607,7 @@ function AllInCarExpenses() {
                 <Field label="km óra állás">
                   <Input
                     type="number"
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.odometer_km ?? ""}
                     onChange={(e) => setItem((s) => ({ ...s, odometer_km: e.target.value ? Number(e.target.value) : null }))}
                     placeholder="pl. 156000"
@@ -601,7 +615,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Kategória">
                   <select
-                    className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="allin-select h-10 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.category || ""}
                     onChange={(e) => setItem((s) => ({ ...s, category: e.target.value }))}
                   >
@@ -616,7 +630,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Leírás">
                   <Input
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.description || ""}
                     onChange={(e) => setItem((s) => ({ ...s, description: e.target.value }))}
                     placeholder="Munkalap, tételes leírás…"
@@ -626,7 +640,7 @@ function AllInCarExpenses() {
                   <Input
                     type="number"
                     step="0.01"
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.cost ?? ""}
                     onChange={(e) => setItem((s) => ({ ...s, cost: e.target.value ? Number(e.target.value) : null }))}
                     placeholder="0.00"
@@ -634,7 +648,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Pénznem">
                   <Input
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.currency || "RON"}
                     onChange={(e) => setItem((s) => ({ ...s, currency: e.target.value }))}
                     placeholder="RON"
@@ -642,7 +656,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Beszállító / Szerviz">
                   <Input
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.vendor || ""}
                     onChange={(e) => setItem((s) => ({ ...s, vendor: e.target.value }))}
                     placeholder="Szerviz neve"
@@ -650,7 +664,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Számla száma">
                   <Input
-                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                    className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.invoice_no || ""}
                     onChange={(e) => setItem((s) => ({ ...s, invoice_no: e.target.value }))}
                     placeholder="Opció"
@@ -672,7 +686,7 @@ function AllInCarExpenses() {
                   {error && <div className="text-red-600 text-xs">{error}</div>}
                   <Button
                     type="submit"
-                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-4 text-xs text-white transition hover:bg-[#319c99]"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 !bg-[#2a8d8b] px-4 text-xs !text-white transition hover:!bg-[#319c99]"
                     disabled={saving}
                   >
                     {saving ? (
