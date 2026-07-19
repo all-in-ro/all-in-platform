@@ -78,7 +78,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "receptions") return { name: "receptions" };
   if (key === "barcodes") return { name: "barcodes" };
   if (key === "admin") return { name: "home" };
-  if (key === "productmoves") return { name: "productmoves" };
+  if (key === "productmoves" || key === "stockdocuments" || key === "stock-documents") return { name: "productmoves" };
   if (key === "vacations") return { name: "vacations" };
   if (key === "users") return { name: "users" };
   if (key === "cars") return { name: "cars" };
@@ -98,7 +98,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allinbarcodes" || key === "allin-barcodes" || key === "aif-barcodes" || key === "barcode" || key === "labels") return { name: "barcodes" };
 
   if (key === "allinadmin") return { name: "home" };
-  if (key === "allinproductmoves") return { name: "productmoves" };
+  if (key === "allinproductmoves" || key === "allinstockdocuments" || key === "allin-stock-documents") return { name: "productmoves" };
   if (key === "allinvacations") return { name: "vacations" };
   if (key === "allinusers") return { name: "users" };
   if (key === "allincars") return { name: "cars" };
