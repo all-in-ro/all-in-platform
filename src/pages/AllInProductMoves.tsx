@@ -99,6 +99,11 @@ type TransferDocumentLine = {
   to_location_id?: string | null;
   to_location_name?: string | null;
   qty: number | string;
+  unit_price?: number | string | null;
+  unit_price_ron?: number | string | null;
+  buy_price?: number | string | null;
+  buy_price_ron?: number | string | null;
+  effective_buy_price?: number | string | null;
   source_before?: number | string | null;
   source_after?: number | string | null;
   target_before?: number | string | null;
@@ -138,6 +143,61 @@ function n(value: unknown) {
 
 function qty(value: unknown) {
   return new Intl.NumberFormat("hu-HU", { maximumFractionDigits: 0 }).format(n(value));
+}
+
+function decimalValue(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const parsed = Number(String(value).replace(/\s+/g, "").replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function moneyRon(value: unknown, includeCurrency = true) {
+  const parsed = decimalValue(value);
+  if (parsed === null) return "-";
+  const formatted = new Intl.NumberFormat("ro-RO", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(parsed);
+  return includeCurrency ? `${formatted} RON` : formatted;
+}
+
+function lineUnitPrice(line: TransferDocumentLine) {
+  const raw = line.raw && typeof line.raw === "object" ? line.raw : {};
+  const candidates = [
+    line.unit_price_ron,
+    line.unit_price,
+    line.buy_price_ron,
+    line.buy_price,
+    line.effective_buy_price,
+    raw.unitPriceRon,
+    raw.unit_price_ron,
+    raw.unitPrice,
+    raw.unit_price,
+    raw.buyPriceRon,
+    raw.buy_price_ron,
+    raw.buyPrice,
+    raw.buy_price,
+    raw.effectiveBuyPrice,
+    raw.effective_buy_price,
+  ];
+  for (const candidate of candidates) {
+    const parsed = decimalValue(candidate);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function lineTotalValue(line: TransferDocumentLine) {
+  const unitPrice = lineUnitPrice(line);
+  return unitPrice === null ? null : Math.max(0, n(line.qty)) * unitPrice;
+}
+
+function transferTotalValue(lines: TransferDocumentLine[]) {
+  return (lines || []).reduce((sum, line) => sum + (lineTotalValue(line) ?? 0), 0);
+}
+
+function transferMissingPriceCount(lines: TransferDocumentLine[]) {
+  return (lines || []).filter((line) => lineUnitPrice(line) === null).length;
 }
 
 function dateTime(value?: string | null) {
@@ -209,6 +269,63 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+type TransferInventoryPriceRow = {
+  variant_id?: string | null;
+  id?: string | null;
+  buy_price?: number | string | null;
+  buy_price_ron?: number | string | null;
+};
+
+let transferInventoryPriceMapPromise: Promise<Map<string, number>> | null = null;
+
+async function transferInventoryPriceMap() {
+  if (!transferInventoryPriceMapPromise) {
+    transferInventoryPriceMapPromise = fetchJson<{ items?: TransferInventoryPriceRow[] }>(`/inventory?limit=5000&_=${Date.now()}`)
+      .then((response) => {
+        const map = new Map<string, number>();
+        for (const row of response.items || []) {
+          const variantId = String(row.variant_id || row.id || "").trim();
+          const price = decimalValue(row.buy_price_ron ?? row.buy_price);
+          if (variantId && price !== null) map.set(variantId, price);
+        }
+        return map;
+      })
+      .catch((error) => {
+        transferInventoryPriceMapPromise = null;
+        throw error;
+      });
+  }
+  return transferInventoryPriceMapPromise;
+}
+
+async function enrichTransferDetailPrices(detail: TransferDocumentDetail) {
+  if (!(detail.lines || []).some((line) => lineUnitPrice(line) === null && String(line.variant_id || "").trim())) return detail;
+  try {
+    const priceMap = await transferInventoryPriceMap();
+    return {
+      ...detail,
+      lines: (detail.lines || []).map((line) => {
+        if (lineUnitPrice(line) !== null) return line;
+        const variantId = String(line.variant_id || "").trim();
+        const currentPrice = variantId ? priceMap.get(variantId) : undefined;
+        if (currentPrice === undefined) return line;
+        return {
+          ...line,
+          unit_price_ron: currentPrice,
+          raw: { ...(line.raw || {}), priceSource: "current_inventory_fallback" },
+        };
+      }),
+    };
+  } catch {
+    return detail;
+  }
+}
+
+async function loadTransferDocumentDetail(id: string) {
+  const detail = await fetchJson<TransferDocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(id)}`);
+  return enrichTransferDetailPrices(detail);
+}
+
 function goHome() {
   window.location.hash = "#allin";
 }
@@ -239,6 +356,8 @@ function makePrintHtml(detail: TransferDocumentDetail) {
   const doc = detail.document;
   const lines = detail.lines || [];
   const totalQty = lines.reduce((sum, line) => sum + n(line.qty), 0);
+  const totalValue = transferTotalValue(lines);
+  const missingPriceCount = transferMissingPriceCount(lines);
   const fromLocations = Array.from(new Set(lines.map((line) => String(line.from_location_name || "").trim()).filter(Boolean)));
   const toLocations = Array.from(new Set(lines.map((line) => String(line.to_location_name || "").trim()).filter(Boolean)));
   const fromSummary = doc.from_location_summary || (fromLocations.length === 1 ? fromLocations[0] : "Conform tabelului");
@@ -254,15 +373,17 @@ function makePrintHtml(detail: TransferDocumentDetail) {
       .map((value) => String(value || "").trim())
       .filter(Boolean)
       .join(" • ");
+    const unitPrice = lineUnitPrice(line);
+    const rowValue = lineTotalValue(line);
     return `<tr>
       <td class="center">${index + 1}</td>
       <td><div class="product">${image}<div><strong>${escapeHtml(line.product_title || "Produs")}</strong>${variant ? `<small>${escapeHtml(variant)}</small>` : ""}</div></div></td>
       <td class="code">${escapeHtml(line.product_code || "-")}</td>
       <td class="code">${escapeHtml(line.barcode || "-")}</td>
-      <td>${escapeHtml(line.from_location_name || "-")}</td>
-      <td>${escapeHtml(line.to_location_name || "-")}</td>
-      <td class="center">buc.</td>
+      <td class="center unit">buc.</td>
       <td class="qty">${escapeHtml(qty(line.qty))}</td>
+      <td class="money">${escapeHtml(moneyRon(unitPrice, false))}</td>
+      <td class="money value">${escapeHtml(moneyRon(rowValue, false))}</td>
     </tr>`;
   }).join("");
 
@@ -301,14 +422,19 @@ function makePrintHtml(detail: TransferDocumentDetail) {
   thead { display:table-header-group; }
   tr { break-inside:avoid; page-break-inside:avoid; }
   th { background:#26384b; color:#fff; border:1px solid #26384b; padding:2.2mm 1.4mm; font-size:7.7px; line-height:1.2; text-transform:uppercase; text-align:left; }
+  th small { display:block; margin-top:.4mm; font-size:6.5px; color:#dce5ee; }
   td { border:1px solid #d4dcdf; padding:1.7mm 1.4mm; font-size:8.5px; line-height:1.25; vertical-align:middle; overflow-wrap:anywhere; }
   tbody tr:nth-child(even) td { background:#f8fafb; }
-  th:nth-child(1),td:nth-child(1){width:7mm} th:nth-child(2),td:nth-child(2){width:51mm} th:nth-child(3),td:nth-child(3){width:24mm} th:nth-child(4),td:nth-child(4){width:27mm} th:nth-child(5),td:nth-child(5),th:nth-child(6),td:nth-child(6){width:27mm} th:nth-child(7),td:nth-child(7){width:10mm} th:nth-child(8),td:nth-child(8){width:12mm}
-  .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}
+  th:nth-child(1),td:nth-child(1){width:7mm} th:nth-child(2),td:nth-child(2){width:54mm} th:nth-child(3),td:nth-child(3){width:24mm} th:nth-child(4),td:nth-child(4){width:27mm} th:nth-child(5),td:nth-child(5){width:10mm} th:nth-child(6),td:nth-child(6){width:11mm} th:nth-child(7),td:nth-child(7){width:24mm} th:nth-child(8),td:nth-child(8){width:28mm}
+  .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}
   .product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}
   .img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
+  tfoot td { background:#eef4f2; border-color:#b9c7c4; font-weight:700; }
+  tfoot .totalLabel { text-align:right; color:#183d36; letter-spacing:.08em; }
+  tfoot .totalValue { background:#255f54; color:#fff; font-size:11px; }
   .total { display:grid; grid-template-columns:minmax(0,1fr) auto; margin-top:2.5mm; border:1px solid #b9c7c4; border-radius:2.5mm; overflow:hidden; }
-  .total span { padding:2.4mm 3mm; color:#536171; background:#f5f8f7; }.total strong { min-width:30mm; padding:2.4mm 3mm; text-align:center; color:#fff; background:#255f54; font-size:13px; }
+  .total span { padding:2.4mm 3mm; color:#536171; background:#f5f8f7; }.total strong { min-width:44mm; padding:2.4mm 3mm; text-align:center; color:#fff; background:#255f54; font-size:13px; }
+  .valuationNote { margin-top:1.5mm; color:#8a5b00; font-size:7.5px; text-align:right; }
   .signatures { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4mm; margin-top:13mm; break-inside:avoid; }
   .signature { min-height:27mm; border:1px solid #ccd7d4; border-radius:2.5mm; padding:2.5mm; }.signatureTitle{color:#255f54;font-size:8px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.signatureLine{margin-top:9mm;border-top:1px solid #667382;padding-top:1.3mm;color:#667382;font-size:7.2px;text-align:center}.signatureDate{margin-top:2.5mm;color:#7b8793;font-size:7.2px;text-align:center}
   .footer { display:flex; justify-content:space-between; gap:8mm; margin-top:5mm; padding-top:2.5mm; border-top:1px solid #d7dfdd; color:#7b8793; font-size:7.2px; }
@@ -321,10 +447,15 @@ function makePrintHtml(detail: TransferDocumentDetail) {
 </div>
 <div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(doc.title || "PROCES-VERBAL DE PREDARE-PRIMIRE")}</h1><div class="subtitle">${escapeHtml(doc.subtitle || "Transfer intern de stoc")}</div>${legacyMark}</div>
 <div class="route"><div class="routeCard"><span>Gestiune predătoare</span><strong>${escapeHtml(fromSummary || "Conform tabelului")}</strong></div><div class="routeCard"><span>Gestiune primitoare</span><strong>${escapeHtml(toSummary || "Conform tabelului")}</strong></div></div>
-<div class="declaration">Prin prezentul document se confirmă predarea și primirea produselor enumerate mai jos, în cantitățile indicate, pentru transfer intern între gestiuni. Persoanele semnatare confirmă verificarea cantitativă a bunurilor.</div>
+<div class="declaration">Prin prezentul document se confirmă predarea și primirea produselor enumerate mai jos, în cantitățile și la valorile indicate, pentru transfer intern între gestiuni. Persoanele semnatare confirmă verificarea cantitativă și valorică a bunurilor.</div>
 ${doc.note ? `<div class="note"><strong>Observații:</strong> ${escapeHtml(doc.note)}</div>` : ""}
-<table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>Gestiune predătoare</th><th>Gestiune primitoare</th><th>U.M.</th><th>Cant.</th></tr></thead><tbody>${rows}</tbody></table>
-<div class="total"><span>Total produse transferate: ${lines.length} poziții</span><strong>${qty(totalQty)} buc.</strong></div>
+<table>
+  <thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>U.M.</th><th>Cant.</th><th>P.U.<small>RON</small></th><th>Valoare<small>RON</small></th></tr></thead>
+  <tbody>${rows}</tbody>
+  <tfoot><tr><td colspan="5" class="totalLabel">TOTAL</td><td class="qty">${escapeHtml(qty(totalQty))}</td><td></td><td class="money totalValue">${escapeHtml(moneyRon(totalValue, false))}</td></tr></tfoot>
+</table>
+<div class="total"><span>Total produse transferate: ${lines.length} poziții • ${qty(totalQty)} buc.</span><strong>${escapeHtml(moneyRon(totalValue))}</strong></div>
+${missingPriceCount ? `<div class="valuationNote">Atenție: ${missingPriceCount} poziții nu au preț de achiziție disponibil; totalul valoric include numai pozițiile evaluate.</div>` : ""}
 <div class="signatures"><div class="signature"><div class="signatureTitle">Predat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div><div class="signature"><div class="signatureTitle">Transportat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div><div class="signature"><div class="signatureTitle">Primit de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div><div class="signature"><div class="signatureTitle">Verificat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div></div>
 <div class="footer"><span>Document generat din sistemul AllInFashion.</span><span>${escapeHtml(doc.document_number)} • ${escapeHtml(roDateTime(doc.created_at))}</span></div>
 </body></html>`;
@@ -461,7 +592,7 @@ export default function AllInProductMoves() {
     setDetailLoading(true);
     setError("");
     try {
-      const result = await fetchJson<TransferDocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`);
+      const result = await loadTransferDocumentDetail(item.id);
       setDetail(result);
     } catch (loadError: any) {
       setError(loadError?.message || "A bizonylat részleteinek betöltése nem sikerült.");
@@ -472,7 +603,7 @@ export default function AllInProductMoves() {
 
   const ensureDetail = useCallback(async (item: TransferDocumentListItem) => {
     if (detail?.document.id === item.id) return detail;
-    return fetchJson<TransferDocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`);
+    return loadTransferDocumentDetail(item.id);
   }, [detail]);
 
   async function printItem(item: TransferDocumentListItem) {
@@ -549,6 +680,8 @@ export default function AllInProductMoves() {
   }
 
   const activeFilterCount = useMemo(() => [search, from, to, fromLocation, toLocation, type !== "all" ? type : ""].filter(Boolean).length, [from, fromLocation, search, to, toLocation, type]);
+  const detailTotalValue = useMemo(() => transferTotalValue(detail?.lines || []), [detail]);
+  const detailMissingPriceCount = useMemo(() => transferMissingPriceCount(detail?.lines || []), [detail]);
 
   return <div className={page}>
     <div className={shell}>
@@ -648,20 +781,60 @@ export default function AllInProductMoves() {
           <div className="flex flex-wrap gap-2"><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button><button type="button" className={dangerBtn} onClick={() => requestPermanentDelete(detail.document)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-3.5">
-          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-6">
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
             <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatszám</p><p className="mt-1 text-sm">{detail.document.document_number}</p></div>
             <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Kibocsátva</p><p className="mt-1 text-sm">{dateTime(detail.document.created_at)}</p></div>
             <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Sor / darab</p><p className="mt-1 text-sm text-[#d7fffd]">{detail.lines.length} sor • {qty(detail.document.total_qty)} db</p></div>
             <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Rögzítette</p><p className="mt-1 truncate text-sm">{detail.document.actor || "-"}</p></div>
             <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Forrás</p><p className="mt-1 truncate text-sm">{detail.document.from_location_summary || "Conform tabelului"}</p></div>
             <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Célhely</p><p className="mt-1 truncate text-sm">{detail.document.to_location_summary || "Conform tabelului"}</p></div>
+            <div className="rounded-2xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/14 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/58">Átadás értéke</p><p className="mt-1 text-sm text-[#d7fffd]">{moneyRon(detailTotalValue)}</p>{detailMissingPriceCount ? <p className="mt-0.5 text-[9px] text-amber-100/70">{detailMissingPriceCount} sor ár nélkül</p> : null}</div>
           </div>
           {detail.document.note ? <div className="mt-3 rounded-2xl border border-white/12 bg-white/[0.05] px-3 py-2.5 text-sm text-white/70"><span className="text-white/42">Megjegyzés: </span>{detail.document.note}</div> : null}
           <div className="mt-3 overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
             <div className="flex items-center justify-between gap-3 border-b border-white/10 px-3 py-2.5"><div className="flex items-center gap-2 text-sm"><PackageCheck size={16} /> Átadott termékek</div><span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/13 px-2 py-0.5 text-[10px] text-[#d7fffd]">{detail.lines.length} sor</span></div>
-            <div className="overflow-x-auto"><table className="w-full min-w-[1120px] text-left text-xs"><thead className="bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">#</th><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Márka / kategória</th><th className="px-2 py-2">Azonosítók</th><th className="px-2 py-2">Variáns</th><th className="px-2 py-2">Forrás</th><th className="px-2 py-2">Cél</th><th className="px-2 py-2 text-right">Db</th><th className="px-2 py-2">Készletváltozás</th></tr></thead><tbody>
-              {detail.lines.map((line, index) => <tr key={line.id || `${line.line_no}-${index}`} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]"><td className="px-2 py-2 text-white/42">{index + 1}</td><td className="px-2 py-2">{line.image_url ? <img src={line.image_url} alt="" className="h-11 w-11 rounded-lg border border-white/12 bg-white object-contain p-0.5" loading="lazy" /> : <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/28">-</span>}</td><td className="px-2 py-2"><p className="max-w-[240px] truncate text-white">{line.product_title || "Névtelen termék"}</p></td><td className="px-2 py-2"><p className="max-w-[180px] truncate">{line.brand_name || "-"}</p><p className="mt-0.5 max-w-[180px] truncate text-[10px] text-white/40">{line.category_name || "-"}</p></td><td className="px-2 py-2"><p className="max-w-[150px] truncate font-mono text-[11px] text-[#cffffd]/75">{line.product_code || "-"}</p><p className="mt-0.5 max-w-[150px] truncate font-mono text-[10px] text-white/42">{line.barcode || "-"}</p></td><td className="px-2 py-2">{[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</td><td className="px-2 py-2">{line.from_location_name || "-"}</td><td className="px-2 py-2">{line.to_location_name || "-"}</td><td className="px-2 py-2 text-right text-sm text-[#d7fffd]">{qty(line.qty)}</td><td className="px-2 py-2 text-[10px] text-white/52"><span>{qty(line.source_before)} → {qty(line.source_after)}</span><br /><span>{qty(line.target_before)} → {qty(line.target_after)}</span></td></tr>)}
-            </tbody></table></div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1120px] text-left text-xs">
+                <thead className="bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48">
+                  <tr>
+                    <th className="px-2 py-2">#</th>
+                    <th className="px-2 py-2">Kép</th>
+                    <th className="px-2 py-2">Termék</th>
+                    <th className="px-2 py-2">Márka / kategória</th>
+                    <th className="px-2 py-2">Azonosítók</th>
+                    <th className="px-2 py-2">Variáns</th>
+                    <th className="px-2 py-2 text-center">U.M.</th>
+                    <th className="px-2 py-2 text-right">Db</th>
+                    <th className="px-2 py-2 text-right">P.U. RON</th>
+                    <th className="px-2 py-2 text-right">Érték RON</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.lines.map((line, index) => (
+                    <tr key={line.id || `${line.line_no}-${index}`} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]">
+                      <td className="px-2 py-2 text-white/42">{index + 1}</td>
+                      <td className="px-2 py-2">{line.image_url ? <img src={line.image_url} alt="" className="h-11 w-11 rounded-lg border border-white/12 bg-white object-contain p-0.5" loading="lazy" /> : <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/12 bg-white/[0.05] text-white/28">-</span>}</td>
+                      <td className="px-2 py-2"><p className="max-w-[240px] truncate text-white">{line.product_title || "Névtelen termék"}</p></td>
+                      <td className="px-2 py-2"><p className="max-w-[180px] truncate">{line.brand_name || "-"}</p><p className="mt-0.5 max-w-[180px] truncate text-[10px] text-white/40">{line.category_name || "-"}</p></td>
+                      <td className="px-2 py-2"><p className="max-w-[150px] truncate font-mono text-[11px] text-[#cffffd]/75">{line.product_code || "-"}</p><p className="mt-0.5 max-w-[150px] truncate font-mono text-[10px] text-white/42">{line.barcode || "-"}</p></td>
+                      <td className="px-2 py-2">{[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</td>
+                      <td className="px-2 py-2 text-center">buc.</td>
+                      <td className="px-2 py-2 text-right text-sm text-[#d7fffd]">{qty(line.qty)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-white/72">{moneyRon(lineUnitPrice(line), false)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(lineTotalValue(line), false)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-[#7bd7d4]/30 bg-[#174c55]/55">
+                    <td colSpan={7} className="px-3 py-2.5 text-right text-xs uppercase tracking-[0.12em] text-[#cffffd]">TOTAL</td>
+                    <td className="px-2 py-2.5 text-right text-sm text-white">{qty(detail.lines.reduce((sum, line) => sum + n(line.qty), 0))}</td>
+                    <td className="px-2 py-2.5 text-right text-white/40">-</td>
+                    <td className="px-2 py-2.5 text-right text-sm text-white">{moneyRon(detailTotalValue)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/42"><span>ESC: bezárás • a PDF román nyelvű hivatalos átadás-átvételi formátum</span><button type="button" className={btnSoft} onClick={() => setDetail(null)}><X size={14} /> Bezárás</button></div>
