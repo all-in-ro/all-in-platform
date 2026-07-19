@@ -1098,7 +1098,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const DetailsPane = (
     <div className="relative space-y-4">
-      <section className="relative z-[220] overflow-visible rounded-2xl border border-white/14 bg-white/[0.06] shadow-sm">
+      <section className="relative z-[60] overflow-visible rounded-2xl border border-white/14 bg-white/[0.06] shadow-sm">
         <div className="flex flex-col gap-3 rounded-2xl bg-gradient-to-r from-[#303a4c] via-[#354153] to-[#2a8d8b]/34 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-white/80 text-sm">Kiválasztva</div>
