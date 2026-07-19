@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 
+
 type Shop = { id: string; name: string };
 
 type CodeItem = {
