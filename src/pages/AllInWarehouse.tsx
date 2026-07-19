@@ -3882,12 +3882,25 @@ async function apiVariantDelete(id: string) {
 async function apiVariantStockUpdate(
   id: string,
   rows: Array<{ locationId?: string; locationCode?: string; qty: number | string; reservedQty?: number | string }>,
-  options?: { mode?: "redistribute" | "correction"; allowTotalChange?: boolean }
+  options?: {
+    mode?: "redistribute" | "correction";
+    allowTotalChange?: boolean;
+    reasonCode?: string;
+    reasonText?: string;
+    note?: string;
+  }
 ) {
   return fetchJSON<{ ok: true; changed?: number; beforeTotal?: number; afterTotal?: number; totalDelta?: number; mode?: string; stock: StockItem[] }>(`/api/aif/variants/${encodeURIComponent(id)}/stock`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rows, mode: options?.mode || "redistribute", allowTotalChange: Boolean(options?.allowTotalChange) }),
+    body: JSON.stringify({
+      rows,
+      mode: options?.mode || "redistribute",
+      allowTotalChange: Boolean(options?.allowTotalChange),
+      reasonCode: options?.reasonCode || null,
+      reasonText: options?.reasonText || null,
+      note: options?.note || null,
+    }),
   });
 }
 
@@ -4404,6 +4417,9 @@ export default function AllInWarehouse() {
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorSaving, setStockEditorSaving] = useState(false);
   const [stockEditorAllowTotalChange, setStockEditorAllowTotalChange] = useState(false);
+  const [stockEditorReasonCode, setStockEditorReasonCode] = useState("");
+  const [stockEditorReasonText, setStockEditorReasonText] = useState("");
+  const [stockEditorNote, setStockEditorNote] = useState("");
   const [stockEditorWarning, setStockEditorWarning] = useState("");
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>({});
   const [incomingSelectedVariants, setIncomingSelectedVariants] = useState<Record<string, boolean>>({});
@@ -4696,7 +4712,7 @@ export default function AllInWarehouse() {
 
       if (loadedFromBatch) {
         const totalQty = Number(loadedFromBatch.totalQty || 0);
-        setMessage(`Utolsó bevételezés aktív: ${loadedFromBatch.rows.length || loadedFromBatch.variantIds.length} import sor, ${loadedFromBatch.variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. A lista most ezt az importot mutatja, nem valami félreértett teendőlistát.`);
+        setMessage(`Utolsó bevételezés aktív: ${loadedFromBatch.rows.length || loadedFromBatch.variantIds.length} import sor, ${loadedFromBatch.variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. A lista most kizárólag ennek az importnak a termékeit mutatja.`);
         return;
       }
 
@@ -4895,6 +4911,9 @@ export default function AllInWarehouse() {
     setStockEditorTarget(item);
     setStockEditorRows(next);
     setStockEditorAllowTotalChange(false);
+    setStockEditorReasonCode("");
+    setStockEditorReasonText("");
+    setStockEditorNote("");
     setStockEditorWarning("");
   }
 
@@ -4925,6 +4944,9 @@ export default function AllInWarehouse() {
     setStockEditorTarget(null);
     setStockEditorRows({});
     setStockEditorAllowTotalChange(false);
+    setStockEditorReasonCode("");
+    setStockEditorReasonText("");
+    setStockEditorNote("");
     setStockEditorWarning("");
   }
 
@@ -4957,8 +4979,16 @@ export default function AllInWarehouse() {
     return stockEditorDraftTotal() - stockEditorOriginalTotal();
   }
 
+  function stockEditorCorrectionReasonValid() {
+    if (!stockEditorAllowTotalChange || stockEditorTotalDelta() === 0) return true;
+    if (!stockEditorReasonCode) return false;
+    if (stockEditorReasonCode === "other" && !stockEditorReasonText.trim()) return false;
+    return true;
+  }
+
   function stockEditorCanSave() {
-    return stockEditorAllowTotalChange || stockEditorTotalDelta() === 0;
+    if (!stockEditorAllowTotalChange && stockEditorTotalDelta() !== 0) return false;
+    return stockEditorCorrectionReasonValid();
   }
 
   function preferredStockReceiverLocation(targetKey: string, rows: Record<string, string>) {
@@ -5070,6 +5100,14 @@ export default function AllInWarehouse() {
       setStockEditorWarning("Mozgatás módban a teljes készlet nem változhat. A + gombbal automatikusan másik helyről vezetjük át, új áruhoz pedig kapcsold be a készletkorrekció módot.");
       return;
     }
+    if (stockEditorAllowTotalChange && totalDelta !== 0 && !stockEditorReasonCode) {
+      setStockEditorWarning("A készletkorrekció okának kiválasztása kötelező. Ez kerül be a Készletmozgások naplójába.");
+      return;
+    }
+    if (stockEditorAllowTotalChange && totalDelta !== 0 && stockEditorReasonCode === "other" && !stockEditorReasonText.trim()) {
+      setStockEditorWarning("Az Egyéb korrekció okát szövegesen is add meg.");
+      return;
+    }
 
     setStockEditorSaving(true);
     setMessage("");
@@ -5089,6 +5127,9 @@ export default function AllInWarehouse() {
       await apiVariantStockUpdate(changedVariantId, rows, {
         mode: stockEditorAllowTotalChange ? "correction" : "redistribute",
         allowTotalChange: stockEditorAllowTotalChange,
+        reasonCode: stockEditorAllowTotalChange ? stockEditorReasonCode : "",
+        reasonText: stockEditorAllowTotalChange ? stockEditorReasonText.trim() : "",
+        note: stockEditorAllowTotalChange ? stockEditorNote.trim() : "",
       });
       notifyStockMovesChanged({ variantId: changedVariantId, source: stockEditorAllowTotalChange ? "warehouse_stock_correction" : "warehouse_stock_redistribution" });
       await load();
@@ -5103,6 +5144,9 @@ export default function AllInWarehouse() {
       setStockEditorTarget(null);
       setStockEditorRows({});
       setStockEditorAllowTotalChange(false);
+      setStockEditorReasonCode("");
+      setStockEditorReasonText("");
+      setStockEditorNote("");
       setStockEditorWarning("");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült módosítani a készletet.");
@@ -9278,7 +9322,7 @@ export default function AllInWarehouse() {
                 </div>
               ) : showShopifyConnectionContext ? (
                 <div className="mb-3 rounded-xl border border-[#95bf47]/35 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
-                  A legutóbb Shopifyhoz párosított termékek vannak elöl. A sorok alatt a kapcsolás dátuma is látszik, így nem kell emlékezetből régészkedni.
+                  A legutóbb Shopifyhoz párosított termékek vannak elöl. A sorok alatt a kapcsolás dátuma is látszik a gyors ellenőrzéshez.
                 </div>
               ) : null}
               {hasActiveWarehouseFilters && (
@@ -10153,9 +10197,14 @@ export default function AllInWarehouse() {
                   onClick={() => {
                     const nextMode = !stockEditorAllowTotalChange;
                     setStockEditorAllowTotalChange(nextMode);
+                    if (!nextMode) {
+                      setStockEditorReasonCode("");
+                      setStockEditorReasonText("");
+                      setStockEditorNote("");
+                    }
                     const delta = stockEditorTotalDelta();
                     setStockEditorWarning(nextMode
-                      ? (delta !== 0 ? `Készletkorrekció mód: a teljes készlet ${delta > 0 ? "+" : ""}${delta} db-bal változik.` : "Készletkorrekció mód bekapcsolva. Itt lehet újonnan kapott darabot vagy leltárkorrekciót menteni.")
+                      ? (delta !== 0 ? `Készletkorrekció mód: a teljes készlet ${delta > 0 ? "+" : ""}${delta} db-bal változik. Válaszd ki a korrekció okát is.` : "Készletkorrekció mód bekapcsolva. A készletváltozás okát mentés előtt kötelező megadni.")
                       : (delta !== 0 ? "Mozgatás módban a teljes készlet nem változhat. Állítsd vissza az eltérést 0-ra, vagy kapcsold vissza a korrekciót." : ""));
                   }}
                 >
@@ -10167,6 +10216,73 @@ export default function AllInWarehouse() {
                 <div className={`flex gap-2 rounded-xl border px-3 py-2 text-xs ${stockEditorAllowTotalChange ? "border-amber-300/35 bg-amber-400/12 text-amber-100" : "border-[#5bd0cc]/30 bg-[#203f49] text-[#d7fffd]"}`}>
                   <AlertTriangle size={15} className="mt-0.5 shrink-0" />
                   <span>{stockEditorWarning}</span>
+                </div>
+              )}
+
+              {stockEditorAllowTotalChange && (
+                <div className="rounded-xl border border-amber-200/25 bg-amber-400/[0.08] p-3">
+                  <div className="mb-3 flex items-start gap-2">
+                    <ClipboardList size={16} className="mt-0.5 shrink-0 text-amber-100" />
+                    <div>
+                      <p className="text-xs text-white">Korrekció oka</p>
+                      <p className="mt-0.5 text-[11px] leading-snug text-white/52">Kötelező, ha a teljes darabszám változik. Az ok és a megjegyzés bekerül a Készletmozgások naplójába.</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className={label}>
+                      Ok
+                      <select
+                        className={select}
+                        value={stockEditorReasonCode}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          setStockEditorReasonCode(next);
+                          if (next !== "other") setStockEditorReasonText("");
+                          if (next) setStockEditorWarning(stockEditorTotalDelta() !== 0 ? `Készletkorrekció mód: a teljes készlet ${stockEditorTotalDelta() > 0 ? "+" : ""}${stockEditorTotalDelta()} db-bal változik.` : "");
+                        }}
+                      >
+                        <option value="">Válassz okot</option>
+                        <option value="inventory_difference">Leltáreltérés</option>
+                        <option value="incorrect_reception">Téves bevételezés</option>
+                        <option value="invoice_correction">Számlakorrekció</option>
+                        <option value="damaged_or_lost">Sérült vagy elveszett termék</option>
+                        <option value="admin_correction">Adminisztrációs javítás</option>
+                        <option value="other">Egyéb</option>
+                      </select>
+                    </label>
+                    {stockEditorReasonCode === "other" ? (
+                      <label className={label}>
+                        Egyéb ok
+                        <input
+                          className={input}
+                          value={stockEditorReasonText}
+                          onChange={(event) => setStockEditorReasonText(event.target.value)}
+                          placeholder="Miért szükséges a korrekció?"
+                        />
+                      </label>
+                    ) : (
+                      <label className={label}>
+                        Megjegyzés <span className="text-white/38">(opcionális)</span>
+                        <input
+                          className={input}
+                          value={stockEditorNote}
+                          onChange={(event) => setStockEditorNote(event.target.value)}
+                          placeholder="Rövid belső megjegyzés"
+                        />
+                      </label>
+                    )}
+                  </div>
+                  {stockEditorReasonCode === "other" && (
+                    <label className={`${label} mt-3`}>
+                      Megjegyzés <span className="text-white/38">(opcionális)</span>
+                      <input
+                        className={input}
+                        value={stockEditorNote}
+                        onChange={(event) => setStockEditorNote(event.target.value)}
+                        placeholder="Rövid belső megjegyzés"
+                      />
+                    </label>
+                  )}
                 </div>
               )}
 
@@ -10225,7 +10341,15 @@ export default function AllInWarehouse() {
                 </div>
                 <div className="flex gap-2">
                   <button className={btnSoft} onClick={closeStockEditor} disabled={stockEditorSaving} type="button">Mégse</button>
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={saveStockEditor} disabled={stockEditorSaving || !stockLocationRows.length || !stockEditorCanSave()} title={!stockEditorCanSave() ? "Mozgatás módban a teljes készlet nem változhat." : "Készlet mentése"} type="button">
+                  <button
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#249b99] disabled:cursor-not-allowed disabled:opacity-50 font-normal"
+                    onClick={saveStockEditor}
+                    disabled={stockEditorSaving || !stockLocationRows.length || !stockEditorCanSave()}
+                    title={!stockEditorCanSave()
+                      ? (stockEditorAllowTotalChange && stockEditorTotalDelta() !== 0 ? "A készletkorrekció okának megadása kötelező." : "Mozgatás módban a teljes készlet nem változhat.")
+                      : "Készlet mentése"}
+                    type="button"
+                  >
                     <Save size={15} /> {stockEditorAllowTotalChange ? "Korrekció mentése" : "Mozgatás mentése"}
                   </button>
                 </div>
