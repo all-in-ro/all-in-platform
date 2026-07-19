@@ -581,6 +581,8 @@ type StockTransferPrintLine = {
   fromLocation: string;
   toLocation: string;
   qty: number;
+  unitPrice: number;
+  lineTotal: number;
 };
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
 type ImageFilter = "all" | "with" | "missing";
@@ -2041,6 +2043,12 @@ function warehouseTransferDocumentNumber(input: Date | string | number = new Dat
   return `TRF-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+function warehouseTransferMoney(value: unknown) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return "0,00";
+  return amount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function warehouseStockTransferPrintDocumentHtml(options: {
   title: string;
   note?: string;
@@ -2049,10 +2057,16 @@ function warehouseStockTransferPrintDocumentHtml(options: {
   lines: StockTransferPrintLine[];
 }) {
   const totalQty = options.lines.reduce((sum, line) => sum + line.qty, 0);
-  const fromLocations = Array.from(new Set(options.lines.map((line) => String(line.fromLocation || "").trim()).filter(Boolean)));
-  const toLocations = Array.from(new Set(options.lines.map((line) => String(line.toLocation || "").trim()).filter(Boolean)));
-  const fromSummary = fromLocations.length === 1 ? fromLocations[0] : "Conform tabelului";
-  const toSummary = toLocations.length === 1 ? toLocations[0] : "Conform tabelului";
+  const totalValue = options.lines.reduce((sum, line) => sum + line.lineTotal, 0);
+  const routePairs = Array.from(new Map(
+    options.lines.map((line) => {
+      const from = String(line.fromLocation || "").trim();
+      const to = String(line.toLocation || "").trim();
+      return [`${normalizeSearch(from)}->${normalizeSearch(to)}`, { from, to }] as const;
+    })
+  ).values()).filter((route) => route.from || route.to);
+  const fromSummary = routePairs.length ? routePairs.map((route) => route.from || "-").filter((value, index, all) => all.indexOf(value) === index).join(" / ") : "-";
+  const toSummary = routePairs.length ? routePairs.map((route) => route.to || "-").filter((value, index, all) => all.indexOf(value) === index).join(" / ") : "-";
   const documentNumber = String(options.documentNumber || warehouseTransferDocumentNumber()).trim();
   const documentObject = String(options.title || "Transfer intern de stoc").trim();
 
@@ -2078,10 +2092,10 @@ function warehouseStockTransferPrintDocumentHtml(options: {
         </td>
         <td class="code">${labelEscapeHtml(line.productCode || "-")}</td>
         <td class="code">${labelEscapeHtml(line.barcode || "-")}</td>
-        <td>${labelEscapeHtml(line.fromLocation || "-")}</td>
-        <td>${labelEscapeHtml(line.toLocation || "-")}</td>
         <td class="center unit">buc.</td>
         <td class="qty">${line.qty}</td>
+        <td class="money">${warehouseTransferMoney(line.unitPrice)}</td>
+        <td class="money strongMoney">${warehouseTransferMoney(line.lineTotal)}</td>
       </tr>`;
   }).join("");
 
@@ -2121,30 +2135,36 @@ function warehouseStockTransferPrintDocumentHtml(options: {
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     thead { display: table-header-group; }
     tr { break-inside: avoid; page-break-inside: avoid; }
-    th { background: #26384b; color: #fff; border: 1px solid #26384b; padding: 2.2mm 1.5mm; font-size: 8px; line-height: 1.2; letter-spacing: .035em; text-transform: uppercase; text-align: left; }
-    td { border: 1px solid #d4dcdf; padding: 1.8mm 1.5mm; font-size: 8.7px; line-height: 1.25; vertical-align: middle; overflow-wrap: anywhere; }
+    th { background: #26384b; color: #fff; border: 1px solid #26384b; padding: 2.2mm 1.3mm; font-size: 7.7px; line-height: 1.2; letter-spacing: .025em; text-transform: uppercase; text-align: left; }
+    td { border: 1px solid #d4dcdf; padding: 1.8mm 1.3mm; font-size: 8.5px; line-height: 1.25; vertical-align: middle; overflow-wrap: anywhere; }
     tbody tr:nth-child(even) td { background: #f8fafb; }
     th:nth-child(1), td:nth-child(1) { width: 7mm; }
-    th:nth-child(2), td:nth-child(2) { width: 51mm; }
-    th:nth-child(3), td:nth-child(3) { width: 24mm; }
-    th:nth-child(4), td:nth-child(4) { width: 27mm; }
-    th:nth-child(5), td:nth-child(5), th:nth-child(6), td:nth-child(6) { width: 27mm; }
-    th:nth-child(7), td:nth-child(7) { width: 10mm; }
-    th:nth-child(8), td:nth-child(8) { width: 12mm; }
+    th:nth-child(2), td:nth-child(2) { width: 52mm; }
+    th:nth-child(3), td:nth-child(3) { width: 25mm; }
+    th:nth-child(4), td:nth-child(4) { width: 29mm; }
+    th:nth-child(5), td:nth-child(5) { width: 10mm; }
+    th:nth-child(6), td:nth-child(6) { width: 12mm; }
+    th:nth-child(7), td:nth-child(7) { width: 23mm; }
+    th:nth-child(8), td:nth-child(8) { width: 25mm; }
     .center { text-align: center; }
     .serial { color: #536171; }
     .unit { white-space: nowrap; }
     .qty { text-align: center; font-size: 11px; font-weight: 700; color: #255f54; }
-    .code { font-family: "Courier New", monospace; font-size: 8px; }
+    .money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .strongMoney { font-weight: 700; color: #183d36; }
+    .code { font-family: "Courier New", monospace; font-size: 7.8px; }
     .productCell { display: flex; align-items: center; gap: 2mm; min-width: 0; }
     .productText { min-width: 0; }
     .productCell strong { display: block; color: #172033; font-size: 9px; line-height: 1.2; }
     .productCell small { display: block; margin-top: .7mm; color: #667382; font-size: 7.7px; line-height: 1.25; }
     .aifTransferImg { width: 9mm; height: 11mm; flex: 0 0 auto; object-fit: contain; border: 1px solid #d4dcdf; border-radius: 1.5mm; background: #fff; }
     .aifTransferImg.empty { display: flex; align-items: center; justify-content: center; padding: 1mm; color: #9aa4ae; font-size: 5.5px; text-align: center; }
+    tfoot td { background: #eef4f2 !important; border-color: #b9c7c4; font-weight: 700; }
+    .totalLabel { text-align: right; color: #183d36; letter-spacing: .05em; }
+    .totalValueCell { background: #255f54 !important; color: #fff; font-size: 10px; }
     .totalRow { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; margin-top: 2.5mm; border: 1px solid #b9c7c4; border-radius: 2.5mm; overflow: hidden; }
     .totalRow span { padding: 2.4mm 3mm; color: #536171; background: #f5f8f7; }
-    .totalRow strong { min-width: 30mm; padding: 2.4mm 3mm; text-align: center; color: #fff; background: #255f54; font-size: 13px; }
+    .totalRow strong { min-width: 40mm; padding: 2.4mm 3mm; text-align: center; color: #fff; background: #255f54; font-size: 13px; }
     .signatures { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 4mm; margin-top: 13mm; break-inside: avoid; page-break-inside: avoid; }
     .signature { min-height: 27mm; border: 1px solid #ccd7d4; border-radius: 2.5mm; padding: 2.5mm; }
     .signatureTitle { color: #255f54; font-size: 8.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
@@ -2186,7 +2206,7 @@ function warehouseStockTransferPrintDocumentHtml(options: {
       <div class="routeCard"><span>Gestiune primitoare</span><strong>${labelEscapeHtml(toSummary)}</strong></div>
     </div>
 
-    <div class="declaration">Prin prezentul document se confirmă predarea și primirea produselor enumerate mai jos, în cantitățile indicate, pentru transfer intern între gestiuni. Persoanele semnatare confirmă verificarea cantitativă a bunurilor.</div>
+    <div class="declaration">Prin prezentul document se confirmă predarea și primirea produselor enumerate mai jos, în cantitățile și la valorile indicate, pentru transfer intern între gestiuni. Persoanele semnatare confirmă verificarea cantitativă și valorică a bunurilor.</div>
     ${options.note ? `<div class="note"><strong>Observații:</strong> ${labelEscapeHtml(options.note)}</div>` : ""}
 
     <table>
@@ -2196,16 +2216,24 @@ function warehouseStockTransferPrintDocumentHtml(options: {
           <th>Denumirea produsului / varianta</th>
           <th>Cod produs</th>
           <th>Cod de bare</th>
-          <th>Gestiune predătoare</th>
-          <th>Gestiune primitoare</th>
           <th>U.M.</th>
           <th>Cant.</th>
+          <th>P.U. RON</th>
+          <th>Valoare RON</th>
         </tr>
       </thead>
       <tbody>${rowsHtml}</tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5" class="totalLabel">TOTAL</td>
+          <td class="qty">${totalQty}</td>
+          <td class="money">-</td>
+          <td class="money totalValueCell">${warehouseTransferMoney(totalValue)}</td>
+        </tr>
+      </tfoot>
     </table>
 
-    <div class="totalRow"><span>Total produse transferate: ${options.lines.length} poziții</span><strong>${totalQty} buc.</strong></div>
+    <div class="totalRow"><span>Total produse transferate: ${options.lines.length} poziții / ${totalQty} buc.</span><strong>${warehouseTransferMoney(totalValue)} RON</strong></div>
 
     <div class="signatures">
       <div class="signature"><div class="signatureTitle">Predat de</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>
@@ -6611,6 +6639,7 @@ export default function AllInWarehouse() {
       else if (draft.fromLocationId === draft.toLocationId) problem = "A forrás és a célhely nem lehet ugyanaz.";
       else if (qty <= 0) problem = "Adj meg legalább 1 darabot.";
       else if (qty > availableFrom) problem = `A forrás helyen csak ${availableFrom} db elérhető.`;
+      else if (priceNumber(item.sell_price) === null) problem = "Hiányzik az eladási ár.";
       return {
         item,
         variantId,
@@ -6629,31 +6658,54 @@ export default function AllInWarehouse() {
   const preparedMoveRowsById = useMemo(() => new Map(preparedMoveRows.map((row) => [row.variantId, row])), [preparedMoveRows]);
   const moveValidRows = useMemo(() => preparedMoveRows.filter((row) => row.valid), [preparedMoveRows]);
   const moveInvalidCount = Math.max(0, preparedMoveRows.length - moveValidRows.length);
-  const moveAllRowsValid = useMemo(() => preparedMoveRows.length > 0 && preparedMoveRows.every((row) => row.valid), [preparedMoveRows]);
+  const moveRoutePairs = useMemo(() => Array.from(new Set(
+    moveValidRows.map((row) => `${row.fromLocationId}=>${row.toLocationId}`)
+  )), [moveValidRows]);
+  const moveHasSingleRoute = moveRoutePairs.length <= 1;
+  const moveRouteProblem = moveRoutePairs.length > 1
+    ? "Egy hivatalos átadás-átvételi bizonylaton csak egy forrás és egy cél lehet. Használd a Gyors kitöltést, vagy készíts külön bizonylatot útvonalanként."
+    : "";
+  const moveAllRowsValid = useMemo(
+    () => preparedMoveRows.length > 0 && preparedMoveRows.every((row) => row.valid) && moveHasSingleRoute,
+    [preparedMoveRows, moveHasSingleRoute]
+  );
   const moveTotalQty = useMemo(() => moveValidRows.reduce((sum, row) => sum + row.qty, 0), [moveValidRows]);
+  const moveTotalValue = useMemo(() => moveValidRows.reduce((sum, row) => {
+    const unitPrice = priceNumber(row.item.sell_price) || 0;
+    return sum + row.qty * unitPrice;
+  }, 0), [moveValidRows]);
   const moveCanSave = selectedWorkPanel === "move" && moveAllRowsValid && !stockMoveSaving;
   const moveBulkCanApply = selectedWorkPanel === "move" && Boolean(stockMoveBulkFrom && stockMoveBulkTo && stockMoveBulkFrom !== stockMoveBulkTo);
 
   function movePrintLines() {
-    return moveValidRows.map((row, index): StockTransferPrintLine => ({
-      index: index + 1,
-      title: row.item.title_ro || "-",
-      brand: row.item.brand_name || "-",
-      category: row.item.category_name_hu || row.item.category_name_ro || "-",
-      productCode: itemProductCode(row.item) || "-",
-      barcode: visibleWarehouseBarcode(row.item) || row.item.barcode || row.item.internal_sku || "-",
-      color: colorDisplay(row.item.color_name, row.item.color_code),
-      size: String(row.item.size || "-"),
-      imageUrl: row.item.image_url || null,
-      fromLocation: row.fromLocationName,
-      toLocation: row.toLocationName,
-      qty: row.qty,
-    }));
+    return moveValidRows.map((row, index): StockTransferPrintLine => {
+      const unitPrice = priceNumber(row.item.sell_price) || 0;
+      return {
+        index: index + 1,
+        title: row.item.title_ro || "-",
+        brand: row.item.brand_name || "-",
+        category: row.item.category_name_hu || row.item.category_name_ro || "-",
+        productCode: itemProductCode(row.item) || "-",
+        barcode: visibleWarehouseBarcode(row.item) || row.item.barcode || row.item.internal_sku || "-",
+        color: colorDisplay(row.item.color_name, row.item.color_code),
+        size: String(row.item.size || "-"),
+        imageUrl: row.item.image_url || null,
+        fromLocation: row.fromLocationName,
+        toLocation: row.toLocationName,
+        qty: row.qty,
+        unitPrice,
+        lineTotal: row.qty * unitPrice,
+      };
+    });
   }
 
   function printStockMoveTransferPdf() {
+    if (!moveHasSingleRoute) {
+      setMessage(moveRouteProblem);
+      return;
+    }
     if (!moveAllRowsValid) {
-      setMessage("A PDF előtt javítsd a készletmozgatási sorokat.");
+      setMessage("A PDF előtt javítsd a készletmozgatási sorokat. Az eladási ár is kötelező, mert a bizonylat értéket számol.");
       return;
     }
     const issuedAt = new Date();
@@ -6733,6 +6785,10 @@ export default function AllInWarehouse() {
   }
 
   function requestSaveSelectedMoveTransfers() {
+    if (!moveHasSingleRoute) {
+      setMessage(moveRouteProblem);
+      return;
+    }
     if (!moveCanSave || stockMoveSubmitLockRef.current) {
       setMessage(moveInvalidCount ? `${moveInvalidCount} készletmozgatási sor még hibás. Javítsd őket mentés előtt.` : stockMoveSubmitLockRef.current ? "A készletmozgatás mentése már folyamatban van." : "Nincs menthető készletmozgatás.");
       return;
@@ -6745,6 +6801,10 @@ export default function AllInWarehouse() {
     // A React state csak a következő rendernél tiltja le a gombot. A ref az első
     // kattintás pillanatában zár, így gyors dupla kattintással sem indul két POST.
     if (stockMoveSubmitLockRef.current) return;
+    if (!moveHasSingleRoute) {
+      setMessage(moveRouteProblem);
+      return;
+    }
     if (!moveCanSave) {
       setMessage(moveInvalidCount ? `${moveInvalidCount} készletmozgatási sor még hibás. Javítsd őket mentés előtt.` : "Nincs menthető készletmozgatás.");
       return;
@@ -9767,8 +9827,8 @@ export default function AllInWarehouse() {
                       <input className={moveInput} value={stockMoveNote} onChange={(e) => setStockMoveNote(e.target.value)} placeholder="Pl. átadás ellenőrzésre, visszahozatal..." />
                     </label>
                     <div className="rounded-lg border border-[#2a8d8b]/28 bg-[#203f49] px-2.5 py-2 text-[11px] text-[#d7fffd]">
-                      <div className="whitespace-nowrap font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db</div>
-                      <div className={`mt-0.5 whitespace-nowrap ${moveInvalidCount ? "text-amber-100" : "text-[#d7fffd]/78"}`}>{moveInvalidCount ? `${moveInvalidCount} hibás sor javítandó` : "véglegesítésre kész"}</div>
+                      <div className="whitespace-nowrap font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db • {money(moveTotalValue)} RON</div>
+                      <div className={`mt-0.5 whitespace-nowrap ${moveInvalidCount || !moveHasSingleRoute ? "text-amber-100" : "text-[#d7fffd]/78"}`}>{moveInvalidCount ? `${moveInvalidCount} hibás sor javítandó` : !moveHasSingleRoute ? "Több útvonal: külön bizonylat kell" : "véglegesítésre kész"}</div>
                     </div>
                   </div>
 
@@ -9836,7 +9896,8 @@ export default function AllInWarehouse() {
                   <div className="flex flex-wrap gap-1.5 text-[11px] text-white/58">
                     <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><FileText size={12} /> PDF előnézet = még nem hivatalos bizonylat</span>
                     <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><PackageCheck size={12} /> Készlet mozgatása = valódi készletmozgás, megerősítéssel</span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><ArrowRight size={12} /> Soronként: Forrás → Cél → Db</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5"><ArrowRight size={12} /> Egy bizonylat = egy útvonal</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5">Eladási érték: {money(moveTotalValue)} RON</span>
                   </div>
                 </div>
               )}
@@ -9967,9 +10028,9 @@ export default function AllInWarehouse() {
               {selectedWorkPanel === "move" && selectedItemsForAction(selectedWorkPanel).length > 0 && (
                 <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#404a5b]/98 px-4 py-2.5 shadow-[0_-14px_32px_rgba(15,23,42,0.25)] backdrop-blur">
                   <div className="min-w-0 text-xs leading-relaxed text-white/62">
-                    <span className="font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db</span>
+                    <span className="font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db • {money(moveTotalValue)} RON</span>
                     <span className="ml-2">Mentés után ténylegesen átírja a készletet és bekerül a mozgásnaplóba.</span>
-                    {!moveAllRowsValid && selectedMoveItems.length > 0 ? <span className="ml-2 text-amber-200">Van javítandó sor.</span> : null}
+                    {!moveHasSingleRoute ? <span className="ml-2 text-amber-200">Több útvonal van kijelölve. Egy bizonylathoz egy forrás és egy cél kell.</span> : !moveAllRowsValid && selectedMoveItems.length > 0 ? <span className="ml-2 text-amber-200">Van javítandó sor.</span> : null}
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     <button className={btnSoft} onClick={printStockMoveTransferPdf} type="button" disabled={!moveAllRowsValid}>
