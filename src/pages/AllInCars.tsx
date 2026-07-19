@@ -18,6 +18,10 @@ import {
   ChevronUp,
   Edit,
   Trash2,
+  CarFront,
+  CheckCircle2,
+  Home,
+  WalletCards,
 } from "lucide-react";
 
 import AllInCarsMobile from "./AllInCarsMobile";
@@ -55,9 +59,9 @@ const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 const ADMIN_SECRET = (import.meta as any).env?.VITE_ADMIN_SECRET || "";
 
 const CUPE = {
-  blue: "#344154",
-  bgBlue: "#2E3A4A",
-  green: "#108D8B",
+  blue: "#303a4c",
+  bgBlue: "#4b5362",
+  green: "#2a8d8b",
 } as const;
 
 /* ---------- Helpers ---------- */
@@ -148,9 +152,9 @@ function cleanForSave(car: any): any {
 
 function toneFor(lvl: Level) {
   if (lvl === "expired") return "bg-[#b90f1e] text-white border border-[#b90f1e]/50";
-  if (lvl === "soon") return "bg-amber-400 text-black border border-amber-900/20";
-  if (lvl === "ok") return "bg-[var(--cupe-green)] text-white border border-emerald-900/30";
-  return "bg-slate-600 text-slate-200 border border-slate-500/50";
+  if (lvl === "soon") return "bg-amber-400/90 text-[#241a00] border border-amber-200/35";
+  if (lvl === "ok") return "bg-[#2a8d8b] text-white border border-[#7bd7d4]/35";
+  return "bg-[#354153] text-white/65 border border-white/14";
 }
 
 async function fetchJSON(url: string, init?: RequestInit) {
@@ -230,7 +234,7 @@ function Chip({ label, days }: { label: string; days: number | null }) {
   const style = lvl === "ok" ? { backgroundColor: CUPE.green } : undefined;
   return (
     <div
-      className={"px-2 py-[3px] rounded text-[11px] font-medium " + toneFor(lvl)}
+      className={"rounded-full px-2.5 py-1 text-[10px] font-normal " + toneFor(lvl)}
       style={style}
       title={`${label} ${days == null ? "-" : days + " nap"}`}
     >
@@ -243,7 +247,7 @@ function Kpi({
   title,
   value,
   hint,
-  tone = "bg-white",
+  tone = "",
 }: {
   title: string;
   value: string;
@@ -254,13 +258,12 @@ function Kpi({
     // NOTE: shadcn <Card> kap alap "bg-card" osztalyt, amit dark theme-ben felulirhat.
     // Itt direkt div-et hasznalunk, hogy a KPI mindig CUPE-feher maradjon.
     <div
-      className={"rounded-xl border border-slate-300 text-slate-800 " + tone}
-      style={{ backgroundColor: "#ffffff" }}
+      className={"rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm " + tone}
     >
-      <div className="p-3 md:p-3">
-        <div className="text-[12px] text-slate-600">{title}</div>
-        <div className="text-2xl font-semibold">{value}</div>
-        {hint && <div className="text-[11px] text-slate-600 mt-1">{hint}</div>}
+      <div className="p-3.5 md:p-4">
+        <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">{title}</div>
+        <div className="mt-2 text-2xl font-normal text-white">{value}</div>
+        {hint && <div className="mt-1 text-[11px] text-white/45">{hint}</div>}
       </div>
     </div>
   );
@@ -269,7 +272,7 @@ function Kpi({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="grid gap-1">
-      <span className="text-[12px] text-slate-600 font-medium tracking-wide">
+      <span className="text-xs text-white/65">
         {label}
       </span>
       {children}
@@ -279,35 +282,35 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /* ---------- Views ---------- */
 function BoardView({ rows }: { rows: any[] }) {
-  const colCls = "rounded-xl border border-slate-300 bg-white text-slate-800";
+  const colCls = "overflow-hidden rounded-2xl border border-white/14 bg-white/[0.055] text-white shadow-sm";
   const expiredRows = rows.filter((r) => r.hasExpired);
   const soonRows = rows.filter((r) => r.hasSoon);
   const okRows = rows.filter((r) => !r.hasExpired && !r.hasSoon);
   const renderCard = (c: any) => (
     <div
       key={String(c.id ?? c.plate)}
-      className="rounded-lg bg-white border border-slate-300 p-3 text-slate-800"
+      className="rounded-2xl border border-white/12 bg-[#404a5b] p-3 text-white transition hover:border-[#7bd7d4]/30 hover:bg-[#465264]"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="truncate">
-          <div className="text-[#344154] text-[15px] font-bold leading-tight">
+          <div className="text-white text-[15px] font-medium leading-tight">
             {c.plate || "Ismeretlen"}
           </div>
-          <div className="text-slate-700 text-[13px] truncate">
+          <div className="text-white/58 text-[12px] truncate">
             {c.make_model || "—"}
           </div>
         </div>
-        <div className="w-24 h-16 rounded bg-slate-100 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
+        <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white/[0.07]">
           {c.photo_url ? (
             <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
           ) : (
-            <div className="w-full h-full grid place-items-center text-slate-600">
+            <div className="grid h-full w-full place-items-center text-white/35">
               <PlusCircle className="w-5 h-5" />
             </div>
           )}
         </div>
       </div>
-      <div className="border-t border-slate-300/60 my-2" />
+      <div className="my-2 border-t border-white/10" />
       <div className="mt-2 flex flex-wrap gap-2">
         {c.itp_date && c.itp != null && <Chip label="ITP" days={c.itp} />}
         {c.rca_date && c.rca != null && <Chip label="RCA" days={c.rca} />}
@@ -321,21 +324,21 @@ function BoardView({ rows }: { rows: any[] }) {
   return (
     <div className="grid md:grid-cols-3 gap-4">
       <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
+        <div className="flex items-center gap-2 border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white">
           <Bell className="w-4 h-4" />
           <span>Lejárt</span>
         </div>
         <div className="p-3 grid gap-3">{expiredRows.map(renderCard)}</div>
       </div>
       <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
+        <div className="flex items-center gap-2 border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white">
           <AlertTriangle className="w-4 h-4" />
           <span>Közelgő</span>
         </div>
         <div className="p-3 grid gap-3">{soonRows.map(renderCard)}</div>
       </div>
       <div className={colCls}>
-        <div className="px-4 py-3 border-b border-slate-300 flex items-center gap-2">
+        <div className="flex items-center gap-2 border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white">
           <CalendarDays className="w-4 h-4" />
           <span>Rendben</span>
         </div>
@@ -370,8 +373,8 @@ function ListView({
   }, [expandedDefault, rows]);
 
   return (
-    <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
-      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 text-[12px] px-4 py-2 bg-white text-slate-800 border-b border-slate-300 shadow-sm ">
+    <div className="overflow-hidden rounded-2xl border border-white/14 bg-white/[0.055] text-white shadow-sm">
+      <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] gap-0 border-b border-white/12 bg-[#303a4c] px-4 py-2.5 text-[10px] uppercase tracking-[0.09em] text-white/55">
         <div>Autó</div>
         <div className="text-center">ITP</div>
         <div className="text-center">RCA</div>
@@ -380,28 +383,28 @@ function ListView({
           Műveletek
         </div>
       </div>
-      <div className="divide-y divide-slate-200 pt-1">
+      <div className="divide-y divide-white/10">
         {rows.map((c) => {
           const key = String(c.id ?? c.plate ?? Math.random());
           const open = !!expanded[key];
           return (
-            <div key={key} className="px-4 py-2.5 hover:bg-white">
+            <div key={key} className="px-4 py-2.5 transition hover:bg-white/[0.035]">
               <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
-	                  <div className="w-20 h-14 rounded bg-slate-100 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
+	                  <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white/[0.07]">
 	                    {c.photo_url ? (
 	                      <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
                     ) : (
-                      <div className="w-full h-full grid place-items-center text-slate-600">
+                      <div className="grid h-full w-full place-items-center text-white/35">
                         <PlusCircle className="w-5 h-5" />
                       </div>
                     )}
                   </div>
                   <div className="truncate">
-                    <div className="text-[#344154] text-[15px] font-bold leading-tight">
+                    <div className="text-white text-[15px] font-medium leading-tight">
                       {c.plate || "Ismeretlen"}
                     </div>
-                    <div className="text-slate-700 text-[13px] truncate">
+                    <div className="text-white/58 text-[12px] truncate">
                       {c.make_model || "—"}
                     </div>
                   </div>
@@ -421,7 +424,7 @@ function ListView({
                 <div className="text-right pr-4 flex items-center justify-end gap-2 whitespace-nowrap">
                   {onEdit && (
                     <button
-                      className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
+                      className="inline-flex h-8 items-center gap-1 rounded-xl border border-white/14 bg-white/[0.06] px-2.5 text-[11px] text-white/78 transition hover:bg-white/[0.11] hover:text-white"
                       onClick={() => onEdit(c)}
                       type="button"
                       disabled={!!deletingId && deletingId === Number(c.id)}
@@ -431,7 +434,7 @@ function ListView({
                     </button>
                   )}
                   <button
-                    className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
+                    className="inline-flex h-8 items-center gap-1 rounded-xl border border-white/14 bg-white/[0.06] px-2.5 text-[11px] text-white/78 transition hover:bg-white/[0.11] hover:text-white"
                     onClick={() => setExpanded((m) => ({ ...m, [key]: !open }))}
                     type="button"
                   >
@@ -449,33 +452,33 @@ function ListView({
               </div>
               {open && (
                 <>
-                  <div className="border-t border-slate-300/60 my-2" />
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-[12px] text-slate-600">
+                  <div className="my-2 border-t border-white/10" />
+                  <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 rounded-xl border border-white/10 bg-[#303a4c]/55 p-3 text-[12px] text-white/65 md:grid-cols-4">
                     <div>
-                      <span className="text-slate-600">VIN:</span> {c.vin || "—"}
+                      <span className="text-white/42">VIN:</span> {c.vin || "—"}
                     </div>
                     <div>
-                      <span className="text-slate-600">CIV:</span> {c.civ || "—"}
+                      <span className="text-white/42">CIV:</span> {c.civ || "—"}
                     </div>
                     <div>
-                      <span className="text-slate-600">Szín:</span> {c.color || "—"}
+                      <span className="text-white/42">Szín:</span> {c.color || "—"}
                     </div>
                     <div>
-                      <span className="text-slate-600">cm³:</span> {c.engine_cc ?? "—"}
+                      <span className="text-white/42">cm³:</span> {c.engine_cc ?? "—"}
                     </div>
                     <div>
-                      <span className="text-slate-600">kW/CP:</span>{" "}
+                      <span className="text-white/42">kW/CP:</span>{" "}
                       {c.power_kw ?? "—"}
                       {c.power_kw ? ` / ${kwToCp(c.power_kw)}` : ""}
                     </div>
                     <div>
-                      <span className="text-slate-600">Össztömeg:</span> {c.total_mass ?? "—"}
+                      <span className="text-white/42">Össztömeg:</span> {c.total_mass ?? "—"}
                     </div>
                     <div>
-                      <span className="text-slate-600">Üzemanyag:</span> {c.fuel || "—"}
+                      <span className="text-white/42">Üzemanyag:</span> {c.fuel || "—"}
                     </div>
                     <div>
-                      <span className="text-slate-600">Gyártási év:</span> {c.year ?? "—"}
+                      <span className="text-white/42">Gyártási év:</span> {c.year ?? "—"}
                     </div>
                   </div>
                   <div className="mt-3 flex justify-end">
@@ -501,7 +504,7 @@ function ListView({
           );
         })}
         {!rows.length && (
-          <div className="px-4 py-10 text-center text-slate-600">Nincs találat.</div>
+          <div className="px-4 py-10 text-center text-white/45">Nincs találat.</div>
         )}
       </div>
     </div>
@@ -747,27 +750,36 @@ function AllInCarsDesktop() {
   const cssVars = { "--cupe-green": CUPE.green } as React.CSSProperties;
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: CUPE.bgBlue, ...cssVars }}>
+    <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5" style={cssVars}>
+      <style>{`input[type="date"]{color-scheme:dark}.allin-select{color-scheme:dark}.allin-select option{background:#354153;color:#fff}`}</style>
+      <div className="mx-auto max-w-[1500px] space-y-4">
       {/* Header */}
-      <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
-        <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-          <div className="text-white font-semibold">Autók nyílvántartása / Kiadások</div>
-          <div className="flex items-center gap-2">
+      <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex min-w-[250px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+              <CarFront className="h-5 w-5" />
+            </span>
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</div>
+              <h1 className="mt-0.5 text-xl leading-tight">Járművek</h1>
+              <div className="mt-0.5 text-[11px] text-white/48">Járműtörzs, okmányok és lejáratok kezelése</div>
+            </div>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
             <Button
               type="button"
-              className="h-8 px-3 text-white"
-              style={{ backgroundColor: CUPE.green }}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/14 bg-white/[0.07] px-3 text-xs text-white transition hover:bg-white/[0.11]"
               onClick={() => {
                 window.location.hash = "#admincarexpenses";
               }}
             >
-              <CalendarDays className="w-4 h-4 mr-1" /> Kiadások
+              <WalletCards className="h-4 w-4" /> Kiadások
             </Button>
 
             <Button
               type="button"
-              className="h-8 px-3 text-white"
-              style={{ backgroundColor: CUPE.green }}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99]"
               onClick={() => {
                 setShowForm((s) => !s);
                 if (!showForm) {
@@ -787,63 +799,61 @@ function AllInCarsDesktop() {
             >
               {showForm ? (
                 <>
-                  <X className="w-4 h-4 mr-1" /> Űrlap elrejtése
+                  <X className="h-4 w-4" /> Űrlap bezárása
                 </>
               ) : (
                 <>
-                  <PlusCircle className="w-4 h-4 mr-1" /> Új autó
+                  <PlusCircle className="h-4 w-4" /> Új jármű
                 </>
               )}
             </Button>
 
             <Button
               type="button"
-              variant="outline"
-              className="h-8 px-3 text-white border-white/40"
-              onClick={() => window.history.back()}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#495465"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63]"
+              onClick={() => { window.location.hash = "#allinadmin"; }}
             >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Vissza
+              <Home className="h-4 w-4" /> Kezdőlap
             </Button>
           </div>
         </div>
-      </div>
+      </header>
 
       {msg && (
-        <div className="mx-auto max-w-6xl px-4 mt-4">
-          <div className="rounded-md border border-emerald-400/40 bg-emerald-50 text-emerald-800 px-3 py-2 text-sm">
+        <div>
+          <div className="flex items-center rounded-2xl border border-[#7bd7d4]/28 bg-[#174c55]/72 px-4 py-3 text-sm text-[#e5fffd]">
+            <CheckCircle2 className="mr-2 h-4 w-4" />
             {msg}
           </div>
         </div>
       )}
 
-      <div className="mx-auto max-w-6xl px-4 py-6">
+      <main className="space-y-4">
         {/* KPI row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <Kpi title="Összes autó" value={String(metrics.total)} hint="Nyilvántartott tétel" />
           <Kpi title="Közelgő lejárat" value={String(metrics.soon)} hint="≤ 5 nap" />
           <Kpi title="Lejárt" value={String(metrics.expired)} hint="Azonnali intézkedés" />
         </div>
 
         {/* Tools bar */}
-        <Card className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
+        <Card className="overflow-visible rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm">
           <CardContent className="p-3 md:p-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative">
-                <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-600" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/36" />
                 <Input
-                  className="pl-7 bg-slate-100 border-slate-300 text-slate-800 placeholder:text-slate-600"
+                  className="h-10 min-w-[280px] rounded-xl border border-white/18 bg-[#3f4959] pl-9 text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   placeholder="Keresés (rendszám, típus, VIN)"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                 />
               </div>
 
-              <label className="ml-auto flex items-center gap-2 text-white text-sm cursor-pointer select-none">
+              <label className="ml-auto inline-flex h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.06] px-3 text-xs text-white/78 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  className="accent-white"
+                  className="h-4 w-4 accent-[#2a8d8b]"
                   checked={alertsOnly}
                   onChange={(e) => setAlertsOnly(e.target.checked)}
                 />
@@ -852,8 +862,7 @@ function AllInCarsDesktop() {
 
               <Button
                 type="button"
-                variant="outline"
-                className="h-9 px-3 text-white border-white/40 hover:bg-slate-50"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63]"
                 onClick={async () => {
                   setLoading(true);
                   const rows = await listCars();
@@ -861,19 +870,19 @@ function AllInCarsDesktop() {
                   setLoading(false);
                 }}
               >
-                <RefreshCcw className="w-4 h-4 mr-1" /> Frissít
+                <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Frissítés
               </Button>
 
-              <div className="flex items<center gap-1 rounded-md bg-white border border-slate-300 px-1 py-1">
+              <div className="flex items-center gap-1 rounded-xl border border-white/14 bg-[#303a4c] p-1">
                 <button
-                  className={"h-8 px-3 rounded " + (view === "board" ? "bg-slate-700 text-white" : "text-slate-600")}
+                  className={"h-8 px-3 rounded " + (view === "board" ? "bg-[#2a8d8b] text-white" : "text-white/55 hover:bg-white/[0.08]")}
                   onClick={() => setView("board")}
                   type="button"
                 >
                   <LayoutGrid className="inline w-4 h-4 mr-1" /> Board
                 </button>
                 <button
-                  className={"h-8 px-3 rounded " + (view === "list" ? "bg-slate-700 text-white" : "text-slate-600")}
+                  className={"h-8 px-3 rounded " + (view === "list" ? "bg-[#2a8d8b] text-white" : "text-white/55 hover:bg-white/[0.08]")}
                   onClick={() => setView("list")}
                   type="button"
                 >
@@ -920,10 +929,9 @@ function AllInCarsDesktop() {
         {/* Form drawer */}
         <div id="carForm" className="mt-6">
           {showForm && (
-            <Card className="rounded-xl overflow-hidden border-slate-300 bg-white">
+            <Card className="overflow-hidden rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm">
               <div
-                className="px-4 py-3 text-white text-sm md:text-base flex items-center justify-between"
-                style={{ backgroundColor: CUPE.blue }}
+                className="flex items-center justify-between border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white md:text-base"
               >
                 <div>
                   {form.id
@@ -931,7 +939,7 @@ function AllInCarsDesktop() {
                     : "Új autó"}
                 </div>
                 <button
-                  className="text-slate-200 hover:text-white"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63]"
                   onClick={() => {
                     setShowForm(false);
                     setForm({ ...defaultForm });
@@ -945,18 +953,18 @@ function AllInCarsDesktop() {
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <CardContent className="p-4 md:p-5 space-y-4 bg-white text-slate-800">
+              <CardContent className="space-y-4 bg-transparent p-4 text-white md:p-5">
                 <form onSubmit={onSubmit} className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2 text-xs uppercase tracking-wider text-slate-600 pt-1">
+                  <div className="col-span-2 pt-1 text-[10px] uppercase tracking-[0.15em] text-white/42">
                     Alap adatok
                   </div>
                   <Field label="Fotó">
                     <div className="flex items-center gap-3">
-                      <div className="w-28 h-20 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                      <div className="h-20 w-28 shrink-0 overflow-hidden rounded-xl border border-white/14 bg-white/[0.07]">
                         {form.photo_url ? (
                           <img src={form.photo_url} className="w-full h-full object-cover" />
                         ) : (
-                          <div className="w-full h-full grid place-items-center text-slate-500">
+                          <div className="grid h-full w-full place-items-center text-white/35">
                             <PlusCircle className="w-5 h-5" />
                           </div>
                         )}
@@ -973,12 +981,12 @@ function AllInCarsDesktop() {
                                 if (f) onPhotoPick(f);
                               }}
                               disabled={photoUploading}
-                              className="block w-full text-sm text-slate-600 file:mr-3 file:rounded file:border file:border-slate-300 file:bg-slate-100 file:px-3 file:py-2 file:text-slate-800 hover:file:bg-slate-200"
+                              className="block w-full text-sm text-white/55 file:mr-3 file:rounded-xl file:border file:border-white/14 file:bg-[#354153] file:px-3 file:py-2 file:text-white hover:file:bg-[#3e4d63]"
                             />
                             {form.photo_url && (
                               <button
                                 type="button"
-                                className="h-9 px-3 inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200"
+                                className="inline-flex h-9 items-center gap-1 rounded-xl border border-white/14 bg-[#354153] px-3 text-white transition hover:bg-[#3e4d63]"
                                 onClick={() => {
                                   setPhotoEdit(false);
                                   setPhotoUploadErr("");
@@ -991,7 +999,7 @@ function AllInCarsDesktop() {
                         ) : (
                           <button
                             type="button"
-                            className="h-9 px-3 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-100 text-slate-800 hover:bg-slate-200 w-fit"
+                            className="inline-flex h-9 w-fit items-center gap-2 rounded-xl border border-white/14 bg-[#354153] px-3 text-white transition hover:bg-[#3e4d63]"
                             onClick={() => setPhotoEdit(true)}
                             title="Másik kép feltöltése"
                           >
@@ -1000,7 +1008,7 @@ function AllInCarsDesktop() {
                         )}
 
                         {photoUploading && (
-                          <div className="text-[11px] text-slate-600">Feltöltés…</div>
+                          <div className="text-[11px] text-white/48">Feltöltés…</div>
                         )}
                         {photoUploadErr && (
                           <div className="text-[11px] text-red-600">{photoUploadErr}</div>
@@ -1010,7 +1018,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Rendszám">
                     <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="ABC-123"
                       value={form.plate || ""}
                       onChange={(e) =>
@@ -1020,7 +1028,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Márka / Típus">
                     <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="Volkswagen Passat"
                       value={form.make_model || ""}
                       onChange={(e) => onChange("make_model", e.target.value)}
@@ -1032,7 +1040,7 @@ function AllInCarsDesktop() {
                     <Field label="ITP dátum">
                       <Input
                         type="date"
-                        className="bg-slate-100 border-slate-300 text-slate-900"
+                        className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                         value={form.itp_date || ""}
                         onChange={(e) =>
                           onChange("itp_date", justDate(e.target.value))
@@ -1041,7 +1049,7 @@ function AllInCarsDesktop() {
                     </Field>
                     <Field label="Érvényesség">
                       <select
-                        className="h-9 rounded-md border border-slate-300 px-2 bg-slate-100 text-slate-900"
+                        className="allin-select h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                         value={form.itp_years || 1}
                         onChange={(e) => {
                           const y = Number(e.target.value) || 1;
@@ -1060,7 +1068,7 @@ function AllInCarsDesktop() {
                   <Field label="RCA dátum">
                     <Input
                       type="date"
-                      className="bg-slate-100 border-slate-300 text-slate-900"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rca_date || ""}
                       onChange={(e) =>
                         onChange("rca_date", justDate(e.target.value))
@@ -1070,7 +1078,7 @@ function AllInCarsDesktop() {
                   {/* üres helykitöltő a rácsban */}
                   <div />
 
-                  <div className="col-span-2 grid grid-cols-2 gap-3 -mt-1 text-[11px] text-slate-600">
+                  <div className="col-span-2 grid grid-cols-2 gap-3 -mt-1 text-[11px] text-white/48">
                     <div className="flex items-center gap-2">
                       <CalendarDays className="h-4 w-4" />
                       <span>ITP: {itpDays ?? "-"}</span>
@@ -1081,14 +1089,14 @@ function AllInCarsDesktop() {
                     </div>
                   </div>
 
-                  <div className="col-span-2 mt-1 mb-1 border-t border-slate-300/70" />
-                  <div className="col-span-2 text-xs uppercase tracking-wider text-slate-600">
+                  <div className="col-span-2 mt-1 mb-1 border-t border-white/10" />
+                  <div className="col-span-2 text-[10px] uppercase tracking-[0.15em] text-white/42">
                     Biztosítások
                   </div>
                   <Field label="Casco kezdete">
                     <Input
                       type="date"
-                      className="bg-slate-100 border-slate-300 text-slate-900"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.casco_start || ""}
                       onChange={(e) =>
                         onChange("casco_start", justDate(e.target.value))
@@ -1097,7 +1105,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Casco hónap">
                     <select
-                      className="h-9 rounded-md border border-slate-300 px-2 bg-slate-100 text-slate-900"
+                      className="allin-select h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.casco_months || 12}
                       onChange={(e) =>
                         onChange("casco_months", Number(e.target.value))
@@ -1113,7 +1121,7 @@ function AllInCarsDesktop() {
                   <Field label="Rovinieta kezdete">
                     <Input
                       type="date"
-                      className="bg-slate-100 border-slate-300 text-slate-900"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rovinieta_start || ""}
                       onChange={(e) =>
                         onChange("rovinieta_start", justDate(e.target.value))
@@ -1122,7 +1130,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Rovinieta hónap">
                     <select
-                      className="h-9 rounded-md border border-slate-300 px-2 bg-slate-100 text-slate-900"
+                      className="allin-select h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rovinieta_months || 12}
                       onChange={(e) =>
                         onChange("rovinieta_months", Number(e.target.value))
@@ -1135,7 +1143,7 @@ function AllInCarsDesktop() {
                       ))}
                     </select>
                   </Field>
-                  <div className="col-span-2 -mt-1 text-[11px] text-slate-600 flex items-center gap-3">
+                  <div className="col-span-2 -mt-1 text-[11px] text-white/48 flex items-center gap-3">
                     <div className="flex items-center gap-2">
                       <CalendarDays className="h-4 w-4" />
                       <span>Casco: {cascoDays ?? "-"}</span>
@@ -1146,13 +1154,13 @@ function AllInCarsDesktop() {
                     </div>
                   </div>
 
-                  <div className="col-span-2 mt-1 mb-1 border-t border-slate-300/70" />
-                  <div className="col-span-2 text-xs uppercase tracking-wider text-slate-600">
+                  <div className="col-span-2 mt-1 mb-1 border-t border-white/10" />
+                  <div className="col-span-2 text-[10px] uppercase tracking-[0.15em] text-white/42">
                     Azonosítók és műszaki
                   </div>
                   <Field label="VIN">
                     <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="WVWZZZ..."
                       value={form.vin || ""}
                       onChange={(e) => onChange("vin", e.target.value.toUpperCase())}
@@ -1160,7 +1168,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="CIV">
                     <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="CIV..."
                       value={form.civ || ""}
                       onChange={(e) => onChange("civ", e.target.value)}
@@ -1168,7 +1176,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Szín">
                     <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="Fekete"
                       value={form.color || ""}
                       onChange={(e) => onChange("color", e.target.value)}
@@ -1177,7 +1185,7 @@ function AllInCarsDesktop() {
                   <Field label="cm³">
                     <Input
                       type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="1968"
                       value={form.engine_cc ?? ""}
                       onChange={(e) =>
@@ -1188,7 +1196,7 @@ function AllInCarsDesktop() {
                   <Field label="kW">
                     <Input
                       type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="110"
                       value={form.power_kw ?? ""}
                       onChange={(e) =>
@@ -1199,7 +1207,7 @@ function AllInCarsDesktop() {
                   <Field label="Össztömeg (kg)">
                     <Input
                       type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="2100"
                       value={form.total_mass ?? ""}
                       onChange={(e) =>
@@ -1209,7 +1217,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Üzemanyag">
                     <Input
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="Benzin / Diesel / Hibrid"
                       value={form.fuel || ""}
                       onChange={(e) => onChange("fuel", e.target.value)}
@@ -1218,7 +1226,7 @@ function AllInCarsDesktop() {
                   <Field label="Gyártási év">
                     <Input
                       type="number"
-                      className="bg-slate-100 border-slate-300 text-slate-900 placeholder:text-slate-500"
+                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="2018"
                       value={form.year ?? ""}
                       onChange={(e) =>
@@ -1230,8 +1238,7 @@ function AllInCarsDesktop() {
                   <div className="col-span-2 flex items-center justify-between gap-3 pt-1">
                     <Button
                       type="button"
-                      variant="outline"
-                      className="h-9 px-4 text-white border-white/40 hover:bg-slate-50"
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-4 text-xs text-white transition hover:bg-[#3e4d63]"
                       onClick={() => {
                         setShowForm(false);
                         setForm({ ...defaultForm });
@@ -1246,15 +1253,14 @@ function AllInCarsDesktop() {
                     {error && <div className="text-red-600 text-xs">{error}</div>}
                     <Button
                       type="submit"
-                      className="h-9 px-4 text-white"
-                      style={{ backgroundColor: CUPE.blue }}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-4 text-xs text-white transition hover:bg-[#319c99]"
                       disabled={saving}
                     >
                       {saving ? (
                         "Mentés…"
                       ) : (
                         <>
-                          <Save className="h-4 w-4 mr-1" /> Mentés
+                          <Save className="h-4 w-4" /> Mentés
                         </>
                       )}
                     </Button>
@@ -1264,19 +1270,19 @@ function AllInCarsDesktop() {
             </Card>
           )}
         </div>
-      </div>
+      </main>
 
       {/* Confirm / Info modal */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-            <div className="text-white font-semibold">{confirmTitle}</div>
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/78 px-3 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[24px] border border-white/18 bg-[#4b5362] p-5 shadow-2xl">
+            <div className="text-white font-medium">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               {confirmVariant === "confirm" && (
                 <button
                   type="button"
-                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  className="h-10 rounded-xl border border-white/18 bg-[#354153] px-4 text-white transition hover:bg-[#3e4d63]"
                   onClick={() => setConfirmOpen(false)}
                 >
                   Mégse
@@ -1286,8 +1292,8 @@ function AllInCarsDesktop() {
                 type="button"
                 className={
                   confirmVariant === "confirm"
-                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
-                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
+                    ? "h-10 rounded-xl bg-red-600 px-4 text-white transition hover:bg-red-500"
+                    : "h-10 rounded-xl bg-[#2a8d8b] px-4 text-white transition hover:bg-[#319c99]"
                 }
                 onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
               >
@@ -1297,6 +1303,7 @@ function AllInCarsDesktop() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
