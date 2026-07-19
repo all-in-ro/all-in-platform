@@ -4427,6 +4427,8 @@ export default function AllInWarehouse() {
   const [incomingFocusItems, setIncomingFocusItems] = useState<InventoryItem[]>([]);
   const productListRef = useRef<HTMLElement | null>(null);
   const detailReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
+  const selectionReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
+  const lastSelectionVariantIdRef = useRef("");
   const pendingProductJumpViewportTopRef = useRef<number | null>(null);
   const pendingProductJumpCandidateIdsRef = useRef<string[]>([]);
   const pendingProductJumpFallbackRef = useRef<{ productPage: number; scrollY: number } | null>(null);
@@ -6155,6 +6157,71 @@ export default function AllInWarehouse() {
     });
   }
 
+  function rememberSelectionReturnAnchor(variantId: unknown) {
+    const id = String(variantId || "").trim();
+    if (!id || typeof window === "undefined") return;
+    lastSelectionVariantIdRef.current = id;
+    const index = filtered.findIndex((item) => String(item.variant_id || "") === id);
+    const node = findVisibleProductNode(id);
+    const rowViewportTop = node ? node.getBoundingClientRect().top : null;
+    selectionReturnAnchorRef.current = {
+      variantId: id,
+      nextVariantId: index >= 0 ? String(filtered[index + 1]?.variant_id || "") || null : null,
+      previousVariantId: index > 0 ? String(filtered[index - 1]?.variant_id || "") || null : null,
+      productPage: safeProductPage,
+      scrollY: window.scrollY,
+      rowViewportTop: typeof rowViewportTop === "number" && Number.isFinite(rowViewportTop) ? rowViewportTop : null,
+      filters: currentWarehouseFilterSnapshot(),
+    };
+  }
+
+  function restoreSelectionReturnPosition() {
+    if (typeof window === "undefined") return;
+    const anchor = selectionReturnAnchorRef.current;
+    selectionReturnAnchorRef.current = null;
+    const fallbackId = String(lastSelectionVariantIdRef.current || "").trim();
+
+    if (!anchor) {
+      if (fallbackId) queueProductRowJump(fallbackId);
+      return;
+    }
+
+    restoreWarehouseFilterSnapshot(anchor.filters);
+    setProductPage(Math.max(1, anchor.productPage || 1));
+
+    const candidates = [anchor.variantId, anchor.nextVariantId, anchor.previousVariantId]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    if (candidates.length) {
+      pendingProductJumpCandidateIdsRef.current = Array.from(new Set(candidates));
+      pendingProductJumpFallbackRef.current = {
+        productPage: Math.max(1, anchor.productPage || 1),
+        scrollY: Math.max(0, anchor.scrollY || 0),
+      };
+      pendingProductJumpViewportTopRef.current =
+        typeof anchor.rowViewportTop === "number" && Number.isFinite(anchor.rowViewportTop)
+          ? anchor.rowViewportTop
+          : null;
+      setListOpen(true);
+      setHighlightProductId(candidates[0]);
+      setPendingProductJumpId(candidates[0]);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: Math.max(0, anchor.scrollY || 0), behavior: "auto" });
+    });
+  }
+
+  function closeSelectedWorkflowAndReturn() {
+    setSelectedActionTargets([]);
+    setShopifyExportModalOpen(false);
+    setSelectedWorkPanel(null);
+    setSelectedPanelOpen(false);
+    window.requestAnimationFrame(() => restoreSelectionReturnPosition());
+  }
+
   function queueProductRowJump(variantId: unknown, options: { viewportTop?: number | null } = {}) {
     const id = String(variantId || "").trim();
     if (!id) return;
@@ -6742,6 +6809,22 @@ export default function AllInWarehouse() {
   const selectedVisibleCount = filteredVariantIds.filter((id) => activeListSelectionMap[id]).length;
   const allFilteredSelected = filteredVariantIds.length > 0 && selectedVisibleCount === filteredVariantIds.length;
 
+  function openSelectedProductsPanel() {
+    const rememberedId = String(lastSelectionVariantIdRef.current || "").trim();
+    const rememberedStillSelected = Boolean(rememberedId && selectedVariants[rememberedId]);
+    if (rememberedStillSelected) {
+      rememberSelectionReturnAnchor(rememberedId);
+    } else {
+      const selectedSet = new Set(Object.keys(selectedVariants).filter((id) => selectedVariants[id]));
+      const fallbackItem =
+        filtered.slice().reverse().find((item) => selectedSet.has(selectedVariantIdFromItem(item))) ||
+        selectedItems[selectedItems.length - 1] ||
+        null;
+      if (fallbackItem) rememberSelectionReturnAnchor(selectedVariantIdFromItem(fallbackItem));
+    }
+    setSelectedPanelOpen(true);
+  }
+
   function openSelectedItemsActionPicker(targetItems: InventoryItem[]) {
     const unique = new Map<string, InventoryItem>();
     for (const item of targetItems || []) {
@@ -6750,6 +6833,8 @@ export default function AllInWarehouse() {
     }
     const targets = Array.from(unique.values());
     if (!targets.length) return;
+    const lastTargetId = selectedVariantIdFromItem(targets[targets.length - 1]);
+    if (lastTargetId) rememberSelectionReturnAnchor(lastTargetId);
     setSelectedActionTargets(targets);
   }
 
@@ -7124,6 +7209,7 @@ export default function AllInWarehouse() {
 
   function toggleVariantSelection(id: string, checked: boolean) {
     if (!id) return;
+    if (checked) rememberSelectionReturnAnchor(id);
     if (incomingFocus?.batchId) {
       setIncomingSelectedVariants((current) => {
         const next = { ...current };
@@ -7150,6 +7236,8 @@ export default function AllInWarehouse() {
   }
 
   function toggleAllFilteredSelection(checked: boolean) {
+    const progressVariantId = filteredVariantIds[filteredVariantIds.length - 1] || filteredVariantIds[0] || "";
+    if (checked && progressVariantId) rememberSelectionReturnAnchor(progressVariantId);
     if (incomingFocus?.batchId) {
       setIncomingSelectedVariants((current) => {
         const next = { ...current };
@@ -8943,7 +9031,7 @@ export default function AllInWarehouse() {
                 ) : null
               ) : selectedCount > 0 && (
                 <>
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={() => setSelectedPanelOpen(true)} type="button">
+                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={openSelectedProductsPanel} type="button">
                     <Eye size={15} /> Kijelöltek megnyitása
                   </button>
                   <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("warehouse")} disabled={saving} type="button" title="Az összes raktári munkalistán kijelölt terméket törli">
@@ -9234,7 +9322,7 @@ export default function AllInWarehouse() {
                 <button className={selectedWorkButtonClass("shopify")} type="button" disabled={!selectedWorkCounts.shopify} onClick={() => setSelectedWorkPanel("shopify")} title="Shopify export listára tett termékek">
                   <ShopifyBrandMark size="xs" /> Shopify export {selectedWorkCounts.shopify > 0 ? `(${selectedWorkCounts.shopify})` : ""}
                 </button>
-                <button className={btnSoft} onClick={() => setSelectedPanelOpen(false)} type="button"><X size={15} /> Bezárás</button>
+                <button className={btnSoft} onClick={closeSelectedWorkflowAndReturn} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
@@ -9273,7 +9361,10 @@ export default function AllInWarehouse() {
                         type="checkbox"
                         checked={false}
                         onChange={(e) => {
-                          if (e.target.checked) openSelectedItemsActionPicker([it]);
+                          if (e.target.checked) {
+                            rememberSelectionReturnAnchor(it.variant_id);
+                            openSelectedItemsActionPicker([it]);
+                          }
                         }}
                         aria-label="Feladat kiválasztása"
                         title="Feladat kiválasztása"
@@ -9306,7 +9397,7 @@ export default function AllInWarehouse() {
 
               <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3">
                 <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli"><X size={15} /> Teljes kijelölés törlése</button>
-                <button className={primaryBtn} onClick={() => setSelectedPanelOpen(false)} type="button">Kész</button>
+                <button className={primaryBtn} onClick={closeSelectedWorkflowAndReturn} type="button">Kész</button>
               </div>
             </div>
           </div>
@@ -9546,7 +9637,7 @@ export default function AllInWarehouse() {
                   </button>
                 )}
                 <button className={btnSoft} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
-                <button className={btnSoft} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); }} type="button"><X size={15} /> Bezárás</button>
+                <button className={btnSoft} onClick={closeSelectedWorkflowAndReturn} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
             <div className="space-y-3 p-4">
