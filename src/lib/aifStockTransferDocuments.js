@@ -54,6 +54,25 @@ function safeSeries(value) {
     .slice(0, 24) || "PV";
 }
 
+export const AIF_STOCK_DOCUMENT_TYPES = Object.freeze({
+  internal_transfer: { series: "PV", title: "PROCES-VERBAL DE PREDARE-PRIMIRE", subtitle: "TRANSFER INTERN DE STOC", priceBasis: "selling_price" },
+  supplier_return: { series: "RET", title: "AVIZ DE RETUR CĂTRE FURNIZOR", subtitle: "RETUR DE MARFĂ CĂTRE FURNIZOR", priceBasis: "purchase_price" },
+  damaged_writeoff: { series: "DET", title: "PROCES-VERBAL DE CONSTATARE ȘI SCOATERE DIN GESTIUNE", subtitle: "PRODUSE DETERIORATE", priceBasis: "purchase_price" },
+  stock_correction: { series: "COR", title: "NOTĂ DE CORECȚIE A STOCULUI", subtitle: "CORECȚIE JUSTIFICATĂ DE STOC", priceBasis: "purchase_price" },
+});
+
+export function cleanAifStockDocumentType(value, fallback = null) {
+  const raw = cleanText(value).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const aliases = {
+    transfer: "internal_transfer", stock_transfer: "internal_transfer", aviz: "internal_transfer",
+    retur: "supplier_return", return: "supplier_return",
+    damaged: "damaged_writeoff", deteriorated: "damaged_writeoff", writeoff: "damaged_writeoff",
+    correction: "stock_correction", adjustment: "stock_correction",
+  };
+  const normalized = aliases[raw] || raw;
+  return Object.prototype.hasOwnProperty.call(AIF_STOCK_DOCUMENT_TYPES, normalized) ? normalized : fallback;
+}
+
 function formatDocumentNumber(settings, year, sequenceNumber) {
   const series = safeSeries(settings.series || "PV");
   const padding = Math.min(12, Math.max(1, cleanInt(settings.padding, 6) || 6));
@@ -161,6 +180,40 @@ export async function ensureAifStockTransferDocumentSchema(target) {
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS line_total numeric(14,2) NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS price_basis text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS qty_delta integer NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS document_type text NOT NULL DEFAULT 'internal_transfer'`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS source_location_id text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS target_location_id text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS supplier_id text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS supplier_name text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reception_id text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS external_reference text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reason_code text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reason_text text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS operation_direction text NULL`);
+    await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS price_basis text NOT NULL DEFAULT 'selling_price'`);
+    await target.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_type_created_idx ON aif_stock_transfer_documents (document_type, created_at DESC)`);
+    await target.query(`CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
+      document_type text PRIMARY KEY,
+      series text NOT NULL,
+      next_number bigint NOT NULL DEFAULT 1,
+      digits integer NOT NULL DEFAULT 6,
+      include_year boolean NOT NULL DEFAULT true,
+      yearly_reset boolean NOT NULL DEFAULT true,
+      sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+      document_title text NOT NULL,
+      document_subtitle text NULL,
+      updated_by text NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )`);
+    await target.query(`INSERT INTO aif_stock_document_settings (document_type,series,document_title,document_subtitle) VALUES
+      ('internal_transfer','PV','PROCES-VERBAL DE PREDARE-PRIMIRE','Transfer intern de stoc'),
+      ('supplier_return','RET','AVIZ DE RETUR CĂTRE FURNIZOR','Retur de marfă către furnizor'),
+      ('damaged_writeoff','DET','PROCES-VERBAL DE CONSTATARE ȘI SCOATERE DIN GESTIUNE','Produse deteriorate / scoatere din gestiune'),
+      ('stock_correction','COR','NOTĂ DE CORECȚIE A STOCULUI','Corecție justificată de stoc')
+      ON CONFLICT (document_type) DO NOTHING`);
     await target.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_lines_document_idx ON aif_stock_transfer_document_lines (document_id, line_no)`);
     await target.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_document_lines_variant_idx ON aif_stock_transfer_document_lines (variant_id)`);
 
@@ -172,7 +225,7 @@ export async function ensureAifStockTransferDocumentSchema(target) {
           line_total=round(l.qty::numeric * v.sell_price::numeric, 2),
           currency_code='RON'
       FROM aif_product_variants v
-      WHERE l.variant_id=v.id
+      WHERE l.variant_id::text=v.id::text
         AND l.unit_price IS NULL
         AND v.sell_price IS NOT NULL
     `);
@@ -263,6 +316,17 @@ function serializeDocument(item) {
     currency_code: cleanText(item.currency_code || "RON") || "RON",
     from_location_summary: nullableText(item.from_location_summary) || documentLocationSummary(item.from_locations),
     to_location_summary: nullableText(item.to_location_summary) || documentLocationSummary(item.to_locations),
+    document_type: cleanAifStockDocumentType(item.document_type, "internal_transfer"),
+    source_location_id: nullableText(item.source_location_id),
+    target_location_id: nullableText(item.target_location_id),
+    supplier_id: nullableText(item.supplier_id),
+    supplier_name: nullableText(item.supplier_name),
+    reception_id: nullableText(item.reception_id),
+    external_reference: nullableText(item.external_reference),
+    reason_code: nullableText(item.reason_code),
+    reason_text: nullableText(item.reason_text),
+    operation_direction: nullableText(item.operation_direction) || (legacy ? "transfer" : null),
+    price_basis: nullableText(item.price_basis) || "selling_price",
     isLegacy: legacy,
     source: legacy ? "legacy" : "official",
   };
@@ -278,6 +342,8 @@ function serializeLine(line) {
     unit_price: unitPrice,
     line_total: lineTotal,
     currency_code: cleanText(line?.currency_code || line?.currencyCode || "RON") || "RON",
+    price_basis: nullableText(line?.price_basis || line?.priceBasis),
+    qty_delta: cleanInt(line?.qty_delta ?? line?.qtyDelta, null),
   };
 }
 
@@ -383,9 +449,12 @@ export async function createAifStockTransferDocument(client, input = {}) {
     `INSERT INTO aif_stock_transfer_documents (
        transfer_id, idempotency_key, document_number, series, sequence_number, document_year,
        document_title, document_subtitle, transfer_title, note, status, line_count, total_qty,
-       total_value, currency_code, from_locations, to_locations, created_by, raw, created_at, updated_at
+       total_value, currency_code, from_locations, to_locations, created_by, raw,
+       document_type, source_location_id, target_location_id, operation_direction, price_basis,
+       created_at, updated_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed',$11,$12,$13,'RON',$14::text[],$15::text[],$16,$17::jsonb,now(),now()
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed',$11,$12,$13,'RON',$14::text[],$15::text[],$16,$17::jsonb,
+       'internal_transfer',$18,$19,'transfer','selling_price',now(),now()
      ) RETURNING *`,
     [
       transferId,
@@ -406,12 +475,15 @@ export async function createAifStockTransferDocument(client, input = {}) {
       actor,
       JSON.stringify({
         source: "aif_stock_transfer",
+        documentType: "internal_transfer",
         transferId,
         idempotencyKey: nullableText(input.idempotencyKey || input.idempotency_key),
         valuation: "selling_price_snapshot",
         currencyCode: "RON",
         totalValue,
       }),
+      nullableText(rows[0]?.fromLocationId || rows[0]?.from_location_id),
+      nullableText(rows[0]?.toLocationId || rows[0]?.to_location_id),
     ]
   );
   const document = inserted.rows[0];
@@ -423,12 +495,12 @@ export async function createAifStockTransferDocument(client, input = {}) {
          document_id, line_no, variant_id, product_title, brand_name, category_name,
          product_code, barcode, color_name, size, image_url,
          from_location_id, from_location_name, to_location_id, to_location_name,
-         qty, unit_price, line_total, currency_code,
+         qty, unit_price, line_total, currency_code, price_basis, qty_delta,
          source_before, source_after, target_before, target_after, raw
        ) VALUES (
          $1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10,$11,
          NULLIF($12,'')::uuid,$13,NULLIF($14,'')::uuid,$15,
-         $16,$17,$18,'RON',$19,$20,$21,$22,$23::jsonb
+         $16,$17,$18,'RON','selling_price',0,$19,$20,$21,$22,$23::jsonb
        )`,
       [
         document.id,
@@ -479,6 +551,7 @@ export async function createAifStockTransferDocument(client, input = {}) {
        'documentTitle',$4::text,
        'documentTotalValue',$5::numeric,
        'documentCurrency','RON',
+       'documentType','internal_transfer',
        'valuation','selling_price_snapshot'
      )
      WHERE raw->>'transferId'=$1`,
@@ -552,6 +625,8 @@ async function legacyDocument(client, transferId) {
       unit_price: unitPrice,
       line_total: multiplyMoney(quantity, unitPrice),
       currency_code: "RON",
+      price_basis: "selling_price",
+      qty_delta: 0,
       source_before: cleanInt(row.qty_before, null),
       source_after: cleanInt(row.qty_after, null),
       target_before: null,
@@ -578,6 +653,9 @@ async function legacyDocument(client, transferId) {
     total_qty: lines.reduce((sum, row) => sum + Number(row.qty || 0), 0),
     total_value: Math.round((lines.reduce((sum, row) => sum + (cleanMoney(row.line_total, 0) || 0), 0) + Number.EPSILON) * 100) / 100,
     currency_code: "RON",
+    document_type: "internal_transfer",
+    operation_direction: "transfer",
+    price_basis: "selling_price",
     from_locations: fromLocations,
     to_locations: toLocations,
     created_by: first.actor || null,
@@ -634,6 +712,9 @@ async function listLegacyDocuments(client) {
       document_title: "PROCES-VERBAL DE PREDARE-PRIMIRE",
       document_subtitle: "TRANSFER INTERN DE STOC",
       currency_code: "RON",
+      document_type: "internal_transfer",
+      operation_direction: "transfer",
+      price_basis: "selling_price",
       status: "legacy",
       official: false,
       legacy: true,
@@ -664,6 +745,8 @@ function documentMatches(item, filters) {
   }
   if (filters.kind === "official" && !item.official) return false;
   if (filters.kind === "legacy" && !item.legacy) return false;
+  const requestedDocumentType = cleanAifStockDocumentType(filters.kind, null);
+  if (requestedDocumentType && cleanAifStockDocumentType(item.document_type, "internal_transfer") !== requestedDocumentType) return false;
   if (filters.status && filters.status !== "all" && String(item.status) !== filters.status) return false;
   const fromNeedle = normalizeSearch(filters.fromLocation);
   if (fromNeedle && !((item.from_locations || []).some((value) => normalizeSearch(value).includes(fromNeedle)))) return false;
@@ -751,7 +834,7 @@ export function registerAifStockTransferDocumentRoutes(router, { pool, requireAu
         to: cleanText(req.query.to),
         fromLocation: resolveLocation(req.query.fromLocation || req.query.from_location),
         toLocation: resolveLocation(req.query.toLocation || req.query.to_location),
-        kind: ["official", "legacy"].includes(type) ? type : "all",
+        kind: (["official", "legacy"].includes(type) || cleanAifStockDocumentType(type, null)) ? type : "all",
         status: type === "cancelled" ? "cancelled" : cleanText(req.query.status || "all"),
       };
       const allRaw = [...official, ...legacy]
