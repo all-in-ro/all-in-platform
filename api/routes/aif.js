@@ -556,6 +556,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }).slice(0, 1000);
   }
 
+
+  function selectedVariantIdsFromBody(body) {
+    const rows = selectedRowsFromBody(body || {});
+    if (rows.length) return rows.map((row) => row.variantId);
+
+    const source = Array.isArray(body?.variantIds)
+      ? body.variantIds
+      : Array.isArray(body?.variant_ids)
+        ? body.variant_ids
+        : Array.isArray(body?.ids)
+          ? body.ids
+          : [];
+    return Array.from(new Set(source.map((value) => text(value)).filter(Boolean))).slice(0, 1000);
+  }
+
+  async function lockSelectedVariantsOwner(client, ownerKey) {
+    // Ugyanazon közös munkalista párhuzamos módosításait szerializáljuk.
+    // Így két gép egyszerre történő kattintása sem tapossa el a másik módosítását.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [ownerKey]);
+  }
+
   async function ensureSelectedVariantsTable(client) {
     await client.query(`CREATE TABLE IF NOT EXISTS aif_user_selected_variants (
       owner_key text NOT NULL,
@@ -7570,6 +7591,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   async function saveSelectedVariants(req, res) {
     const ownerKey = selectionOwnerKey(req);
     const rows = selectedRowsFromBody(req.body || {});
+    const replaceRequested = [true, 1, "1", "true", "yes"].includes(req.body?.replace);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -7587,7 +7609,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         validIds = new Set(valid.rows.map((x) => String(x.id)));
       }
 
-      await client.query(`DELETE FROM aif_user_selected_variants WHERE owner_key=$1`, [ownerKey]);
+      // A régi kliensek teljes pillanatképet küldtek. Két gépnél ez kitörölhette
+      // a másik gép friss kijelöléseit. Teljes cserét már csak kifejezett replace=true
+      // kérés végezhet; a régi, jelöletlen kérés biztonságosan csak hozzáad/frissít.
+      await lockSelectedVariantsOwner(client, ownerKey);
+      if (replaceRequested) {
+        await client.query(`DELETE FROM aif_user_selected_variants WHERE owner_key=$1`, [ownerKey]);
+      }
       let saved = 0;
       for (let index = 0; index < rows.length; index++) {
         const row = rows[index];
@@ -7607,7 +7635,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       await client.query("COMMIT");
       const fresh = await loadSelectedVariantRows(client, ownerKey);
-      res.json({ ...selectedVariantResponseFromRows(fresh.rows), saved });
+      res.json({ ...selectedVariantResponseFromRows(fresh.rows), saved, replaced: replaceRequested });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF selected variants save failed", e);
@@ -7621,6 +7649,139 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.put("/selection", requireAuthed, saveSelectedVariants);
   router.post("/selected-variants", requireAuthed, saveSelectedVariants);
   router.put("/selected-variants", requireAuthed, saveSelectedVariants);
+
+
+  async function addSelectedVariantItems(req, res) {
+    const ownerKey = selectionOwnerKey(req);
+    const rows = selectedRowsFromBody(req.body || {});
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSelectedVariantsTable(client);
+      await lockSelectedVariantsOwner(client, ownerKey);
+
+      const ids = rows.map((row) => row.variantId);
+      let validIds = new Set();
+      if (ids.length) {
+        const valid = await client.query(
+          `SELECT id::text AS id
+           FROM aif_product_variants
+           WHERE id::text = ANY($1::text[])
+             AND COALESCE(status, 'active') <> 'archived'`,
+          [ids]
+        );
+        validIds = new Set(valid.rows.map((row) => String(row.id)));
+      }
+
+      const maxSort = await client.query(
+        `SELECT COALESCE(max(sort_order), -1)::int AS max_sort
+         FROM aif_user_selected_variants
+         WHERE owner_key=$1`,
+        [ownerKey]
+      );
+      let nextSort = Number(maxSort.rows[0]?.max_sort ?? -1) + 1;
+      let added = 0;
+
+      for (const row of rows) {
+        if (!validIds.has(row.variantId)) continue;
+        const result = await client.query(
+          `INSERT INTO aif_user_selected_variants (
+             owner_key, variant_id, action, sort_order, raw, created_at, updated_at
+           )
+           VALUES ($1,$2,$3,$4,$5::jsonb,now(),now())
+           ON CONFLICT (owner_key, variant_id) DO UPDATE SET
+             action=COALESCE(EXCLUDED.action, aif_user_selected_variants.action),
+             raw=COALESCE(aif_user_selected_variants.raw, '{}'::jsonb) || EXCLUDED.raw,
+             updated_at=now()
+           RETURNING (xmax = 0) AS inserted`,
+          [ownerKey, row.variantId, row.action, nextSort++, JSON.stringify({ source: "warehouse_ui_atomic_add" })]
+        );
+        if (result.rows[0]?.inserted) added++;
+      }
+
+      await client.query("COMMIT");
+      const fresh = await loadSelectedVariantRows(client, ownerKey);
+      res.json({ ...selectedVariantResponseFromRows(fresh.rows), owner: ownerKey, added });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF selected variants atomic add failed", e);
+      res.status(500).json({ error: "A kijelölt termékek hozzáadása nem sikerült." });
+    } finally {
+      client.release();
+    }
+  }
+
+  async function updateSelectedVariantActions(req, res) {
+    const ownerKey = selectionOwnerKey(req);
+    const rows = selectedRowsFromBody(req.body || {});
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSelectedVariantsTable(client);
+      await lockSelectedVariantsOwner(client, ownerKey);
+
+      let updated = 0;
+      for (const row of rows) {
+        const result = await client.query(
+          `UPDATE aif_user_selected_variants
+           SET action=$3,
+               raw=COALESCE(raw, '{}'::jsonb) || $4::jsonb,
+               updated_at=now()
+           WHERE owner_key=$1 AND variant_id=$2`,
+          [ownerKey, row.variantId, row.action, JSON.stringify({ source: "warehouse_ui_atomic_action" })]
+        );
+        updated += result.rowCount;
+      }
+
+      await client.query("COMMIT");
+      const fresh = await loadSelectedVariantRows(client, ownerKey);
+      res.json({ ...selectedVariantResponseFromRows(fresh.rows), owner: ownerKey, updated });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF selected variants action update failed", e);
+      res.status(500).json({ error: "A kijelölt termékek műveletének mentése nem sikerült." });
+    } finally {
+      client.release();
+    }
+  }
+
+  async function removeSelectedVariantItems(req, res) {
+    const ownerKey = selectionOwnerKey(req);
+    const ids = selectedVariantIdsFromBody(req.body || {});
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSelectedVariantsTable(client);
+      await lockSelectedVariantsOwner(client, ownerKey);
+
+      let removed = 0;
+      if (ids.length) {
+        const result = await client.query(
+          `DELETE FROM aif_user_selected_variants
+           WHERE owner_key=$1 AND variant_id = ANY($2::text[])`,
+          [ownerKey, ids]
+        );
+        removed = result.rowCount;
+      }
+
+      await client.query("COMMIT");
+      const fresh = await loadSelectedVariantRows(client, ownerKey);
+      res.json({ ...selectedVariantResponseFromRows(fresh.rows), owner: ownerKey, removed });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF selected variants atomic remove failed", e);
+      res.status(500).json({ error: "A kijelölt termékek eltávolítása nem sikerült." });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post("/selection/items", requireAuthed, addSelectedVariantItems);
+  router.patch("/selection/items", requireAuthed, updateSelectedVariantActions);
+  router.delete("/selection/items", requireAuthed, removeSelectedVariantItems);
+  router.post("/selected-variants/items", requireAuthed, addSelectedVariantItems);
+  router.patch("/selected-variants/items", requireAuthed, updateSelectedVariantActions);
+  router.delete("/selected-variants/items", requireAuthed, removeSelectedVariantItems);
 
   async function clearSelectedVariants(req, res) {
     const ownerKey = selectionOwnerKey(req);
