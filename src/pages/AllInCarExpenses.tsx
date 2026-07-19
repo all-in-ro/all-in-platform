@@ -13,6 +13,10 @@ import {
   Trash2,
   X,
   ArrowLeft,
+  CarFront,
+  CheckCircle2,
+  Home,
+  ReceiptText,
 } from "lucide-react";
 
 import AllInCarExpensesMobile from "./AllInCarExpensesMobile";
@@ -42,9 +46,9 @@ type CarExpense = {
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
 
 const CUPE = {
-  blue: "#344154",
-  bgBlue: "#2E3A4A",
-  green: "#108D8B",
+  blue: "#303a4c",
+  bgBlue: "#4b5362",
+  green: "#2a8d8b",
 } as const;
 
 /* ---------- Helpers ---------- */
@@ -136,7 +140,7 @@ async function deleteExpense(id: number) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="grid gap-1">
-      <span className="text-[12px] text-slate-600 font-medium tracking-wide">
+      <span className="text-xs text-white/65">
         {label}
       </span>
       {children}
@@ -324,55 +328,66 @@ function AllInCarExpenses() {
   const cssVars = { "--cupe-green": CUPE.green } as React.CSSProperties;
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: CUPE.bgBlue, ...cssVars }}>
+    <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5" style={cssVars}>
+      <style>{`input[type="date"]{color-scheme:dark}.allin-select{color-scheme:dark}.allin-select option{background:#354153;color:#fff}`}</style>
+      <div className="mx-auto max-w-[1500px] space-y-4">
       {/* Header */}
-      <div className="sticky top-0 z-10 shadow-md" style={{ backgroundColor: CUPE.blue }}>
-        <div className="mx-auto max-w-6xl px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
-          <div className="text-white font-semibold">Autó kiadások - Javítások</div>
-          <div className="flex items-center gap-2">
+      <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex min-w-[250px] items-center gap-3 border-l-4 border-[#7bd7d4]/70 pl-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+              <ReceiptText className="h-5 w-5" />
+            </span>
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</div>
+              <h1 className="mt-0.5 text-xl leading-tight">Járműkiadások</h1>
+              <div className="mt-0.5 text-[11px] text-white/48">Javítások, szervizek és költségek nyilvántartása</div>
+            </div>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
             <Button
               type="button"
-              className="h-8 px-3 text-white"
-              style={{ backgroundColor: CUPE.green }}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99]"
               onClick={() => onEdit()}
             >
-              <PlusCircle className="w-4 h-4 mr-1" /> Új tétel
+              <PlusCircle className="h-4 w-4" /> Új tétel
             </Button>
             <Button
               type="button"
-              variant="outline"
-              className="h-8 px-3 text-white border-white/40"
-              onClick={() => window.history.back()}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = "#495465";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = "transparent";
-              }}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/14 bg-white/[0.07] px-3 text-xs text-white transition hover:bg-white/[0.11]"
+              onClick={() => { window.location.hash = "#admincars"; }}
             >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Vissza
+              <CarFront className="h-4 w-4" /> Járművek
+            </Button>
+            <Button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63]"
+              onClick={() => { window.location.hash = "#allinadmin"; }}
+            >
+              <Home className="h-4 w-4" /> Kezdőlap
             </Button>
           </div>
         </div>
-      </div>
+      </header>
 
       {msg && (
-        <div className="mx-auto max-w-6xl px-4 mt-4">
-          <div className="rounded-md border border-emerald-400/40 bg-emerald-50 text-emerald-800 px-3 py-2 text-sm">
+        <div>
+          <div className="flex items-center rounded-2xl border border-[#7bd7d4]/28 bg-[#174c55]/72 px-4 py-3 text-sm text-[#e5fffd]">
+            <CheckCircle2 className="mr-2 h-4 w-4" />
             {msg}
           </div>
         </div>
       )}
 
-      <div className="mx-auto max-w-6xl px-4 py-6">
+      <main className="space-y-4">
         {/* Filters & tools */}
-        <Card className="rounded-xl border-slate-300 bg-white text-slate-800 mb-4">
+        <Card className="overflow-visible rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm">
           <CardContent className="p-3 md:p-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative">
-                <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-600" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/36" />
                 <Input
-                  className="pl-7 bg-white border-slate-300 text-slate-800 placeholder:text-slate-600"
+                  className="h-10 min-w-[280px] rounded-xl border border-white/18 bg-[#3f4959] pl-9 text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   placeholder="Keresés (leírás, számla, beszállító)"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
@@ -385,7 +400,7 @@ function AllInCarExpenses() {
               <select
                 value={carId}
                 onChange={(e) => setCarId(e.target.value === "" ? "" : Number(e.target.value))}
-                className="h-9 rounded-md bg-white border border-slate-300 text-slate-800 px-2"
+                className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
               >
                 <option value="">Autó: mind</option>
                 {cars.map((c) => (
@@ -398,7 +413,7 @@ function AllInCarExpenses() {
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="h-9 rounded-md bg-white border border-slate-300 text-slate-800 px-2"
+                className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
               >
                 <option value="">Kategória: mind</option>
                 {["Kötelező szerviz", "Olajcsere", "Gumicsere", "Javítás", "Vizsga", "Egyéb"].map((c) => (
@@ -411,14 +426,14 @@ function AllInCarExpenses() {
               <div className="flex items-center gap-2">
                 <Input
                   type="date"
-                  className="bg-white border-slate-300 text-slate-800"
+                  className="h-10 rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(justDate(e.target.value))}
                 />
-                <span className="text-slate-500 text-sm">→</span>
+                <span className="text-white/35 text-sm">→</span>
                 <Input
                   type="date"
-                  className="bg-white border-slate-300 text-slate-800"
+                  className="h-10 rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   value={dateTo}
                   onChange={(e) => setDateTo(justDate(e.target.value))}
                 />
@@ -426,44 +441,43 @@ function AllInCarExpenses() {
 
               <Button
                 type="button"
-                variant="outline"
-                className="h-9 px-3 text-white border-white/40 hover:bg-slate-50"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63]"
                 onClick={reload}
                 disabled={loading}
               >
-                <RefreshCcw className="w-4 h-4 mr-1" /> Szűrés
+                <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Szűrés
               </Button>
             </div>
           </CardContent>
         </Card>
 
         {/* Totals */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {/* NOTE: div-et hasznalunk, hogy dark theme ne tudja felulirni a feher kartya hatteret */}
-          <div className="rounded-xl border border-slate-300 text-slate-800" style={{ backgroundColor: "#ffffff" }}>
-            <div className="p-3 md:p-3">
-              <div className="text-[12px] text-slate-600">Összes tétel</div>
-              <div className="text-2xl font-semibold">{enriched.length}</div>
+          <div className="rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm">
+            <div className="p-3.5 md:p-4">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Összes tétel</div>
+              <div className="mt-2 text-2xl font-normal text-white">{enriched.length}</div>
             </div>
           </div>
-          <div className="rounded-xl border border-slate-300 text-slate-800" style={{ backgroundColor: "#ffffff" }}>
-            <div className="p-3 md:p-3">
-              <div className="text-[12px] text-slate-600">Időszak</div>
+          <div className="rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm">
+            <div className="p-3.5 md:p-4">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Időszak</div>
               <div className="text-sm">{dateFrom} → {dateTo}</div>
             </div>
           </div>
-          <div className="rounded-xl border border-slate-300 text-slate-800" style={{ backgroundColor: "#ffffff" }}>
-            <div className="p-3 md:p-3">
-              <div className="text-[12px] text-slate-600">Összeg (RON)</div>
-              <div className="text-2xl font-semibold"><Money value={total} /></div>
+          <div className="rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm">
+            <div className="p-3.5 md:p-4">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-white/45">Összeg (RON)</div>
+              <div className="mt-2 text-2xl font-normal text-white"><Money value={total} /></div>
             </div>
           </div>
         </div>
 
         {/* List */}
-        <div className="rounded-xl border border-slate-300 bg-white text-slate-800 overflow-hidden">
+        <div className="overflow-x-auto rounded-2xl border border-white/14 bg-white/[0.055] text-white shadow-sm">
           {/* HEADER: fixed widths + centered labels */}
-          <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center text-[12px] px-4 py-2.5 bg-white text-slate-800 border-b border-slate-300 shadow-sm h-[36px] items-center">
+          <div className="grid min-w-[1030px] grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),170px,110px] items-center border-b border-white/12 bg-[#303a4c] px-4 py-2.5 text-[10px] uppercase tracking-[0.08em] text-white/55">
             <div className="text-center">Dátum</div>
             <div className="text-center">Autó</div>
             <div className="text-center pl-6">km óra</div>
@@ -472,7 +486,7 @@ function AllInCarExpenses() {
             <div className="text-left pl-2">Összeg</div>
             <div className="text-right pr-2"></div>
           </div>
-          <div className="divide-y divide-slate-200">
+          <div className="min-w-[1030px] divide-y divide-white/10">
             {enriched
               .filter((r) => {
                 if (!q.trim()) return true;
@@ -484,27 +498,27 @@ function AllInCarExpenses() {
                 );
               })
               .map((r) => (
-                <div key={r.id || Math.random()} className="px-4 py-2.5">
+                <div key={r.id || Math.random()} className="px-4 py-2.5 transition hover:bg-white/[0.035]">
                   {/* ROW: match header grid exactly; center content */}
                   <div className="grid grid-cols-[115px,160px,100px,120px,minmax(220px,1fr),180px,110px] items-center gap-2 h-[36px]">
                     <div className="flex items-center justify-end gap-2 pr-2">
-                      <CalendarDays className="w-4 h-4 text-slate-600" />
+                      <CalendarDays className="h-4 w-4 text-white/38" />
                       <span>{justDate(r.date)}</span>
                     </div>
                     <div className="truncate text-center">
-                      <div className="font-semibold text-[#344154] truncate">{r.plate || "Ismeretlen"}</div>
-                      <div className="text-[12px] text-slate-600 truncate">{r.make_model || "—"}</div>
+                      <div className="truncate font-medium text-white">{r.plate || "Ismeretlen"}</div>
+                      <div className="truncate text-[11px] text-white/45">{r.make_model || "—"}</div>
                     </div>
                     <div className="grid place-items-center text-center h-[36px] m-0 p-0">{r.odometer_km ? r.odometer_km : "—"}</div>
                     <div className="flex items-center justify-center gap-2 min-h-[24px]">
-                      <Wrench className="w-4 h-4 text-slate-600" />
+                      <Wrench className="h-4 w-4 text-white/38" />
                       <span>{r.category || "—"}</span>
                     </div>
                     <div className="truncate text-center">{r.description || "—"}</div>
                     <div className="font-medium text-left pl-2"><Money value={r.cost} /> {r.currency || ""}</div>
                     <div className="flex items-center justify-end gap-2 pr-2">
                       <button
-                        className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900"
+                        className="inline-flex h-8 items-center gap-1 rounded-xl border border-white/14 bg-white/[0.06] px-2.5 text-[11px] text-white/78 transition hover:bg-white/[0.11] hover:text-white"
                         onClick={() => onEdit(r)}
                         type="button"
                       >
@@ -526,21 +540,20 @@ function AllInCarExpenses() {
                 </div>
               ))}
             {!enriched.length && (
-              <div className="px-4 py-10 text-center text-slate-600">Nincs találat.</div>
+              <div className="px-4 py-10 text-center text-white/45">Nincs találat.</div>
             )}
           </div>
         </div>
 
         {/* Drawer */}
         {openForm && (
-          <Card className="rounded-xl overflow-hidden border-slate-300 bg-white mt-6" id="expenseForm">
+          <Card className="overflow-hidden rounded-2xl border border-white/14 bg-white/[0.06] text-white shadow-sm" id="expenseForm">
             <div
-              className="px-4 py-3 text-white text-sm md:text-base flex items-center justify-between"
-              style={{ backgroundColor: CUPE.blue }}
+              className="flex items-center justify-between border-b border-white/12 bg-[#404a5b] px-4 py-3 text-sm text-white md:text-base"
             >
               <div>{item.id ? "Tétel szerkesztése" : "Új tétel"}</div>
               <button
-                className="text-slate-200 hover:text-white"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/18 bg-[#354153] text-white transition hover:bg-[#3e4d63]"
                 onClick={() => {
                   setOpenForm(false);
                   setItem({ ...emptyItem });
@@ -551,11 +564,11 @@ function AllInCarExpenses() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <CardContent className="p-4 md:p-5 space-y-4 bg-white text-slate-800">
+            <CardContent className="space-y-4 bg-transparent p-4 text-white md:p-5">
               <form onSubmit={onSubmit} className="grid grid-cols-2 gap-3">
                 <Field label="Autó">
                   <select
-                    className="h-9 rounded-md border border-slate-300 px-2 bg-white"
+                    className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.car_id ?? ""}
                     onChange={(e) => setItem((s) => ({ ...s, car_id: e.target.value === "" ? null : Number(e.target.value) }))}
                     required
@@ -571,7 +584,7 @@ function AllInCarExpenses() {
                 <Field label="Dátum">
                   <Input
                     type="date"
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.date || ""}
                     onChange={(e) => setItem((s) => ({ ...s, date: justDate(e.target.value) }))}
                     required
@@ -580,7 +593,7 @@ function AllInCarExpenses() {
                 <Field label="km óra állás">
                   <Input
                     type="number"
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.odometer_km ?? ""}
                     onChange={(e) => setItem((s) => ({ ...s, odometer_km: e.target.value ? Number(e.target.value) : null }))}
                     placeholder="pl. 156000"
@@ -588,7 +601,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Kategória">
                   <select
-                    className="h-9 rounded-md border border-slate-300 px-2 bg-white"
+                    className="allin-select h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.category || ""}
                     onChange={(e) => setItem((s) => ({ ...s, category: e.target.value }))}
                   >
@@ -603,7 +616,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Leírás">
                   <Input
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.description || ""}
                     onChange={(e) => setItem((s) => ({ ...s, description: e.target.value }))}
                     placeholder="Munkalap, tételes leírás…"
@@ -613,7 +626,7 @@ function AllInCarExpenses() {
                   <Input
                     type="number"
                     step="0.01"
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.cost ?? ""}
                     onChange={(e) => setItem((s) => ({ ...s, cost: e.target.value ? Number(e.target.value) : null }))}
                     placeholder="0.00"
@@ -621,7 +634,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Pénznem">
                   <Input
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.currency || "RON"}
                     onChange={(e) => setItem((s) => ({ ...s, currency: e.target.value }))}
                     placeholder="RON"
@@ -629,7 +642,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Beszállító / Szerviz">
                   <Input
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.vendor || ""}
                     onChange={(e) => setItem((s) => ({ ...s, vendor: e.target.value }))}
                     placeholder="Szerviz neve"
@@ -637,7 +650,7 @@ function AllInCarExpenses() {
                 </Field>
                 <Field label="Számla száma">
                   <Input
-                    className="bg-white"
+                    className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                     value={item.invoice_no || ""}
                     onChange={(e) => setItem((s) => ({ ...s, invoice_no: e.target.value }))}
                     placeholder="Opció"
@@ -647,8 +660,7 @@ function AllInCarExpenses() {
                 <div className="col-span-2 flex items-center justify-between gap-3 pt-1">
                   <Button
                     type="button"
-                    variant="outline"
-                    className="h-9 px-4 text-white border-white/40 hover:bg-slate-50"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-4 text-xs text-white transition hover:bg-[#3e4d63]"
                     onClick={() => {
                       setOpenForm(false);
                       setItem({ ...emptyItem });
@@ -660,15 +672,14 @@ function AllInCarExpenses() {
                   {error && <div className="text-red-600 text-xs">{error}</div>}
                   <Button
                     type="submit"
-                    className="h-9 px-4 text-white"
-                    style={{ backgroundColor: CUPE.blue }}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-4 text-xs text-white transition hover:bg-[#319c99]"
                     disabled={saving}
                   >
                     {saving ? (
                       "Mentés…"
                     ) : (
                       <>
-                        <Save className="h-4 w-4 mr-1" /> Mentés
+                        <Save className="h-4 w-4" /> Mentés
                       </>
                     )}
                   </Button>
@@ -677,19 +688,19 @@ function AllInCarExpenses() {
             </CardContent>
           </Card>
         )}
-      </div>
+      </main>
 
       {/* Confirm / Info modal */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-white/30 bg-[#354153] p-5 shadow-xl">
-            <div className="text-white font-semibold">{confirmTitle}</div>
+        <div className="fixed inset-0 z-[130] grid place-items-center bg-slate-950/78 px-3 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[24px] border border-white/18 bg-[#4b5362] p-5 shadow-2xl">
+            <div className="text-white font-medium">{confirmTitle}</div>
             <div className="text-white/70 text-sm mt-2 whitespace-pre-wrap">{confirmMsg}</div>
             <div className="mt-5 flex items-center justify-end gap-2">
               {confirmVariant === "confirm" && (
                 <button
                   type="button"
-                  className="h-10 px-4 rounded-xl border border-white/30 bg-white/5 text-white hover:bg-white/10"
+                  className="h-10 rounded-xl border border-white/18 bg-[#354153] px-4 text-white transition hover:bg-[#3e4d63]"
                   onClick={() => setConfirmOpen(false)}
                 >
                   Mégse
@@ -699,8 +710,8 @@ function AllInCarExpenses() {
                 type="button"
                 className={
                   confirmVariant === "confirm"
-                    ? "h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold"
-                    : "h-10 px-4 rounded-xl bg-[#208d8b] hover:bg-[#1b7a78] text-white font-semibold"
+                    ? "h-10 rounded-xl bg-red-600 px-4 text-white transition hover:bg-red-500"
+                    : "h-10 rounded-xl bg-[#2a8d8b] px-4 text-white transition hover:bg-[#319c99]"
                 }
                 onClick={confirmVariant === "confirm" ? runConfirm : () => setConfirmOpen(false)}
               >
@@ -710,6 +721,7 @@ function AllInCarExpenses() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
