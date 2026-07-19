@@ -46,6 +46,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   let aifStockTransferIdempotencySchemaPromise = null;
   let aifStockTransferDocumentsSchemaPromise = null;
+  let aifPurchaseOrderSchemaPromise = null;
 
   function ensureAifStockTransferIdempotencySchema() {
     if (!aifStockTransferIdempotencySchemaPromise) {
@@ -691,6 +692,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureSnCodSchema(pool);
       await ensureAifSubcategorySchema(pool);
       await ensureSizeMasterDataSchema(pool);
+      await ensureAifPurchaseOrderSchema(pool);
       next();
     } catch (e) {
       console.error("AIF AIF schema ensure failed", e);
@@ -2560,9 +2562,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
         r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
         r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-        r.note, r.raw_meta, r.supplier_id, r.target_location_id,
+        r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
         s.name AS supplier_name,
         l.name AS location_name,
+        po.order_number AS purchase_order_number,
         count(DISTINCT b.id)::int AS import_batches,
         count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
         count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
@@ -2579,11 +2582,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       FROM aif_receptions r
       LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
       LEFT JOIN aif_locations l ON l.id=r.target_location_id
+      LEFT JOIN aif_purchase_orders po ON po.id=r.purchase_order_id
       LEFT JOIN aif_import_batches b ON b.reception_id=r.id
       LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
       LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      GROUP BY r.id, s.name, l.name
+      GROUP BY r.id, s.name, l.name, po.order_number
       ORDER BY r.created_at DESC
       LIMIT ${limitParam}
     `;
@@ -2763,11 +2767,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-                r.note, r.raw_meta, r.supplier_id, r.target_location_id,
-                s.name AS supplier_name, l.name AS location_name
+                r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
+                s.name AS supplier_name, l.name AS location_name, po.order_number AS purchase_order_number
          FROM aif_receptions r
          LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
          LEFT JOIN aif_locations l ON l.id=r.target_location_id
+         LEFT JOIN aif_purchase_orders po ON po.id=r.purchase_order_id
          WHERE r.id=$1
          LIMIT 1`,
         [receptionId]
@@ -2872,8 +2877,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
-                r.note, r.raw_meta, r.supplier_id, r.target_location_id,
-                s.name AS supplier_name, l.name AS location_name,
+                r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
+                s.name AS supplier_name, l.name AS location_name, po.order_number AS purchase_order_number,
                 count(DISTINCT b.id)::int AS import_batches,
                 count(rw.id) FILTER (WHERE rw.status <> 'ignored')::int AS import_rows,
                 count(rw.id) FILTER (WHERE rw.status = 'committed')::int AS committed_rows,
@@ -2886,11 +2891,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          FROM aif_receptions r
          LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
          LEFT JOIN aif_locations l ON l.id=r.target_location_id
+         LEFT JOIN aif_purchase_orders po ON po.id=r.purchase_order_id
          LEFT JOIN aif_import_batches b ON b.reception_id=r.id
          LEFT JOIN aif_import_rows rw ON rw.batch_id=b.id
          LEFT JOIN aif_stock_movements sm ON sm.source_type='import_batch' AND sm.source_id=b.id::text
          WHERE r.id::text=$1
-         GROUP BY r.id, s.name, l.name
+         GROUP BY r.id, s.name, l.name, po.order_number
          LIMIT 1`,
         [id]
       );
@@ -2898,7 +2904,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const batches = await pool.query(
         `SELECT b.id, b.created_at, b.updated_at, b.status, b.row_count, b.error_count,
-                b.source_file_name, b.note, b.committed_at, b.reception_id, b.invoice_number,
+                b.source_file_name, b.note, b.committed_at, b.reception_id, b.purchase_order_id, b.invoice_number,
                 b.currency_code, b.exchange_rate_to_ron, s.code AS supplier_code, s.name AS supplier_name,
                 l.code AS location_code, l.name AS location_name, p.name AS profile_name, p.version AS profile_version
          FROM aif_import_batches b
@@ -2912,7 +2918,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const rows = await pool.query(
         `SELECT rw.id, rw.batch_id, rw.row_no, rw.raw, rw.normalized, rw.status, rw.error_messages,
                 rw.variant_id, rw.supplier_product_code, rw.supplier_variant_code, rw.supplier_color_code,
-                rw.supplier_size, rw.qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron, rw.sn_cod
+                rw.supplier_size, rw.qty, rw.buy_price, rw.buy_price_ron, rw.sell_price, rw.sell_price_ron, rw.sn_cod,
+                rw.purchase_order_id, rw.purchase_order_line_id
          FROM aif_import_batches b
          JOIN aif_import_rows rw ON rw.batch_id=b.id
          WHERE b.reception_id=$1
@@ -4736,6 +4743,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const targetLocationId = location?.id || await getDefaultLocationId(client);
       if (!targetLocationId) return res.status(400).json({ error: "Cél hely kiválasztása kötelező." });
 
+      const purchaseOrderContext = await resolvePurchaseOrderContext(client, body);
+      if (purchaseOrderContext && String(purchaseOrderContext.supplier_id) !== String(supplier.id)) {
+        return res.status(400).json({ error: "A bevételezés beszállítója nem egyezik a beszerzési rendelés beszállítójával." });
+      }
+      if (purchaseOrderContext?.target_location_id && String(purchaseOrderContext.target_location_id) !== String(targetLocationId)) {
+        return res.status(400).json({ error: "A bevételezés célhelye nem egyezik a beszerzési rendelés célhelyével." });
+      }
+
       const reception = receptionFromBody(body);
       if (!reception.invoiceNumber) return res.status(400).json({ error: "Számlaszám megadása kötelező." });
       if (!reception.invoiceDate) return res.status(400).json({ error: "Számla dátuma kötelező." });
@@ -4889,6 +4904,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
 
       const batchId = batchRes.rows[0].id;
+      if (purchaseOrderContext) {
+        const purchaseMeta = JSON.stringify({
+          purchaseOrderId: String(purchaseOrderContext.id),
+          purchaseOrderNumber: purchaseOrderContext.order_number,
+        });
+        await client.query(
+          `UPDATE aif_receptions
+           SET purchase_order_id=$2,
+               raw_meta=COALESCE(raw_meta,'{}'::jsonb) || $3::jsonb,
+               updated_at=now()
+           WHERE id=$1`,
+          [receptionId, purchaseOrderContext.id, purchaseMeta]
+        );
+        await client.query(
+          `UPDATE aif_import_batches
+           SET purchase_order_id=$2,
+               raw_meta=COALESCE(raw_meta,'{}'::jsonb) || $3::jsonb,
+               updated_at=now()
+           WHERE id=$1`,
+          [batchId, purchaseOrderContext.id, purchaseMeta]
+        );
+      }
       const exchangeRate = Number(receptionExchangeRateToRon);
       const salesTvaSettings = await readSalesTvaSettings(client);
       let errorCount = 0;
@@ -4911,9 +4948,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `INSERT INTO aif_import_rows (
              batch_id, row_no, raw, normalized, status, error_messages,
              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-             qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
+             qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod,
+             purchase_order_id, purchase_order_line_id
            )
-           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
           [
             batchId,
             nr.rowNo,
@@ -4931,6 +4969,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.sellPrice,
             sellPriceRon,
             nr.normalized.snCod || nr.normalized.sn_cod,
+            purchaseOrderContext ? purchaseOrderContext.id : null,
+            purchaseOrderLineIdFromNormalized(nr.normalized),
           ]
         );
       }
@@ -5367,7 +5407,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
       const batch = await client.query(
-        `SELECT b.id, b.status, b.currency_code, b.exchange_rate_to_ron,
+        `SELECT b.id, b.status, b.currency_code, b.exchange_rate_to_ron, b.purchase_order_id,
                 r.exchange_rate_to_ron AS reception_exchange_rate, r.currency_code AS reception_currency_code,
                 r.raw_meta AS reception_raw_meta
          FROM aif_import_batches b
@@ -5429,9 +5469,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `INSERT INTO aif_import_rows (
              batch_id, row_no, raw, normalized, status, error_messages,
              supplier_product_code, supplier_variant_code, supplier_color_code, supplier_size,
-             qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod
+             qty, buy_price, buy_price_ron, sell_price, sell_price_ron, sn_cod,
+             purchase_order_id, purchase_order_line_id
            )
-           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6::text[],$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
           [
             batchId,
             nr.rowNo,
@@ -5449,6 +5490,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             nr.normalized.sellPrice,
             sellPriceRon,
             nr.normalized.snCod || nr.normalized.sn_cod,
+            batch.rows[0].purchase_order_id || null,
+            purchaseOrderLineIdFromNormalized(nr.normalized),
           ]
         );
       }
@@ -5596,6 +5639,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           raw: row.raw,
         });
 
+        const purchaseOrderLineId = row.purchase_order_line_id || purchaseOrderLineIdFromNormalized(normalized);
+        if (batch.purchase_order_id && purchaseOrderLineId) {
+          await registerAifPurchaseOrderReceipt(client, {
+            orderId: batch.purchase_order_id,
+            orderLineId: purchaseOrderLineId,
+            receptionId: batch.reception_id || null,
+            importBatchId: batch.id,
+            importRowId: row.id,
+            qty: Math.floor(qty),
+            actor,
+            raw: {
+              source: 'incoming_commit',
+              batchId: String(batch.id),
+              receptionId: batch.reception_id ? String(batch.reception_id) : null,
+              rowNo: row.row_no || null,
+              variantId: String(variantId || ''),
+            },
+          });
+        }
+
         await client.query(
           `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
           [row.id, variantId]
@@ -5689,6 +5752,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       } else {
         await client.query(`UPDATE aif_receptions SET status='draft', updated_at=now() WHERE id=$1 AND status <> 'cancelled'`, [batch.reception_id]);
       }
+    }
+
+    if (batch.purchase_order_id) {
+      await refreshAifPurchaseOrderReceiptState(client, batch.purchase_order_id, actor);
     }
 
     return {
@@ -10948,6 +11015,759 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       console.error("AIF Shopify product export reconcile failed", e);
       res.status(Number(e?.statusCode || 500)).json({ error: e?.message || "A Shopify import utáni párosítás nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
+  async function ensureAifPurchaseOrderSchema(client = pool) {
+    const run = async () => {
+      await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_purchase_order_settings (
+        id smallint PRIMARY KEY DEFAULT 1 CHECK (id=1),
+        series text NOT NULL DEFAULT 'CMD',
+        next_number bigint NOT NULL DEFAULT 1 CHECK (next_number > 0),
+        digits integer NOT NULL DEFAULT 6 CHECK (digits BETWEEN 3 AND 10),
+        include_year boolean NOT NULL DEFAULT true,
+        yearly_reset boolean NOT NULL DEFAULT true,
+        sequence_year integer NOT NULL DEFAULT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer,
+        document_title text NOT NULL DEFAULT 'COMANDĂ CĂTRE FURNIZOR',
+        document_subtitle text NOT NULL DEFAULT 'Comandă de aprovizionare',
+        updated_by text NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`INSERT INTO aif_purchase_order_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_purchase_orders (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_number text NOT NULL UNIQUE,
+        series text NOT NULL,
+        sequence_number bigint NOT NULL,
+        sequence_year integer NOT NULL,
+        status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','ordered','partially_received','received','cancelled')),
+        supplier_id uuid NOT NULL REFERENCES aif_suppliers(id),
+        target_location_id uuid NULL REFERENCES aif_locations(id),
+        currency_code text NOT NULL DEFAULT 'RON',
+        order_date date NOT NULL DEFAULT (now() AT TIME ZONE 'Europe/Bucharest')::date,
+        expected_date date NULL,
+        external_reference text NULL,
+        note text NULL,
+        ordered_at timestamptz NULL,
+        ordered_by text NULL,
+        cancelled_at timestamptz NULL,
+        cancelled_by text NULL,
+        created_by text NULL,
+        raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_orders_status_date_idx ON aif_purchase_orders (status, order_date DESC, created_at DESC)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_orders_supplier_idx ON aif_purchase_orders (supplier_id, created_at DESC)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_orders_location_idx ON aif_purchase_orders (target_location_id, created_at DESC)`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_purchase_order_lines (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id uuid NOT NULL REFERENCES aif_purchase_orders(id) ON DELETE CASCADE,
+        line_no integer NOT NULL,
+        variant_id uuid NULL REFERENCES aif_product_variants(id) ON DELETE SET NULL,
+        supplier_product_code text NULL,
+        supplier_variant_code text NULL,
+        model_code text NULL,
+        product_title text NOT NULL,
+        brand_name text NULL,
+        category_name text NULL,
+        barcode text NULL,
+        sn_cod text NULL,
+        customs_tariff_code text NULL,
+        color_name text NULL,
+        color_code text NULL,
+        size text NULL,
+        gender text NULL,
+        product_type text NULL,
+        material text NULL,
+        description_ro text NULL,
+        image_url text NULL,
+        qty_ordered integer NOT NULL CHECK (qty_ordered > 0),
+        qty_received integer NOT NULL DEFAULT 0 CHECK (qty_received >= 0),
+        unit_price numeric(14,2) NULL,
+        sell_price numeric(14,2) NULL,
+        line_total numeric(14,2) NULL,
+        currency_code text NOT NULL DEFAULT 'RON',
+        note text NULL,
+        raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (order_id, line_no)
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_order_idx ON aif_purchase_order_lines (order_id, line_no)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_variant_idx ON aif_purchase_order_lines (variant_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_barcode_idx ON aif_purchase_order_lines (barcode)`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_purchase_order_status_history (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id uuid NOT NULL REFERENCES aif_purchase_orders(id) ON DELETE CASCADE,
+        from_status text NULL,
+        to_status text NOT NULL,
+        note text NULL,
+        actor text NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_status_history_order_idx ON aif_purchase_order_status_history (order_id, created_at DESC)`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_purchase_order_receipts (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id uuid NOT NULL REFERENCES aif_purchase_orders(id) ON DELETE CASCADE,
+        order_line_id uuid NOT NULL REFERENCES aif_purchase_order_lines(id) ON DELETE CASCADE,
+        reception_id uuid NULL REFERENCES aif_receptions(id) ON DELETE SET NULL,
+        import_batch_id uuid NULL REFERENCES aif_import_batches(id) ON DELETE SET NULL,
+        import_row_id uuid NULL REFERENCES aif_import_rows(id) ON DELETE SET NULL,
+        qty integer NOT NULL CHECK (qty > 0),
+        actor text NULL,
+        raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+        received_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (import_row_id)
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_receipts_order_idx ON aif_purchase_order_receipts (order_id, received_at DESC)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_receipts_line_idx ON aif_purchase_order_receipts (order_line_id, received_at DESC)`);
+      await client.query(`ALTER TABLE IF EXISTS aif_receptions ADD COLUMN IF NOT EXISTS purchase_order_id uuid NULL REFERENCES aif_purchase_orders(id) ON DELETE SET NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_import_batches ADD COLUMN IF NOT EXISTS purchase_order_id uuid NULL REFERENCES aif_purchase_orders(id) ON DELETE SET NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_import_rows ADD COLUMN IF NOT EXISTS purchase_order_id uuid NULL REFERENCES aif_purchase_orders(id) ON DELETE SET NULL`);
+      await client.query(`ALTER TABLE IF EXISTS aif_import_rows ADD COLUMN IF NOT EXISTS purchase_order_line_id uuid NULL REFERENCES aif_purchase_order_lines(id) ON DELETE SET NULL`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_receptions_purchase_order_idx ON aif_receptions (purchase_order_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_import_batches_purchase_order_idx ON aif_import_batches (purchase_order_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_import_rows_purchase_order_idx ON aif_import_rows (purchase_order_id, purchase_order_line_id)`);
+      return true;
+    };
+    if (client !== pool) return run();
+    if (!aifPurchaseOrderSchemaPromise) {
+      aifPurchaseOrderSchemaPromise = run().catch((error) => {
+        aifPurchaseOrderSchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifPurchaseOrderSchemaPromise;
+  }
+
+  function cleanAifPurchaseOrderSeries(value) {
+    return text(value || 'CMD')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'CMD';
+  }
+
+  function aifPurchaseOrderNumber(settings, sequenceNumber, year) {
+    const series = cleanAifPurchaseOrderSeries(settings?.series || 'CMD');
+    const digits = Math.min(10, Math.max(3, Number(settings?.digits || 6)));
+    const sequence = String(Math.max(1, Number(sequenceNumber || 1))).padStart(digits, '0');
+    return settings?.include_year === false ? `${series}/${sequence}` : `${series}/${year}/${sequence}`;
+  }
+
+  function aifPurchaseOrderSettingsResponse(row = {}) {
+    const year = Number(row.sequence_year || new Date().getFullYear());
+    const nextNumber = Math.max(1, Number(row.next_number || 1));
+    const series = cleanAifPurchaseOrderSeries(row.series || 'CMD');
+    const digits = Math.min(10, Math.max(3, Number(row.digits || 6)));
+    const includeYear = row.include_year !== false;
+    return {
+      series,
+      nextNumber,
+      digits,
+      includeYear,
+      yearlyReset: row.yearly_reset !== false,
+      sequenceYear: year,
+      documentTitle: text(row.document_title || 'COMANDĂ CĂTRE FURNIZOR'),
+      documentSubtitle: text(row.document_subtitle || 'Comandă de aprovizionare'),
+      previewNumber: aifPurchaseOrderNumber({ series, digits, include_year: includeYear }, nextNumber, year),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      updatedBy: row.updated_by || null,
+    };
+  }
+
+  async function readAifPurchaseOrderSettings(client = pool, lock = false) {
+    await ensureAifPurchaseOrderSchema(client);
+    const result = await client.query(`SELECT * FROM aif_purchase_order_settings WHERE id=1 ${lock ? 'FOR UPDATE' : ''}`);
+    return result.rows[0] || {};
+  }
+
+  async function allocateAifPurchaseOrderNumber(client) {
+    const yearResult = await client.query(`SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`);
+    const currentYear = Number(yearResult.rows[0]?.year || new Date().getFullYear());
+    const row = await readAifPurchaseOrderSettings(client, true);
+    let nextNumber = Math.max(1, Number(row.next_number || 1));
+    let sequenceYear = Number(row.sequence_year || currentYear);
+    if (row.yearly_reset !== false && sequenceYear !== currentYear) {
+      nextNumber = 1;
+      sequenceYear = currentYear;
+    }
+    const orderNumber = aifPurchaseOrderNumber(row, nextNumber, sequenceYear);
+    await client.query(
+      `UPDATE aif_purchase_order_settings SET next_number=$1, sequence_year=$2, updated_at=now() WHERE id=1`,
+      [nextNumber + 1, sequenceYear]
+    );
+    return {
+      orderNumber,
+      series: cleanAifPurchaseOrderSeries(row.series || 'CMD'),
+      sequenceNumber: nextNumber,
+      sequenceYear,
+    };
+  }
+
+  function cleanAifPurchaseOrderStatus(value, fallback = null) {
+    const status = normCode(value);
+    const aliases = {
+      draft: 'draft', vazlat: 'draft',
+      ordered: 'ordered', sent: 'ordered', rendelve: 'ordered',
+      partially_received: 'partially_received', partial: 'partially_received', reszben_beerkezett: 'partially_received',
+      received: 'received', complete: 'received', beerkezett: 'received',
+      cancelled: 'cancelled', canceled: 'cancelled', torolt: 'cancelled',
+    };
+    return aliases[status] || fallback;
+  }
+
+  function purchaseOrderIdFromBody(body = {}) {
+    const reception = body?.reception && typeof body.reception === 'object' ? body.reception : {};
+    return emptyToNull(
+      body.purchaseOrderId || body.purchase_order_id ||
+      reception.purchaseOrderId || reception.purchase_order_id ||
+      body.rawMeta?.purchaseOrderId || body.raw_meta?.purchase_order_id
+    );
+  }
+
+  function purchaseOrderLineIdFromNormalized(normalized = {}) {
+    return emptyToNull(
+      normalized.purchaseOrderLineId || normalized.purchase_order_line_id ||
+      normalized.orderLineId || normalized.order_line_id
+    );
+  }
+
+  async function resolvePurchaseOrderContext(client, body = {}) {
+    const orderId = purchaseOrderIdFromBody(body);
+    if (!orderId) return null;
+    await ensureAifPurchaseOrderSchema(client);
+    const result = await client.query(
+      `SELECT po.*, s.name AS supplier_name, l.name AS location_name
+       FROM aif_purchase_orders po
+       JOIN aif_suppliers s ON s.id=po.supplier_id
+       LEFT JOIN aif_locations l ON l.id=po.target_location_id
+       WHERE po.id::text=$1 OR po.order_number=$1
+       LIMIT 1`,
+      [orderId]
+    );
+    if (!result.rowCount) throw Object.assign(new Error('A kapcsolódó beszerzési rendelés nem található.'), { statusCode: 404 });
+    const order = result.rows[0];
+    if (order.status === 'draft') throw Object.assign(new Error('A beszerzési rendelést előbb jelöld Rendelve állapotúnak.'), { statusCode: 400 });
+    if (order.status === 'cancelled') throw Object.assign(new Error('Törölt beszerzési rendelésből nem indítható bevételezés.'), { statusCode: 400 });
+    if (order.status === 'received') throw Object.assign(new Error('Ez a beszerzési rendelés már teljesen beérkezett.'), { statusCode: 400 });
+    return order;
+  }
+
+  async function refreshAifPurchaseOrderReceiptState(client, orderId, actor = 'system') {
+    const key = text(orderId);
+    if (!key) return null;
+    await ensureAifPurchaseOrderSchema(client);
+    const orderRes = await client.query(
+      `SELECT id, status FROM aif_purchase_orders WHERE id::text=$1 OR order_number=$1 FOR UPDATE`,
+      [key]
+    );
+    if (!orderRes.rowCount) return null;
+    const order = orderRes.rows[0];
+    await client.query(
+      `UPDATE aif_purchase_order_lines l
+       SET qty_received=COALESCE((
+         SELECT sum(r.qty)::int FROM aif_purchase_order_receipts r WHERE r.order_line_id=l.id
+       ),0), updated_at=now()
+       WHERE l.order_id=$1`,
+      [order.id]
+    );
+    const totalsRes = await client.query(
+      `SELECT COALESCE(sum(qty_ordered),0)::int AS total_qty,
+              COALESCE(sum(qty_received),0)::int AS received_qty
+       FROM aif_purchase_order_lines WHERE order_id=$1`,
+      [order.id]
+    );
+    const totalQty = Number(totalsRes.rows[0]?.total_qty || 0);
+    const receivedQty = Number(totalsRes.rows[0]?.received_qty || 0);
+    let nextStatus = order.status;
+    if (order.status !== 'cancelled') {
+      if (totalQty > 0 && receivedQty >= totalQty) nextStatus = 'received';
+      else if (receivedQty > 0) nextStatus = 'partially_received';
+      else if (order.status !== 'draft') nextStatus = 'ordered';
+      else nextStatus = 'draft';
+    }
+    if (nextStatus !== order.status) {
+      await client.query(`UPDATE aif_purchase_orders SET status=$2, updated_at=now() WHERE id=$1`, [order.id, nextStatus]);
+      await client.query(
+        `INSERT INTO aif_purchase_order_status_history (order_id,from_status,to_status,note,actor)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [order.id, order.status, nextStatus, 'Automatikus állapotfrissítés a készletre vett mennyiségek alapján.', actor]
+      );
+    }
+    return { id: order.id, status: nextStatus, totalQty, receivedQty, remainingQty: Math.max(0, totalQty - receivedQty) };
+  }
+
+  async function registerAifPurchaseOrderReceipt(client, {
+    orderId,
+    orderLineId,
+    receptionId,
+    importBatchId,
+    importRowId,
+    qty,
+    actor,
+    raw,
+  }) {
+    const quantity = Math.max(0, toInt(qty) || 0);
+    if (!orderId || !orderLineId || !importRowId || quantity <= 0) return { inserted: false };
+    await ensureAifPurchaseOrderSchema(client);
+    const line = await client.query(
+      `SELECT pol.id, pol.order_id, pol.qty_ordered, pol.qty_received, po.status
+       FROM aif_purchase_order_lines pol
+       JOIN aif_purchase_orders po ON po.id=pol.order_id
+       WHERE pol.id::text=$1 AND pol.order_id::text=$2
+       FOR UPDATE OF pol, po`,
+      [String(orderLineId), String(orderId)]
+    );
+    if (!line.rowCount) throw Object.assign(new Error('A bevételezett sor nem tartozik a kiválasztott beszerzési rendeléshez.'), { statusCode: 400 });
+    const item = line.rows[0];
+    if (item.status === 'cancelled') throw Object.assign(new Error('Törölt rendelésre nem könyvelhető bevételezés.'), { statusCode: 400 });
+    const duplicate = await client.query(`SELECT id FROM aif_purchase_order_receipts WHERE import_row_id=$1 LIMIT 1`, [importRowId]);
+    if (duplicate.rowCount) return { inserted: false, duplicate: true };
+    const currentReceived = Number(item.qty_received || 0);
+    const orderedQty = Number(item.qty_ordered || 0);
+    if (currentReceived + quantity > orderedQty) {
+      throw Object.assign(new Error(`A bevételezett mennyiség meghaladná a rendelt darabszámot. Rendelt: ${orderedQty}, eddig bevételezett: ${currentReceived}, most: ${quantity}.`), { statusCode: 400 });
+    }
+    await client.query(
+      `INSERT INTO aif_purchase_order_receipts (
+         order_id,order_line_id,reception_id,import_batch_id,import_row_id,qty,actor,raw
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+      [item.order_id, item.id, receptionId || null, importBatchId || null, importRowId, quantity, actor, JSON.stringify(raw || {})]
+    );
+    await client.query(
+      `UPDATE aif_purchase_order_lines
+       SET qty_received=COALESCE((SELECT sum(qty)::int FROM aif_purchase_order_receipts WHERE order_line_id=$1),0), updated_at=now()
+       WHERE id=$1`,
+      [item.id]
+    );
+    return { inserted: true };
+  }
+
+  async function purchaseOrderVariantSnapshot(client, input = {}, supplierId = null) {
+    const variantId = text(input.variantId || input.variant_id || input.variant || input.id);
+    let variant = null;
+    if (variantId) {
+      const result = await client.query(
+        `SELECT v.id, v.internal_sku, v.barcode, v.sn_cod, v.color_name, v.color_code, v.size,
+                v.image_url, v.buy_price, v.sell_price, ${customsTariffSql('v')} AS customs_tariff_code,
+                m.model_code, m.title_ro, m.description_ro, m.gender, m.product_type, m.material,
+                b.name AS brand_name, c.name_ro AS category_name,
+                sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_barcode
+         FROM aif_product_variants v
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=COALESCE(m.subcategory_id,m.category_id)
+         LEFT JOIN LATERAL (
+           SELECT supplier_product_code,supplier_variant_code,supplier_barcode
+           FROM aif_variant_supplier_codes x
+           WHERE x.variant_id=v.id
+             AND COALESCE(x.is_active,true)=true
+             AND ($2::text='' OR x.supplier_id::text=$2)
+           ORDER BY CASE WHEN x.supplier_id::text=$2 THEN 0 ELSE 1 END,
+                    x.updated_at DESC NULLS LAST, x.created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
+         WHERE v.id::text=$1
+         LIMIT 1`,
+        [variantId, supplierId ? String(supplierId) : '']
+      );
+      variant = result.rows[0] || null;
+      if (!variant) throw Object.assign(new Error('A kiválasztott termékvariáns nem található.'), { statusCode: 404 });
+    }
+    const qtyOrdered = Math.max(0, toInt(input.qtyOrdered ?? input.qty_ordered ?? input.qty ?? input.quantity) || 0);
+    if (qtyOrdered <= 0) throw Object.assign(new Error('A rendelendő mennyiség legyen legalább 1.'), { statusCode: 400 });
+    const unitPrice = toMoney(input.unitPrice ?? input.unit_price ?? input.buyPrice ?? input.buy_price);
+    const sellPrice = toMoney(input.sellPrice ?? input.sell_price ?? variant?.sell_price);
+    const productTitle = text(input.productTitle || input.product_title || input.title || variant?.title_ro);
+    if (!productTitle) throw Object.assign(new Error('A terméknév kötelező.'), { statusCode: 400 });
+    return {
+      variantId: variant ? String(variant.id) : null,
+      supplierProductCode: emptyToNull(input.supplierProductCode || input.supplier_product_code || variant?.supplier_product_code || variant?.model_code || variant?.internal_sku),
+      supplierVariantCode: emptyToNull(input.supplierVariantCode || input.supplier_variant_code || variant?.supplier_variant_code),
+      modelCode: emptyToNull(input.modelCode || input.model_code || variant?.model_code),
+      productTitle,
+      brandName: emptyToNull(input.brandName || input.brand_name || variant?.brand_name),
+      categoryName: emptyToNull(input.categoryName || input.category_name || variant?.category_name),
+      barcode: emptyToNull(input.barcode || variant?.barcode || variant?.supplier_barcode),
+      snCod: emptyToNull(input.snCod || input.sn_cod || variant?.sn_cod),
+      customsTariffCode: emptyToNull(input.customsTariffCode || input.customs_tariff_code || variant?.customs_tariff_code),
+      colorName: emptyToNull(input.colorName || input.color_name || variant?.color_name),
+      colorCode: emptyToNull(input.colorCode || input.color_code || variant?.color_code),
+      size: emptyToNull(input.size || variant?.size),
+      gender: emptyToNull(input.gender || variant?.gender),
+      productType: emptyToNull(input.productType || input.product_type || variant?.product_type),
+      material: emptyToNull(input.material || variant?.material),
+      descriptionRo: emptyToNull(input.descriptionRo || input.description_ro || variant?.description_ro),
+      imageUrl: emptyToNull(input.imageUrl || input.image_url || variant?.image_url),
+      qtyOrdered,
+      unitPrice,
+      sellPrice,
+      lineTotal: unitPrice === null ? null : Math.round((qtyOrdered * unitPrice + Number.EPSILON) * 100) / 100,
+      note: emptyToNull(input.note),
+    };
+  }
+
+  async function insertAifPurchaseOrderLines(client, orderId, linesInput, currency, supplierId = null) {
+    const lines = [];
+    let lineNo = 0;
+    for (const input of linesInput || []) {
+      const line = await purchaseOrderVariantSnapshot(client, input || {}, supplierId);
+      lineNo += 1;
+      const result = await client.query(
+        `INSERT INTO aif_purchase_order_lines (
+           order_id,line_no,variant_id,supplier_product_code,supplier_variant_code,model_code,
+           product_title,brand_name,category_name,barcode,sn_cod,customs_tariff_code,
+           color_name,color_code,size,gender,product_type,material,description_ro,image_url,
+           qty_ordered,qty_received,unit_price,sell_price,line_total,currency_code,note,raw
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+           $21,0,$22,$23,$24,$25,$26,$27::jsonb
+         ) RETURNING *`,
+        [
+          orderId, lineNo, line.variantId, line.supplierProductCode, line.supplierVariantCode, line.modelCode,
+          line.productTitle, line.brandName, line.categoryName, line.barcode, line.snCod, line.customsTariffCode,
+          line.colorName, line.colorCode, line.size, line.gender, line.productType, line.material, line.descriptionRo, line.imageUrl,
+          line.qtyOrdered, line.unitPrice, line.sellPrice, line.lineTotal, currency, line.note,
+          JSON.stringify({ source: line.variantId ? 'inventory' : 'manual', input }),
+        ]
+      );
+      lines.push(result.rows[0]);
+    }
+    if (!lines.length) throw Object.assign(new Error('A rendeléshez legalább egy terméksor szükséges.'), { statusCode: 400 });
+    return lines;
+  }
+
+  function purchaseOrderSummarySql(whereSql = '') {
+    return `SELECT po.*, s.name AS supplier_name, l.name AS location_name,
+                   count(pol.id)::int AS line_count,
+                   COALESCE(sum(pol.qty_ordered),0)::int AS total_qty,
+                   COALESCE(sum(pol.qty_received),0)::int AS received_qty,
+                   COALESCE(sum(GREATEST(pol.qty_ordered-pol.qty_received,0)),0)::int AS remaining_qty,
+                   round(COALESCE(sum(pol.line_total),0)::numeric,2) AS total_value
+            FROM aif_purchase_orders po
+            JOIN aif_suppliers s ON s.id=po.supplier_id
+            LEFT JOIN aif_locations l ON l.id=po.target_location_id
+            LEFT JOIN aif_purchase_order_lines pol ON pol.order_id=po.id
+            ${whereSql}
+            GROUP BY po.id,s.name,l.name`;
+  }
+
+  async function readAifPurchaseOrder(client, value) {
+    const key = text(value);
+    if (!key) return null;
+    await ensureAifPurchaseOrderSchema(client);
+    const itemRes = await client.query(
+      `${purchaseOrderSummarySql('WHERE po.id::text=$1 OR po.order_number=$1')} LIMIT 1`,
+      [key]
+    );
+    if (!itemRes.rowCount) return null;
+    const item = itemRes.rows[0];
+    const linesRes = await client.query(
+      `SELECT pol.*, GREATEST(pol.qty_ordered-pol.qty_received,0)::int AS qty_remaining
+       FROM aif_purchase_order_lines pol
+       WHERE pol.order_id=$1
+       ORDER BY pol.line_no ASC`,
+      [item.id]
+    );
+    const historyRes = await client.query(
+      `SELECT id,from_status,to_status,note,actor,created_at
+       FROM aif_purchase_order_status_history WHERE order_id=$1 ORDER BY created_at DESC`,
+      [item.id]
+    );
+    return { item, lines: linesRes.rows, history: historyRes.rows };
+  }
+
+  router.get('/purchase-orders/settings', requireAuthed, async (_req, res) => {
+    try {
+      const row = await readAifPurchaseOrderSettings(pool, false);
+      const settings = aifPurchaseOrderSettingsResponse(row);
+      res.json({ ok: true, settings, item: settings });
+    } catch (error) {
+      console.error('AIF purchase order settings load failed', error);
+      res.status(500).json({ error: 'A beszerzési rendelések számozási beállításainak betöltése nem sikerült.' });
+    }
+  });
+
+  async function saveAifPurchaseOrderSettings(req, res) {
+    try {
+      await ensureAifPurchaseOrderSchema(pool);
+      const current = await readAifPurchaseOrderSettings(pool, false);
+      const body = req.body?.settings && typeof req.body.settings === 'object' ? req.body.settings : (req.body || {});
+      const series = cleanAifPurchaseOrderSeries(body.series || current.series || 'CMD');
+      const nextNumber = Math.max(1, toInt(body.nextNumber ?? body.next_number ?? current.next_number) || 1);
+      const digits = Math.min(10, Math.max(3, toInt(body.digits ?? current.digits) || 6));
+      const includeYear = body.includeYear === undefined && body.include_year === undefined ? current.include_year !== false : Boolean(body.includeYear ?? body.include_year);
+      const yearlyReset = body.yearlyReset === undefined && body.yearly_reset === undefined ? current.yearly_reset !== false : Boolean(body.yearlyReset ?? body.yearly_reset);
+      const sequenceYear = Math.max(2000, Math.min(2100, toInt(body.sequenceYear ?? body.sequence_year ?? current.sequence_year) || new Date().getFullYear()));
+      const documentTitle = text(body.documentTitle || body.document_title || current.document_title || 'COMANDĂ CĂTRE FURNIZOR').slice(0, 220);
+      const documentSubtitle = text(body.documentSubtitle || body.document_subtitle || current.document_subtitle || 'Comandă de aprovizionare').slice(0, 220);
+      const preview = aifPurchaseOrderNumber({ series, digits, include_year: includeYear }, nextNumber, sequenceYear);
+      const collision = await pool.query(`SELECT 1 FROM aif_purchase_orders WHERE order_number=$1 LIMIT 1`, [preview]);
+      if (collision.rowCount) return res.status(409).json({ error: `Ez a következő rendelésszám már foglalt: ${preview}.` });
+      const updated = await pool.query(
+        `UPDATE aif_purchase_order_settings
+         SET series=$1,next_number=$2,digits=$3,include_year=$4,yearly_reset=$5,
+             sequence_year=$6,document_title=$7,document_subtitle=$8,updated_by=$9,updated_at=now()
+         WHERE id=1 RETURNING *`,
+        [series,nextNumber,digits,includeYear,yearlyReset,sequenceYear,documentTitle,documentSubtitle,actorFrom(req)]
+      );
+      const settings = aifPurchaseOrderSettingsResponse(updated.rows[0] || {});
+      res.json({ ok: true, settings, item: settings });
+    } catch (error) {
+      console.error('AIF purchase order settings save failed', error);
+      res.status(500).json({ error: error?.message || 'A beszerzési rendelés számozási beállításainak mentése nem sikerült.' });
+    }
+  }
+
+  router.put('/purchase-orders/settings', requireAdminOrSecret, saveAifPurchaseOrderSettings);
+  router.patch('/purchase-orders/settings', requireAdminOrSecret, saveAifPurchaseOrderSettings);
+
+  router.get('/purchase-orders', requireAuthed, async (req, res) => {
+    try {
+      await ensureAifPurchaseOrderSchema(pool);
+      const args = [];
+      const where = [];
+      const add = (value) => { args.push(value); return `$${args.length}`; };
+      const search = text(req.query.q || req.query.search);
+      if (search) {
+        const p = add(`%${search}%`);
+        where.push(`(po.order_number ILIKE ${p} OR COALESCE(po.external_reference,'') ILIKE ${p} OR COALESCE(po.note,'') ILIKE ${p} OR s.name ILIKE ${p} OR COALESCE(l.name,'') ILIKE ${p} OR EXISTS (
+          SELECT 1 FROM aif_purchase_order_lines x WHERE x.order_id=po.id AND (
+            x.product_title ILIKE ${p} OR COALESCE(x.supplier_product_code,'') ILIKE ${p} OR COALESCE(x.barcode,'') ILIKE ${p}
+          )
+        ))`);
+      }
+      const supplier = text(req.query.supplier || req.query.supplierId || req.query.supplier_id);
+      if (supplier) { const p = add(supplier); where.push(`(po.supplier_id::text=${p} OR s.code=${p})`); }
+      const location = text(req.query.location || req.query.locationId || req.query.location_id);
+      if (location) { const p = add(location); where.push(`(po.target_location_id::text=${p} OR l.code=${p})`); }
+      const status = cleanAifPurchaseOrderStatus(req.query.status, null);
+      if (status) { const p = add(status); where.push(`po.status=${p}`); }
+      const from = emptyToNull(req.query.from);
+      if (from) { const p = add(from); where.push(`po.order_date >= ${p}::date`); }
+      const to = emptyToNull(req.query.to);
+      if (to) { const p = add(to); where.push(`po.order_date < (${p}::date + interval '1 day')`); }
+      const limit = Math.min(1000, Math.max(1, toInt(req.query.limit) || 500));
+      const rows = await pool.query(
+        `${purchaseOrderSummarySql(where.length ? `WHERE ${where.join(' AND ')}` : '')}
+         ORDER BY po.created_at DESC LIMIT ${limit}`,
+        args
+      );
+      const items = rows.rows;
+      const summary = items.reduce((acc, item) => {
+        acc.total += 1;
+        if (item.status === 'draft') acc.draft += 1;
+        else if (item.status === 'ordered') acc.ordered += 1;
+        else if (item.status === 'partially_received') acc.partiallyReceived += 1;
+        else if (item.status === 'received') acc.received += 1;
+        else if (item.status === 'cancelled') acc.cancelled += 1;
+        acc.totalQty += Number(item.total_qty || 0);
+        acc.receivedQty += Number(item.received_qty || 0);
+        acc.remainingQty += Number(item.remaining_qty || 0);
+        acc.totalValue += Number(item.total_value || 0);
+        return acc;
+      }, { total: 0, draft: 0, ordered: 0, partiallyReceived: 0, received: 0, cancelled: 0, totalQty: 0, receivedQty: 0, remainingQty: 0, totalValue: 0 });
+      summary.totalValue = Math.round((summary.totalValue + Number.EPSILON) * 100) / 100;
+      res.json({ ok: true, items, summary });
+    } catch (error) {
+      console.error('AIF purchase orders list failed', error);
+      res.status(500).json({ error: error?.message || 'A beszerzési rendelések betöltése nem sikerült.' });
+    }
+  });
+
+  router.get('/purchase-orders/:id', requireAuthed, async (req, res) => {
+    try {
+      const detail = await readAifPurchaseOrder(pool, req.params.id);
+      if (!detail) return res.status(404).json({ error: 'A beszerzési rendelés nem található.' });
+      res.json(detail);
+    } catch (error) {
+      console.error('AIF purchase order detail failed', error);
+      res.status(500).json({ error: error?.message || 'A beszerzési rendelés betöltése nem sikerült.' });
+    }
+  });
+
+  async function resolveAifPurchaseOrderHeader(client, body = {}) {
+    const supplier = await findByIdOrCode(client, 'aif_suppliers', body.supplierId || body.supplier_id || body.supplier);
+    if (!supplier || supplier.is_active === false) throw Object.assign(new Error('Beszállító kiválasztása kötelező.'), { statusCode: 400 });
+    let location = null;
+    const locationInput = body.targetLocationId || body.target_location_id || body.locationId || body.location_id || body.location;
+    if (locationInput) {
+      location = await findByIdOrCode(client, 'aif_locations', locationInput);
+      if (!location || location.is_active === false) throw Object.assign(new Error('A kiválasztott célhely nem található vagy inaktív.'), { statusCode: 400 });
+    }
+    const currency = currencyCode(body.currencyCode || body.currency_code || 'RON') || 'RON';
+    const curr = await client.query(`SELECT code FROM aif_currencies WHERE code=$1 AND is_active=true LIMIT 1`, [currency]);
+    if (!curr.rowCount) throw Object.assign(new Error('A kiválasztott pénznem nem létezik vagy inaktív.'), { statusCode: 400 });
+    return {
+      supplier,
+      location,
+      currency,
+      orderDate: emptyToNull(body.orderDate || body.order_date) || new Date().toISOString().slice(0,10),
+      expectedDate: emptyToNull(body.expectedDate || body.expected_date),
+      externalReference: emptyToNull(body.externalReference || body.external_reference),
+      note: emptyToNull(body.note),
+    };
+  }
+
+  router.post('/purchase-orders', requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const linesInput = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : [];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifPurchaseOrderSchema(client);
+      const header = await resolveAifPurchaseOrderHeader(client, body);
+      const sequence = await allocateAifPurchaseOrderNumber(client);
+      const inserted = await client.query(
+        `INSERT INTO aif_purchase_orders (
+           order_number,series,sequence_number,sequence_year,status,supplier_id,target_location_id,
+           currency_code,order_date,expected_date,external_reference,note,created_by,raw
+         ) VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb) RETURNING *`,
+        [sequence.orderNumber,sequence.series,sequence.sequenceNumber,sequence.sequenceYear,header.supplier.id,header.location?.id || null,header.currency,header.orderDate,header.expectedDate,header.externalReference,header.note,actorFrom(req),JSON.stringify({ source: 'allin_purchase_order' })]
+      );
+      const order = inserted.rows[0];
+      await insertAifPurchaseOrderLines(client, order.id, linesInput, header.currency, header.supplier.id);
+      await client.query(
+        `INSERT INTO aif_purchase_order_status_history (order_id,from_status,to_status,note,actor)
+         VALUES ($1,NULL,'draft','Rendelés létrehozva.',$2)`,
+        [order.id, actorFrom(req)]
+      );
+      await client.query('COMMIT');
+      const detail = await readAifPurchaseOrder(pool, order.id);
+      res.json({ ok: true, ...detail });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF purchase order create failed', error);
+      const statusCode = Number(error?.statusCode || 500);
+      res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({ error: error?.message || 'A beszerzési rendelés mentése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.patch('/purchase-orders/:id', requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const linesInput = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : [];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifPurchaseOrderSchema(client);
+      const current = await client.query(`SELECT * FROM aif_purchase_orders WHERE id::text=$1 OR order_number=$1 FOR UPDATE`, [text(req.params.id)]);
+      if (!current.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'A beszerzési rendelés nem található.' }); }
+      const order = current.rows[0];
+      if (order.status !== 'draft') { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Csak vázlat rendelés szerkeszthető.' }); }
+      const header = await resolveAifPurchaseOrderHeader(client, body);
+      await client.query(
+        `UPDATE aif_purchase_orders SET supplier_id=$2,target_location_id=$3,currency_code=$4,
+             order_date=$5,expected_date=$6,external_reference=$7,note=$8,updated_at=now()
+         WHERE id=$1`,
+        [order.id,header.supplier.id,header.location?.id || null,header.currency,header.orderDate,header.expectedDate,header.externalReference,header.note]
+      );
+      await client.query(`DELETE FROM aif_purchase_order_lines WHERE order_id=$1`, [order.id]);
+      await insertAifPurchaseOrderLines(client, order.id, linesInput, header.currency, header.supplier.id);
+      await client.query('COMMIT');
+      const detail = await readAifPurchaseOrder(pool, order.id);
+      res.json({ ok: true, ...detail });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF purchase order update failed', error);
+      const statusCode = Number(error?.statusCode || 500);
+      res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({ error: error?.message || 'A beszerzési rendelés módosítása nem sikerült.' });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post('/purchase-orders/:id/ordered', requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifPurchaseOrderSchema(client);
+      const current = await client.query(`SELECT * FROM aif_purchase_orders WHERE id::text=$1 OR order_number=$1 FOR UPDATE`, [text(req.params.id)]);
+      if (!current.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'A beszerzési rendelés nem található.' }); }
+      const order = current.rows[0];
+      if (order.status === 'cancelled') { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Törölt rendelés nem jelölhető elküldöttnek.' }); }
+      const lineCount = await client.query(`SELECT count(*)::int AS c FROM aif_purchase_order_lines WHERE order_id=$1`, [order.id]);
+      if (Number(lineCount.rows[0]?.c || 0) <= 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Üres rendelés nem küldhető el.' }); }
+      if (order.status === 'draft') {
+        await client.query(`UPDATE aif_purchase_orders SET status='ordered',ordered_at=now(),ordered_by=$2,updated_at=now() WHERE id=$1`, [order.id,actorFrom(req)]);
+        await client.query(
+          `INSERT INTO aif_purchase_order_status_history (order_id,from_status,to_status,note,actor)
+           VALUES ($1,'draft','ordered',$2,$3)`,
+          [order.id,emptyToNull(req.body?.note) || 'Rendelés elküldve a beszállítónak.',actorFrom(req)]
+        );
+      }
+      await client.query('COMMIT');
+      const detail = await readAifPurchaseOrder(pool, order.id);
+      res.json({ ok: true, item: detail?.item || null });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF purchase order mark ordered failed', error);
+      res.status(500).json({ error: error?.message || 'A rendelés állapotának módosítása nem sikerült.' });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post('/purchase-orders/:id/cancel', requireAuthed, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifPurchaseOrderSchema(client);
+      const current = await client.query(`SELECT * FROM aif_purchase_orders WHERE id::text=$1 OR order_number=$1 FOR UPDATE`, [text(req.params.id)]);
+      if (!current.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'A beszerzési rendelés nem található.' }); }
+      const order = current.rows[0];
+      const received = await client.query(`SELECT COALESCE(sum(qty),0)::int AS qty FROM aif_purchase_order_receipts WHERE order_id=$1`, [order.id]);
+      if (Number(received.rows[0]?.qty || 0) > 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Már részben vagy teljesen bevételezett rendelés nem törölhető állapotba.' }); }
+      if (order.status !== 'cancelled') {
+        await client.query(`UPDATE aif_purchase_orders SET status='cancelled',cancelled_at=now(),cancelled_by=$2,updated_at=now() WHERE id=$1`, [order.id,actorFrom(req)]);
+        await client.query(
+          `INSERT INTO aif_purchase_order_status_history (order_id,from_status,to_status,note,actor)
+           VALUES ($1,$2,'cancelled',$3,$4)`,
+          [order.id,order.status,emptyToNull(req.body?.note) || 'Rendelés törölve / érvénytelenítve.',actorFrom(req)]
+        );
+      }
+      await client.query('COMMIT');
+      const detail = await readAifPurchaseOrder(pool, order.id);
+      res.json({ ok: true, item: detail?.item || null });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF purchase order cancel failed', error);
+      res.status(500).json({ error: error?.message || 'A rendelés törlése nem sikerült.' });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete('/purchase-orders/:id', requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifPurchaseOrderSchema(client);
+      const current = await client.query(`SELECT * FROM aif_purchase_orders WHERE id::text=$1 OR order_number=$1 FOR UPDATE`, [text(req.params.id)]);
+      if (!current.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'A beszerzési rendelés nem található.' }); }
+      const order = current.rows[0];
+      const received = await client.query(`SELECT COALESCE(sum(qty),0)::int AS qty FROM aif_purchase_order_receipts WHERE order_id=$1`, [order.id]);
+      if (Number(received.rows[0]?.qty || 0) > 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Bevételezéshez kapcsolódó rendelés véglegesen nem törölhető.' }); }
+      await client.query(`UPDATE aif_receptions SET purchase_order_id=NULL WHERE purchase_order_id=$1`, [order.id]);
+      await client.query(`UPDATE aif_import_batches SET purchase_order_id=NULL WHERE purchase_order_id=$1`, [order.id]);
+      await client.query(`UPDATE aif_import_rows SET purchase_order_id=NULL,purchase_order_line_id=NULL WHERE purchase_order_id=$1`, [order.id]);
+      await client.query(`DELETE FROM aif_purchase_orders WHERE id=$1`, [order.id]);
+      await client.query('COMMIT');
+      res.json({ ok: true, mode: 'deleted' });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF purchase order delete failed', error);
+      res.status(500).json({ error: error?.message || 'A beszerzési rendelés végleges törlése nem sikerült.' });
     } finally {
       client.release();
     }
