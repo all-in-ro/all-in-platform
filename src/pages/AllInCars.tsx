@@ -825,7 +825,7 @@ function AllInCarsDesktop() {
             <Button
               type="button"
               className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-3 text-xs text-white transition hover:bg-[#3e4d63]"
-              onClick={() => { window.location.hash = "#allinadmin"; }}
+              onClick={() => { window.location.hash = "#allin"; }}
             >
               <Home className="h-4 w-4" /> Kezdőlap
             </Button>
