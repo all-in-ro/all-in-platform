@@ -139,6 +139,87 @@ function formatMonthLabel(value: string) {
   return new Intl.DateTimeFormat("hu-HU", { year: "numeric", month: "long" }).format(date);
 }
 
+function normalizeMonthRange(monthFrom: string, monthTo: string) {
+  const from = /^\d{4}-\d{2}$/.test(monthFrom) ? monthFrom : yyyymmNow();
+  const to = /^\d{4}-\d{2}$/.test(monthTo) ? monthTo : from;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function monthValuesBetween(monthFrom: string, monthTo: string) {
+  const range = normalizeMonthRange(monthFrom, monthTo);
+  const [fromYear, fromMonth] = range.from.split("-").map(Number);
+  const [toYear, toMonth] = range.to.split("-").map(Number);
+  const values: string[] = [];
+  const cursor = new Date(Date.UTC(fromYear, fromMonth - 1, 1));
+  const end = new Date(Date.UTC(toYear, toMonth - 1, 1));
+  while (cursor <= end && values.length < 120) {
+    values.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return values;
+}
+
+function formatMonthRangeLabel(monthFrom: string, monthTo: string) {
+  const range = normalizeMonthRange(monthFrom, monthTo);
+  if (range.from === range.to) return formatMonthLabel(range.from);
+  const [fromYear, fromMonth] = range.from.split("-").map(Number);
+  const [toYear, toMonth] = range.to.split("-").map(Number);
+  if (fromYear === toYear) {
+    const fromName = new Intl.DateTimeFormat("hu-HU", { month: "long" }).format(new Date(fromYear, fromMonth - 1, 1));
+    const toName = new Intl.DateTimeFormat("hu-HU", { month: "long" }).format(new Date(toYear, toMonth - 1, 1));
+    return `${fromYear}. ${fromName} – ${toName}`;
+  }
+  return `${formatMonthLabel(range.from)} – ${formatMonthLabel(range.to)}`;
+}
+
+function mergeVacationSummaryRows(groups: SummaryRow[][]): SummaryRow[] {
+  const map = new Map<string, SummaryRow>();
+  for (const rows of groups) {
+    for (const row of rows || []) {
+      const key = empKey(row.employeeName);
+      if (!key) continue;
+      const current = map.get(key) || {
+        employeeName: row.employeeName,
+        vacationDays: 0,
+        shortDays: 0,
+        shortHours: 0,
+      };
+      current.vacationDays += Number(row.vacationDays || 0);
+      current.shortDays += Number(row.shortDays || 0);
+      current.shortHours += Number(row.shortHours || 0);
+      map.set(key, current);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.employeeName.localeCompare(b.employeeName, "hu", { sensitivity: "base" }));
+}
+
+function mergeVacationCompSummaryRows(groups: CompSummaryRow[][]): CompSummaryRow[] {
+  const map = new Map<string, CompSummaryRow>();
+  for (const rows of groups) {
+    for (const row of rows || []) {
+      const key = empKey(row.employeeName);
+      if (!key) continue;
+      const current = map.get(key) || {
+        employeeName: row.employeeName,
+        creditDays: 0,
+        creditHours: 0,
+        debitDays: 0,
+        debitHours: 0,
+        balanceDays: 0,
+        balanceHours: 0,
+      };
+      current.creditDays += Number(row.creditDays || 0);
+      current.creditHours += Number(row.creditHours || 0);
+      current.debitDays += Number(row.debitDays || 0);
+      current.debitHours += Number(row.debitHours || 0);
+      current.balanceDays += Number(row.balanceDays || 0);
+      current.balanceHours += Number(row.balanceHours || 0);
+      map.set(key, current);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.employeeName.localeCompare(b.employeeName, "hu", { sensitivity: "base" }));
+}
+
 function initials(name: string) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
   return (parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "-").slice(0, 2);
@@ -261,13 +342,16 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const [selected, setSelected] = useState<string>("");
 
-  const [month, setMonth] = useState<string>(yyyymmNow());
+  const [monthFrom, setMonthFrom] = useState<string>(yyyymmNow());
+  const [monthTo, setMonthTo] = useState<string>(yyyymmNow());
   const [items, setItems] = useState<TimeEvent[]>([]);
   const [summary, setSummary] = useState<SummaryRow[]>([]);
   const [compItems, setCompItems] = useState<CompEvent[]>([]);
   const [compSummary, setCompSummary] = useState<CompSummaryRow[]>([]);
   const [listErr, setListErr] = useState("");
   const [listBusy, setListBusy] = useState(false);
+  const listRequestIdRef = useRef(0);
+  const activityMonthsRequestIdRef = useRef(0);
 
   // Mobile UI state
   const [mobilePane, setMobilePane] = useState<"employees" | "details">("employees");
@@ -359,14 +443,16 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
   const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
   const [archiveYearOpen, setArchiveYearOpen] = useState(false);
-  const [archiveMonthOpen, setArchiveMonthOpen] = useState(false);
+  const [archiveFromMonthOpen, setArchiveFromMonthOpen] = useState(false);
+  const [archiveToMonthOpen, setArchiveToMonthOpen] = useState(false);
   const archiveYearRef = useRef<HTMLDivElement | null>(null);
-  const archiveMonthRef = useRef<HTMLDivElement | null>(null);
+  const archiveFromMonthRef = useRef<HTMLDivElement | null>(null);
+  const archiveToMonthRef = useRef<HTMLDivElement | null>(null);
 
-  const archiveYear = Number(month.slice(0, 4)) || new Date().getFullYear();
+  const archiveYear = Number(monthFrom.slice(0, 4)) || new Date().getFullYear();
   const archiveYears = useMemo(() => {
     const years = Array.from(
-      new Set(
+      new Set<number>(
         activityMonths
           .map((item) => Number(String(item.month || "").slice(0, 4)))
           .filter((year) => Number.isFinite(year) && year >= 2000 && year <= 2100)
@@ -375,12 +461,19 @@ export default function AllInVacations({ api }: { api?: string }) {
     return years.length ? years : [new Date().getFullYear()];
   }, [activityMonths]);
   const activityMonthsForYear = useMemo(
-    () => activityMonths.filter((item) => String(item.month || "").startsWith(`${archiveYear}-`)),
+    () => activityMonths
+      .filter((item) => String(item.month || "").startsWith(`${archiveYear}-`))
+      .slice()
+      .sort((a, b) => String(a.month || "").localeCompare(String(b.month || ""))),
     [activityMonths, archiveYear]
   );
-  const activeArchiveMonth = useMemo(
-    () => activityMonthsForYear.find((item) => item.month === month) || activityMonthsForYear[0] || null,
-    [activityMonthsForYear, month]
+  const activeArchiveFromMonth = useMemo(
+    () => activityMonthsForYear.find((item) => item.month === monthFrom) || activityMonthsForYear[0] || null,
+    [activityMonthsForYear, monthFrom]
+  );
+  const activeArchiveToMonth = useMemo(
+    () => activityMonthsForYear.find((item) => item.month === monthTo) || activityMonthsForYear[activityMonthsForYear.length - 1] || null,
+    [activityMonthsForYear, monthTo]
   );
   const pdfYearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -395,16 +488,31 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const changeArchiveYear = (nextYear: number) => {
     if (!Number.isFinite(nextYear)) return;
-    const firstActiveMonth = activityMonths.find((item) => String(item.month || "").startsWith(`${nextYear}-`));
-    if (firstActiveMonth) setMonth(firstActiveMonth.month);
+    const months = activityMonths
+      .filter((item) => String(item.month || "").startsWith(`${nextYear}-`))
+      .slice()
+      .sort((a, b) => String(a.month || "").localeCompare(String(b.month || "")));
+    if (months.length) {
+      setMonthFrom(months[0].month);
+      setMonthTo(months[months.length - 1].month);
+    }
     setArchiveYearOpen(false);
-    setArchiveMonthOpen(false);
+    setArchiveFromMonthOpen(false);
+    setArchiveToMonthOpen(false);
   };
 
-  const changeArchiveMonth = (nextMonth: string) => {
+  const changeArchiveMonthFrom = (nextMonth: string) => {
     if (!/^\d{4}-\d{2}$/.test(nextMonth)) return;
-    setMonth(nextMonth);
-    setArchiveMonthOpen(false);
+    setMonthFrom(nextMonth);
+    if (nextMonth > monthTo) setMonthTo(nextMonth);
+    setArchiveFromMonthOpen(false);
+  };
+
+  const changeArchiveMonthTo = (nextMonth: string) => {
+    if (!/^\d{4}-\d{2}$/.test(nextMonth)) return;
+    setMonthTo(nextMonth);
+    if (nextMonth < monthFrom) setMonthFrom(nextMonth);
+    setArchiveToMonthOpen(false);
   };
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -425,7 +533,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   // Custom dropdowns use only the AllIn palette, never the browser's blue native menu.
   useEffect(() => {
-    if (!compDirOpen && !compUnitOpen && !pdfEmpOpen && !pdfYearOpen && !archiveYearOpen && !archiveMonthOpen) return;
+    if (!compDirOpen && !compUnitOpen && !pdfEmpOpen && !pdfYearOpen && !archiveYearOpen && !archiveFromMonthOpen && !archiveToMonthOpen) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node | null;
       if (!t) return;
@@ -434,7 +542,8 @@ export default function AllInVacations({ api }: { api?: string }) {
       if (pdfEmpOpen && pdfEmpRef.current && !pdfEmpRef.current.contains(t)) setPdfEmpOpen(false);
       if (pdfYearOpen && pdfYearRef.current && !pdfYearRef.current.contains(t)) setPdfYearOpen(false);
       if (archiveYearOpen && archiveYearRef.current && !archiveYearRef.current.contains(t)) setArchiveYearOpen(false);
-      if (archiveMonthOpen && archiveMonthRef.current && !archiveMonthRef.current.contains(t)) setArchiveMonthOpen(false);
+      if (archiveFromMonthOpen && archiveFromMonthRef.current && !archiveFromMonthRef.current.contains(t)) setArchiveFromMonthOpen(false);
+      if (archiveToMonthOpen && archiveToMonthRef.current && !archiveToMonthRef.current.contains(t)) setArchiveToMonthOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -443,7 +552,8 @@ export default function AllInVacations({ api }: { api?: string }) {
         setPdfEmpOpen(false);
         setPdfYearOpen(false);
         setArchiveYearOpen(false);
-        setArchiveMonthOpen(false);
+        setArchiveFromMonthOpen(false);
+        setArchiveToMonthOpen(false);
       }
     };
     window.addEventListener("mousedown", onDown);
@@ -452,7 +562,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [compDirOpen, compUnitOpen, pdfEmpOpen, pdfYearOpen, archiveYearOpen, archiveMonthOpen]);
+  }, [compDirOpen, compUnitOpen, pdfEmpOpen, pdfYearOpen, archiveYearOpen, archiveFromMonthOpen, archiveToMonthOpen]);
 
   // Custom "Típus" dropdown: force ONLY our colors (no OS/browser blue highlight).
   useEffect(() => {
@@ -522,8 +632,12 @@ export default function AllInVacations({ api }: { api?: string }) {
     }
   };
 
-  const fetchActivityMonths = async (employeeName?: string) => {
+  const fetchActivityMonths = async (
+    employeeName?: string,
+    options: { resetRange?: boolean } = {}
+  ) => {
     const employee = String(employeeName ?? selected).trim();
+    const requestId = ++activityMonthsRequestIdRef.current;
     if (!employee) {
       setActivityMonths([]);
       return;
@@ -533,16 +647,47 @@ export default function AllInVacations({ api }: { api?: string }) {
       const response = await fetch(`${apiBase}/admin/vacations/activity-months?employee=${encodeURIComponent(employee)}`, { credentials: "include", cache: "no-store" });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      if (requestId !== activityMonthsRequestIdRef.current) return;
+
       const nextItems: VacationActivityMonth[] = Array.isArray(body?.items) ? body.items : [];
-      setActivityMonths(nextItems);
-      if (nextItems.length && !nextItems.some((item) => item.month === month)) {
-        setMonth(nextItems[0].month);
+      const orderedItems = nextItems
+        .filter((item) => /^\d{4}-\d{2}$/.test(String(item.month || "")))
+        .slice()
+        .sort((a, b) => String(a.month || "").localeCompare(String(b.month || "")));
+      setActivityMonths(orderedItems);
+
+      if (!orderedItems.length) return;
+
+      const latestYear = Number(String(orderedItems[orderedItems.length - 1].month).slice(0, 4));
+      const currentYear = Number(String(monthFrom || "").slice(0, 4));
+      const currentYearItems = orderedItems.filter((item) => String(item.month || "").startsWith(`${currentYear}-`));
+      const targetYearItems = options.resetRange || !currentYearItems.length
+        ? orderedItems.filter((item) => String(item.month || "").startsWith(`${latestYear}-`))
+        : currentYearItems;
+
+      if (!targetYearItems.length) return;
+
+      const validMonths = new Set(targetYearItems.map((item) => item.month));
+      const nextFrom = options.resetRange || !validMonths.has(monthFrom)
+        ? targetYearItems[0].month
+        : monthFrom;
+      const nextTo = options.resetRange || !validMonths.has(monthTo)
+        ? targetYearItems[targetYearItems.length - 1].month
+        : monthTo;
+
+      if (nextFrom <= nextTo) {
+        setMonthFrom(nextFrom);
+        setMonthTo(nextTo);
+      } else {
+        setMonthFrom(targetYearItems[0].month);
+        setMonthTo(targetYearItems[targetYearItems.length - 1].month);
       }
     } catch (error: any) {
+      if (requestId !== activityMonthsRequestIdRef.current) return;
       setListErr(String(error?.message || error || "A szabadságos hónapok nem tölthetők be."));
       setActivityMonths([]);
     } finally {
-      setActivityMonthsBusy(false);
+      if (requestId === activityMonthsRequestIdRef.current) setActivityMonthsBusy(false);
     }
   };
 
@@ -651,38 +796,77 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const fetchList = async (employeeName?: string) => {
     const emp = (employeeName ?? selected).trim();
+    const rangeMonths = monthValuesBetween(monthFrom, monthTo);
+    const requestId = ++listRequestIdRef.current;
     setListErr("");
     setListBusy(true);
 
     try {
-      // 1) Always load the MONTHLY summary for ALL employees (left list must be correct without clicking).
-      const sumUrl = `${apiBase}/admin/vacations?month=${encodeURIComponent(month)}`;
-      const rSum = await fetch(sumUrl, { credentials: "include" });
-      const jSum = await rSum.json().catch(() => null);
-      if (!rSum.ok) throw new Error(String(jSum?.error || jSum?.message || `HTTP ${rSum.status}`));
-      setSummary(Array.isArray(jSum?.summary) ? jSum.summary : []);
-      setCompSummary(Array.isArray(jSum?.compSummary) ? jSum.compSummary : []);
+      if (!rangeMonths.length) throw new Error("A kiválasztott hónaptartomány hibás.");
 
-      // 2) Then load the events list for the SELECTED employee (right panel).
+      const monthResults = await Promise.all(
+        rangeMonths.map(async (currentMonth) => {
+          const sumUrl = `${apiBase}/admin/vacations?month=${encodeURIComponent(currentMonth)}`;
+          const itemUrl = emp
+            ? `${apiBase}/admin/vacations?month=${encodeURIComponent(currentMonth)}&employee=${encodeURIComponent(emp)}`
+            : "";
+
+          const [summaryResponse, itemResponse] = await Promise.all([
+            fetch(sumUrl, { credentials: "include", cache: "no-store" }),
+            itemUrl ? fetch(itemUrl, { credentials: "include", cache: "no-store" }) : Promise.resolve(null),
+          ]);
+
+          const summaryBody = await summaryResponse.json().catch(() => null);
+          if (!summaryResponse.ok) {
+            throw new Error(String(summaryBody?.error || summaryBody?.message || `HTTP ${summaryResponse.status}`));
+          }
+
+          let itemBody: any = null;
+          if (itemResponse) {
+            itemBody = await itemResponse.json().catch(() => null);
+            if (!itemResponse.ok) {
+              throw new Error(String(itemBody?.error || itemBody?.message || `HTTP ${itemResponse.status}`));
+            }
+          }
+
+          return {
+            summary: Array.isArray(summaryBody?.summary) ? summaryBody.summary as SummaryRow[] : [],
+            compSummary: Array.isArray(summaryBody?.compSummary) ? summaryBody.compSummary as CompSummaryRow[] : [],
+            items: Array.isArray(itemBody?.items) ? itemBody.items as TimeEvent[] : [],
+            compItems: Array.isArray(itemBody?.compItems) ? itemBody.compItems as CompEvent[] : [],
+          };
+        })
+      );
+
+      if (requestId !== listRequestIdRef.current) return;
+
+      setSummary(mergeVacationSummaryRows(monthResults.map((result) => result.summary)));
+      setCompSummary(mergeVacationCompSummaryRows(monthResults.map((result) => result.compSummary)));
+
       if (emp) {
-        const itemsUrl = `${apiBase}/admin/vacations?month=${encodeURIComponent(month)}&employee=${encodeURIComponent(emp)}`;
-        const rItems = await fetch(itemsUrl, { credentials: "include" });
-        const jItems = await rItems.json().catch(() => null);
-        if (!rItems.ok) throw new Error(String(jItems?.error || jItems?.message || `HTTP ${rItems.status}`));
-        setItems(Array.isArray(jItems?.items) ? jItems.items : []);
-        setCompItems(Array.isArray(jItems?.compItems) ? jItems.compItems : []);
+        const mergedItems = monthResults
+          .flatMap((result) => result.items)
+          .filter((item, index, all) => all.findIndex((candidate) => String(candidate.id) === String(item.id)) === index)
+          .sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")));
+        const mergedCompItems = monthResults
+          .flatMap((result) => result.compItems)
+          .filter((item, index, all) => all.findIndex((candidate) => String(candidate.id) === String(item.id)) === index)
+          .sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")));
+        setItems(mergedItems);
+        setCompItems(mergedCompItems);
       } else {
         setItems([]);
         setCompItems([]);
       }
     } catch (e: any) {
+      if (requestId !== listRequestIdRef.current) return;
       setListErr(String(e?.message || e || "Hiba"));
       setItems([]);
       setSummary([]);
       setCompItems([]);
       setCompSummary([]);
     } finally {
-      setListBusy(false);
+      if (requestId === listRequestIdRef.current) setListBusy(false);
     }
   };
 
@@ -693,11 +877,19 @@ export default function AllInVacations({ api }: { api?: string }) {
   }, [apiBase]);
 
   useEffect(() => {
-    if (!month) return;
-    void fetchList();
-    if (selected) void fetchActivityMonths(selected);
+    if (!selected) {
+      setActivityMonths([]);
+      return;
+    }
+    void fetchActivityMonths(selected, { resetRange: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, selected, apiBase]);
+  }, [selected, apiBase]);
+
+  useEffect(() => {
+    if (!monthFrom || !monthTo) return;
+    void fetchList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthFrom, monthTo, selected, apiBase]);
 
   const selectedSummary = useMemo(() => {
     const s = summary.find((x) => empKey(x.employeeName) === empKey(selected));
@@ -719,7 +911,7 @@ export default function AllInVacations({ api }: { api?: string }) {
     );
   }, [compSummary, selected]);
 
-  const monthLabel = useMemo(() => formatMonthLabel(month), [month]);
+  const monthLabel = useMemo(() => formatMonthRangeLabel(monthFrom, monthTo), [monthFrom, monthTo]);
   const vacationPreview = useMemo(
     () => countVacationPeriod(day, dayTo || day, vacationSettings.workingDays),
     [day, dayTo, vacationSettings.workingDays]
@@ -1111,7 +1303,11 @@ export default function AllInVacations({ api }: { api?: string }) {
             <button
               type="button"
               className="flex h-11 min-w-[112px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
-              onClick={() => { setArchiveYearOpen((value) => !value); setArchiveMonthOpen(false); }}
+              onClick={() => {
+                setArchiveYearOpen((value) => !value);
+                setArchiveFromMonthOpen(false);
+                setArchiveToMonthOpen(false);
+              }}
               aria-haspopup="listbox"
               aria-expanded={archiveYearOpen}
             >
@@ -1134,27 +1330,65 @@ export default function AllInVacations({ api }: { api?: string }) {
             ) : null}
           </div>
 
-          <div ref={archiveMonthRef} className="relative grid gap-1">
-            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Szabadságos hónap</div>
+          <div ref={archiveFromMonthRef} className="relative grid gap-1">
+            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Mettől</div>
             <button
               type="button"
-              className="flex h-11 min-w-[178px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex h-11 min-w-[158px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
               disabled={!activityMonthsForYear.length}
-              onClick={() => { setArchiveMonthOpen((value) => !value); setArchiveYearOpen(false); }}
+              onClick={() => {
+                setArchiveFromMonthOpen((value) => !value);
+                setArchiveYearOpen(false);
+                setArchiveToMonthOpen(false);
+              }}
               aria-haspopup="listbox"
-              aria-expanded={archiveMonthOpen}
+              aria-expanded={archiveFromMonthOpen}
             >
-              <span>{activeArchiveMonth ? formatMonthLabel(activeArchiveMonth.month).replace(`${archiveYear}. `, "") : "Nincs rögzített hónap"}</span>
-              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveMonthOpen ? "rotate-180" : ""}`} />
+              <span>{activeArchiveFromMonth ? formatMonthLabel(activeArchiveFromMonth.month).replace(`${archiveYear}. `, "") : "Nincs hónap"}</span>
+              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveFromMonthOpen ? "rotate-180" : ""}`} />
             </button>
-            {archiveMonthOpen && activityMonthsForYear.length ? (
+            {archiveFromMonthOpen && activityMonthsForYear.length ? (
               <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
                 {activityMonthsForYear.map((item) => (
                   <button
                     key={item.month}
                     type="button"
-                    className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left text-sm transition ${item.month === month ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
-                    onClick={() => changeArchiveMonth(item.month)}
+                    className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left text-sm transition ${item.month === monthFrom ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                    onClick={() => changeArchiveMonthFrom(item.month)}
+                  >
+                    <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
+                    <span className="text-[10px] text-white/55">{item.vacationDays} nap</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div ref={archiveToMonthRef} className="relative grid gap-1">
+            <div className="text-[10px] uppercase tracking-[0.1em] text-white/48">Meddig</div>
+            <button
+              type="button"
+              className="flex h-11 min-w-[158px] items-center justify-between gap-3 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!activityMonthsForYear.length}
+              onClick={() => {
+                setArchiveToMonthOpen((value) => !value);
+                setArchiveYearOpen(false);
+                setArchiveFromMonthOpen(false);
+              }}
+              aria-haspopup="listbox"
+              aria-expanded={archiveToMonthOpen}
+            >
+              <span>{activeArchiveToMonth ? formatMonthLabel(activeArchiveToMonth.month).replace(`${archiveYear}. `, "") : "Nincs hónap"}</span>
+              <ChevronDown className={`h-4 w-4 text-white/55 transition ${archiveToMonthOpen ? "rotate-180" : ""}`} />
+            </button>
+            {archiveToMonthOpen && activityMonthsForYear.length ? (
+              <div className="absolute right-0 top-full z-[320] mt-2 min-w-full overflow-hidden rounded-xl border border-white/18 bg-[#354153] shadow-2xl" role="listbox">
+                {activityMonthsForYear.map((item) => (
+                  <button
+                    key={item.month}
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left text-sm transition ${item.month === monthTo ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"}`}
+                    onClick={() => changeArchiveMonthTo(item.month)}
                   >
                     <span>{formatMonthLabel(item.month).replace(`${archiveYear}. `, "")}</span>
                     <span className="text-[10px] text-white/55">{item.vacationDays} nap</span>
@@ -1185,12 +1419,15 @@ export default function AllInVacations({ api }: { api?: string }) {
             <button
               key={item.month}
               type="button"
-              className={`rounded-xl border px-3 py-2 text-left text-xs transition ${month === item.month ? "border-white/55 bg-white text-[#236d6b]" : "border-[#b7f1ed]/24 bg-[#2a8d8b]/28 text-[#e5fffd] hover:bg-[#2a8d8b]/45"}`}
-              onClick={() => setMonth(item.month)}
-              title={`${item.vacationDays} szabadságnap`}
+              className={`rounded-xl border px-3 py-2 text-left text-xs transition ${item.month >= monthFrom && item.month <= monthTo ? "border-white/55 bg-white text-[#236d6b]" : "border-[#b7f1ed]/24 bg-[#2a8d8b]/28 text-[#e5fffd] hover:bg-[#2a8d8b]/45"}`}
+              onClick={() => {
+                setMonthFrom(item.month);
+                setMonthTo(item.month);
+              }}
+              title={`${item.vacationDays} szabadságnap • kattintásra csak ezt a hónapot mutatja`}
             >
               <span className="block">{formatMonthLabel(item.month)}</span>
-              <span className={`mt-0.5 block text-[10px] ${month === item.month ? "text-[#236d6b]/70" : "text-white/52"}`}>{item.vacationDays} nap</span>
+              <span className={`mt-0.5 block text-[10px] ${item.month >= monthFrom && item.month <= monthTo ? "text-[#236d6b]/70" : "text-white/52"}`}>{item.vacationDays} nap</span>
             </button>
           )) : !activityMonthsBusy ? <span className="text-xs text-white/48">{archiveYear}-ban ennél a dolgozónál nincs rögzített szabadság.</span> : null}
         </div>
@@ -1629,7 +1866,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       <section id="vacation-history" className={panel}>
         <div className={panelHead}>
           <div>
-            <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Havi előzmények</div>
+            <div className="text-[10px] uppercase tracking-[0.17em] text-white/40">Időszaki előzmények</div>
             <div className="mt-1 flex items-center gap-2 text-base"><History className="h-4 w-4" /> Bejegyzések ({monthLabel})</div>
           </div>
           <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[11px] text-white/55">{items.length + compItems.length} esemény</span>
@@ -1835,7 +2072,7 @@ export default function AllInVacations({ api }: { api?: string }) {
             <div>
               <div className="text-[10px] uppercase tracking-[0.15em] text-white/40">Munkafolyamat</div>
               <div className="mt-1 text-base text-white">1. Dolgozó kiválasztása → 2. Művelet → 3. Mentés vagy visszakeresés</div>
-              <div className="mt-1 text-xs text-white/42">A hónap és a kiválasztott dolgozó minden kapcsolódó adatot együtt tart.</div>
+              <div className="mt-1 text-xs text-white/42">A kiválasztott időszak és dolgozó minden kapcsolódó adatot együtt tart.</div>
             </div>
             <div className="grid grid-cols-3 gap-2 sm:flex">
               <button
