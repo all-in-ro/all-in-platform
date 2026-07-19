@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ClipboardList,
   History,
+  FileText,
   LogOut,
   Package,
   Repeat,
@@ -45,7 +46,7 @@ const warehouseItems: MenuItem[] = [
   { label: "Raktár", hash: "#allinwarehouse", icon: Package },
   { label: "Leltár", hash: "#allininventory", icon: ClipboardList },
   { label: "Készletmozgások", hash: "#allinstockmoves", icon: Repeat },
-  { label: "Termékátadások", hash: "#allinproductmoves", icon: History },
+  { label: "Készletbizonylatok", hash: "#allinproductmoves", icon: FileText },
   { label: "Lefoglalt termékek", hash: "#allinreserved", icon: Bookmark },
 ];
 
