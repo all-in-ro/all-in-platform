@@ -16,7 +16,6 @@ import AllInSuppliers from "./pages/AllInSuppliers";
 import AllInReceptions from "./pages/AllInReceptions";
 import AllInBarcodes from "./pages/AllInBarcodes";
 
-import AllInAdmin from "./pages/AllInAdmin";
 import AllInProductMoves from "./pages/AllInProductMoves";
 import AllInVacations from "./pages/AllInVacations";
 import AllInUsers from "./pages/AllInUsers";
@@ -37,7 +36,6 @@ type ScreenName =
   | "suppliers"
   | "receptions"
   | "barcodes"
-  | "admin"
   | "productmoves"
   | "vacations"
   | "users"
@@ -79,7 +77,7 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "suppliers") return { name: "suppliers" };
   if (key === "receptions") return { name: "receptions" };
   if (key === "barcodes") return { name: "barcodes" };
-  if (key === "admin") return { name: "admin" };
+  if (key === "admin") return { name: "home" };
   if (key === "productmoves") return { name: "productmoves" };
   if (key === "vacations") return { name: "vacations" };
   if (key === "users") return { name: "users" };
@@ -99,14 +97,15 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "allinreceptions" || key === "allin-receptions" || key === "aif-receptions") return { name: "receptions" };
   if (key === "allinbarcodes" || key === "allin-barcodes" || key === "aif-barcodes" || key === "barcode" || key === "labels") return { name: "barcodes" };
 
-  if (key === "allinadmin") return { name: "admin" };
+  if (key === "allinadmin") return { name: "home" };
   if (key === "allinproductmoves") return { name: "productmoves" };
   if (key === "allinvacations") return { name: "vacations" };
   if (key === "allinusers") return { name: "users" };
   if (key === "allincars") return { name: "cars" };
   if (key === "allincarexpenses" || key === "allin-carexpenses" || key === "allin-car-expenses") return { name: "carexpenses" };
+  if (key === "admincars") return { name: "cars" };
   if (key === "admincarexpenses") return { name: "carexpenses" };
-  if (key === "adminextras") return { name: "admin" };
+  if (key === "adminextras") return { name: "home" };
 
   return { name: "login" };
 }
@@ -233,7 +232,6 @@ export default function App() {
       {screen.name === "receptions" && <AllInReceptions {...(commonProps as any)} />}
       {screen.name === "barcodes" && <AllInBarcodes {...(commonProps as any)} />}
 
-      {screen.name === "admin" && <AllInAdmin {...(commonProps as any)} />}
       {screen.name === "productmoves" && <AllInProductMoves {...(commonProps as any)} />}
       {screen.name === "vacations" && <AllInVacations {...(commonProps as any)} />}
       {screen.name === "users" && <AllInUsers {...(commonProps as any)} />}
