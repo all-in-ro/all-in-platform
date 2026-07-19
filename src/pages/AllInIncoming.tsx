@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Barcode,
   Building2,
   CheckCircle,
+  Camera,
   Edit3,
   FileSpreadsheet,
   FileText,
   Download,
   Home,
+  Keyboard,
   MapPin,
   Plus,
   RefreshCw,
@@ -78,6 +81,126 @@ type InvoiceDifferencePrompt = {
   extremeDifference: boolean;
   selectedRowsCount: number;
 };
+
+
+type IncomingInventoryLookupItem = {
+  variant_id?: string | null;
+  internal_sku?: string | null;
+  barcode?: string | null;
+  supplier_product_code?: string | null;
+  supplierProductCode?: string | null;
+  product_code?: string | null;
+  productCode?: string | null;
+  model_code?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
+  customs_tariff_code?: string | null;
+  customsTariffCode?: string | null;
+  hs_code?: string | null;
+  title_ro?: string | null;
+  description_ro?: string | null;
+  image_url?: string | null;
+  material?: string | null;
+  product_type?: string | null;
+  brand_code?: string | null;
+  brand_name?: string | null;
+  category_code?: string | null;
+  category_name_ro?: string | null;
+  category_name_hu?: string | null;
+  subcategory_code?: string | null;
+  subcategory_name_ro?: string | null;
+  subcategory_name_hu?: string | null;
+  gender?: string | null;
+  color_name?: string | null;
+  color_code?: string | null;
+  size?: string | null;
+  buy_price?: string | number | null;
+  sell_price?: string | number | null;
+  variant_status?: string | null;
+  model_status?: string | null;
+};
+
+type IncomingDetectedBarcode = { rawValue?: string; format?: string };
+type IncomingBarcodeDetectorInstance = { detect(source: CanvasImageSource): Promise<IncomingDetectedBarcode[]> };
+type IncomingBarcodeDetectorConstructor = {
+  new (options?: { formats?: string[] }): IncomingBarcodeDetectorInstance;
+  getSupportedFormats?: () => Promise<string[]>;
+};
+type IncomingZxingControls = { stop?: () => void };
+type IncomingZxingResult = { getText?: () => string; text?: string; rawValue?: string };
+type IncomingZxingReader = {
+  decodeFromConstraints?: (
+    constraints: MediaStreamConstraints,
+    previewElem: HTMLVideoElement,
+    callbackFn: (result?: IncomingZxingResult | null, error?: unknown, controls?: IncomingZxingControls) => void
+  ) => Promise<IncomingZxingControls> | IncomingZxingControls;
+};
+type IncomingZxingBrowserGlobal = {
+  BrowserMultiFormatReader?: new () => IncomingZxingReader;
+  BrowserMultiFormatOneDReader?: new () => IncomingZxingReader;
+};
+
+const AIF_INCOMING_BARCODE_FORMATS = [
+  "code_128", "ean_13", "ean_8", "upc_a", "upc_e", "code_39", "code_93", "itf", "codabar", "qr_code", "data_matrix",
+];
+const AIF_INCOMING_BARCODE_VIDEO_CONSTRAINTS: MediaStreamConstraints = {
+  video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+  audio: false,
+};
+const AIF_INCOMING_ZXING_CDN = "https://unpkg.com/@zxing/browser@0.1.5";
+let aifIncomingZxingPromise: Promise<IncomingZxingBrowserGlobal | null> | null = null;
+
+function cleanIncomingBarcode(value: unknown) {
+  return String(value ?? "").replace(/[\r\n\t]+/g, "").trim();
+}
+
+function incomingBarcodeLookupKey(value: unknown) {
+  return cleanIncomingBarcode(value).toLowerCase();
+}
+
+function incomingZxingResultText(result: unknown) {
+  const row = result as IncomingZxingResult | null | undefined;
+  if (!row) return "";
+  if (typeof row.getText === "function") return cleanIncomingBarcode(row.getText());
+  return cleanIncomingBarcode(row.text || row.rawValue || "");
+}
+
+function loadIncomingZxingBrowser(): Promise<IncomingZxingBrowserGlobal | null> {
+  if (typeof window === "undefined" || typeof document === "undefined") return Promise.resolve(null);
+  const current = (window as any).ZXingBrowser as IncomingZxingBrowserGlobal | undefined;
+  if (current?.BrowserMultiFormatReader || current?.BrowserMultiFormatOneDReader) return Promise.resolve(current);
+  if (aifIncomingZxingPromise) return aifIncomingZxingPromise;
+
+  aifIncomingZxingPromise = new Promise((resolve) => {
+    const finish = () => resolve(((window as any).ZXingBrowser || null) as IncomingZxingBrowserGlobal | null);
+    const existing = document.querySelector<HTMLScriptElement>('script[data-aif-incoming-zxing="true"]');
+    if (existing) {
+      if (existing.dataset.loaded === "true") return finish();
+      existing.addEventListener("load", finish, { once: true });
+      existing.addEventListener("error", () => resolve(null), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = AIF_INCOMING_ZXING_CDN;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.dataset.aifIncomingZxing = "true";
+    script.onload = () => { script.dataset.loaded = "true"; finish(); };
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
+  return aifIncomingZxingPromise;
+}
+
+async function apiIncomingInventoryLookupItems() {
+  const response = await fetch(`/api/aif/inventory?limit=5000&_=${Date.now()}`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+  return (Array.isArray(payload?.items) ? payload.items : []) as IncomingInventoryLookupItem[];
+}
 
 const warehouseShowAllAfterIncomingStorageKey = "allinfashion:warehouse:showAllAfterIncoming:v1";
 const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-incoming";
@@ -1436,6 +1559,17 @@ export default function AllInIncoming(_props: Props) {
   const [manualCustomsTariffCode, setManualCustomsTariffCode] = useState("");
   const [manualTitle, setManualTitle] = useState("");
   const [manualBarcode, setManualBarcode] = useState("");
+  const [manualBarcodeScannerOpen, setManualBarcodeScannerOpen] = useState(false);
+  const [manualBarcodeScannerStatus, setManualBarcodeScannerStatus] = useState("");
+  const [manualBarcodeScannerValue, setManualBarcodeScannerValue] = useState("");
+  const [manualBarcodeLookupBusy, setManualBarcodeLookupBusy] = useState(false);
+  const manualBarcodeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const manualBarcodeStreamRef = useRef<MediaStream | null>(null);
+  const manualBarcodeZxingControlsRef = useRef<IncomingZxingControls | null>(null);
+  const manualBarcodeScanRafRef = useRef<number | null>(null);
+  const manualBarcodeHandlingRef = useRef(false);
+  const manualBarcodeHardwareInputRef = useRef<HTMLInputElement | null>(null);
+  const manualBarcodeInventoryCacheRef = useRef<{ loadedAt: number; items: IncomingInventoryLookupItem[] }>({ loadedAt: 0, items: [] });
   const [manualImageUrl, setManualImageUrl] = useState("");
   const [manualDescription, setManualDescription] = useState("");
   const [manualMaterial, setManualMaterial] = useState("");
@@ -1469,7 +1603,7 @@ export default function AllInIncoming(_props: Props) {
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
 
   useEffect(() => {
-    const anyModalOpen = Boolean(invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen);
+    const anyModalOpen = Boolean(invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen || manualBarcodeScannerOpen);
     if (!anyModalOpen) return;
 
     const previousOverflow = document.body.style.overflow;
@@ -1480,7 +1614,8 @@ export default function AllInIncoming(_props: Props) {
       event.preventDefault();
       event.stopPropagation();
 
-      if (invoiceDifferencePrompt) setInvoiceDifferencePrompt(null);
+      if (manualBarcodeScannerOpen) closeManualBarcodeScanner();
+      else if (invoiceDifferencePrompt) setInvoiceDifferencePrompt(null);
       else if (salesTvaModalOpen) setSalesTvaModalOpen(false);
       else if (locationModalOpen) setLocationModalOpen(false);
       else if (currencyModalOpen) setCurrencyModalOpen(false);
@@ -1491,7 +1626,7 @@ export default function AllInIncoming(_props: Props) {
       document.removeEventListener("keydown", closeTopModal, true);
       document.body.style.overflow = previousOverflow;
     };
-  }, [invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen]);
+  }, [invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen, manualBarcodeScannerOpen]);
 
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === supplierId) || null,
@@ -2350,6 +2485,266 @@ export default function AllInIncoming(_props: Props) {
     setApprovedRows({});
     setMessage("A kijelölés törölve. A beolvasott adatok továbbra is csak előnézetben vannak.");
   }
+
+  function stopManualBarcodeScannerCamera() {
+    if (manualBarcodeScanRafRef.current !== null) {
+      window.cancelAnimationFrame(manualBarcodeScanRafRef.current);
+      manualBarcodeScanRafRef.current = null;
+    }
+    try { manualBarcodeZxingControlsRef.current?.stop?.(); } catch {}
+    manualBarcodeZxingControlsRef.current = null;
+    if (manualBarcodeStreamRef.current) {
+      manualBarcodeStreamRef.current.getTracks().forEach((track) => track.stop());
+      manualBarcodeStreamRef.current = null;
+    }
+    const video = manualBarcodeVideoRef.current;
+    if (video?.srcObject && typeof (video.srcObject as MediaStream).getTracks === "function") {
+      (video.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
+      video.srcObject = null;
+    }
+  }
+
+  function closeManualBarcodeScanner() {
+    stopManualBarcodeScannerCamera();
+    manualBarcodeHandlingRef.current = false;
+    setManualBarcodeScannerOpen(false);
+    setManualBarcodeScannerStatus("");
+    setManualBarcodeScannerValue("");
+  }
+
+  function openManualBarcodeScanner() {
+    stopManualBarcodeScannerCamera();
+    manualBarcodeHandlingRef.current = false;
+    setManualBarcodeScannerValue(cleanIncomingBarcode(manualBarcode));
+    setManualBarcodeScannerStatus("Kamera indítása. USB-s olvasónál csak szkenneld be a kódot, majd az Enter azonosítja a terméket.");
+    setManualBarcodeScannerOpen(true);
+    window.setTimeout(() => {
+      const isTouch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+      if (!isTouch) manualBarcodeHardwareInputRef.current?.focus();
+    }, 120);
+  }
+
+  function manualLookupBrandValue(item: IncomingInventoryLookupItem) {
+    const rawValues = [item.brand_code, item.brand_name].map((value) => String(value || "").trim()).filter(Boolean);
+    const found = activeBrands.find((brand) => rawValues.some((value) => sameLoose(value, brand.code) || sameLoose(value, brand.id) || sameLoose(value, brand.name)));
+    return String(found?.code || found?.id || item.brand_code || "").trim();
+  }
+
+  function manualLookupCategoryValues(item: IncomingInventoryLookupItem) {
+    const sub = findCategoryByCandidates(
+      [item.subcategory_code, item.subcategory_name_ro, item.subcategory_name_hu, item.product_type],
+      subCategories,
+    );
+    let main = findCategoryByCandidates(
+      [item.category_code, item.category_name_ro, item.category_name_hu],
+      mainCategories.length ? mainCategories : activeCategories.filter((row) => !isSubcategoryOption(row)),
+    );
+    if (!main && sub) {
+      const parentId = categoryParentId(sub);
+      if (parentId) main = activeCategories.find((row) => String(row.id) === parentId) || null;
+    }
+    return {
+      mainValue: String(main?.code || main?.id || item.category_code || "").trim(),
+      subValue: String(sub?.code || sub?.id || item.subcategory_code || "").trim(),
+      productType: firstNonEmptyText(item.product_type, sub ? categoryLabel(sub) : ""),
+    };
+  }
+
+  function applyManualLookupItem(item: IncomingInventoryLookupItem, scannedCode: string) {
+    const categories = manualLookupCategoryValues(item);
+    setManualProductCode(firstNonEmptyText(item.supplier_product_code, item.supplierProductCode, item.product_code, item.productCode, item.model_code));
+    setManualBarcode(firstNonEmptyText(item.barcode, scannedCode));
+    setManualSnCod(firstNonEmptyText(item.sn_cod, item.snCod));
+    setManualCustomsTariffCode(firstNonEmptyText(item.customs_tariff_code, item.customsTariffCode, item.hs_code));
+    setManualTitle(firstNonEmptyText(item.title_ro));
+    setManualImageUrl(firstNonEmptyText(item.image_url));
+    setManualDescription(firstNonEmptyText(item.description_ro));
+    setManualMaterial(firstNonEmptyText(item.material));
+    setManualProductType(categories.productType);
+    setManualBrandCode(manualLookupBrandValue(item));
+    setManualCategoryCode(categories.mainValue);
+    setManualSubCategoryCode(categories.subValue);
+    setManualGender(firstNonEmptyText(item.gender));
+    setManualColorName(firstNonEmptyText(item.color_name));
+    setManualColorCode(firstNonEmptyText(item.color_code));
+    setManualSize(normalizeAifSizeValue(item.size));
+    setManualQty((current) => current.trim() || "1");
+    setManualBuyPrice(item.buy_price === null || item.buy_price === undefined ? "" : String(item.buy_price));
+    setManualSellPrice(item.sell_price === null || item.sell_price === undefined ? "" : String(item.sell_price));
+  }
+
+  async function identifyManualBarcode(rawValue: unknown, options: { closeOnFound?: boolean } = {}) {
+    const code = cleanIncomingBarcode(rawValue);
+    if (!code) {
+      setManualBarcodeScannerStatus("Nincs beolvasott kód. Tartsd a címkét a kamera elé, vagy szkenneld be az USB-s olvasóval.");
+      setMessage("A termék azonosításához szükség van vonalkódra.");
+      return false;
+    }
+    if (manualBarcodeLookupBusy) return false;
+
+    setManualBarcode(code);
+    setManualBarcodeScannerValue(code);
+    setManualBarcodeLookupBusy(true);
+    setManualBarcodeScannerStatus(`Termék keresése: ${code}`);
+    try {
+      const cache = manualBarcodeInventoryCacheRef.current;
+      let inventoryItems = cache.items;
+      if (!inventoryItems.length || Date.now() - cache.loadedAt > 30000) {
+        inventoryItems = await apiIncomingInventoryLookupItems();
+        manualBarcodeInventoryCacheRef.current = { loadedAt: Date.now(), items: inventoryItems };
+      }
+
+      const activeItems = inventoryItems.filter((item) =>
+        String(item.variant_status || "active").toLowerCase() !== "archived" &&
+        String(item.model_status || "active").toLowerCase() !== "archived"
+      );
+      const key = incomingBarcodeLookupKey(code);
+      const barcodeMatches = activeItems.filter((item) => incomingBarcodeLookupKey(item.barcode) === key);
+      const fallbackMatches = activeItems.filter((item) => [
+        item.internal_sku,
+        item.sn_cod,
+        item.snCod,
+        item.supplier_product_code,
+        item.supplierProductCode,
+        item.product_code,
+        item.productCode,
+        item.model_code,
+      ].some((value) => incomingBarcodeLookupKey(value) === key));
+      const matches = barcodeMatches.length ? barcodeMatches : fallbackMatches;
+
+      if (!matches.length) {
+        setManualBarcodeScannerStatus(`A ${code} kód nincs még az AllIn terméktörzsében. A vonalkódot beírtam, a többi adat kézzel tölthető.`);
+        setMessage(`A ${code} vonalkódhoz nem találtam meglévő terméket. A kód bekerült a manuális sorba, új termékként folytathatod.`);
+        return false;
+      }
+
+      const item = matches[0];
+      applyManualLookupItem(item, code);
+      const title = firstNonEmptyText(item.title_ro, item.supplier_product_code, item.model_code, code);
+      setManualBarcodeScannerStatus(`Azonosítva: ${title}`);
+      setMessage(
+        matches.length > 1
+          ? `A vonalkód több sorhoz is illeszkedett; a pontos vonalkód-egyezés első variánsát töltöttem be: ${title}. Ellenőrizd a méretet és a színt.`
+          : `Termék azonosítva és a manuális mezők kitöltve: ${title}. A darabszám 1, a vételárat pedig ellenőrizd az aktuális számla alapján.`
+      );
+      if (options.closeOnFound !== false) closeManualBarcodeScanner();
+      return true;
+    } catch (error: any) {
+      setManualBarcodeScannerStatus(error?.message || "A termékazonosítás nem sikerült.");
+      setMessage(error?.message || "A vonalkód alapján nem sikerült betölteni a terméket.");
+      return false;
+    } finally {
+      manualBarcodeHandlingRef.current = false;
+      setManualBarcodeLookupBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!manualBarcodeScannerOpen) return;
+    let cancelled = false;
+
+    async function attachPreviewOnly(status: string) {
+      const stream = await navigator.mediaDevices.getUserMedia(AIF_INCOMING_BARCODE_VIDEO_CONSTRAINTS);
+      if (cancelled) return stream.getTracks().forEach((track) => track.stop());
+      manualBarcodeStreamRef.current = stream;
+      const video = manualBarcodeVideoRef.current;
+      if (!video) return stream.getTracks().forEach((track) => track.stop());
+      video.srcObject = stream;
+      await video.play();
+      setManualBarcodeScannerStatus(status);
+    }
+
+    async function useDetectedCode(value: unknown) {
+      const code = cleanIncomingBarcode(value);
+      if (!code || manualBarcodeHandlingRef.current || cancelled) return;
+      manualBarcodeHandlingRef.current = true;
+      stopManualBarcodeScannerCamera();
+      await identifyManualBarcode(code, { closeOnFound: true });
+    }
+
+    async function startZxing() {
+      setManualBarcodeScannerStatus("ZXing vonalkódolvasó betöltése...");
+      const zxing = await loadIncomingZxingBrowser();
+      if (cancelled) return;
+      const Reader = zxing?.BrowserMultiFormatReader || zxing?.BrowserMultiFormatOneDReader;
+      const video = manualBarcodeVideoRef.current;
+      if (!Reader || !video) {
+        await attachPreviewOnly("A kamera aktív, de az automatikus olvasó nem érhető el. USB-s olvasóval vagy kézi beírással továbbra is azonosítható.");
+        return;
+      }
+      const reader = new Reader();
+      if (typeof reader.decodeFromConstraints !== "function") {
+        await attachPreviewOnly("A kamera aktív, de ez a böngésző nem ad folyamatos dekódolást. Használd az USB-s olvasót vagy a kézi mezőt.");
+        return;
+      }
+      const controls = await reader.decodeFromConstraints(
+        AIF_INCOMING_BARCODE_VIDEO_CONSTRAINTS,
+        video,
+        async (result) => {
+          const code = incomingZxingResultText(result);
+          if (code) await useDetectedCode(code);
+        },
+      );
+      if (cancelled) return controls?.stop?.();
+      manualBarcodeZxingControlsRef.current = controls || null;
+      setManualBarcodeScannerStatus("Kamera aktív. Tartsd a címke vonalkódját a keretbe. USB-s olvasó is használható.");
+    }
+
+    async function startCamera() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setManualBarcodeScannerStatus("Ezen az eszközön nincs webes kamera-hozzáférés. Az USB-s vonalkódolvasó vagy a kézi mező használható.");
+          return;
+        }
+        const Detector = (window as any).BarcodeDetector as IncomingBarcodeDetectorConstructor | undefined;
+        if (!Detector) return startZxing();
+        const stream = await navigator.mediaDevices.getUserMedia(AIF_INCOMING_BARCODE_VIDEO_CONSTRAINTS);
+        if (cancelled) return stream.getTracks().forEach((track) => track.stop());
+        manualBarcodeStreamRef.current = stream;
+        const video = manualBarcodeVideoRef.current;
+        if (!video) return stream.getTracks().forEach((track) => track.stop());
+        video.srcObject = stream;
+        await video.play();
+        const supported = await Detector.getSupportedFormats?.().catch(() => []);
+        const formats = Array.isArray(supported) && supported.length
+          ? AIF_INCOMING_BARCODE_FORMATS.filter((format) => supported.includes(format))
+          : AIF_INCOMING_BARCODE_FORMATS;
+        const detector = new Detector(formats.length ? { formats } : undefined);
+        setManualBarcodeScannerStatus("Kamera aktív. Tartsd a címke vonalkódját a keretbe. USB-s olvasó is használható.");
+        const scanFrame = async () => {
+          if (cancelled || manualBarcodeHandlingRef.current) return;
+          const currentVideo = manualBarcodeVideoRef.current;
+          if (currentVideo && currentVideo.readyState >= 2) {
+            try {
+              const detected = await detector.detect(currentVideo);
+              const first = detected.find((row) => cleanIncomingBarcode(row.rawValue));
+              if (first?.rawValue) return useDetectedCode(first.rawValue);
+            } catch {}
+          }
+          if (!cancelled && !manualBarcodeHandlingRef.current) manualBarcodeScanRafRef.current = window.requestAnimationFrame(scanFrame);
+        };
+        manualBarcodeScanRafRef.current = window.requestAnimationFrame(scanFrame);
+      } catch (error: any) {
+        const name = String(error?.name || "");
+        if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+          setManualBarcodeScannerStatus("A kamera nincs engedélyezve. Engedélyezd a böngészőben, vagy használd az USB-s vonalkódolvasót.");
+        } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+          setManualBarcodeScannerStatus("Nem található kamera. Az USB-s vonalkódolvasó és a kézi beírás továbbra is működik.");
+        } else {
+          setManualBarcodeScannerStatus(error?.message || "A kamera nem indítható. Használd az USB-s vonalkódolvasót vagy a kézi mezőt.");
+        }
+      }
+    }
+
+    void startCamera();
+    return () => {
+      cancelled = true;
+      stopManualBarcodeScannerCamera();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualBarcodeScannerOpen]);
+
+  useEffect(() => () => stopManualBarcodeScannerCamera(), []);
 
   function resetManualRowForm() {
     setManualProductCode("");
@@ -3983,6 +4378,76 @@ export default function AllInIncoming(_props: Props) {
       <datalist id="aif-size-options">
         {sizeDatalistOptions.map((size) => <option key={size} value={size} />)}
       </datalist>
+      {manualBarcodeScannerOpen && (
+        <div
+          className="fixed inset-0 z-[150] flex items-start justify-center overflow-y-auto bg-slate-950/82 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-4 sm:py-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="manual-barcode-scanner-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !manualBarcodeLookupBusy) closeManualBarcodeScanner();
+          }}
+        >
+          <div className="my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/22 bg-[#4b5566] text-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-[#303b4e] px-4 py-3">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#67d4d1]/45 bg-[#208d8b] text-white"><Barcode size={20} /></span>
+                <div>
+                  <p id="manual-barcode-scanner-title" className="text-lg">Termék azonosítása vonalkóddal</p>
+                  <p className="mt-1 text-sm text-white/62">Telefonon kamera, számítógépen USB-s vonalkódolvasó vagy kézi beírás.</p>
+                </div>
+              </div>
+              <button className={neutralBtn} onClick={closeManualBarcodeScanner} disabled={manualBarcodeLookupBusy} type="button"><X size={14} /> Bezárás</button>
+            </div>
+
+            <div className="grid gap-3 p-4 lg:grid-cols-[1.15fr_0.85fr]">
+              <div className="relative min-h-[250px] overflow-hidden rounded-2xl border border-white/16 bg-[#202838]">
+                <video ref={manualBarcodeVideoRef} className="h-[300px] w-full object-cover" muted playsInline />
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <div className="h-28 w-[82%] rounded-2xl border-2 border-[#7bd7d4]/90 shadow-[0_0_0_999px_rgba(2,6,23,0.26)]" />
+                </div>
+                <div className="absolute bottom-2 left-2 right-2 rounded-xl border border-white/12 bg-slate-950/72 px-3 py-2 text-xs leading-5 text-white/82">
+                  <Camera size={14} className="mr-1.5 inline" /> {manualBarcodeScannerStatus || "Kamera előkészítése..."}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-white/14 bg-[#354153] p-3">
+                  <div className="flex items-center gap-2 text-sm text-white"><Keyboard size={16} /> USB-s olvasó / kézi kód</div>
+                  <p className="mt-1 text-xs leading-5 text-white/56">Az olvasó ide írja a kódot. A legtöbb eszköz Entert is küld, ekkor az azonosítás azonnal elindul.</p>
+                  <input
+                    ref={manualBarcodeHardwareInputRef}
+                    className={`${input} mt-3 w-full font-mono tracking-wide`}
+                    value={manualBarcodeScannerValue}
+                    onChange={(event) => setManualBarcodeScannerValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") return;
+                      event.preventDefault();
+                      void identifyManualBarcode(event.currentTarget.value, { closeOnFound: true });
+                    }}
+                    placeholder="EAN / barcode"
+                    inputMode="text"
+                    autoComplete="off"
+                  />
+                  <button
+                    className={`${primaryBtn} mt-3 w-full`}
+                    onClick={() => void identifyManualBarcode(manualBarcodeScannerValue, { closeOnFound: true })}
+                    disabled={manualBarcodeLookupBusy || !cleanIncomingBarcode(manualBarcodeScannerValue)}
+                    type="button"
+                  >
+                    {manualBarcodeLookupBusy ? <RefreshCw size={14} className="animate-spin" /> : <Barcode size={14} />}
+                    {manualBarcodeLookupBusy ? "Azonosítás..." : "Termék azonosítása"}
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-[#67d4d1]/24 bg-[#208d8b]/10 px-3 py-2.5 text-xs leading-5 text-white/76">
+                  Találat esetén a termékkód, név, márka, kategória, szín, méret, kép, leírás, összetétel és az ármezők automatikusan kitöltődnek. A darabszám alapból 1. A vételárat mindig ellenőrizd az aktuális számlán.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {invoiceDifferencePrompt && (
         <div
           className={modalBackdrop}
@@ -4572,7 +5037,29 @@ export default function AllInIncoming(_props: Props) {
                   <input className={`${input} w-full`} value={manualProductCode} onChange={(e) => setManualProductCode(e.target.value)} placeholder="pl. UA-123" />
                 </label>
                 <label className={label}>Vonalkód / bárkód
-                  <input className={`${input} w-full`} value={manualBarcode} onChange={(e) => setManualBarcode(e.target.value)} placeholder="EAN / barcode" />
+                  <div className="relative">
+                    <input
+                      className={`${input} w-full pr-12 font-mono`}
+                      value={manualBarcode}
+                      onChange={(e) => setManualBarcode(e.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        void identifyManualBarcode(event.currentTarget.value, { closeOnFound: false });
+                      }}
+                      placeholder="EAN / barcode"
+                      autoComplete="off"
+                    />
+                    <button
+                      className="absolute right-1.5 top-1 inline-flex h-7 w-9 items-center justify-center rounded-lg border border-[#67d4d1]/45 bg-[#208d8b] text-white shadow-sm transition hover:bg-[#249b99] focus:outline-none focus:ring-2 focus:ring-[#67d4d1]/35"
+                      onClick={openManualBarcodeScanner}
+                      type="button"
+                      title="Kamera vagy USB-s vonalkódolvasó megnyitása"
+                      aria-label="Vonalkód beolvasása"
+                    >
+                      <Barcode size={15} />
+                    </button>
+                  </div>
                 </label>
                 <label className={label}>S/N/COD
                   <input className={`${input} w-full`} value={manualSnCod} onChange={(e) => setManualSnCod(e.target.value)} placeholder="belső azonosító" />
