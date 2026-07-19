@@ -300,9 +300,9 @@ function BoardView({ rows }: { rows: any[] }) {
             {c.make_model || "—"}
           </div>
         </div>
-        <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white/[0.07]">
+        <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-white shadow-sm">
           {c.photo_url ? (
-            <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
+            <img src={c.photo_url} alt={`${c.plate || "Jármű"} kép`} className="h-full w-full object-contain p-1.5" />
           ) : (
             <div className="grid h-full w-full place-items-center text-white/35">
               <PlusCircle className="w-5 h-5" />
@@ -391,9 +391,9 @@ function ListView({
             <div key={key} className="px-4 py-2.5 transition hover:bg-white/[0.035]">
               <div className="grid grid-cols-[1.2fr,1fr,1fr,1.6fr,180px] items-center gap-2">
                 <div className="flex items-center gap-3 min-w-0">
-	                  <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white/[0.07]">
+	                  <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-white shadow-sm">
 	                    {c.photo_url ? (
-	                      <img src={c.photo_url} className="max-w-full max-h-full object-contain" />
+	                      <img src={c.photo_url} alt={`${c.plate || "Jármű"} kép`} className="h-full w-full object-contain p-1.5" />
                     ) : (
                       <div className="grid h-full w-full place-items-center text-white/35">
                         <PlusCircle className="w-5 h-5" />
@@ -751,7 +751,21 @@ function AllInCarsDesktop() {
 
   return (
     <div className="min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-4 sm:py-5" style={cssVars}>
-      <style>{`input[type="date"]{color-scheme:dark}.allin-select{color-scheme:dark}.allin-select option{background:#354153;color:#fff}`}</style>
+      <style>{`
+        input[type="date"].allin-date {
+          color-scheme: dark !important;
+          background-color: #3f4959 !important;
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+        input[type="date"].allin-date::-webkit-calendar-picker-indicator {
+          filter: invert(1) brightness(1.8);
+          opacity: 0.82;
+          cursor: pointer;
+        }
+        .allin-select { color-scheme: dark; }
+        .allin-select option { background: #354153; color: #fff; }
+      `}</style>
       <div className="mx-auto max-w-[1500px] space-y-4">
       {/* Header */}
       <header className="sticky top-2 z-40 rounded-2xl border border-white/20 bg-[#303a4c]/96 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28)] backdrop-blur">
@@ -779,7 +793,7 @@ function AllInCarsDesktop() {
 
             <Button
               type="button"
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99]"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 !bg-[#2a8d8b] px-3 text-xs !text-white transition hover:!bg-[#319c99]"
               onClick={() => {
                 setShowForm((s) => !s);
                 if (!showForm) {
@@ -843,7 +857,7 @@ function AllInCarsDesktop() {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/36" />
                 <Input
-                  className="h-10 min-w-[280px] rounded-xl border border-white/18 bg-[#3f4959] pl-9 text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                  className="h-10 min-w-[280px] rounded-xl border border-white/18 !bg-[#3f4959] pl-9 !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                   placeholder="Keresés (rendszám, típus, VIN)"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
@@ -960,9 +974,9 @@ function AllInCarsDesktop() {
                   </div>
                   <Field label="Fotó">
                     <div className="flex items-center gap-3">
-                      <div className="h-20 w-28 shrink-0 overflow-hidden rounded-xl border border-white/14 bg-white/[0.07]">
+                      <div className="flex h-20 w-28 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-white shadow-sm">
                         {form.photo_url ? (
-                          <img src={form.photo_url} className="w-full h-full object-cover" />
+                          <img src={form.photo_url} alt={`${form.plate || "Jármű"} előnézet`} className="h-full w-full object-contain p-1.5" />
                         ) : (
                           <div className="grid h-full w-full place-items-center text-white/35">
                             <PlusCircle className="w-5 h-5" />
@@ -1018,7 +1032,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Rendszám">
                     <Input
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="ABC-123"
                       value={form.plate || ""}
                       onChange={(e) =>
@@ -1028,7 +1042,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Márka / Típus">
                     <Input
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="Volkswagen Passat"
                       value={form.make_model || ""}
                       onChange={(e) => onChange("make_model", e.target.value)}
@@ -1040,7 +1054,7 @@ function AllInCarsDesktop() {
                     <Field label="ITP dátum">
                       <Input
                         type="date"
-                        className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                        className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                         value={form.itp_date || ""}
                         onChange={(e) =>
                           onChange("itp_date", justDate(e.target.value))
@@ -1049,7 +1063,7 @@ function AllInCarsDesktop() {
                     </Field>
                     <Field label="Érvényesség">
                       <select
-                        className="allin-select h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                        className="allin-select h-9 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                         value={form.itp_years || 1}
                         onChange={(e) => {
                           const y = Number(e.target.value) || 1;
@@ -1068,7 +1082,7 @@ function AllInCarsDesktop() {
                   <Field label="RCA dátum">
                     <Input
                       type="date"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rca_date || ""}
                       onChange={(e) =>
                         onChange("rca_date", justDate(e.target.value))
@@ -1096,7 +1110,7 @@ function AllInCarsDesktop() {
                   <Field label="Casco kezdete">
                     <Input
                       type="date"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.casco_start || ""}
                       onChange={(e) =>
                         onChange("casco_start", justDate(e.target.value))
@@ -1105,7 +1119,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Casco hónap">
                     <select
-                      className="allin-select h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="allin-select h-9 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.casco_months || 12}
                       onChange={(e) =>
                         onChange("casco_months", Number(e.target.value))
@@ -1121,7 +1135,7 @@ function AllInCarsDesktop() {
                   <Field label="Rovinieta kezdete">
                     <Input
                       type="date"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="allin-date rounded-xl border-white/18 !bg-[#3f4959] !text-white focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rovinieta_start || ""}
                       onChange={(e) =>
                         onChange("rovinieta_start", justDate(e.target.value))
@@ -1130,7 +1144,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Rovinieta hónap">
                     <select
-                      className="allin-select h-9 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="allin-select h-9 rounded-xl border border-white/18 !bg-[#3f4959] px-3 text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       value={form.rovinieta_months || 12}
                       onChange={(e) =>
                         onChange("rovinieta_months", Number(e.target.value))
@@ -1160,7 +1174,7 @@ function AllInCarsDesktop() {
                   </div>
                   <Field label="VIN">
                     <Input
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="WVWZZZ..."
                       value={form.vin || ""}
                       onChange={(e) => onChange("vin", e.target.value.toUpperCase())}
@@ -1168,7 +1182,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="CIV">
                     <Input
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="CIV..."
                       value={form.civ || ""}
                       onChange={(e) => onChange("civ", e.target.value)}
@@ -1176,7 +1190,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Szín">
                     <Input
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="Fekete"
                       value={form.color || ""}
                       onChange={(e) => onChange("color", e.target.value)}
@@ -1185,7 +1199,7 @@ function AllInCarsDesktop() {
                   <Field label="cm³">
                     <Input
                       type="number"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="1968"
                       value={form.engine_cc ?? ""}
                       onChange={(e) =>
@@ -1196,7 +1210,7 @@ function AllInCarsDesktop() {
                   <Field label="kW">
                     <Input
                       type="number"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="110"
                       value={form.power_kw ?? ""}
                       onChange={(e) =>
@@ -1207,7 +1221,7 @@ function AllInCarsDesktop() {
                   <Field label="Össztömeg (kg)">
                     <Input
                       type="number"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="2100"
                       value={form.total_mass ?? ""}
                       onChange={(e) =>
@@ -1217,7 +1231,7 @@ function AllInCarsDesktop() {
                   </Field>
                   <Field label="Üzemanyag">
                     <Input
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="Benzin / Diesel / Hibrid"
                       value={form.fuel || ""}
                       onChange={(e) => onChange("fuel", e.target.value)}
@@ -1226,7 +1240,7 @@ function AllInCarsDesktop() {
                   <Field label="Gyártási év">
                     <Input
                       type="number"
-                      className="rounded-xl border-white/18 bg-[#3f4959] text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
+                      className="rounded-xl border-white/18 !bg-[#3f4959] !text-white placeholder:text-white/36 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18"
                       placeholder="2018"
                       value={form.year ?? ""}
                       onChange={(e) =>
@@ -1253,7 +1267,7 @@ function AllInCarsDesktop() {
                     {error && <div className="text-red-600 text-xs">{error}</div>}
                     <Button
                       type="submit"
-                      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-4 text-xs text-white transition hover:bg-[#319c99]"
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 !bg-[#2a8d8b] px-4 text-xs !text-white transition hover:!bg-[#319c99]"
                       disabled={saving}
                     >
                       {saving ? (
