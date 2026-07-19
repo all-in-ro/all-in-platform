@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS aif_purchase_order_receipts (
   order_line_id uuid NOT NULL REFERENCES aif_purchase_order_lines(id) ON DELETE CASCADE,
   reception_id uuid NULL REFERENCES aif_receptions(id) ON DELETE SET NULL,
   import_batch_id uuid NULL REFERENCES aif_import_batches(id) ON DELETE SET NULL,
-  import_row_id uuid NULL REFERENCES aif_import_rows(id) ON DELETE SET NULL,
+  import_row_id bigint NULL REFERENCES aif_import_rows(id) ON DELETE SET NULL,
   qty integer NOT NULL CHECK (qty > 0),
   actor text NULL,
   raw jsonb NOT NULL DEFAULT '{}'::jsonb,
