@@ -160,6 +160,8 @@ export type AifReceptionInput = {
   lineCount?: number;
   totalQty?: number;
   note?: string;
+  purchaseOrderId?: string | null;
+  purchase_order_id?: string | null;
 };
 
 export type AifSalesTvaSettings = {
@@ -184,6 +186,8 @@ export type AifReceptionSummary = {
   supplier_name?: string | null;
   target_location_id?: string | null;
   location_name?: string | null;
+  purchase_order_id?: string | null;
+  purchase_order_number?: string | null;
   invoice_number?: string | null;
   invoice_date?: string | null;
   reception_date?: string | null;
@@ -225,6 +229,8 @@ export type AifReceptionDetailRow = {
   sell_price_ron?: string | number | null;
   sn_cod?: string | null;
   snCod?: string | null;
+  purchase_order_id?: string | null;
+  purchase_order_line_id?: string | null;
   supplier_product_code?: string | null;
   supplier_variant_code?: string | null;
   supplier_color_code?: string | null;
@@ -800,6 +806,8 @@ export function apiAifCreateFullImportBatch(input: {
   sourceFileName?: string;
   sourceFormat?: string;
   note?: string;
+  purchaseOrderId?: string | null;
+  purchase_order_id?: string | null;
   reception?: AifReceptionInput;
   rows: AifParsedRow[];
 }) {
@@ -1613,6 +1621,240 @@ export function apiAifMoveImportRow(rowId: string, targetReceptionId: string) {
 }
 
 export const apiAifCommitReceptionSelected = apiAifCommitReceptionRows;
+
+
+export type AifPurchaseOrderStatus = "draft" | "ordered" | "partially_received" | "received" | "cancelled";
+
+export type AifPurchaseOrderLine = {
+  id: string;
+  order_id: string;
+  line_no: number;
+  variant_id?: string | null;
+  supplier_product_code?: string | null;
+  supplier_variant_code?: string | null;
+  model_code?: string | null;
+  product_title: string;
+  brand_name?: string | null;
+  category_name?: string | null;
+  barcode?: string | null;
+  sn_cod?: string | null;
+  customs_tariff_code?: string | null;
+  color_name?: string | null;
+  color_code?: string | null;
+  size?: string | null;
+  gender?: string | null;
+  product_type?: string | null;
+  material?: string | null;
+  description_ro?: string | null;
+  image_url?: string | null;
+  qty_ordered: number | string;
+  qty_received: number | string;
+  qty_remaining?: number | string;
+  unit_price?: number | string | null;
+  sell_price?: number | string | null;
+  line_total?: number | string | null;
+  currency_code?: string | null;
+  note?: string | null;
+  raw?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AifPurchaseOrderSummary = {
+  id: string;
+  order_number: string;
+  series?: string | null;
+  sequence_number?: number | string | null;
+  sequence_year?: number | string | null;
+  status: AifPurchaseOrderStatus;
+  supplier_id: string;
+  supplier_name?: string | null;
+  target_location_id?: string | null;
+  location_name?: string | null;
+  currency_code: string;
+  order_date: string;
+  expected_date?: string | null;
+  external_reference?: string | null;
+  note?: string | null;
+  ordered_at?: string | null;
+  ordered_by?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  line_count?: number | string | null;
+  total_qty?: number | string | null;
+  received_qty?: number | string | null;
+  remaining_qty?: number | string | null;
+  total_value?: number | string | null;
+};
+
+export type AifPurchaseOrderDetail = {
+  item: AifPurchaseOrderSummary;
+  lines: AifPurchaseOrderLine[];
+  history?: Array<{
+    id: string;
+    from_status?: string | null;
+    to_status: string;
+    note?: string | null;
+    actor?: string | null;
+    created_at: string;
+  }>;
+};
+
+export type AifPurchaseOrderSettings = {
+  series: string;
+  nextNumber: number;
+  digits: number;
+  includeYear: boolean;
+  yearlyReset: boolean;
+  sequenceYear: number;
+  documentTitle: string;
+  documentSubtitle: string;
+  previewNumber: string;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+};
+
+export type AifPurchaseOrderInputLine = {
+  id?: string;
+  variantId?: string | null;
+  variant_id?: string | null;
+  supplierProductCode?: string | null;
+  supplier_product_code?: string | null;
+  supplierVariantCode?: string | null;
+  supplier_variant_code?: string | null;
+  modelCode?: string | null;
+  model_code?: string | null;
+  productTitle?: string | null;
+  product_title?: string | null;
+  brandName?: string | null;
+  brand_name?: string | null;
+  categoryName?: string | null;
+  category_name?: string | null;
+  barcode?: string | null;
+  snCod?: string | null;
+  sn_cod?: string | null;
+  customsTariffCode?: string | null;
+  customs_tariff_code?: string | null;
+  colorName?: string | null;
+  color_name?: string | null;
+  colorCode?: string | null;
+  color_code?: string | null;
+  size?: string | null;
+  gender?: string | null;
+  productType?: string | null;
+  product_type?: string | null;
+  material?: string | null;
+  descriptionRo?: string | null;
+  description_ro?: string | null;
+  imageUrl?: string | null;
+  image_url?: string | null;
+  qty?: number | string;
+  qtyOrdered?: number | string;
+  qty_ordered?: number | string;
+  unitPrice?: number | string | null;
+  unit_price?: number | string | null;
+  sellPrice?: number | string | null;
+  sell_price?: number | string | null;
+  note?: string | null;
+};
+
+export type AifPurchaseOrderInput = {
+  supplierId: string;
+  targetLocationId?: string | null;
+  currencyCode?: string;
+  orderDate?: string;
+  expectedDate?: string | null;
+  externalReference?: string | null;
+  note?: string | null;
+  lines: AifPurchaseOrderInputLine[];
+};
+
+export function apiAifListPurchaseOrders(options?: {
+  search?: string;
+  supplier?: string;
+  location?: string;
+  status?: AifPurchaseOrderStatus | "all";
+  from?: string;
+  to?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (options?.search?.trim()) q.set("q", options.search.trim());
+  if (options?.supplier) q.set("supplier", options.supplier);
+  if (options?.location) q.set("location", options.location);
+  if (options?.status && options.status !== "all") q.set("status", options.status);
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
+  q.set("limit", String(options?.limit || 500));
+  return fetchAifJSON<{
+    ok: true;
+    items: AifPurchaseOrderSummary[];
+    summary: {
+      total: number;
+      draft: number;
+      ordered: number;
+      partiallyReceived: number;
+      received: number;
+      cancelled: number;
+      totalQty: number;
+      receivedQty: number;
+      remainingQty: number;
+      totalValue: number;
+    };
+  }>(`/purchase-orders?${q.toString()}`);
+}
+
+export function apiAifGetPurchaseOrder(id: string) {
+  return fetchAifJSON<AifPurchaseOrderDetail>(`/purchase-orders/${encodeURIComponent(id)}`);
+}
+
+export function apiAifCreatePurchaseOrder(input: AifPurchaseOrderInput) {
+  return fetchAifJSON<{ ok: true; item: AifPurchaseOrderSummary; lines: AifPurchaseOrderLine[] }>("/purchase-orders", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifUpdatePurchaseOrder(id: string, input: AifPurchaseOrderInput) {
+  return fetchAifJSON<{ ok: true; item: AifPurchaseOrderSummary; lines: AifPurchaseOrderLine[] }>(`/purchase-orders/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifMarkPurchaseOrderOrdered(id: string, note?: string) {
+  return fetchAifJSON<{ ok: true; item: AifPurchaseOrderSummary }>(`/purchase-orders/${encodeURIComponent(id)}/ordered`, {
+    method: "POST",
+    body: JSON.stringify({ note: note || null }),
+  });
+}
+
+export function apiAifCancelPurchaseOrder(id: string, note?: string) {
+  return fetchAifJSON<{ ok: true; item: AifPurchaseOrderSummary }>(`/purchase-orders/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ note: note || null }),
+  });
+}
+
+export function apiAifDeletePurchaseOrder(id: string) {
+  return fetchAifJSON<{ ok: true; mode: "deleted" }>(`/purchase-orders/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function apiAifGetPurchaseOrderSettings() {
+  return fetchAifJSON<{ ok: true; settings: AifPurchaseOrderSettings; item?: AifPurchaseOrderSettings }>("/purchase-orders/settings");
+}
+
+export function apiAifSavePurchaseOrderSettings(settings: Partial<AifPurchaseOrderSettings>) {
+  return fetchAifJSON<{ ok: true; settings: AifPurchaseOrderSettings; item?: AifPurchaseOrderSettings }>("/purchase-orders/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ settings }),
+  });
+}
 
 export type AifShopifyStatus = {
   ok: boolean;
