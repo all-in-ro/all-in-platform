@@ -847,15 +847,6 @@ export default function AllInShopifyOrders({ role }: Props) {
         <header className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <button
-                type="button"
-                className={buttonClass}
-                onClick={() => (window.location.hash = "#allin")}
-                aria-label="Vissza a főmenübe"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                <span className="hidden sm:inline">Vissza</span>
-              </button>
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#e5f4f0] text-[#176b5b]">
                 <ShoppingBag className="h-5 w-5" />
               </div>
@@ -897,6 +888,15 @@ export default function AllInShopifyOrders({ role }: Props) {
               >
                 <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                 Frissítés
+              </button>
+              <button
+                type="button"
+                className={buttonClass}
+                onClick={() => (window.location.hash = "#allin")}
+                aria-label="Vissza a főmenübe"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span className="hidden sm:inline">Vissza</span>
               </button>
             </div>
           </div>
