@@ -405,7 +405,13 @@ export type AifSelectedWorklistResponse = {
   owner?: string;
   items?: AifSelectedWorkItem[];
   variantIds?: string[];
+  selectedVariantIds?: string[];
   actions?: Record<string, AifSelectedWorkAction>;
+  updatedAt?: string | null;
+  added?: number;
+  updated?: number;
+  removed?: number;
+  saved?: number;
 };
 
 export type AifStockItem = {
@@ -884,7 +890,30 @@ export function apiAifSelectedWorklist() {
 export function apiAifSaveSelectedWorklist(items: AifSelectedWorkPayloadItem[]) {
   return fetchAifJSON<AifSelectedWorklistResponse>("/selection", {
     method: "PUT",
+    body: JSON.stringify({ items, replace: true }),
+  });
+}
+
+// Többgépes munkához atomikus műveletek. Ezek nem írják felül a teljes közös
+// kijelölési listát, csak a megadott variánsokat módosítják.
+export function apiAifAddSelectedWorklistItems(items: AifSelectedWorkPayloadItem[]) {
+  return fetchAifJSON<AifSelectedWorklistResponse>("/selection/items", {
+    method: "POST",
     body: JSON.stringify({ items }),
+  });
+}
+
+export function apiAifUpdateSelectedWorklistActions(items: AifSelectedWorkPayloadItem[]) {
+  return fetchAifJSON<AifSelectedWorklistResponse>("/selection/items", {
+    method: "PATCH",
+    body: JSON.stringify({ items }),
+  });
+}
+
+export function apiAifRemoveSelectedWorklistItems(variantIds: string[]) {
+  return fetchAifJSON<AifSelectedWorklistResponse>("/selection/items", {
+    method: "DELETE",
+    body: JSON.stringify({ variantIds }),
   });
 }
 
