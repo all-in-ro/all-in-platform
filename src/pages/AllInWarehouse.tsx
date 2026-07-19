@@ -2637,6 +2637,75 @@ function itemProductCode(it: Partial<InventoryItem> | Record<string, any> | null
   return String(lastPart || rawModel).trim();
 }
 
+function warehouseProductFamilyCode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  const source = (it || {}) as Record<string, any>;
+  const colorCode = firstWarehouseText(source.color_code, source.colorCode, source.supplier_color_code, source.supplierColorCode);
+  const rawProductCode = firstWarehouseText(itemProductCode(source));
+  const rawModelCode = firstWarehouseText(source.model_code, source.modelCode);
+
+  const withoutColorSuffix = (value: string) => {
+    const cleanValue = String(value || "").trim();
+    const cleanColor = String(colorCode || "").trim();
+    if (!cleanValue || !cleanColor) return cleanValue;
+    const escapedColor = cleanColor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const stripped = cleanValue
+      .replace(new RegExp(`(?:[-_./:\\s]+)?${escapedColor}$`, "i"), "")
+      .replace(/[-_./:\\s]+$/g, "")
+      .trim();
+    return stripped || cleanValue;
+  };
+
+  const productFamily = withoutColorSuffix(rawProductCode);
+  if (productFamily) return productFamily;
+  const cleanModelCode = rawModelCode.includes(":") ? rawModelCode.split(":").pop() || rawModelCode : rawModelCode;
+  return withoutColorSuffix(cleanModelCode) || firstWarehouseText(source.title_ro, source.shopify_title, source.internal_sku);
+}
+
+function warehouseVariantColorSortKey(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  const source = (it || {}) as Record<string, any>;
+  return firstWarehouseText(source.color_code, source.colorCode, source.supplier_color_code, source.supplierColorCode, source.color_name, source.colorName);
+}
+
+function warehouseVariantSizeSortRank(value: unknown) {
+  const key = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+  const known = [
+    "XXXS", "XXS", "XS", "S", "S/M", "M", "M/L", "L", "L/XL", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL",
+    "OSFM", "ONESIZE", "ONE-SIZE", "TU",
+  ];
+  const index = known.indexOf(key);
+  return index >= 0 ? index : 1000;
+}
+
+function compareWarehouseVariantPresentation(a: InventoryItem, b: InventoryItem) {
+  const compareText = (left: unknown, right: unknown) => String(left || "").localeCompare(String(right || ""), "hu", {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  const byTitle = compareText(a.title_ro || a.shopify_title, b.title_ro || b.shopify_title);
+  if (byTitle !== 0) return byTitle;
+
+  const byFamily = compareText(warehouseProductFamilyCode(a), warehouseProductFamilyCode(b));
+  if (byFamily !== 0) return byFamily;
+
+  // Azonos termékcsaládnál előbb egy szín összes mérete jön, és csak utána
+  // a következő színkód. Így a 069 és 601 sorok nem váltogatják egymást.
+  const byColorCode = compareText(warehouseVariantColorSortKey(a), warehouseVariantColorSortKey(b));
+  if (byColorCode !== 0) return byColorCode;
+
+  const aSizeRank = warehouseVariantSizeSortRank(a.size);
+  const bSizeRank = warehouseVariantSizeSortRank(b.size);
+  if (aSizeRank !== bSizeRank) return aSizeRank - bSizeRank;
+
+  const bySize = compareText(a.size, b.size);
+  if (bySize !== 0) return bySize;
+
+  const byProductCode = compareText(itemProductCode(a), itemProductCode(b));
+  if (byProductCode !== 0) return byProductCode;
+
+  return compareText(a.variant_id, b.variant_id);
+}
+
 function visibleWarehouseBarcode(it: Partial<InventoryItem> | Record<string, any> | null | undefined) {
   const source = (it || {}) as Record<string, any>;
   const raw = String(source.barcode || source.display_barcode || "").trim();
@@ -4382,6 +4451,7 @@ export default function AllInWarehouse() {
   const [selectedActionTargets, setSelectedActionTargets] = useState<InventoryItem[]>([]);
   const [selectedWorkPanel, setSelectedWorkPanel] = useState<SelectedWorkAction | null>(null);
   const [shopifyExportModalOpen, setShopifyExportModalOpen] = useState(false);
+  const [shopifyExportItems, setShopifyExportItems] = useState<InventoryItem[]>([]);
   const [shopifySyncCenterOpen, setShopifySyncCenterOpen] = useState(false);
   const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
   const [stockMoveNote, setStockMoveNote] = useState("");
@@ -5907,7 +5977,7 @@ export default function AllInWarehouse() {
         }
         const byIncoming = latestWarehouseIncomingMs(b) - latestWarehouseIncomingMs(a);
         if (byIncoming !== 0) return byIncoming;
-        return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+        return compareWarehouseVariantPresentation(a, b);
       }
       if (effectiveSortMode === "incoming_asc") {
         const aIncoming = firstWarehouseIncomingMs(a);
@@ -5915,19 +5985,35 @@ export default function AllInWarehouse() {
         if (!aIncoming && bIncoming) return 1;
         if (aIncoming && !bIncoming) return -1;
         if (aIncoming !== bIncoming) return aIncoming - bIncoming;
-        return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+        return compareWarehouseVariantPresentation(a, b);
       }
       if (effectiveSortMode === "shopify_connected_desc") {
         const byConnection = shopifyConnectionMs(b) - shopifyConnectionMs(a);
         if (byConnection !== 0) return byConnection;
-        return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+        return compareWarehouseVariantPresentation(a, b);
       }
-      if (effectiveSortMode === "brand") return String(a.brand_name || "").localeCompare(String(b.brand_name || ""), "hu");
-      if (effectiveSortMode === "stock_desc") return n(b.total_qty) - n(a.total_qty);
-      if (effectiveSortMode === "stock_asc") return n(a.total_qty) - n(b.total_qty);
-      if (effectiveSortMode === "value_desc") return n(b.total_qty) * n(b.buy_price) - n(a.total_qty) * n(a.buy_price);
-      if (effectiveSortMode === "missing") return Number(hasMissingData(b)) - Number(hasMissingData(a));
-      return String(a.title_ro || "").localeCompare(String(b.title_ro || ""), "hu");
+      if (effectiveSortMode === "brand") {
+        const byBrand = String(a.brand_name || "").localeCompare(String(b.brand_name || ""), "hu", { numeric: true, sensitivity: "base" });
+        if (byBrand !== 0) return byBrand;
+        return compareWarehouseVariantPresentation(a, b);
+      }
+      if (effectiveSortMode === "stock_desc") {
+        const byStock = n(b.total_qty) - n(a.total_qty);
+        return byStock !== 0 ? byStock : compareWarehouseVariantPresentation(a, b);
+      }
+      if (effectiveSortMode === "stock_asc") {
+        const byStock = n(a.total_qty) - n(b.total_qty);
+        return byStock !== 0 ? byStock : compareWarehouseVariantPresentation(a, b);
+      }
+      if (effectiveSortMode === "value_desc") {
+        const byValue = n(b.total_qty) * n(b.buy_price) - n(a.total_qty) * n(a.buy_price);
+        return byValue !== 0 ? byValue : compareWarehouseVariantPresentation(a, b);
+      }
+      if (effectiveSortMode === "missing") {
+        const byMissing = Number(hasMissingData(b)) - Number(hasMissingData(a));
+        return byMissing !== 0 ? byMissing : compareWarehouseVariantPresentation(a, b);
+      }
+      return compareWarehouseVariantPresentation(a, b);
     });
     return out;
   }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, sizeTypes, color, colorTypes, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
@@ -6746,20 +6832,7 @@ export default function AllInWarehouse() {
       const movedLines = Number(result.movedLines ?? result.movedRows ?? result.lineCount ?? rowsToMove.length);
       const movedQty = Number(result.movedQty ?? result.totalQty ?? qtyToMove);
       const movedVariantIds = new Set<string>(rowsToMove.map((row) => String(row.variantId || "")));
-      setStockMoveRows((current) => {
-        const next = { ...current };
-        Array.from(movedVariantIds).forEach((id: string) => {
-          delete next[id];
-        });
-        return next;
-      });
-      setSelectedWorkActions((current) => {
-        const next = { ...current };
-        Array.from(movedVariantIds).forEach((id: string) => {
-          if (next[id] === "move") delete next[id];
-        });
-        return next;
-      });
+      const selectionCleanup = await removeCompletedSelectedItems(movedVariantIds);
       setStockMoveBulkFrom("");
       setStockMoveBulkTo("");
       setStockMoveConfirmOpen(false);
@@ -6771,6 +6844,9 @@ export default function AllInWarehouse() {
           ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. ${officialDocumentNumber ? `Proces-verbal: ${officialDocumentNumber}. ` : ""}A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
           : `Készletmozgatás és hivatalos átadási bizonylat rögzítve: ${officialDocumentNumber || result.transferId}. ${movedLines} sor, ${movedQty} db. A bizonylat bármikor újranyomtatható a Termékátadások oldalon.`
       );
+      if (!selectionCleanup.synced) {
+        setMessage((current) => `${current} A kész termékeket helyben kivettem a kijelölésből, de a szerveres munkalista mentése hibázott.`);
+      }
     } catch (e: any) {
       // Hálózati bizonytalanságnál ugyanaz a kulcs marad. Újrapróbáláskor a backend
       // visszaadja a korábbi eredményt, de nem írja át még egyszer a készletet.
@@ -6883,6 +6959,70 @@ export default function AllInWarehouse() {
     if (action === "order") return selectedOrderItems;
     if (action === "shopify") return selectedShopifyItems;
     return selectedMoveItems;
+  }
+
+  async function removeCompletedSelectedItems(idsInput: Iterable<string>) {
+    const completedIds = new Set(Array.from(idsInput, (value) => String(value || "").trim()).filter(Boolean));
+    if (!completedIds.size) return { removed: 0, synced: true };
+
+    const nextSelected = { ...selectedVariants };
+    const nextActions = { ...selectedWorkActions };
+    let removed = 0;
+    for (const id of completedIds) {
+      if (nextSelected[id]) removed += 1;
+      delete nextSelected[id];
+      delete nextActions[id];
+    }
+
+    // A kész művelet termékei minden helyi munkalistából azonnal eltűnnek.
+    setSelectedVariants(nextSelected);
+    setSelectedWorkActions(nextActions);
+    setPersistedSelectedItems((current) => current.filter((item) => !completedIds.has(selectedVariantIdFromItem(item))));
+    setSelectedActionTargets((current) => current.filter((item) => !completedIds.has(selectedVariantIdFromItem(item))));
+    setStockMoveRows((current) => {
+      const next = { ...current };
+      completedIds.forEach((id) => delete next[id]);
+      return next;
+    });
+
+    // Ne csak a böngészőből tűnjön el. Azonnal mentjük a maradék kijelölést a
+    // szerverre is, így frissítés vagy másik eszköz sem hozza vissza a kész sort.
+    try {
+      const saved = await apiSaveSelectedVariantSelection(selectedPayloadFromState(nextSelected, nextActions));
+      if (Array.isArray(saved.items)) applyPersistedSelectedWorklist(saved.items);
+      return { removed, synced: true };
+    } catch (error) {
+      console.error("AIF completed selected items cleanup sync failed", error);
+      return { removed, synced: false };
+    }
+  }
+
+  function openSelectedShopifyExport() {
+    const targets = selectedShopifyItems.slice();
+    if (!targets.length) {
+      setMessage("Nincs termék a Shopify export listában.");
+      return;
+    }
+    setShopifyExportItems(targets);
+    setShopifyExportModalOpen(true);
+  }
+
+  async function handleShopifyExportChanged() {
+    const completedIds = new Set(shopifyExportItems.map((item) => selectedVariantIdFromItem(item)).filter(Boolean));
+    await load();
+    const cleanup = await removeCompletedSelectedItems(completedIds);
+    if (cleanup.removed > 0) {
+      setMessage(
+        cleanup.synced
+          ? `Shopify művelet elkészült. ${cleanup.removed} terméket eltávolítottam a kijelölt munkalistából.`
+          : `Shopify művelet elkészült, és ${cleanup.removed} termék eltűnt a helyi kijelölésből, de a szerveres kijelölés mentését újra kell próbálni.`
+      );
+    }
+  }
+
+  function closeShopifyExportModal() {
+    setShopifyExportModalOpen(false);
+    setShopifyExportItems([]);
   }
 
   function labelProductCodeForItem(item: InventoryItem) {
@@ -9632,7 +9772,7 @@ export default function AllInWarehouse() {
                   </button>
                 )}
                 {selectedWorkPanel === "shopify" && (
-                  <button className={primaryBtn} onClick={() => setShopifyExportModalOpen(true)} type="button" disabled={!selectedShopifyItems.length}>
+                  <button className={primaryBtn} onClick={openSelectedShopifyExport} type="button" disabled={!selectedShopifyItems.length}>
                     <ShopifyBrandMark size="xs" /> Shopify export előkészítése
                   </button>
                 )}
@@ -9878,9 +10018,9 @@ export default function AllInWarehouse() {
 
       <ShopifyProductExportModal
         open={shopifyExportModalOpen}
-        items={selectedShopifyItems}
-        onClose={() => setShopifyExportModalOpen(false)}
-        onChanged={() => load()}
+        items={shopifyExportItems}
+        onClose={closeShopifyExportModal}
+        onChanged={handleShopifyExportChanged}
       />
 
       <ShopifySyncCenterModal
