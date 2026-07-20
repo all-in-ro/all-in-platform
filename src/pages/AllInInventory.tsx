@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
+  ChevronDown,
   AlertTriangle,
   Barcode,
   CalendarDays,
@@ -35,7 +37,6 @@ const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 round
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
-const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chipBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs transition-colors";
 const chipActive = `${chipBase} border-[#2a8d8b]/60 bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(42,141,139,0.18)]`;
@@ -49,6 +50,169 @@ const stockMovesChangedEventName = "aif:stock-moves-changed";
 function goHome() {
   window.location.hash = "#allin";
 }
+
+type CompactSelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+};
+
+type CompactSelectProps = {
+  value: string;
+  options: CompactSelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  size?: "compact" | "default";
+  menuMinWidth?: number;
+};
+
+function CompactSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Válassz",
+  className = "",
+  disabled = false,
+  ariaLabel,
+  size = "default",
+  menuMinWidth = 220,
+}: CompactSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value) || null;
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || typeof window === "undefined") return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const maxWidth = Math.min(360, window.innerWidth - viewportPadding * 2);
+    const width = Math.min(Math.max(rect.width, menuMinWidth), maxWidth);
+    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
+    const roomBelow = window.innerHeight - rect.bottom;
+    const openUp = roomBelow < 250 && rect.top > roomBelow;
+    setMenuPosition(openUp
+      ? { left, width, bottom: Math.max(viewportPadding, window.innerHeight - rect.top + 6) }
+      : { left, width, top: Math.min(window.innerHeight - viewportPadding, rect.bottom + 6) });
+  }, [menuMinWidth]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("mousedown", closeOnOutside, true);
+    window.addEventListener("keydown", closeOnEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside, true);
+      window.removeEventListener("keydown", closeOnEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  const heightClass = size === "compact" ? "h-9 rounded-lg" : "h-10 rounded-xl";
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/22 bg-[#3f4959] px-3 text-left text-xs text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45 ${heightClass}`}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className={`truncate ${selected ? "text-white" : "text-white/48"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && menuPosition && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="overflow-hidden rounded-xl border shadow-2xl"
+          style={{
+            position: "fixed",
+            zIndex: 500,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            top: menuPosition.top,
+            bottom: menuPosition.bottom,
+            color: "#ffffff",
+            backgroundColor: "#26364c",
+            borderColor: "rgba(142, 230, 226, 0.48)",
+            boxShadow: "0 18px 46px rgba(2, 6, 23, 0.58)",
+          }}
+        >
+          <div className="max-h-64 overflow-y-auto p-1">
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value || "__empty"}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  disabled={option.disabled}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{
+                    color: "#ffffff",
+                    backgroundColor: active ? "#2a8d8b" : "#354153",
+                  }}
+                  onMouseEnter={(event) => {
+                    if (!option.disabled) event.currentTarget.style.backgroundColor = active ? "#319c99" : "#415064";
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.backgroundColor = active ? "#2a8d8b" : "#354153";
+                  }}
+                  onClick={() => {
+                    if (option.disabled) return;
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="truncate" style={{ color: "#ffffff" }}>{option.label}</span>
+                  <CheckCircle2 size={13} color="#ffffff" className={active ? "shrink-0 opacity-100" : "shrink-0 opacity-0"} />
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
 
 type MessageTone = "info" | "error" | "success";
 type CountStatus = "draft" | "counting" | "review" | "committed" | "cancelled";
@@ -1318,9 +1482,12 @@ export default function AllInInventory() {
           </div>
           <div className="grid gap-3 p-4 lg:grid-cols-[1.2fr_1.4fr_1fr]">
             <label className={label}>Üzlet / helyszín
-              <select className={select} value={location} onChange={(e) => { setLocation(e.target.value); setActive(null); setDrafts({}); }}>
-                {locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
-              </select>
+              <CompactSelect
+                value={location}
+                onChange={(next) => { setLocation(next); setActive(null); setDrafts({}); }}
+                placeholder="Válassz üzletet"
+                options={locations.map((loc) => ({ value: loc.id, label: loc.name }))}
+              />
             </label>
             <label className={label}>Termék / vonalkód keresés
               <div className="relative">
@@ -1329,10 +1496,15 @@ export default function AllInInventory() {
               </div>
             </label>
             <label className={label}>Kategória
-              <select className={select} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-                <option value="all">Minden kategória</option>
-                {categories.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
-              </select>
+              <CompactSelect
+                value={categoryFilter}
+                onChange={setCategoryFilter}
+                placeholder="Minden kategória"
+                options={[
+                  { value: "all", label: "Minden kategória" },
+                  ...categories.map(([code, name]) => ({ value: code, label: name })),
+                ]}
+              />
             </label>
             <label className={`${label} lg:col-span-2`}>Leltár címe
               <input className={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Pl. Júliusi üzlet leltár" />
