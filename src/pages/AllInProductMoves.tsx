@@ -54,6 +54,14 @@ const rowDangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounde
 const input = "h-10 w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20";
 const label = "grid min-w-0 gap-1.5 text-xs text-white/65";
 const API_BASE = "/api/aif";
+const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
+const stockMovesChangedEventName = "aif:stock-moves-changed";
+
+function notifyStockMovesChanged() {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(stockMovesChangedStorageKey, String(Date.now())); } catch {}
+  try { window.dispatchEvent(new CustomEvent(stockMovesChangedEventName)); } catch {}
+}
 
 type DocumentType = "internal_transfer" | "supplier_return" | "damaged_writeoff" | "stock_correction";
 type ArchiveFilter = "all" | "official" | "draft" | "preparation" | "legacy" | "cancelled" | DocumentType;
@@ -1814,6 +1822,7 @@ export default function AllInProductMoves() {
           ? `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}/preparation`
           : `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}`;
       await fetchJson<{ ok: boolean; restoredQty?: number }>(deletePath, { method: "DELETE" });
+      notifyStockMovesChanged();
       const number = displayDocumentNumber(deleteTarget);
       if (detail?.document.id === deleteTarget.id) setDetail(null);
       setDeleteTarget(null);
