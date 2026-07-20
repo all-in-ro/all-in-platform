@@ -213,6 +213,11 @@ export async function ensureAifStockTransferDocumentSchema(target) {
     await target.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_uq
       ON aif_stock_transfer_documents (owner_key)
       WHERE status='preparation' AND document_type='internal_transfer' AND owner_key IS NOT NULL`);
+    await target.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_type_uq
+      ON aif_stock_transfer_documents (owner_key, document_type)
+      WHERE status='preparation'
+        AND document_type IN ('internal_transfer','damaged_writeoff')
+        AND owner_key IS NOT NULL`);
     await target.query(`CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
       document_type text PRIMARY KEY,
       series text NOT NULL,
@@ -765,7 +770,7 @@ function documentMatches(item, filters) {
   if (filters.kind === "official" && (!item.official || item.status === "draft" || item.status === "preparation")) return false;
   if (filters.kind === "legacy" && !item.legacy) return false;
   if (filters.kind === "draft" && item.status !== "draft") return false;
-  if (filters.kind === "preparation" && item.status !== "preparation") return false;
+  if (filters.kind === "preparation" && !["preparation", "draft"].includes(item.status)) return false;
   const requestedDocumentType = cleanAifStockDocumentType(filters.kind, null);
   if (requestedDocumentType && cleanAifStockDocumentType(item.document_type, "internal_transfer") !== requestedDocumentType) return false;
   if (filters.status && filters.status !== "all" && String(item.status) !== filters.status) return false;
@@ -875,7 +880,7 @@ export function registerAifStockTransferDocumentRoutes(router, { pool, requireAu
       const totals = {
         total,
         official: all.filter((item) => item.source === "official" && item.status !== "draft" && item.status !== "preparation" && item.status !== "cancelled").length,
-        preparation: all.filter((item) => item.status === "preparation").length,
+        preparation: all.filter((item) => ["preparation", "draft"].includes(item.status)).length,
         draft: all.filter((item) => item.status === "draft").length,
         legacy: all.filter((item) => item.isLegacy).length,
         cancelled: all.filter((item) => item.status === "cancelled").length,
