@@ -16,14 +16,22 @@ import {
   Filter,
   Home,
   ImageIcon,
+  Loader2,
   MapPin,
+  Minus,
   PackageSearch,
+  Plus,
   RefreshCw,
   Search,
+  ShoppingCart,
   SlidersHorizontal,
   Trash2,
   X,
 } from "lucide-react";
+import {
+  apiAifAddItemsToOpenPurchaseOrders,
+  apiAifGetVariant,
+} from "../lib/aif/api";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4 sm:py-7";
 const shell = "mx-auto max-w-7xl space-y-4";
@@ -49,6 +57,8 @@ const chipIdle = `${chipBase} border-white/14 bg-white/[0.06] text-white/72 hove
 const AIF_BASE = "/api/aif";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
+const purchaseOrdersChangedStorageKey = "allinfashion:purchaseOrders:changed:v1";
+const purchaseOrdersChangedEventName = "aif:purchase-orders-changed";
 
 function goHome() {
   window.location.hash = "#allin";
@@ -225,8 +235,16 @@ type AifLocation = {
   is_active?: boolean;
 };
 
+type AifSupplier = {
+  id: string;
+  code: string;
+  name: string;
+  is_active?: boolean;
+};
+
 type AifMeta = {
   locations?: AifLocation[];
+  suppliers?: AifSupplier[];
 };
 
 type AifStockItem = {
@@ -1048,6 +1066,46 @@ function ProductText({
   );
 }
 
+
+function splitValues(value: unknown) {
+  return String(value || "")
+    .split(/[;,|]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function supplierCandidatesForVariant(detail: any, suppliers: AifSupplier[]) {
+  const item = detail?.item && typeof detail.item === "object" ? detail.item : {};
+  const supplierCodes = Array.isArray(detail?.supplierCodes) ? detail.supplierCodes : [];
+  const ids = new Set<string>();
+  const codes = new Set<string>();
+  const names = new Set<string>();
+
+  for (const value of [item.supplier_id, item.supplierId, item.supplier_ids, item.supplierIds]) {
+    splitValues(value).forEach((entry) => ids.add(entry));
+  }
+  for (const value of [item.supplier_code, item.supplierCode, item.supplier_codes, item.supplierCodes]) {
+    splitValues(value).forEach((entry) => codes.add(entry.toLowerCase()));
+  }
+  for (const value of [item.supplier_name, item.supplierName, item.supplier_names, item.supplierNames]) {
+    splitValues(value).forEach((entry) => names.add(entry.toLowerCase()));
+  }
+
+  for (const entry of supplierCodes) {
+    if (!entry || typeof entry !== "object") continue;
+    splitValues(entry.supplier_id ?? entry.supplierId).forEach((value) => ids.add(value));
+    splitValues(entry.supplier_code ?? entry.supplierCode).forEach((value) => codes.add(value.toLowerCase()));
+    splitValues(entry.supplier_name ?? entry.supplierName).forEach((value) => names.add(value.toLowerCase()));
+  }
+
+  const matched = suppliers.filter((supplier) =>
+    ids.has(String(supplier.id))
+    || codes.has(String(supplier.code || "").toLowerCase())
+    || names.has(String(supplier.name || "").toLowerCase()),
+  );
+  return matched.length ? matched : suppliers;
+}
+
 function StatCard({ icon: Icon, label, value, hint, tone = "green" }: { icon: ComponentType<{ size?: number; className?: string }>; label: string; value: ReactNode; hint?: string; tone?: "green" | "red" | "neutral" }) {
   const iconTone = tone === "red"
     ? "border-red-300/32 bg-red-500/17 text-red-100"
@@ -1073,6 +1131,7 @@ function StatCard({ icon: Icon, label, value, hint, tone = "green" }: { icon: Co
 export default function AllInStockMoves() {
   const initialRange = useMemo(() => rangeForPreset("today"), []);
   const [locations, setLocations] = useState<AifLocation[]>([]);
+  const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locationId, setLocationId] = useState("");
   const [stockRows, setStockRows] = useState<AifStockItem[]>([]);
   const [moveRows, setMoveRows] = useState<AifStockMoveItem[]>([]);
@@ -1097,6 +1156,15 @@ export default function AllInStockMoves() {
   const [variantHistory, setVariantHistory] = useState<AifVariantHistoryResponse | null>(null);
   const [variantHistoryLoading, setVariantHistoryLoading] = useState(false);
   const [variantHistoryError, setVariantHistoryError] = useState<string | null>(null);
+  const [reorderTarget, setReorderTarget] = useState<AifStockMoveItem | null>(null);
+  const [reorderVariantDetail, setReorderVariantDetail] = useState<any>(null);
+  const [reorderSupplierId, setReorderSupplierId] = useState("");
+  const [reorderLocationId, setReorderLocationId] = useState("");
+  const [reorderQty, setReorderQty] = useState(1);
+  const [reorderLoading, setReorderLoading] = useState(false);
+  const [reorderSaving, setReorderSaving] = useState(false);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const [reorderIdempotencyKey, setReorderIdempotencyKey] = useState("");
   const refreshInFlightRef = useRef(false);
 
   const closeVariantHistory = useCallback(() => {
@@ -1131,6 +1199,119 @@ export default function AllInStockMoves() {
     if (historyTarget) void openVariantHistory(historyTarget);
   }, [historyTarget, openVariantHistory]);
 
+  const closeReorder = useCallback(() => {
+    if (reorderSaving) return;
+    setReorderTarget(null);
+    setReorderVariantDetail(null);
+    setReorderSupplierId("");
+    setReorderLocationId("");
+    setReorderQty(1);
+    setReorderLoading(false);
+    setReorderError(null);
+    setReorderIdempotencyKey("");
+  }, [reorderSaving]);
+
+  const openReorder = useCallback(async (row: AifStockMoveItem) => {
+    if (!(row.direction === "out" || n(row.qty_delta) < 0)) return;
+    const variantId = String(row.variant_id || "").trim();
+    if (!variantId) {
+      setMessageTone("error");
+      setMessage("Ehhez a kimenő sorhoz nincs termékazonosító, ezért nem rendelhető újra.");
+      return;
+    }
+
+    setReorderTarget(row);
+    setReorderVariantDetail(null);
+    setReorderSupplierId("");
+    setReorderLocationId(String(row.location_id || locationId || ""));
+    setReorderQty(Math.max(1, Math.abs(Math.trunc(n(row.qty_delta)))));
+    setReorderError(null);
+    setReorderLoading(true);
+    setReorderIdempotencyKey(
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? `stock-move-reorder:${crypto.randomUUID()}`
+        : `stock-move-reorder:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+    );
+
+    try {
+      const detail = await apiAifGetVariant(variantId);
+      setReorderVariantDetail(detail);
+      const candidates = supplierCandidatesForVariant(detail, suppliers);
+      if (candidates.length === 1) setReorderSupplierId(candidates[0].id);
+    } catch (error: any) {
+      setReorderError(error?.message || "A termék beszállítói adatai nem tölthetők be.");
+    } finally {
+      setReorderLoading(false);
+    }
+  }, [locationId, suppliers]);
+
+  const reorderSupplierOptions = useMemo(() => {
+    if (!reorderTarget) return suppliers;
+    return supplierCandidatesForVariant(reorderVariantDetail, suppliers);
+  }, [reorderTarget, reorderVariantDetail, suppliers]);
+
+  const notifyPurchaseOrdersChanged = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const payload = { at: new Date().toISOString() };
+      window.localStorage.setItem(purchaseOrdersChangedStorageKey, JSON.stringify(payload));
+    } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent(purchaseOrdersChangedEventName, { detail: { at: new Date().toISOString() } }));
+    } catch {}
+  }, []);
+
+  const submitReorder = useCallback(async () => {
+    if (!reorderTarget || reorderSaving) return;
+    if (!reorderSupplierId) {
+      setReorderError("Válaszd ki a beszállítót.");
+      return;
+    }
+    if (!reorderLocationId) {
+      setReorderError("Válaszd ki, melyik üzletbe érkezzen a rendelés.");
+      return;
+    }
+
+    setReorderSaving(true);
+    setReorderError(null);
+    try {
+      const result = await apiAifAddItemsToOpenPurchaseOrders({
+        items: [{
+          supplierId: reorderSupplierId,
+          variantId: reorderTarget.variant_id,
+          qty: Math.max(1, Math.trunc(reorderQty)),
+          unitPrice: null,
+          note: movementDocumentNumber(reorderTarget)
+            ? `Újrarendelés a ${movementDocumentNumber(reorderTarget)} készletmozgásból.`
+            : "Újrarendelés a készletmozgás naplóból.",
+        }],
+        targetLocationId: reorderLocationId,
+        currencyCode: "RON",
+        note: "Készletmozgásból indított utánrendelés.",
+        idempotencyKey: reorderIdempotencyKey,
+      });
+      const order = result.orders?.[0];
+      const orderText = order?.orderNumber || "a nyitott rendelés";
+      setMessageTone("info");
+      setMessage(
+        order?.created
+          ? `${formatQty(reorderQty)} db hozzáadva. Új nyitott rendelés készült: ${orderText}.`
+          : `${formatQty(reorderQty)} db hozzáadva a ${orderText} nyitott rendeléshez.`,
+      );
+      notifyPurchaseOrdersChanged();
+      setReorderTarget(null);
+      setReorderVariantDetail(null);
+      setReorderSupplierId("");
+      setReorderLocationId("");
+      setReorderQty(1);
+      setReorderIdempotencyKey("");
+    } catch (error: any) {
+      setReorderError(error?.message || "A termék rendeléshez adása nem sikerült.");
+    } finally {
+      setReorderSaving(false);
+    }
+  }, [notifyPurchaseOrdersChanged, reorderIdempotencyKey, reorderLocationId, reorderQty, reorderSaving, reorderSupplierId, reorderTarget]);
+
   useEffect(() => {
     if (!historyTarget) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1141,12 +1322,23 @@ export default function AllInStockMoves() {
   }, [historyTarget, closeVariantHistory]);
 
   useEffect(() => {
+    if (!reorderTarget) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !reorderSaving) closeReorder();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeReorder, reorderSaving, reorderTarget]);
+
+  useEffect(() => {
     let alive = true;
     fetchAifJSON<AifMeta>("/meta")
       .then((data) => {
         if (!alive) return;
         const activeLocations = (data.locations || []).filter((loc) => loc.is_active !== false);
+        const activeSuppliers = (data.suppliers || []).filter((supplier) => supplier.is_active !== false);
         setLocations(activeLocations);
+        setSuppliers(activeSuppliers);
       })
       .catch((e) => {
         setMessageTone("error");
@@ -1630,7 +1822,7 @@ export default function AllInStockMoves() {
                     <th className="px-3 py-2.5 text-center font-normal">Előtte</th>
                     <th className="px-3 py-2.5 text-center font-normal">Utána</th>
                     <th className="px-3 py-2.5 text-left font-normal">Forrás</th>
-                    <th className="px-3 py-2.5 text-right font-normal">Művelet</th>
+                    <th className="w-[214px] px-3 py-2.5 text-right font-normal">Művelet</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1659,9 +1851,20 @@ export default function AllInStockMoves() {
                         <td className="px-3 py-2 text-[12px] text-white/78">{formatDateTime(row.created_at)}</td>
                         <td className="px-3 py-2 text-[12px] text-white/78">{row.location_name || "-"}</td>
                         <td className="px-3 py-2 text-center">
-                          <span className={`inline-flex min-w-[96px] items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal ${meta.cls}`}>
-                            <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)}
-                          </span>
+                          {row.direction === "out" || n(row.qty_delta) < 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => void openReorder(row)}
+                              className={`inline-flex min-w-[110px] cursor-pointer items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal transition hover:-translate-y-px hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-red-200/35 ${meta.cls}`}
+                              title="Kattints az azonnali utánrendeléshez"
+                            >
+                              <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)} <ShoppingCart size={11} />
+                            </button>
+                          ) : (
+                            <span className={`inline-flex min-w-[110px] items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal ${meta.cls}`}>
+                              <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/78">{formatQty(row.qty_before ?? 0)}</td>
                         <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
@@ -1681,11 +1884,11 @@ export default function AllInStockMoves() {
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right">
-                          <div className="flex justify-end gap-1.5">
+                          <div className="ml-auto grid w-[198px] grid-cols-2 gap-1.5">
                             <button
                               type="button"
                               onClick={() => openVariantHistory(row)}
-                              className={rowPrimaryBtn}
+                              className={`${rowPrimaryBtn} w-full`}
                               title="Termék History"
                               aria-label="Termék History"
                             >
@@ -1695,7 +1898,7 @@ export default function AllInStockMoves() {
                               <button
                                 type="button"
                                 onClick={() => openMovementDocument(row)}
-                                className={rowSoftBtn}
+                                className={`${rowSoftBtn} w-full`}
                                 title="Kapcsolt készletbizonylat megnyitása"
                               >
                                 <FileText size={13} className="shrink-0" /> Bizonylat
@@ -1705,7 +1908,7 @@ export default function AllInStockMoves() {
                                 type="button"
                                 onClick={() => setDeleteCandidate(row)}
                                 disabled={deletingId === row.id}
-                                className={rowDangerBtn}
+                                className={`${rowDangerBtn} w-full`}
                                 title="Naplóbejegyzés végleges törlése"
                                 aria-label="Naplóbejegyzés végleges törlése"
                               >
@@ -1746,7 +1949,17 @@ export default function AllInStockMoves() {
                     <div className="mt-3 grid gap-2 text-xs text-white/68 sm:grid-cols-2">
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><Clock3 className="mr-1 inline" size={13} /> {formatDateTime(row.created_at)}</div>
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><MapPin className="mr-1 inline" size={13} /> {row.location_name || "-"}</div>
-                      <div className={`rounded-xl border px-3 py-2 text-center font-semibold ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
+                      {row.direction === "out" || n(row.qty_delta) < 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => void openReorder(row)}
+                          className={`rounded-xl border px-3 py-2 text-center font-semibold transition hover:brightness-110 ${meta.cls}`}
+                        >
+                          <Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)} <ShoppingCart className="ml-1 inline" size={12} />
+                        </button>
+                      ) : (
+                        <div className={`rounded-xl border px-3 py-2 text-center font-semibold ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
+                      )}
                       <div className="rounded-xl bg-[#354153] px-3 py-2">{formatQty(row.qty_before ?? 0)} → {formatQty(row.qty_after ?? 0)}</div>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-white/62">
@@ -1763,11 +1976,11 @@ export default function AllInStockMoves() {
                           </button>
                         ) : null}
                       </span>
-                      <div className="flex gap-2">
+                      <div className="grid w-full grid-cols-2 gap-2 sm:w-[224px]">
                         <button
                           type="button"
                           onClick={() => openVariantHistory(row)}
-                          className={primaryBtn}
+                          className={`${primaryBtn} w-full`}
                           title="Termék History"
                           aria-label="Termék History"
                         >
@@ -1777,7 +1990,7 @@ export default function AllInStockMoves() {
                           <button
                             type="button"
                             onClick={() => openMovementDocument(row)}
-                            className={btnSoft}
+                            className={`${btnSoft} w-full`}
                           >
                             <FileText size={15} className="shrink-0" /> Bizonylat
                           </button>
@@ -1786,7 +1999,7 @@ export default function AllInStockMoves() {
                             type="button"
                             onClick={() => setDeleteCandidate(row)}
                             disabled={deletingId === row.id}
-                            className={tinyDangerBtn}
+                            className={`${tinyDangerBtn} w-full`}
                           >
                             <Trash2 size={15} className="shrink-0" /> Törlés
                           </button>
@@ -1905,6 +2118,87 @@ export default function AllInStockMoves() {
           onReload={reloadVariantHistory}
           onClose={closeVariantHistory}
         />
+      )}
+
+      {reorderTarget && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-red-300/28 bg-[#404a5b] shadow-[0_24px_70px_rgba(0,0,0,.58)]">
+            <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#303a4c] to-[#4a3039] px-5 py-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-red-100/60">Azonnali utánrendelés</p>
+                <h3 className="mt-1 flex items-center gap-2 text-lg font-normal text-white"><ShoppingCart size={19} /> Kimenő termék rendeléshez adása</h3>
+              </div>
+              <button type="button" onClick={closeReorder} disabled={reorderSaving} className={btnSoft}><X size={15} /> Bezárás</button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="flex gap-3 rounded-2xl border border-white/12 bg-[#354153] p-3">
+                <ProductThumb item={reorderTarget} />
+                <div className="min-w-0 flex-1">
+                  <ProductText item={reorderTarget} />
+                  <p className="mt-2 text-xs text-white/48">Kiment: {formatQty(Math.abs(n(reorderTarget.qty_delta)))} db • {reorderTarget.location_name || "Nincs helyszín"}</p>
+                </div>
+              </div>
+
+              {reorderError ? <div className="rounded-xl border border-red-200/22 bg-red-500/12 px-3 py-2 text-sm text-red-50">{reorderError}</div> : null}
+
+              {reorderLoading ? (
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 py-8 text-sm text-white/60"><Loader2 size={17} className="animate-spin" /> Beszállítói adatok betöltése...</div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className={label}>
+                    Beszállító
+                    <CompactSelect
+                      value={reorderSupplierId}
+                      onChange={setReorderSupplierId}
+                      placeholder="Válassz beszállítót"
+                      options={reorderSupplierOptions.map((supplier) => ({ value: supplier.id, label: supplier.name }))}
+                    />
+                  </label>
+                  <label className={label}>
+                    Célhely
+                    <CompactSelect
+                      value={reorderLocationId}
+                      onChange={setReorderLocationId}
+                      placeholder="Válassz célhelyet"
+                      options={locations.map((location) => ({ value: location.id || location.code, label: location.name }))}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                <label className={label}>
+                  Rendelendő mennyiség
+                  <div className="grid grid-cols-[42px_minmax(90px,1fr)_42px]">
+                    <button type="button" className={`${btnSoft} rounded-r-none px-0`} onClick={() => setReorderQty((qty) => Math.max(1, qty - 1))} disabled={reorderSaving}><Minus size={16} /></button>
+                    <input
+                      className={`${input} rounded-none text-center text-base tabular-nums`}
+                      value={reorderQty}
+                      onChange={(event) => setReorderQty(Math.max(1, Math.trunc(n(event.target.value) || 1)))}
+                      inputMode="numeric"
+                    />
+                    <button type="button" className={`${primaryBtn} rounded-l-none px-0`} onClick={() => setReorderQty((qty) => qty + 1)} disabled={reorderSaving}><Plus size={16} /></button>
+                  </div>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void submitReorder()}
+                  disabled={reorderLoading || reorderSaving || !reorderSupplierId || !reorderLocationId}
+                  className="inline-flex h-10 min-w-[190px] items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-red-600 px-4 text-sm text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {reorderSaving ? <Loader2 size={16} className="animate-spin" /> : <ShoppingCart size={16} />}
+                  {reorderSaving ? "Hozzáadás..." : "Rendeléshez adás"}
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2a8d8b]/24 bg-[#174c55]/50 px-3 py-2 text-xs text-cyan-50/86">
+                <span>Ha van nyitott rendelés ennél a beszállítónál, azt bővíti. Ha nincs, újat nyit.</span>
+                <button type="button" onClick={() => { closeReorder(); window.location.hash = "#allinorderhistory"; }} className="rounded-lg border border-white/18 bg-white/[0.08] px-2.5 py-1.5 text-white hover:bg-white/[0.12]">Rendelések</button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {bulkDeleteOpen && selectedMoveCount > 0 && (
