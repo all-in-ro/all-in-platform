@@ -30,10 +30,11 @@ ALTER TABLE IF EXISTS aif_stock_transfer_documents
 ALTER TABLE IF EXISTS aif_stock_transfer_documents
   ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON';
 
--- Piszkozat: még nem módosít készletet és nem fogyaszt hivatalos sorszámot.
+-- A draft továbbra is készletet nem mozgató vázlat.
+-- A preparation már ténylegesen mozgatott, de még szerkeszthető belső átadás.
 UPDATE aif_stock_transfer_documents
 SET status='issued'
-WHERE status NOT IN ('draft','issued','cancelled');
+WHERE status NOT IN ('draft','preparation','issued','cancelled');
 
 DO $$
 DECLARE c record;
@@ -51,7 +52,7 @@ END $$;
 
 ALTER TABLE aif_stock_transfer_documents
   ADD CONSTRAINT aif_stock_transfer_documents_status_check
-  CHECK (status IN ('draft','issued','cancelled'));
+  CHECK (status IN ('draft','preparation','issued','cancelled'));
 
 ALTER TABLE IF EXISTS aif_stock_transfer_document_lines
   ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL;
@@ -66,6 +67,13 @@ ALTER TABLE IF EXISTS aif_stock_transfer_document_lines
 
 CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_type_created_idx
   ON aif_stock_transfer_documents (document_type, created_at DESC);
+
+-- Egy felhasználónak egyszerre egy nyitott belső átadási előkészítése lehet.
+CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_uq
+  ON aif_stock_transfer_documents (owner_key)
+  WHERE status='preparation'
+    AND document_type='internal_transfer'
+    AND owner_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
   document_type text PRIMARY KEY,
