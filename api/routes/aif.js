@@ -13040,7 +13040,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (variantId) {
       const result = await client.query(
         `SELECT v.id, v.internal_sku, v.barcode, v.sn_cod, v.color_name, v.color_code, v.size,
-                v.image_url, v.buy_price, v.sell_price, ${customsTariffSql('v')} AS customs_tariff_code,
+                v.image_url, v.buy_price,
+                COALESCE(last_purchase.buy_price, v.buy_price) AS purchase_price,
+                last_purchase.purchased_at AS purchase_price_at,
+                ${customsTariffSql('v')} AS customs_tariff_code,
                 m.model_code, m.title_ro, m.description_ro, m.gender, m.product_type, m.material,
                 b.name AS brand_name, c.name_ro AS category_name,
                 sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_barcode
@@ -13058,6 +13061,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     x.updated_at DESC NULLS LAST, x.created_at DESC NULLS LAST
            LIMIT 1
          ) sc ON true
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(rw.buy_price_ron, rw.buy_price) AS buy_price,
+                  COALESCE(ib.committed_at, ib.updated_at, ib.created_at, rw.updated_at) AS purchased_at
+           FROM aif_import_rows rw
+           JOIN aif_import_batches ib ON ib.id=rw.batch_id
+           WHERE rw.variant_id=v.id
+             AND rw.status='committed'
+             AND COALESCE(rw.buy_price_ron, rw.buy_price) IS NOT NULL
+             AND ($2::text='' OR ib.supplier_id::text=$2)
+           ORDER BY COALESCE(ib.committed_at, ib.updated_at, ib.created_at, rw.updated_at) DESC,
+                    rw.row_no DESC,
+                    rw.id DESC
+           LIMIT 1
+         ) last_purchase ON true
          WHERE v.id::text=$1
          LIMIT 1`,
         [variantId, supplierId ? String(supplierId) : '']
@@ -13067,8 +13084,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
     const qtyOrdered = Math.max(0, toInt(input.qtyOrdered ?? input.qty_ordered ?? input.qty ?? input.quantity) || 0);
     if (qtyOrdered <= 0) throw Object.assign(new Error('A rendelendő mennyiség legyen legalább 1.'), { statusCode: 400 });
-    const unitPrice = toMoney(input.unitPrice ?? input.unit_price ?? input.buyPrice ?? input.buy_price);
-    const sellPrice = toMoney(input.sellPrice ?? input.sell_price ?? variant?.sell_price);
+    // Beszerzési rendelésben kizárólag vételár szerepelhet.
+    // Elsőként a kézzel megadott vételárat használjuk, utána a kiválasztott
+    // beszállító legutóbbi készletre vett árát, végül a variáns aktuális vételárát.
+    // Eladási árat ebbe a folyamatba szándékosan nem veszünk át.
+    const unitPrice = toMoney(
+      input.unitPrice ?? input.unit_price ?? input.buyPrice ?? input.buy_price ??
+      variant?.purchase_price ?? variant?.buy_price
+    );
+    const sellPrice = null;
     const productTitle = text(input.productTitle || input.product_title || input.title || variant?.title_ro);
     if (!productTitle) throw Object.assign(new Error('A terméknév kötelező.'), { statusCode: 400 });
     return {
@@ -13119,7 +13143,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           line.productTitle, line.brandName, line.categoryName, line.barcode, line.snCod, line.customsTariffCode,
           line.colorName, line.colorCode, line.size, line.gender, line.productType, line.material, line.descriptionRo, line.imageUrl,
           line.qtyOrdered, line.unitPrice, line.sellPrice, line.lineTotal, currency, line.note,
-          JSON.stringify({ source: line.variantId ? 'inventory' : 'manual', input }),
+          JSON.stringify({ source: line.variantId ? 'inventory' : 'manual', priceBasis: 'purchase_price', input }),
         ]
       );
       lines.push(result.rows[0]);
@@ -13195,7 +13219,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const existing = line.variantId
       ? await client.query(
-          `SELECT id, qty_ordered, qty_received, unit_price, sell_price
+          `SELECT id, qty_ordered, qty_received, unit_price
            FROM aif_purchase_order_lines
            WHERE order_id=$1 AND variant_id=$2::uuid
            LIMIT 1
@@ -13210,9 +13234,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const unitPrice = current.unit_price === null || current.unit_price === undefined
         ? line.unitPrice
         : Number(current.unit_price);
-      const sellPrice = current.sell_price === null || current.sell_price === undefined
-        ? line.sellPrice
-        : Number(current.sell_price);
       const lineTotal = unitPrice === null || unitPrice === undefined
         ? null
         : Math.round((nextQty * Number(unitPrice) + Number.EPSILON) * 100) / 100;
@@ -13220,21 +13241,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_purchase_order_lines
          SET qty_ordered=$2,
              unit_price=$3,
-             sell_price=$4,
-             line_total=$5,
-             note=COALESCE(note,$6),
-             raw=COALESCE(raw,'{}'::jsonb) || $7::jsonb,
+             sell_price=NULL,
+             line_total=$4,
+             note=COALESCE(note,$5),
+             raw=COALESCE(raw,'{}'::jsonb) || $6::jsonb,
              updated_at=now()
          WHERE id=$1`,
         [
           current.id,
           nextQty,
           unitPrice,
-          sellPrice,
           lineTotal,
           line.note,
           JSON.stringify({
             source: 'warehouse_order_worklist',
+            priceBasis: 'purchase_price',
             addedQty: line.qtyOrdered,
             addedAt: new Date().toISOString(),
           }),
@@ -13267,6 +13288,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         line.qtyOrdered, line.unitPrice, line.sellPrice, line.lineTotal, order.currency_code || 'RON', line.note,
         JSON.stringify({
           source: 'warehouse_order_worklist',
+          priceBasis: 'purchase_price',
           addedQty: line.qtyOrdered,
           addedAt: new Date().toISOString(),
           input,
