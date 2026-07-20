@@ -11,6 +11,7 @@ import {
   PackageCheck,
   PackageOpen,
   Receipt,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Edit3,
