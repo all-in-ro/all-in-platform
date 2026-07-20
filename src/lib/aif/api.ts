@@ -1825,6 +1825,58 @@ export function apiAifUpdatePurchaseOrder(id: string, input: AifPurchaseOrderInp
   });
 }
 
+export type AifOpenPurchaseOrderWorkItem = {
+  supplierId: string;
+  variantId: string;
+  qty: number | string;
+  unitPrice?: number | string | null;
+  note?: string | null;
+};
+
+export type AifOpenPurchaseOrderWorkResult = {
+  supplierId: string;
+  supplierName?: string | null;
+  orderId: string;
+  orderNumber: string;
+  status: AifPurchaseOrderStatus;
+  created: boolean;
+  addedLines: number;
+  mergedLines: number;
+  addedQty: number;
+  lineCount?: number;
+  totalQty?: number;
+  currencyCode?: string | null;
+  targetLocationId?: string | null;
+  locationName?: string | null;
+};
+
+export function apiAifAddItemsToOpenPurchaseOrders(input: {
+  items: AifOpenPurchaseOrderWorkItem[];
+  targetLocationId?: string | null;
+  currencyCode?: string;
+  note?: string | null;
+  idempotencyKey?: string;
+}) {
+  const idempotencyKey = String(input.idempotencyKey || "").trim();
+  return fetchAifJSON<{
+    ok: true;
+    duplicate?: boolean;
+    orders: AifOpenPurchaseOrderWorkResult[];
+    addedItems: number;
+    addedQty: number;
+  }>("/purchase-orders/open/add-items", {
+    method: "POST",
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+    body: JSON.stringify({
+      items: input.items,
+      targetLocationId: input.targetLocationId || null,
+      currencyCode: input.currencyCode || "RON",
+      note: input.note || null,
+      idempotencyKey: idempotencyKey || null,
+    }),
+  });
+}
+
 export function apiAifMarkPurchaseOrderOrdered(id: string, note?: string) {
   return fetchAifJSON<{ ok: true; item: AifPurchaseOrderSummary }>(`/purchase-orders/${encodeURIComponent(id)}/ordered`, {
     method: "POST",
