@@ -36,6 +36,7 @@ import {
 import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
 import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
 import ShopifyStatusIcon, { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import { apiAifAddItemsToOpenPurchaseOrders } from "../lib/aif/api";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
@@ -555,6 +556,21 @@ type StockTransferDraftRow = {
   fromLocationId: string;
   toLocationId: string;
   qty: string;
+};
+
+type PurchaseOrderWorkDraftRow = {
+  supplierId: string;
+  qty: string;
+};
+
+type PreparedPurchaseOrderWorkRow = {
+  item: InventoryItem;
+  variantId: string;
+  supplierId: string;
+  supplierName: string;
+  qty: number;
+  valid: boolean;
+  problem: string;
 };
 
 type PreparedStockTransferRow = {
@@ -4630,6 +4646,11 @@ export default function AllInWarehouse() {
   const [shopifyExportModalOpen, setShopifyExportModalOpen] = useState(false);
   const [shopifyExportItems, setShopifyExportItems] = useState<InventoryItem[]>([]);
   const [shopifySyncCenterOpen, setShopifySyncCenterOpen] = useState(false);
+  const [purchaseOrderWorkRows, setPurchaseOrderWorkRows] = useState<Record<string, PurchaseOrderWorkDraftRow>>({});
+  const [purchaseOrderTargetLocationId, setPurchaseOrderTargetLocationId] = useState("");
+  const [purchaseOrderWorkSaving, setPurchaseOrderWorkSaving] = useState(false);
+  const purchaseOrderWorkSubmitLockRef = useRef(false);
+  const purchaseOrderWorkIdempotencyKeyRef = useRef("");
   const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
   const [stockMoveNote, setStockMoveNote] = useState("");
   const [stockMoveDocumentTitle, setStockMoveDocumentTitle] = useState("Aviz intern de transfer stoc");
@@ -6779,6 +6800,279 @@ export default function AllInWarehouse() {
     shopify: selectedShopifyItems.length,
   };
   const selectedWorkButtonClass = (action: SelectedWorkAction) => selectedWorkCounts[action] > 0 ? primaryBtn : btnSoft;
+
+  function supplierValue(row?: Partial<MetaItem> | null) {
+    return String(row?.id || row?.code || row?.name || "").trim();
+  }
+
+  function supplierByValue(value: unknown) {
+    const key = normalizeSearch(value);
+    if (!key) return null;
+    return suppliers.find((row) => [row.id, row.code, row.name].map(normalizeSearch).includes(key)) || null;
+  }
+
+  function brandRowForOrderItem(item: InventoryItem) {
+    const keys = [item.brand_code, item.brand_name].map(normalizeSearch).filter(Boolean);
+    if (!keys.length) return null;
+    return brands.find((row) => [row.id, row.code, row.name].map(normalizeSearch).some((key) => keys.includes(key))) || null;
+  }
+
+  function orderSupplierCandidatesForItem(item: InventoryItem) {
+    const candidates = new Map<string, MetaItem>();
+    const addSupplier = (row?: MetaItem | null) => {
+      if (!row || row.is_active === false) return;
+      const id = supplierValue(row);
+      if (id && !candidates.has(id)) candidates.set(id, row);
+    };
+
+    const directEntries = inventorySupplierEntries(item);
+    for (const entry of directEntries) {
+      const keyValues = [entry.id, entry.code, entry.name].map(normalizeSearch).filter(Boolean);
+      const found = suppliers.find((row) => [row.id, row.code, row.name].map(normalizeSearch).some((key) => keyValues.includes(key)));
+      addSupplier(found || null);
+    }
+
+    const brandRow = brandRowForOrderItem(item);
+    const brandLinks = brandRow
+      ? supplierBrands
+          .filter((link) => link.is_active !== false && String(link.brand_id || "") === String(brandRow.id || ""))
+          .slice()
+          .sort((a, b) => Number(Boolean(b.is_preferred)) - Number(Boolean(a.is_preferred)))
+      : [];
+    for (const link of brandLinks) addSupplier(suppliers.find((row) => String(row.id || "") === String(link.supplier_id || "")) || null);
+
+    return Array.from(candidates.values());
+  }
+
+  function preferredOrderSupplierIdForItem(item: InventoryItem) {
+    const candidates = orderSupplierCandidatesForItem(item);
+    if (candidates.length === 1) return supplierValue(candidates[0]);
+
+    const brandRow = brandRowForOrderItem(item);
+    if (brandRow) {
+      const preferredLink = supplierBrands.find((link) =>
+        link.is_active !== false &&
+        link.is_preferred &&
+        String(link.brand_id || "") === String(brandRow.id || "") &&
+        candidates.some((row) => String(row.id || "") === String(link.supplier_id || ""))
+      );
+      if (preferredLink) return String(preferredLink.supplier_id || "");
+    }
+
+    return "";
+  }
+
+  function purchaseOrderSupplierOptionsForItem(item: InventoryItem): WarehouseMoveDropdownOption[] {
+    const linked = orderSupplierCandidatesForItem(item);
+    const linkedIds = new Set(linked.map((row) => String(row.id || "")));
+    const rest = suppliers
+      .filter((row) => row.is_active !== false && !linkedIds.has(String(row.id || "")))
+      .slice()
+      .sort((a, b) => String(a.name || a.code || "").localeCompare(String(b.name || b.code || ""), "hu", { sensitivity: "base" }));
+    return [
+      ...linked.map((row) => ({
+        value: supplierValue(row),
+        label: String(row.name || row.code || "Beszállító"),
+        hint: "kapcsolt",
+      })),
+      ...rest.map((row) => ({
+        value: supplierValue(row),
+        label: String(row.name || row.code || "Beszállító"),
+      })),
+    ];
+  }
+
+  const selectedOrderIdsKey = useMemo(
+    () => selectedOrderItems.map((item) => String(item.variant_id || "")).filter(Boolean).join("|"),
+    [selectedOrderItems]
+  );
+
+  useEffect(() => {
+    if (selectedWorkPanel !== "order") return;
+    purchaseOrderWorkIdempotencyKeyRef.current = "";
+    setPurchaseOrderWorkRows((current) => {
+      const next: Record<string, PurchaseOrderWorkDraftRow> = {};
+      for (const item of selectedOrderItems) {
+        const variantId = String(item.variant_id || "");
+        if (!variantId) continue;
+        const previous = current[variantId];
+        const previousSupplier = supplierByValue(previous?.supplierId);
+        next[variantId] = {
+          supplierId: previousSupplier ? supplierValue(previousSupplier) : preferredOrderSupplierIdForItem(item),
+          qty: String(Math.max(1, Math.floor(n(previous?.qty || 1)))),
+        };
+      }
+      return next;
+    });
+
+    if (!purchaseOrderTargetLocationId) {
+      const preferredLocation = stockLocationRows.find((row) => String(row.code || "") === "main_warehouse")
+        || stockLocationRows.find((row) => /miercurea|ciuc/i.test(String(row.name || row.code || "")))
+        || stockLocationRows[0]
+        || null;
+      setPurchaseOrderTargetLocationId(locationValue(preferredLocation));
+    }
+  }, [
+    selectedWorkPanel,
+    selectedOrderIdsKey,
+    suppliers,
+    brands,
+    supplierBrands,
+    stockLocationRows,
+    purchaseOrderTargetLocationId,
+  ]);
+
+  function setPurchaseOrderWorkRowField(variantId: string, patch: Partial<PurchaseOrderWorkDraftRow>) {
+    const item = selectedOrderItems.find((row) => String(row.variant_id || "") === String(variantId || ""));
+    setPurchaseOrderWorkRows((current) => {
+      const previous = current[variantId] || {
+        supplierId: item ? preferredOrderSupplierIdForItem(item) : "",
+        qty: "1",
+      };
+      const next = { ...previous, ...patch };
+      next.qty = String(Math.max(1, Math.floor(n(next.qty || 1))));
+      return { ...current, [variantId]: next };
+    });
+    purchaseOrderWorkIdempotencyKeyRef.current = "";
+  }
+
+  function adjustPurchaseOrderWorkQty(variantId: string, delta: number) {
+    const item = selectedOrderItems.find((row) => String(row.variant_id || "") === String(variantId || ""));
+    if (!item) return;
+    const current = purchaseOrderWorkRows[variantId] || {
+      supplierId: preferredOrderSupplierIdForItem(item),
+      qty: "1",
+    };
+    setPurchaseOrderWorkRowField(variantId, { qty: String(Math.max(1, Math.floor(n(current.qty)) + delta)) });
+  }
+
+  const preparedPurchaseOrderRows = useMemo<PreparedPurchaseOrderWorkRow[]>(() => {
+    return selectedOrderItems.map((item) => {
+      const variantId = String(item.variant_id || "");
+      const draft = purchaseOrderWorkRows[variantId] || {
+        supplierId: preferredOrderSupplierIdForItem(item),
+        qty: "1",
+      };
+      const supplier = supplierByValue(draft.supplierId);
+      const qty = Math.max(0, Math.floor(n(draft.qty)));
+      let problem = "";
+      if (!variantId) problem = "Hiányzik a termékazonosító.";
+      else if (!supplier) problem = "Válassz beszállítót.";
+      else if (qty <= 0) problem = "Adj meg legalább 1 darabot.";
+      return {
+        item,
+        variantId,
+        supplierId: supplier ? supplierValue(supplier) : "",
+        supplierName: supplier ? String(supplier.name || supplier.code || "Beszállító") : "",
+        qty,
+        valid: !problem,
+        problem,
+      };
+    });
+  }, [selectedOrderItems, purchaseOrderWorkRows, suppliers, brands, supplierBrands]);
+
+  const preparedPurchaseOrderRowsById = useMemo(
+    () => new Map(preparedPurchaseOrderRows.map((row) => [row.variantId, row])),
+    [preparedPurchaseOrderRows]
+  );
+
+  const purchaseOrderWorkGroups = useMemo(() => {
+    const groups = new Map<string, { supplierId: string; supplierName: string; rows: number; qty: number }>();
+    for (const row of preparedPurchaseOrderRows.filter((item) => item.valid)) {
+      const current = groups.get(row.supplierId) || {
+        supplierId: row.supplierId,
+        supplierName: row.supplierName,
+        rows: 0,
+        qty: 0,
+      };
+      current.rows += 1;
+      current.qty += row.qty;
+      groups.set(row.supplierId, current);
+    }
+    return Array.from(groups.values()).sort((a, b) => a.supplierName.localeCompare(b.supplierName, "hu", { sensitivity: "base" }));
+  }, [preparedPurchaseOrderRows]);
+
+  const purchaseOrderWorkInvalidCount = preparedPurchaseOrderRows.filter((row) => !row.valid).length;
+  const purchaseOrderWorkTotalQty = preparedPurchaseOrderRows
+    .filter((row) => row.valid)
+    .reduce((sum, row) => sum + row.qty, 0);
+  const purchaseOrderWorkCanSave =
+    selectedWorkPanel === "order" &&
+    preparedPurchaseOrderRows.length > 0 &&
+    purchaseOrderWorkInvalidCount === 0 &&
+    !purchaseOrderWorkSaving;
+
+  function createPurchaseOrderWorkIdempotencyKey() {
+    if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
+      return globalThis.crypto.randomUUID();
+    }
+    return `purchase-order-work-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  async function saveSelectedOrderItemsToOpenOrders() {
+    if (purchaseOrderWorkSubmitLockRef.current) return;
+    if (!purchaseOrderWorkCanSave) {
+      setMessage(purchaseOrderWorkInvalidCount
+        ? `${purchaseOrderWorkInvalidCount} rendelési sor még javítandó.`
+        : "Nincs menthető termék a rendelési listában.");
+      return;
+    }
+
+    purchaseOrderWorkSubmitLockRef.current = true;
+    setPurchaseOrderWorkSaving(true);
+    setMessage("");
+    try {
+      if (!purchaseOrderWorkIdempotencyKeyRef.current) {
+        purchaseOrderWorkIdempotencyKeyRef.current = createPurchaseOrderWorkIdempotencyKey();
+      }
+      const result = await apiAifAddItemsToOpenPurchaseOrders({
+        targetLocationId: purchaseOrderTargetLocationId || null,
+        currencyCode: "RON",
+        idempotencyKey: purchaseOrderWorkIdempotencyKeyRef.current,
+        items: preparedPurchaseOrderRows.map((row) => ({
+          supplierId: row.supplierId,
+          variantId: row.variantId,
+          qty: row.qty,
+        })),
+      });
+
+      const completedIds = new Set<string>(
+        preparedPurchaseOrderRows.map((row) => row.variantId).filter((value): value is string => Boolean(value))
+      );
+      const cleanup = await removeCompletedSelectedItems(completedIds);
+      const resultText = (result.orders || [])
+        .map((order) => `${order.orderNumber} • ${order.supplierName || "beszállító"} • +${order.addedQty} db${order.created ? " • új" : " • bővítve"}`)
+        .join(" | ");
+
+      try {
+        const payload = { at: new Date().toISOString(), orders: result.orders || [] };
+        window.localStorage.setItem("allinfashion:purchaseOrders:changed:v1", JSON.stringify(payload));
+        window.dispatchEvent(new CustomEvent("aif:purchase-orders-changed", { detail: payload }));
+      } catch {
+        // A következő oldalbetöltés ettől még behozza a rendeléseket.
+      }
+
+      purchaseOrderWorkIdempotencyKeyRef.current = "";
+      setPurchaseOrderWorkRows({});
+      setMessage(
+        `${result.duplicate ? "A korábbi mentést ismertem fel, nem dupláztam." : "Nyitott rendelések frissítve."} ${resultText}${
+          cleanup.synced ? "" : " A helyi kijelölésből eltűntek, de a közös munkalista szinkronját újra kell próbálni."
+        }`
+      );
+      closeSelectedWorkflowAndReturn();
+    } catch (error: any) {
+      setMessage(error?.message || "A nyitott beszállítói rendelések frissítése nem sikerült.");
+    } finally {
+      purchaseOrderWorkSubmitLockRef.current = false;
+      setPurchaseOrderWorkSaving(false);
+    }
+  }
+
+  function openPurchaseOrdersPage() {
+    setSelectedWorkPanel(null);
+    setSelectedPanelOpen(false);
+    window.location.hash = "#allinorderhistory";
+  }
 
   function locationValue(loc?: MetaItem | null) {
     return String(loc?.id || loc?.code || loc?.name || "").trim();
@@ -10135,13 +10429,22 @@ export default function AllInWarehouse() {
       {selectedWorkPanel && (
         <div className="fixed inset-0 z-[65] flex items-center justify-center bg-[#070c16]/80 p-4 backdrop-blur-lg">
           <div
-            className={`${selectedWorkPanel === "move" ? "flex max-w-none flex-col overflow-hidden rounded-[28px] bg-[#253143]" : "max-h-[88vh] max-w-5xl overflow-auto rounded-2xl bg-[#4b5362]"} w-full border border-white/20 shadow-[0_34px_110px_rgba(2,6,23,0.72),0_0_0_1px_rgba(123,215,212,0.05)]`}
+            className={`${selectedWorkPanel === "move"
+              ? "flex max-w-none flex-col overflow-hidden rounded-[28px] bg-[#253143]"
+              : selectedWorkPanel === "order"
+                ? "flex max-w-none flex-col overflow-hidden rounded-[26px] bg-[#253143]"
+                : "max-h-[88vh] max-w-5xl overflow-auto rounded-2xl bg-[#4b5362]"} w-full border border-white/20 shadow-[0_34px_110px_rgba(2,6,23,0.72),0_0_0_1px_rgba(123,215,212,0.05)]`}
             style={selectedWorkPanel === "move" ? {
               width: "min(1480px, calc(100vw - 32px))",
               height: "min(780px, calc(100vh - 32px))",
+            } : selectedWorkPanel === "order" ? {
+              width: "min(1280px, calc(100vw - 32px))",
+              height: "min(760px, calc(100vh - 32px))",
             } : undefined}
           >
-            <div className={`${selectedWorkPanel === "move" ? "bg-gradient-to-r from-[#172235] via-[#293b52] to-[#2a8d8b]/70 px-5 py-3.5" : "sticky top-0 z-10 bg-[#404a5b]/98 px-4 py-3 backdrop-blur"} flex flex-wrap items-center justify-between gap-3 border-b border-white/14`}>
+            <div className={`${selectedWorkPanel === "move" || selectedWorkPanel === "order"
+              ? "bg-gradient-to-r from-[#172235] via-[#293b52] to-[#2a8d8b]/70 px-5 py-3.5"
+              : "sticky top-0 z-10 bg-[#404a5b]/98 px-4 py-3 backdrop-blur"} flex flex-wrap items-center justify-between gap-3 border-b border-white/14`}>
               {selectedWorkPanel === "move" ? (
                 <div className="flex min-w-0 items-center gap-3.5">
                   <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/38 bg-[#2a8d8b]/24 text-[#d7fffd] shadow-[0_12px_28px_rgba(2,6,23,0.28)]" title="A készlet csak a végső megerősítés után változik.">
@@ -10157,6 +10460,23 @@ export default function AllInWarehouse() {
                       </span>
                     </div>
                     <p className="mt-1 text-[12px] text-white/62">{selectedMoveItems.length} terméksor • {moveTotalQty} db • {money(moveTotalValue)} RON</p>
+                  </div>
+                </div>
+              ) : selectedWorkPanel === "order" ? (
+                <div className="flex min-w-0 items-center gap-3.5">
+                  <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/38 bg-[#2a8d8b]/24 text-[#d7fffd] shadow-[0_12px_28px_rgba(2,6,23,0.28)]" title="Beszállítónként egy nyitott rendelés készül vagy bővül.">
+                    <ClipboardList size={22} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/68">Beszállítói rendelés • nyitott lista</p>
+                    <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
+                      <h2 className="mr-1 truncate text-[22px] leading-tight tracking-tight text-white">Rendelési csomag</h2>
+                      <span className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[10px] ${purchaseOrderWorkCanSave ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/20 text-[#d7fffd]" : "border-rose-200/35 bg-[#d31126]/75 text-white"}`}>
+                        {purchaseOrderWorkCanSave ? <CheckCircle2 size={11} /> : <AlertTriangle size={11} />}
+                        {purchaseOrderWorkCanSave ? "Menthető" : `${purchaseOrderWorkInvalidCount} javítandó`}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px] text-white/62">{selectedOrderItems.length} terméksor • {purchaseOrderWorkTotalQty} db • {purchaseOrderWorkGroups.length} beszállító</p>
                   </div>
                 </div>
               ) : (
@@ -10176,12 +10496,19 @@ export default function AllInWarehouse() {
                     <ShopifyBrandMark size="xs" /> Shopify export előkészítése
                   </button>
                 )}
+                {selectedWorkPanel === "order" && (
+                  <button className={`${btnSoft} !h-10 !rounded-xl !px-4 !text-[12px]`} onClick={openPurchaseOrdersPage} type="button">
+                    <ClipboardList size={14} /> Rendelések
+                  </button>
+                )}
                 <button className={`${btnSoft} !h-10 !rounded-xl !px-4 !text-[12px]`} onClick={() => setSelectedWorkPanel(null)} type="button"><ArrowLeft size={15} /> Vissza</button>
                 <button className={`${btnSoft} !h-10 !rounded-xl !px-4 !text-[12px]`} onClick={closeSelectedWorkflowAndReturn} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
-            <div className={selectedWorkPanel === "move" ? "min-h-0 flex-1 overflow-hidden bg-[#253143] p-3.5" : "space-y-3 p-4"}>
+            <div className={selectedWorkPanel === "move" || selectedWorkPanel === "order"
+              ? "min-h-0 flex-1 overflow-hidden bg-[#253143] p-3.5"
+              : "space-y-3 p-4"}>
               {selectedWorkPanel === "move" ? (
                 <div className="flex h-full min-h-0 flex-col gap-3">
                   <div className="grid shrink-0 gap-3 xl:grid-cols-[minmax(420px,.92fr)_minmax(700px,1.38fr)]">
@@ -10506,6 +10833,202 @@ export default function AllInWarehouse() {
                     </div>
                   </section>
                 </div>
+              ) : selectedWorkPanel === "order" ? (
+                <div className="flex h-full min-h-0 flex-col gap-3">
+                  <section className="shrink-0 overflow-hidden rounded-2xl border border-white/14 bg-[#303d51] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_12px_28px_rgba(2,6,23,0.10)]">
+                    <div className="flex h-10 items-center justify-between gap-2 border-b border-white/10 bg-[#29364a] px-3.5">
+                      <span className="inline-flex items-center gap-2 text-[13px] text-white/92">
+                        <ClipboardList size={13} className="text-[#7bd7d4]" />
+                        Nyitott rendelések beállítása
+                      </span>
+                      <span className="rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/66" title="Beszállítónként mindig a meglévő nyitott rendelés bővül; ha nincs, új rendelés nyílik.">
+                        1 beszállító = 1 nyitott rendelés
+                      </span>
+                    </div>
+                    <div className="grid gap-3 p-3 lg:grid-cols-[minmax(280px,.8fr)_minmax(0,1.7fr)] lg:items-end">
+                      <label className="grid min-w-0 gap-1.5 text-[10px] uppercase tracking-[0.08em] text-white/58">
+                        Alapértelmezett célhely
+                        <WarehouseMoveDropdown
+                          value={purchaseOrderTargetLocationId}
+                          placeholder="Válassz célhelyet..."
+                          ariaLabel="Beszerzési rendelés célhelye"
+                          tone="target"
+                          options={stockLocationRows.map((loc) => ({
+                            value: locationValue(loc),
+                            label: warehouseMoveLocationLabel(loc),
+                          }))}
+                          onChange={(value) => {
+                            setPurchaseOrderTargetLocationId(value);
+                            purchaseOrderWorkIdempotencyKeyRef.current = "";
+                          }}
+                        />
+                      </label>
+                      <div className="min-w-0">
+                        <p className="mb-1.5 text-[10px] uppercase tracking-[0.08em] text-white/48">Rendelések</p>
+                        <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-xl border border-white/12 bg-[#253247] px-2.5 py-1.5">
+                          {purchaseOrderWorkGroups.map((group) => (
+                            <span key={group.supplierId} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 px-2 text-[11px] text-[#d7fffd]" title={`${group.rows} terméksor, ${group.qty} db`}>
+                              {group.supplierName}
+                              <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] text-white">{group.rows}/{group.qty}</span>
+                            </span>
+                          ))}
+                          {!purchaseOrderWorkGroups.length ? (
+                            <span className="text-[11px] text-white/45">A beszállítók kiválasztása után itt látszik, hány nyitott rendelés frissül.</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {purchaseOrderWorkInvalidCount > 0 ? (
+                    <div className="flex shrink-0 items-center gap-2 rounded-xl border border-rose-200/28 bg-[#d31126]/18 px-3 py-2 text-[12px] text-rose-50">
+                      <AlertTriangle size={13} className="shrink-0" />
+                      <span>{purchaseOrderWorkInvalidCount} terméksornál még beszállítót vagy mennyiséget kell megadni.</span>
+                    </div>
+                  ) : null}
+
+                  <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/14 bg-[#29364a] shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_16px_34px_rgba(2,6,23,0.14)]">
+                    <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-white/10 bg-[#263246] px-3.5">
+                      <div className="flex items-center gap-2 text-[13px] text-white/94">
+                        <Boxes size={14} className="text-[#7bd7d4]" />
+                        Rendelendő termékek
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-0.5 text-white/65">{selectedOrderItems.length} sor</span>
+                        <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2 py-0.5 text-[#d7fffd]">{purchaseOrderWorkTotalQty} db</span>
+                      </div>
+                    </div>
+
+                    <div className="hidden shrink-0 border-b border-white/[0.09] bg-[#202c3e] px-3 py-2 text-[10px] uppercase tracking-[0.08em] text-white/56 lg:grid lg:grid-cols-[24px_44px_minmax(270px,1.25fr)_minmax(250px,.9fr)_132px_86px] lg:items-center lg:gap-2.5">
+                      <span />
+                      <span />
+                      <span>Termék</span>
+                      <span>Beszállító</span>
+                      <span>Rendelendő</span>
+                      <span />
+                    </div>
+
+                    <div className="min-h-0 flex-1 divide-y divide-white/[0.08] overflow-y-auto overscroll-contain">
+                      {selectedOrderItems.map((it) => {
+                        const variantId = String(it.variant_id || "");
+                        const prepared = preparedPurchaseOrderRowsById.get(variantId);
+                        const draft = purchaseOrderWorkRows[variantId] || {
+                          supplierId: preferredOrderSupplierIdForItem(it),
+                          qty: "1",
+                        };
+                        const rowProblem = prepared?.problem || "";
+                        const supplierOptions = purchaseOrderSupplierOptionsForItem(it);
+
+                        return (
+                          <article key={variantId} className={`${rowProblem ? "bg-rose-500/[0.06]" : "bg-[#344257] hover:bg-[#3d4c61]"} transition-colors`}>
+                            <div className="grid gap-2.5 px-3 py-2 lg:grid-cols-[24px_44px_minmax(270px,1.25fr)_minmax(250px,.9fr)_132px_86px] lg:items-center">
+                              <div className="flex justify-center">
+                                <input
+                                  className={selectBox}
+                                  type="checkbox"
+                                  checked
+                                  onChange={(event) => {
+                                    if (!event.target.checked) returnSelectedItemToMainList(variantId);
+                                  }}
+                                  aria-label="Kivétel a rendelési listából"
+                                  title="Kivétel a rendelési listából; a fő kijelölésben megmarad."
+                                />
+                              </div>
+
+                              <WarehouseProductImage
+                                src={it.image_url}
+                                alt={it.title_ro || ""}
+                                thumbClassName="h-10 w-10 rounded-xl"
+                                iconSize={15}
+                              />
+
+                              <div className="min-w-0" title={`${it.title_ro || "-"} • ${it.brand_name || "-"} • ${colorDisplay(it.color_name, it.color_code)} • ${it.size || "-"} • ${itemProductCode(it) || "-"}`}>
+                                <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
+                                <p className="mt-0.5 truncate text-[11px] text-white/58">
+                                  {it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"} • {itemProductCode(it) || "nincs termékkód"}
+                                </p>
+                              </div>
+
+                              <WarehouseMoveDropdown
+                                value={draft.supplierId}
+                                placeholder="Válassz beszállítót..."
+                                ariaLabel="Rendelési beszállító"
+                                options={supplierOptions}
+                                onChange={(supplierId) => setPurchaseOrderWorkRowField(variantId, { supplierId })}
+                              />
+
+                              <div className="grid h-10 grid-cols-[32px,minmax(48px,1fr),32px] overflow-hidden rounded-xl border border-white/18 bg-[#253247] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+                                <button
+                                  className="inline-flex h-10 items-center justify-center border-r border-white/10 text-white/84 hover:bg-white/10 disabled:opacity-35"
+                                  type="button"
+                                  onClick={() => adjustPurchaseOrderWorkQty(variantId, -1)}
+                                  disabled={n(draft.qty) <= 1}
+                                  aria-label="Rendelendő mennyiség csökkentése"
+                                >
+                                  <Minus size={12} />
+                                </button>
+                                <input
+                                  className="w-full min-w-0 bg-transparent px-1 text-center text-[13px] text-white outline-none tabular-nums"
+                                  type="text"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  value={draft.qty}
+                                  onChange={(event) => setPurchaseOrderWorkRowField(variantId, {
+                                    qty: event.target.value.replace(/[^0-9]/g, "") || "1",
+                                  })}
+                                  aria-label="Rendelendő darabszám"
+                                />
+                                <button
+                                  className="inline-flex h-10 items-center justify-center border-l border-white/10 text-white/84 hover:bg-white/10"
+                                  type="button"
+                                  onClick={() => adjustPurchaseOrderWorkQty(variantId, 1)}
+                                  aria-label="Rendelendő mennyiség növelése"
+                                >
+                                  <Plus size={12} />
+                                </button>
+                              </div>
+
+                              <div className="flex justify-end gap-1.5">
+                                <button
+                                  className={moveTinyBtn}
+                                  onClick={() => {
+                                    setSelectedWorkPanel(null);
+                                    setSelectedPanelOpen(false);
+                                    openDetail(it.variant_id);
+                                  }}
+                                  type="button"
+                                  title="Termék részletei"
+                                  aria-label="Termék részletei"
+                                >
+                                  <Edit3 size={12} />
+                                </button>
+                                <button
+                                  className={`${moveTinyBtn} hover:border-rose-300/45 hover:bg-rose-500/16`}
+                                  onClick={() => returnSelectedItemToMainList(variantId)}
+                                  type="button"
+                                  title="Kivétel a rendelési listából"
+                                  aria-label="Kivétel a rendelési listából"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </div>
+                            </div>
+
+                            {rowProblem ? (
+                              <div className="flex items-center gap-2 border-t border-rose-200/14 bg-[#d31126]/10 px-3 py-1.5 text-[11px] text-rose-100">
+                                <AlertTriangle size={11} className="shrink-0" />
+                                {rowProblem}
+                              </div>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                      {!selectedOrderItems.length ? (
+                        <p className="px-3 py-8 text-center text-sm text-white/60">Nincs termék ebben a listában.</p>
+                      ) : null}
+                    </div>
+                  </section>
+                </div>
               ) : (
                 <>
                   <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
@@ -10561,6 +11084,33 @@ export default function AllInWarehouse() {
                   </button>
                   <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/50 bg-[#2a8d8b] px-4 text-[12px] text-white shadow-[0_10px_24px_rgba(2,6,23,0.24)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40" onClick={requestSaveSelectedMoveTransfers} type="button" disabled={!moveCanSave} title="Tényleges készletmozgatás és hozzáadás a nyitott PV-előkészítéshez; előtte megerősítést kér.">
                     <PackageCheck size={15} /> {stockMoveSaving ? "Mentés..." : "Mozgatás az előkészítésbe"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {selectedWorkPanel === "order" && selectedOrderItems.length > 0 && (
+              <div className="flex min-h-[62px] shrink-0 flex-wrap items-center justify-between gap-3 border-t border-white/14 bg-[#172235]/98 px-4 py-3 shadow-[0_-18px_38px_rgba(2,6,23,0.34)] backdrop-blur">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5 text-[12px]" title="Mentéskor beszállítónként a meglévő nyitott rendelés bővül, vagy új nyitott rendelés jön létre.">
+                  <span className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 ${purchaseOrderWorkCanSave ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/20 text-[#d7fffd]" : "border-rose-200/35 bg-[#d31126]/65 text-white"}`}>
+                    {purchaseOrderWorkCanSave ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                    {purchaseOrderWorkCanSave ? "Rendben" : "Javítandó"}
+                  </span>
+                  <span className="text-white">{preparedPurchaseOrderRows.length} sor • {purchaseOrderWorkTotalQty} db</span>
+                  <span className="max-w-[620px] truncate text-white/52">{purchaseOrderWorkGroups.map((group) => group.supplierName).join(" • ") || "Nincs kiválasztott beszállító"}</span>
+                </div>
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <button className={`${btnSoft} !h-10 !rounded-xl !px-4 !text-[12px]`} onClick={openPurchaseOrdersPage} type="button">
+                    <ClipboardList size={14} /> Rendelések
+                  </button>
+                  <button
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/50 bg-[#2a8d8b] px-4 text-[12px] text-white shadow-[0_10px_24px_rgba(2,6,23,0.24)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={saveSelectedOrderItemsToOpenOrders}
+                    type="button"
+                    disabled={!purchaseOrderWorkCanSave}
+                    title="Hozzáadás beszállítónként a nyitott rendeléshez; ha nincs ilyen, új nyitott rendelés készül."
+                  >
+                    <Plus size={15} /> {purchaseOrderWorkSaving ? "Mentés..." : "Hozzáadás a nyitott rendelésekhez"}
                   </button>
                 </div>
               </div>
