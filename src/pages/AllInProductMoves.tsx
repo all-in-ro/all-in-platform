@@ -326,7 +326,19 @@ function moneyRon(value: unknown, includeCurrency = true) {
 function displayDocumentNumber(item?: Partial<DocumentListItem> | null) {
   const value = String(item?.document_number || "").trim();
   if (!value) return "-";
-  return item?.status === "draft" ? value.replace(/^PISZKOZAT\//i, "ELŐKÉSZÍTÉS/") : value;
+  if (item?.status !== "draft") return value;
+
+  const suffix = value
+    .replace(/^PISZKOZAT\//i, "")
+    .replace(/^ELŐKÉSZÍTÉS\//i, "")
+    .trim();
+  const prefixByType: Record<DocumentType, string> = {
+    internal_transfer: "PV",
+    supplier_return: "RET",
+    damaged_writeoff: "DET",
+    stock_correction: "COR",
+  };
+  return `${prefixByType[documentTypeOf(item)]}/${suffix || "NYITOTT"}`;
 }
 
 function dateTime(value?: string | null) {
@@ -1907,7 +1919,7 @@ export default function AllInProductMoves() {
                   const TypeIcon = typeMeta.icon;
                   return (
                     <tr key={item.id} className="border-t border-white/10 align-middle text-[12px] leading-tight transition hover:bg-white/[0.035]">
-                      <td className="px-3 py-2"><div className="flex items-center gap-2"><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06]"><FileText size={16} /></span><div><p className="text-[13px] font-normal text-white">{displayDocumentNumber(item)}</p><span className={`mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${badge.cls}`}><BadgeIcon size={10} /> {badge.label}</span></div></div></td>
+                      <td className="px-3 py-2"><div className="flex items-center gap-2"><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06]"><FileText size={16} /></span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><span className={`mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${badge.cls}`}><BadgeIcon size={10} /> {badge.label}</span></div></div></td>
                       <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${typeMeta.tone}`}><TypeIcon size={12} /> {typeMeta.shortLabel}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/72">{dateTime(item.created_at)}</td>
                       <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-white/76"><ArrowLeft size={12} className="text-[#7bd7d4]" /> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-white/76"><ArrowRight size={12} className="text-[#7bd7d4]" /> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
@@ -1973,13 +1985,13 @@ export default function AllInProductMoves() {
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetail(null); }}>
             <div className="flex max-h-[95vh] w-full max-w-[1360px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
-                <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" ? "Készletbizonylat előkészítése" : doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{displayDocumentNumber(doc)}</h2><p className="mt-1 truncate text-xs text-white/58">{meta.label} • {doc.subtitle || "-"}</p></div></div>
+                <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-1 truncate text-xs text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div></div>
                 <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3.5">
                 <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatszám</p><p className="mt-1 text-sm">{displayDocumentNumber(doc)}</p></div>
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p><p className="mt-1 text-sm">{dateTime(doc.updated_at || doc.created_at)}</p></div>
+                  <div className="min-w-0 overflow-hidden rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" ? "Előkészítési azonosító" : "Bizonylatszám"}</p><p className="mt-1 truncate text-[12px]" title={displayDocumentNumber(doc)}>{displayDocumentNumber(doc)}</p></div>
+                  <div className="min-w-0 overflow-hidden rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p><p className="mt-1 truncate text-[12px]" title={dateTime(doc.updated_at || doc.created_at)}>{dateTime(doc.updated_at || doc.created_at)}</p></div>
                   <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Típus</p><p className="mt-1 text-sm text-[#d7fffd]">{meta.shortLabel}</p></div>
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Rögzítette</p><p className="mt-1 truncate text-sm">{doc.actor || "-"}</p></div>
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Forrás</p><p className="mt-1 truncate text-sm">{detailFromSummary}</p></div>
