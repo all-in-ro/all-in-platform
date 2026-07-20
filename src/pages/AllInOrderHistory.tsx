@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
+  ChevronDown,
+  CheckCircle2,
   Barcode,
   Camera,
   ClipboardList,
@@ -65,7 +68,6 @@ const wrap = "mx-auto max-w-[1400px] space-y-4";
 const topCard = "rounded-2xl border border-white/20 bg-[#303a4c] px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)]";
 const card = "rounded-2xl border border-white/18 bg-[#4d5869] shadow-lg shadow-slate-950/15";
 const input = "h-9 w-full rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-[#67d4d1]/80 focus:ring-1 focus:ring-[#67d4d1]/30 [color-scheme:dark]";
-const selectInput = `${input} [color-scheme:dark]`;
 const label = "grid gap-1.5 text-[10px] uppercase tracking-[0.08em] text-white/72";
 const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-45";
 const primaryBtn = `${btnBase} border-[#67d4d1]/45 bg-[#2a8d8b] hover:bg-[#319c99]`;
@@ -73,11 +75,173 @@ const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
 const dangerBtn = `${btnBase} border-red-300/30 bg-[#c90d22] hover:bg-[#aa0b1d]`;
 const modalBackdrop = "fixed inset-0 z-[150] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-4 sm:py-6";
 const modalCard = "my-auto max-h-[calc(100dvh-2rem)] w-full overflow-y-auto rounded-2xl border border-white/22 bg-[#4b5566] text-white shadow-2xl";
-const optionStyle = { backgroundColor: "#303b4e", color: "#fff" };
 
 function goHome() {
   window.location.hash = "#allin";
 }
+
+type CompactSelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+};
+
+type CompactSelectProps = {
+  value: string;
+  options: CompactSelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  size?: "compact" | "default";
+  menuMinWidth?: number;
+};
+
+function CompactSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Válassz",
+  className = "",
+  disabled = false,
+  ariaLabel,
+  size = "default",
+  menuMinWidth = 220,
+}: CompactSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value) || null;
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || typeof window === "undefined") return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const maxWidth = Math.min(360, window.innerWidth - viewportPadding * 2);
+    const width = Math.min(Math.max(rect.width, menuMinWidth), maxWidth);
+    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
+    const roomBelow = window.innerHeight - rect.bottom;
+    const openUp = roomBelow < 250 && rect.top > roomBelow;
+    setMenuPosition(openUp
+      ? { left, width, bottom: Math.max(viewportPadding, window.innerHeight - rect.top + 6) }
+      : { left, width, top: Math.min(window.innerHeight - viewportPadding, rect.bottom + 6) });
+  }, [menuMinWidth]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("mousedown", closeOnOutside, true);
+    window.addEventListener("keydown", closeOnEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside, true);
+      window.removeEventListener("keydown", closeOnEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  const heightClass = size === "compact" ? "h-9 rounded-lg" : "h-10 rounded-xl";
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/22 bg-[#3f4959] px-3 text-left text-xs text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45 ${heightClass}`}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className={`truncate ${selected ? "text-white" : "text-white/48"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && menuPosition && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="overflow-hidden rounded-xl border shadow-2xl"
+          style={{
+            position: "fixed",
+            zIndex: 500,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            top: menuPosition.top,
+            bottom: menuPosition.bottom,
+            color: "#ffffff",
+            backgroundColor: "#26364c",
+            borderColor: "rgba(142, 230, 226, 0.48)",
+            boxShadow: "0 18px 46px rgba(2, 6, 23, 0.58)",
+          }}
+        >
+          <div className="max-h-64 overflow-y-auto p-1">
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value || "__empty"}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  disabled={option.disabled}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{
+                    color: "#ffffff",
+                    backgroundColor: active ? "#2a8d8b" : "#354153",
+                  }}
+                  onMouseEnter={(event) => {
+                    if (!option.disabled) event.currentTarget.style.backgroundColor = active ? "#319c99" : "#415064";
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.backgroundColor = active ? "#2a8d8b" : "#354153";
+                  }}
+                  onClick={() => {
+                    if (option.disabled) return;
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="truncate" style={{ color: "#ffffff" }}>{option.label}</span>
+                  <CheckCircle2 size={13} color="#ffffff" className={active ? "shrink-0 opacity-100" : "shrink-0 opacity-0"} />
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -955,7 +1119,6 @@ export default function AllInOrderHistory() {
 
   return (
     <main className={page}>
-      <style>{`select option { background:#303b4e; color:#fff; }`}</style>
       <div className={wrap}>
         <header className={topCard}>
           <div className="flex flex-wrap items-center gap-3">
@@ -997,9 +1160,9 @@ export default function AllInOrderHistory() {
           <div className="mb-3 flex items-center gap-2"><Search size={16} className="text-[#8ee6e2]" /><h2 className="text-base">Szűrés és gyors visszakeresés</h2></div>
           <div className="grid gap-3 lg:grid-cols-[1.7fr_1fr_1fr_1fr_0.85fr_0.85fr_auto]">
             <input className={input} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadOrders(); }} placeholder="Rendelésszám, termék, kód, beszállító..." />
-            <select className={selectInput} value={supplierFilter} onChange={(event) => setSupplierFilter(event.target.value)}><option style={optionStyle} value="">Minden beszállító</option>{suppliers.map((item) => <option style={optionStyle} key={item.id} value={item.id}>{item.name}</option>)}</select>
-            <select className={selectInput} value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)}><option style={optionStyle} value="">Minden célhely</option>{locations.map((item) => <option style={optionStyle} key={item.id} value={item.id}>{item.name}</option>)}</select>
-            <select className={selectInput} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as any)}><option style={optionStyle} value="all">Minden állapot</option><option style={optionStyle} value="draft">Vázlat</option><option style={optionStyle} value="ordered">Rendelve</option><option style={optionStyle} value="partially_received">Részben beérkezett</option><option style={optionStyle} value="received">Beérkezett</option><option style={optionStyle} value="cancelled">Törölt</option></select>
+            <CompactSelect size="compact" value={supplierFilter} onChange={setSupplierFilter} placeholder="Minden beszállító" options={[{ value: "", label: "Minden beszállító" }, ...suppliers.map((item) => ({ value: item.id, label: item.name }))]} />
+            <CompactSelect size="compact" value={locationFilter} onChange={setLocationFilter} placeholder="Minden célhely" options={[{ value: "", label: "Minden célhely" }, ...locations.map((item) => ({ value: item.id, label: item.name }))]} />
+            <CompactSelect size="compact" value={statusFilter} onChange={(next) => setStatusFilter(next as "all" | AifPurchaseOrderStatus)} options={[{ value: "all", label: "Minden állapot" }, { value: "draft", label: "Vázlat" }, { value: "ordered", label: "Rendelve" }, { value: "partially_received", label: "Részben beérkezett" }, { value: "received", label: "Beérkezett" }, { value: "cancelled", label: "Törölt" }]} />
             <input className={input} type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
             <input className={input} type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
             <button className={primaryBtn} onClick={() => void loadOrders()} disabled={busy} type="button"><Search size={14} /> Keresés</button>
@@ -1045,9 +1208,9 @@ export default function AllInOrderHistory() {
             <div className="space-y-4 p-4">
               <section className="rounded-2xl border border-white/16 bg-[#4d5869] p-3">
                 <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
-                  <label className={`${label} lg:col-span-2`}>Beszállító<select className={selectInput} value={formSupplierId} onChange={(event) => setFormSupplierId(event.target.value)}><option style={optionStyle} value="">Válassz beszállítót</option>{suppliers.map((item) => <option style={optionStyle} key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-                  <label className={`${label} lg:col-span-2`}>Célhely<select className={selectInput} value={formLocationId} onChange={(event) => setFormLocationId(event.target.value)}><option style={optionStyle} value="">Nincs megadva</option>{locations.map((item) => <option style={optionStyle} key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-                  <label className={label}>Pénznem<select className={selectInput} value={formCurrencyCode} onChange={(event) => setFormCurrencyCode(event.target.value)}>{currencies.map((item) => <option style={optionStyle} key={item.code} value={item.code}>{item.code}</option>)}</select></label>
+                  <label className={`${label} lg:col-span-2`}>Beszállító<CompactSelect size="compact" value={formSupplierId} onChange={setFormSupplierId} placeholder="Válassz beszállítót" options={[{ value: "", label: "Válassz beszállítót" }, ...suppliers.map((item) => ({ value: item.id, label: item.name }))]} /></label>
+                  <label className={`${label} lg:col-span-2`}>Célhely<CompactSelect size="compact" value={formLocationId} onChange={setFormLocationId} placeholder="Nincs megadva" options={[{ value: "", label: "Nincs megadva" }, ...locations.map((item) => ({ value: item.id, label: item.name }))]} /></label>
+                  <label className={label}>Pénznem<CompactSelect size="compact" menuMinWidth={150} value={formCurrencyCode} onChange={setFormCurrencyCode} placeholder={formCurrencyCode || "RON"} options={currencies.map((item) => ({ value: item.code, label: item.code }))} /></label>
                   <label className={label}>Rendelés dátuma<input className={input} type="date" value={formOrderDate} onChange={(event) => setFormOrderDate(event.target.value)} /></label>
                   <label className={label}>Várható érkezés<input className={input} type="date" value={formExpectedDate} onChange={(event) => setFormExpectedDate(event.target.value)} /></label>
                   <label className={`${label} lg:col-span-2`}>Beszállítói hivatkozás<input className={input} value={formExternalReference} onChange={(event) => setFormExternalReference(event.target.value)} placeholder="opcionális" /></label>
