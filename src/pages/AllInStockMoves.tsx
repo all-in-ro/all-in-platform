@@ -30,7 +30,9 @@ import {
 } from "lucide-react";
 import {
   apiAifAddItemsToOpenPurchaseOrders,
+  apiAifGetPurchaseOrder,
   apiAifGetVariant,
+  apiAifListPurchaseOrders,
 } from "../lib/aif/api";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-5 text-white font-normal sm:px-4 sm:py-7";
@@ -464,6 +466,166 @@ function formatQty(value: unknown) {
   const num = n(value);
   return new Intl.NumberFormat("hu-HU", { maximumFractionDigits: 0 }).format(num);
 }
+
+
+type OpenPurchaseOrderBadgeOrder = {
+  id: string;
+  orderNumber: string;
+  supplierName: string;
+  status: string;
+  qty: number;
+};
+
+type OpenPurchaseOrderBadgeInfo = {
+  totalQty: number;
+  orders: OpenPurchaseOrderBadgeOrder[];
+};
+
+function purchaseOrderStatusText(status: unknown) {
+  const raw = String(status || "").trim().toLowerCase();
+  if (raw === "draft") return "Nyitott";
+  if (raw === "ordered") return "Rendelve";
+  if (raw === "partially_received") return "Részben beérkezett";
+  return raw || "Folyamatban";
+}
+
+async function fetchOpenPurchaseOrderVariantMap() {
+  const list = await apiAifListPurchaseOrders({ limit: 1000 });
+  const activeOrders = (list.items || []).filter((order) =>
+    ["draft", "ordered", "partially_received"].includes(String(order.status || "").toLowerCase()),
+  );
+  const details = await Promise.all(activeOrders.map(async (order) => {
+    try {
+      return await apiAifGetPurchaseOrder(order.id);
+    } catch {
+      return null;
+    }
+  }));
+  const result: Record<string, OpenPurchaseOrderBadgeInfo> = {};
+  for (const detail of details) {
+    if (!detail?.item) continue;
+    for (const line of detail.lines || []) {
+      const variantId = String(line.variant_id || "").trim();
+      if (!variantId) continue;
+      const ordered = Math.max(0, n(line.qty_ordered));
+      const received = Math.max(0, n(line.qty_received));
+      const remainingRaw = line.qty_remaining === null || line.qty_remaining === undefined
+        ? ordered - received
+        : n(line.qty_remaining);
+      const qty = Math.max(0, Math.trunc(remainingRaw));
+      if (qty <= 0) continue;
+      const current = result[variantId] || { totalQty: 0, orders: [] };
+      current.totalQty += qty;
+      const existing = current.orders.find((order) => order.id === detail.item.id);
+      if (existing) existing.qty += qty;
+      else current.orders.push({
+        id: detail.item.id,
+        orderNumber: String(detail.item.order_number || "Rendelés"),
+        supplierName: String(detail.item.supplier_name || "Beszállító"),
+        status: purchaseOrderStatusText(detail.item.status),
+        qty,
+      });
+      result[variantId] = current;
+    }
+  }
+  return result;
+}
+
+function OpenPurchaseOrderBadge({
+  info,
+  children,
+  className = "",
+  onClick,
+  title = "Rendelés alatt",
+}: {
+  info: OpenPurchaseOrderBadgeInfo;
+  children: React.ReactNode;
+  className?: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
+
+  const updateTooltipPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const node = buttonRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const width = 330;
+    const padding = 10;
+    const left = Math.min(
+      Math.max(padding, rect.left + rect.width / 2 - width / 2),
+      Math.max(padding, window.innerWidth - width - padding),
+    );
+    const openUp = rect.bottom + 190 > window.innerHeight;
+    setTooltipStyle({
+      position: "fixed",
+      left,
+      top: openUp ? rect.top - 8 : rect.bottom + 8,
+      width,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483000,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!tooltipOpen) return;
+    updateTooltipPosition();
+    const reposition = () => updateTooltipPosition();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [tooltipOpen, updateTooltipPosition]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={className}
+        onClick={onClick}
+        onMouseEnter={() => { updateTooltipPosition(); setTooltipOpen(true); }}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={() => { updateTooltipPosition(); setTooltipOpen(true); }}
+        onBlur={() => setTooltipOpen(false)}
+        aria-label={`${title}: ${info.totalQty} darab`}
+      >
+        {children}
+      </button>
+      {tooltipOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="pointer-events-none rounded-2xl border border-orange-200/55 bg-[#202838] p-3 text-left text-[11px] leading-snug text-white shadow-[0_24px_60px_rgba(0,0,0,.55)]"
+          style={tooltipStyle}
+          role="tooltip"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+            <span className="inline-flex items-center gap-2 text-orange-100"><ShoppingCart size={15} /> {title}</span>
+            <span className="rounded-full border border-orange-200/55 bg-[#ff6a00] px-2 py-0.5 text-[10px] text-white">{formatQty(info.totalQty)} db</span>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {info.orders.map((order) => (
+              <div key={order.id} className="grid grid-cols-[1fr_auto] gap-3 rounded-xl bg-white/[0.06] px-2.5 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-white">{order.orderNumber} • {order.supplierName}</div>
+                  <div className="mt-0.5 text-[10px] text-white/48">{order.status}</div>
+                </div>
+                <div className="self-center whitespace-nowrap tabular-nums text-orange-100">{formatQty(order.qty)} db</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 border-t border-white/10 pt-2 text-[10px] text-white/42">Kattintás: művelet folytatása</div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
@@ -1194,7 +1356,16 @@ export default function AllInStockMoves() {
   const [reorderSaving, setReorderSaving] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
   const [reorderIdempotencyKey, setReorderIdempotencyKey] = useState("");
+  const [openPurchaseOrdersByVariant, setOpenPurchaseOrdersByVariant] = useState<Record<string, OpenPurchaseOrderBadgeInfo>>({});
   const refreshInFlightRef = useRef(false);
+
+  const loadOpenPurchaseOrderState = useCallback(async () => {
+    try {
+      setOpenPurchaseOrdersByVariant(await fetchOpenPurchaseOrderVariantMap());
+    } catch {
+      // A mozgásnapló ettől még használható; a jelzés a következő frissítéskor újrapróbálkozik.
+    }
+  }, []);
 
   const closeVariantHistory = useCallback(() => {
     setHistoryTarget(null);
@@ -1328,6 +1499,7 @@ export default function AllInStockMoves() {
           : `${formatQty(reorderQty)} db hozzáadva a ${orderText} nyitott rendeléshez.`,
       );
       notifyPurchaseOrdersChanged();
+      await loadOpenPurchaseOrderState();
       setReorderTarget(null);
       setReorderVariantDetail(null);
       setReorderSupplierId("");
@@ -1339,7 +1511,7 @@ export default function AllInStockMoves() {
     } finally {
       setReorderSaving(false);
     }
-  }, [notifyPurchaseOrdersChanged, reorderIdempotencyKey, reorderLocationId, reorderQty, reorderSaving, reorderSupplierId, reorderTarget]);
+  }, [loadOpenPurchaseOrderState, notifyPurchaseOrdersChanged, reorderIdempotencyKey, reorderLocationId, reorderQty, reorderSaving, reorderSupplierId, reorderTarget]);
 
   useEffect(() => {
     if (!historyTarget) return;
@@ -1377,6 +1549,23 @@ export default function AllInStockMoves() {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    void loadOpenPurchaseOrderState();
+    if (typeof window === "undefined") return;
+    const refreshOrders = () => void loadOpenPurchaseOrderState();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === purchaseOrdersChangedStorageKey) refreshOrders();
+    };
+    window.addEventListener(purchaseOrdersChangedEventName, refreshOrders as EventListener);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", refreshOrders);
+    return () => {
+      window.removeEventListener(purchaseOrdersChangedEventName, refreshOrders as EventListener);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", refreshOrders);
+    };
+  }, [loadOpenPurchaseOrderState]);
 
   const selectedLocation = useMemo(
     () => locations.find((loc) => loc.id === locationId || loc.code === locationId) || null,
@@ -1859,6 +2048,7 @@ export default function AllInStockMoves() {
                     const meta = directionMeta(row);
                     const Icon = meta.icon;
                     const delta = Math.abs(n(row.qty_delta));
+                    const openOrderInfo = openPurchaseOrdersByVariant[String(row.variant_id || "")] || null;
                     return (
                       <tr key={row.id} className={`border-t border-white/10 leading-tight hover:bg-white/[0.04] ${selectedMoveIds.has(String(row.id)) ? "bg-[#2a8d8b]/12" : ""}`}>
                         <td className="px-2 py-2 text-center">
@@ -1881,14 +2071,25 @@ export default function AllInStockMoves() {
                         <td className="px-3 py-2 text-[12px] text-white/78">{row.location_name || "-"}</td>
                         <td className="px-3 py-2 text-center">
                           {row.direction === "out" || n(row.qty_delta) < 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => void openReorder(row)}
-                              className={`inline-flex min-w-[110px] cursor-pointer items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal transition hover:-translate-y-px hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-red-200/35 ${meta.cls}`}
-                              title="Kattints az azonnali utánrendeléshez"
-                            >
-                              <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)} <ShoppingCart size={11} />
-                            </button>
+                            openOrderInfo ? (
+                              <OpenPurchaseOrderBadge
+                                info={openOrderInfo}
+                                onClick={() => void openReorder(row)}
+                                title="Már rendelés alatt"
+                                className="inline-flex min-w-[110px] cursor-pointer items-center justify-center gap-1.5 rounded-full border border-orange-200/70 bg-[#ff6a00] px-2.5 py-1 text-[11px] font-normal text-white shadow-[0_0_0_1px_rgba(255,106,0,.30),0_8px_18px_rgba(255,106,0,.24)] transition hover:-translate-y-px hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
+                              >
+                                <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)} <ShoppingCart size={11} />
+                              </OpenPurchaseOrderBadge>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void openReorder(row)}
+                                className={`inline-flex min-w-[110px] cursor-pointer items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal transition hover:-translate-y-px hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-red-200/35 ${meta.cls}`}
+                                title="Kattints az azonnali utánrendeléshez"
+                              >
+                                <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)} <ShoppingCart size={11} />
+                              </button>
+                            )
                           ) : (
                             <span className={`inline-flex min-w-[110px] items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal ${meta.cls}`}>
                               <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)}
@@ -1961,6 +2162,7 @@ export default function AllInStockMoves() {
                 const meta = directionMeta(row);
                 const Icon = meta.icon;
                 const delta = Math.abs(n(row.qty_delta));
+                const openOrderInfo = openPurchaseOrdersByVariant[String(row.variant_id || "")] || null;
                 return (
                   <div key={row.id} className={`rounded-2xl border p-3 ${selectedMoveIds.has(String(row.id)) ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/12" : "border-white/12 bg-white/[0.05]"}`}>
                     <div className="flex items-start gap-3">
@@ -1979,13 +2181,24 @@ export default function AllInStockMoves() {
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><Clock3 className="mr-1 inline" size={13} /> {formatDateTime(row.created_at)}</div>
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><MapPin className="mr-1 inline" size={13} /> {row.location_name || "-"}</div>
                       {row.direction === "out" || n(row.qty_delta) < 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => void openReorder(row)}
-                          className={`rounded-xl border px-3 py-2 text-center font-semibold transition hover:brightness-110 ${meta.cls}`}
-                        >
-                          <Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)} <ShoppingCart className="ml-1 inline" size={12} />
-                        </button>
+                        openOrderInfo ? (
+                          <OpenPurchaseOrderBadge
+                            info={openOrderInfo}
+                            onClick={() => void openReorder(row)}
+                            title="Már rendelés alatt"
+                            className="rounded-xl border border-orange-200/70 bg-[#ff6a00] px-3 py-2 text-center font-semibold text-white shadow-[0_8px_18px_rgba(255,106,0,.22)] transition hover:bg-[#ff7a1a]"
+                          >
+                            <Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)} <ShoppingCart className="ml-1 inline" size={12} />
+                          </OpenPurchaseOrderBadge>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void openReorder(row)}
+                            className={`rounded-xl border px-3 py-2 text-center font-semibold transition hover:brightness-110 ${meta.cls}`}
+                          >
+                            <Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)} <ShoppingCart className="ml-1 inline" size={12} />
+                          </button>
+                        )
                       ) : (
                         <div className={`rounded-xl border px-3 py-2 text-center font-semibold ${meta.cls}`}><Icon className="mr-1 inline" size={13} /> {meta.label}: {meta.sign}{formatQty(delta)}</div>
                       )}
