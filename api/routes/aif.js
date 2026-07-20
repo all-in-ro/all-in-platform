@@ -11598,12 +11598,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const searchWhere = aifStockProductSearchWhere(search, args);
     if (searchWhere) where.push(searchWhere);
 
+    // A végleg törölt készletbizonylatok naplósorai ne jelenjenek meg újra a
+    // mozgásnaplóban. A készletet nem írjuk vissza, csak az archív nézetből
+    // szűrjük ki a dokumentumhoz tartozó technikai mozgásokat.
+    where.push(`NOT EXISTS (
+      SELECT 1
+      FROM aif_stock_transfer_document_deletions del
+      WHERE (
+        COALESCE(sm.raw->>'transferId', sm.raw->>'transfer_id', '') <> ''
+        AND del.transfer_id=COALESCE(sm.raw->>'transferId', sm.raw->>'transfer_id')
+      ) OR (
+        COALESCE(sm.raw->>'documentNumber', sm.raw->>'document_number', '') <> ''
+        AND del.document_number=COALESCE(sm.raw->>'documentNumber', sm.raw->>'document_number')
+      ) OR (
+        COALESCE(sm.raw->>'documentId', sm.raw->>'document_id', '') <> ''
+        AND COALESCE(del.raw->>'documentId', del.raw->>'document_id', '')=COALESCE(sm.raw->>'documentId', sm.raw->>'document_id')
+      )
+    )`);
+
     const fromSql = `
        FROM aif_stock_movements sm
        ${aifStockProductJoinSql("sm")}
        ${where.length ? "WHERE " + where.join(" AND ") : ""}`;
 
     try {
+      await ensureAifStockTransferDocumentsSchema();
       const totals = await pool.query(
         `SELECT
            count(*)::int AS movement_count,
@@ -11699,6 +11718,62 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   router.delete("/stock-movements/:id", requireAuthed, deleteStockMovement);
   router.delete("/stock/movements/:id", requireAuthed, deleteStockMovement);
+
+  async function deleteStockMovementsBulk(req, res) {
+    const sourceIds = Array.isArray(req.body?.ids)
+      ? req.body.ids
+      : Array.isArray(req.body?.movementIds)
+        ? req.body.movementIds
+        : Array.isArray(req.body?.movement_ids)
+          ? req.body.movement_ids
+          : [];
+    const ids = Array.from(new Set(sourceIds.map((value) => text(value)).filter(Boolean))).slice(0, 3000);
+    if (!ids.length) return res.status(400).json({ error: "Legalább egy naplóbejegyzést ki kell jelölni." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query(
+        `SELECT id::text AS id
+         FROM aif_stock_movements
+         WHERE id::text = ANY($1::text[])
+         FOR UPDATE`,
+        [ids]
+      );
+      const foundIds = locked.rows.map((row) => String(row.id));
+      if (!foundIds.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A kijelölt naplóbejegyzések már nem találhatók." });
+      }
+
+      const deleted = await client.query(
+        `DELETE FROM aif_stock_movements
+         WHERE id::text = ANY($1::text[])
+         RETURNING id::text AS id`,
+        [foundIds]
+      );
+      await client.query("COMMIT");
+      const deletedIds = deleted.rows.map((row) => String(row.id));
+      const deletedSet = new Set(deletedIds);
+      return res.json({
+        ok: true,
+        mode: "bulk_permanently_deleted",
+        deletedCount: deletedIds.length,
+        deletedIds,
+        missingIds: ids.filter((id) => !deletedSet.has(id)),
+        note: "A törlés csak a mozgásnaplót érinti, a készlet mennyiségét nem módosítja.",
+      });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF bulk delete stock movements failed", e);
+      return res.status(500).json({ error: e?.message || "A kijelölt naplóbejegyzések törlése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post("/stock-movements/bulk-delete", requireAuthed, deleteStockMovementsBulk);
+  router.post("/stock/movements/bulk-delete", requireAuthed, deleteStockMovementsBulk);
 
 
   function inventoryCountStatus(value) {
