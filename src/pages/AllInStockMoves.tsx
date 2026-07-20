@@ -35,6 +35,9 @@ const historyBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-
 const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const rowPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const rowSoftBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.08] px-2.5 text-[11px] text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const rowDangerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-500 bg-red-600 px-2.5 text-[11px] text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
@@ -949,39 +952,52 @@ function writeStockMovementPdfWindow(win: Window, params: {
   win.document.close();
 }
 
-function ProductThumb({ item }: { item: Pick<AifStockItem, "image_url" | "images" | "title_ro"> | Pick<AifStockMoveItem, "image_url" | "images" | "title_ro"> }) {
+function ProductThumb({
+  item,
+  compact = false,
+}: {
+  item: Pick<AifStockItem, "image_url" | "images" | "title_ro"> | Pick<AifStockMoveItem, "image_url" | "images" | "title_ro">;
+  compact?: boolean;
+}) {
   const src = imageFor(item);
+  const sizeClass = compact ? "h-11 w-11 rounded-lg" : "h-14 w-14 rounded-xl";
   return (
-    <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-white/12 bg-white/[0.08]">
+    <div className={`${sizeClass} shrink-0 overflow-hidden border border-white/12 bg-white/[0.08]`}>
       {src ? (
         <img src={src} alt={item.title_ro || "Termékkép"} className="h-full w-full object-cover" loading="lazy" />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-white/35">
-          <ImageIcon size={20} />
+          <ImageIcon size={compact ? 17 : 20} />
         </div>
       )}
     </div>
   );
 }
 
-function ProductText({ item }: { item: AifStockItem | AifStockMoveItem }) {
+function ProductText({
+  item,
+  compact = false,
+}: {
+  item: AifStockItem | AifStockMoveItem;
+  compact?: boolean;
+}) {
   const barcode = displayBarcode(item);
   return (
     <div className="min-w-0">
-      <div className="flex flex-wrap items-center gap-2">
-        {item.brand_name && <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#9fd7d5]">{item.brand_name}</span>}
-        {item.category_name_ro && <span className="text-[11px] text-white/42">{item.category_name_ro}</span>}
+      <div className={`flex flex-wrap items-center ${compact ? "gap-1.5" : "gap-2"}`}>
+        {item.brand_name && <span className={`${compact ? "text-[10px]" : "text-xs"} font-normal uppercase tracking-[0.10em] text-[#9fd7d5]`}>{item.brand_name}</span>}
+        {item.category_name_ro && <span className={compact ? "text-[10px] text-white/42" : "text-[11px] text-white/42"}>{item.category_name_ro}</span>}
       </div>
-      <p className="mt-0.5 truncate text-sm font-semibold text-white sm:text-[15px]">{displayName(item)}</p>
-      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/58">
+      <p className={`${compact ? "mt-0 truncate text-[13px] font-normal leading-tight" : "mt-0.5 truncate text-sm font-normal sm:text-[15px]"} text-white`}>{displayName(item)}</p>
+      <div className={`${compact ? "mt-0.5 gap-1.5 text-[10px]" : "mt-1 gap-2 text-xs"} flex flex-wrap items-center text-white/58`}>
         {barcode && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5">
-            <Barcode size={12} />
+          <span className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] ${compact ? "px-1.5 py-0" : "px-2 py-0.5"}`}>
+            <Barcode size={compact ? 10 : 12} />
             Vonalkód: {barcode}
           </span>
         )}
         {(item.color_name || item.size) && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5">
+          <span className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] ${compact ? "px-1.5 py-0" : "px-2 py-0.5"}`}>
             {item.color_name || "-"} · {item.size || "-"}
           </span>
         )}
@@ -1471,7 +1487,7 @@ export default function AllInStockMoves() {
             <div className={panelHead}>
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-white/40">Mozgásnapló</p>
-                <h2 className="mt-1 flex items-center gap-2 text-base font-semibold"><Clock3 size={17} /> Dátum, óra, termék és irány</h2>
+                <h2 className="mt-1 flex items-center gap-2 text-base font-normal"><Clock3 size={17} /> Dátum, óra, termék és irány</h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => exportPdf("in")} disabled={exportingDirection !== null} className={primaryBtn}>
@@ -1485,17 +1501,17 @@ export default function AllInStockMoves() {
             </div>
 
             <div className="hidden overflow-auto lg:block">
-              <table className="w-full min-w-[1080px] border-collapse text-sm">
-                <thead className="bg-[#293448] text-xs uppercase tracking-[0.08em] text-white/72">
+              <table className="w-full min-w-[1080px] border-collapse text-[13px]">
+                <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.08em] text-white/72">
                   <tr>
-                    <th className="px-4 py-3 text-left">Termék</th>
-                    <th className="px-4 py-3 text-left">Dátum / óra</th>
-                    <th className="px-4 py-3 text-left">Helyszín</th>
-                    <th className="px-4 py-3 text-center">Mozgás</th>
-                    <th className="px-4 py-3 text-center">Előtte</th>
-                    <th className="px-4 py-3 text-center">Utána</th>
-                    <th className="px-4 py-3 text-left">Forrás</th>
-                    <th className="px-4 py-3 text-right">Törlés</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Termék</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Dátum / óra</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Helyszín</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Mozgás</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Előtte</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Utána</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Forrás</th>
+                    <th className="px-3 py-2.5 text-right font-normal">Művelet</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1504,24 +1520,24 @@ export default function AllInStockMoves() {
                     const Icon = meta.icon;
                     const delta = Math.abs(n(row.qty_delta));
                     return (
-                      <tr key={row.id} className="border-t border-white/10 hover:bg-white/[0.04]">
-                        <td className="px-4 py-3">
-                          <div className="flex min-w-0 items-center gap-3">
-                            <ProductThumb item={row} />
-                            <ProductText item={row} />
+                      <tr key={row.id} className="border-t border-white/10 leading-tight hover:bg-white/[0.04]">
+                        <td className="px-3 py-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <ProductThumb item={row} compact />
+                            <ProductText item={row} compact />
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-white/78">{formatDateTime(row.created_at)}</td>
-                        <td className="px-4 py-3 text-white/78">{row.location_name || "-"}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`inline-flex min-w-[112px] items-center justify-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${meta.cls}`}>
-                            <Icon size={14} /> {meta.label} {meta.sign}{formatQty(delta)}
+                        <td className="px-3 py-2 text-[12px] text-white/78">{formatDateTime(row.created_at)}</td>
+                        <td className="px-3 py-2 text-[12px] text-white/78">{row.location_name || "-"}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`inline-flex min-w-[96px] items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-normal ${meta.cls}`}>
+                            <Icon size={12} /> {meta.label} {meta.sign}{formatQty(delta)}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_before ?? 0)}</td>
-                        <td className="px-4 py-3 text-center tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
-                        <td className="px-4 py-3 text-white/70">
-                          <div className="grid gap-1">
+                        <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/78">{formatQty(row.qty_before ?? 0)}</td>
+                        <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/78">{formatQty(row.qty_after ?? 0)}</td>
+                        <td className="px-3 py-2 text-[12px] text-white/70">
+                          <div className="grid gap-0.5">
                             <span>{sourceLabel(row)}</span>
                             {movementReasonText(row) ? <span className="text-[10px] leading-snug text-white/45">{movementReasonText(row)}</span> : null}
                             {movementDocumentNumber(row) ? (
@@ -1535,36 +1551,36 @@ export default function AllInStockMoves() {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex justify-end gap-2">
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => openVariantHistory(row)}
-                              className={primaryBtn}
+                              className={rowPrimaryBtn}
                               title="Termék History"
                               aria-label="Termék History"
                             >
-                              <Clock3 size={15} className="shrink-0" /> Történet
+                              <Clock3 size={13} className="shrink-0" /> Történet
                             </button>
                             {movementDocumentNumber(row) ? (
                               <button
                                 type="button"
                                 onClick={() => openMovementDocument(row)}
-                                className={btnSoft}
+                                className={rowSoftBtn}
                                 title="Kapcsolt készletbizonylat megnyitása"
                               >
-                                <FileText size={15} className="shrink-0" /> Bizonylat
+                                <FileText size={13} className="shrink-0" /> Bizonylat
                               </button>
                             ) : (
                               <button
                                 type="button"
                                 onClick={() => setDeleteCandidate(row)}
                                 disabled={deletingId === row.id}
-                                className={tinyDangerBtn}
+                                className={rowDangerBtn}
                                 title="Naplóbejegyzés végleges törlése"
                                 aria-label="Naplóbejegyzés végleges törlése"
                               >
-                                <Trash2 size={15} className="shrink-0" /> Törlés
+                                <Trash2 size={13} className="shrink-0" /> Törlés
                               </button>
                             )}
                           </div>
@@ -1651,51 +1667,51 @@ export default function AllInStockMoves() {
             <div className={panelHead}>
               <div>
                 <p className="text-xs uppercase tracking-[0.18em] text-white/40">Jelenlegi készlet</p>
-                <h2 className="mt-1 flex items-center gap-2 text-base font-semibold"><PackageSearch size={17} /> Termékek a kiválasztott helyszínen</h2>
+                <h2 className="mt-1 flex items-center gap-2 text-base font-normal"><PackageSearch size={17} /> Termékek a kiválasztott helyszínen</h2>
               </div>
               <div className="text-sm text-white/62">{formatQty(stockRows.length)} terméksor</div>
             </div>
 
             <div className="hidden overflow-auto lg:block">
-              <table className="w-full min-w-[860px] border-collapse text-sm">
-                <thead className="bg-[#293448] text-xs uppercase tracking-[0.08em] text-white/72">
+              <table className="w-full min-w-[860px] border-collapse text-[13px]">
+                <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.08em] text-white/72">
                   <tr>
-                    <th className="px-4 py-3 text-left">Termék</th>
-                    <th className="px-4 py-3 text-left">Helyszín</th>
-                    <th className="px-4 py-3 text-center">Méret</th>
-                    <th className="px-4 py-3 text-center">Készlet</th>
-                    <th className="px-4 py-3 text-center">Foglalt</th>
-                    <th className="px-4 py-3 text-center">Elérhető</th>
-                    <th className="px-4 py-3 text-left">Frissítve</th>
-                    <th className="px-4 py-3 text-right">Műv.</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Termék</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Helyszín</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Méret</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Készlet</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Foglalt</th>
+                    <th className="px-3 py-2.5 text-center font-normal">Elérhető</th>
+                    <th className="px-3 py-2.5 text-left font-normal">Frissítve</th>
+                    <th className="px-3 py-2.5 text-right font-normal">Műv.</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stockRows.map((row) => (
-                    <tr key={`${row.location_id || row.location_code}-${row.variant_id}`} className="border-t border-white/10 hover:bg-white/[0.04]">
-                      <td className="px-4 py-3">
-                        <div className="flex min-w-0 items-center gap-3">
-                          <ProductThumb item={row} />
-                          <ProductText item={row} />
+                    <tr key={`${row.location_id || row.location_code}-${row.variant_id}`} className="border-t border-white/10 leading-tight hover:bg-white/[0.04]">
+                      <td className="px-3 py-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <ProductThumb item={row} compact />
+                          <ProductText item={row} compact />
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-white/78">{row.location_name || "-"}</td>
-                      <td className="px-4 py-3 text-center text-white/78">{row.size || "-"}</td>
-                      <td className="px-4 py-3 text-center tabular-nums text-white">{formatQty(row.qty)}</td>
-                      <td className="px-4 py-3 text-center tabular-nums text-white/70">{formatQty(row.reserved_qty)}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="inline-flex min-w-12 justify-center rounded-full border border-[#2a8d8b]/35 bg-[#2a8d8b]/18 px-3 py-1 text-white">{formatQty(row.available_qty)}</span>
+                      <td className="px-3 py-2 text-[12px] text-white/78">{row.location_name || "-"}</td>
+                      <td className="px-3 py-2 text-center text-[12px] text-white/78">{row.size || "-"}</td>
+                      <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white">{formatQty(row.qty)}</td>
+                      <td className="px-3 py-2 text-center text-[12px] tabular-nums text-white/70">{formatQty(row.reserved_qty)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <span className="inline-flex min-w-10 justify-center rounded-full border border-[#2a8d8b]/35 bg-[#2a8d8b]/18 px-2.5 py-0.5 text-[11px] text-white">{formatQty(row.available_qty)}</span>
                       </td>
-                      <td className="px-4 py-3 text-white/60">{formatDateTime(row.updated_at)}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-3 py-2 text-[12px] text-white/60">{formatDateTime(row.updated_at)}</td>
+                      <td className="px-3 py-2 text-right">
                         <button
                           type="button"
                           onClick={() => openVariantHistory(row)}
-                          className={primaryBtn}
+                          className={rowPrimaryBtn}
                           title="Termék History"
                           aria-label="Termék History"
                         >
-                          <Clock3 size={15} className="shrink-0" /> Történet
+                          <Clock3 size={13} className="shrink-0" /> Történet
                         </button>
                       </td>
                     </tr>
