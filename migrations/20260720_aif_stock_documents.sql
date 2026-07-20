@@ -30,6 +30,29 @@ ALTER TABLE IF EXISTS aif_stock_transfer_documents
 ALTER TABLE IF EXISTS aif_stock_transfer_documents
   ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON';
 
+-- Piszkozat: még nem módosít készletet és nem fogyaszt hivatalos sorszámot.
+UPDATE aif_stock_transfer_documents
+SET status='issued'
+WHERE status NOT IN ('draft','issued','cancelled');
+
+DO $$
+DECLARE c record;
+BEGIN
+  FOR c IN
+    SELECT conname
+    FROM pg_constraint
+    WHERE conrelid='aif_stock_transfer_documents'::regclass
+      AND contype='c'
+      AND pg_get_constraintdef(oid) ILIKE '%status%'
+  LOOP
+    EXECUTE format('ALTER TABLE aif_stock_transfer_documents DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+END $$;
+
+ALTER TABLE aif_stock_transfer_documents
+  ADD CONSTRAINT aif_stock_transfer_documents_status_check
+  CHECK (status IN ('draft','issued','cancelled'));
+
 ALTER TABLE IF EXISTS aif_stock_transfer_document_lines
   ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL;
 ALTER TABLE IF EXISTS aif_stock_transfer_document_lines
