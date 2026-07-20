@@ -543,7 +543,7 @@ function CompactSelect({
     if (!trigger || typeof window === "undefined") return;
     const rect = trigger.getBoundingClientRect();
     const viewportPadding = 8;
-    const width = Math.min(Math.max(rect.width, 150), window.innerWidth - viewportPadding * 2);
+    const width = Math.min(Math.max(rect.width, 220), window.innerWidth - viewportPadding * 2);
     const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
     const roomBelow = window.innerHeight - rect.bottom;
     const openUp = roomBelow < 250 && rect.top > roomBelow;
@@ -603,7 +603,7 @@ function CompactSelect({
         <div
           ref={menuRef}
           role="listbox"
-          className="overflow-hidden rounded-xl border border-white/20 bg-[#354153] shadow-2xl"
+          className="overflow-hidden rounded-xl border shadow-2xl"
           style={{
             position: "fixed",
             zIndex: 500,
@@ -611,12 +611,16 @@ function CompactSelect({
             width: menuPosition.width,
             top: menuPosition.top,
             bottom: menuPosition.bottom,
+            color: "#ffffff",
+            backgroundColor: "#26364c",
+            borderColor: "rgba(142, 230, 226, 0.48)",
+            boxShadow: "0 18px 46px rgba(2, 6, 23, 0.58)",
           }}
         >
           <div className="max-h-64 overflow-y-auto p-1">
             {groupedOptions.map((group, groupIndex) => (
               <div key={`${group.label}:${groupIndex}`} className={groupIndex ? "mt-1 border-t border-white/10 pt-1" : ""}>
-                {group.label ? <div className="px-2 py-1 text-[9px] uppercase tracking-[0.12em] text-white/38">{group.label}</div> : null}
+                {group.label ? <div className="px-2 py-1.5 text-[9px] uppercase tracking-[0.12em]" style={{ color: "#b8c7d9" }}>{group.label}</div> : null}
                 {group.items.map((option) => {
                   const active = option.value === value;
                   return (
@@ -626,17 +630,25 @@ function CompactSelect({
                       role="option"
                       aria-selected={active}
                       disabled={option.disabled}
-                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${
-                        active ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"
-                      } disabled:cursor-not-allowed disabled:opacity-40`}
+                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-40"
+                      style={{
+                        color: "#ffffff",
+                        backgroundColor: active ? "#2a8d8b" : "#354153",
+                      }}
+                      onMouseEnter={(event) => {
+                        if (!option.disabled) event.currentTarget.style.backgroundColor = active ? "#319c99" : "#415064";
+                      }}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.style.backgroundColor = active ? "#2a8d8b" : "#354153";
+                      }}
                       onClick={() => {
                         if (option.disabled) return;
                         onChange(option.value);
                         setOpen(false);
                       }}
                     >
-                      <span className="truncate">{option.label}</span>
-                      <CheckCircle2 size={13} className={active ? "shrink-0 opacity-100" : "shrink-0 opacity-0"} />
+                      <span className="truncate" style={{ color: "#ffffff" }}>{option.label}</span>
+                      <CheckCircle2 size={13} color="#ffffff" className={active ? "shrink-0 opacity-100" : "shrink-0 opacity-0"} />
                     </button>
                   );
                 })}
