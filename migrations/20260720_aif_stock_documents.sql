@@ -31,7 +31,7 @@ ALTER TABLE IF EXISTS aif_stock_transfer_documents
   ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON';
 
 -- A draft továbbra is készletet nem mozgató vázlat.
--- A preparation már ténylegesen mozgatott, de még szerkeszthető belső átadás.
+-- A preparation már ténylegesen módosított, de még szerkeszthető belső átadás vagy sérülttermék-kivezetés.
 UPDATE aif_stock_transfer_documents
 SET status='issued'
 WHERE status NOT IN ('draft','preparation','issued','cancelled');
@@ -73,6 +73,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_
   ON aif_stock_transfer_documents (owner_key)
   WHERE status='preparation'
     AND document_type='internal_transfer'
+    AND owner_key IS NOT NULL;
+
+-- Belső átadásból és sérült termékből külön-külön egy nyitott előkészítés lehet felhasználónként.
+CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_type_uq
+  ON aif_stock_transfer_documents (owner_key, document_type)
+  WHERE status='preparation'
+    AND document_type IN ('internal_transfer','damaged_writeoff')
     AND owner_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
