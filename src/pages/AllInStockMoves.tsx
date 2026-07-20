@@ -961,16 +961,58 @@ function ProductThumb({
 }) {
   const src = imageFor(item);
   const sizeClass = compact ? "h-11 w-11 rounded-lg" : "h-14 w-14 rounded-xl";
+  const [preview, setPreview] = useState<{ left: number; top: number; size: number } | null>(null);
+
+  const showPreview = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!src || typeof window === "undefined") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const size = Math.max(160, Math.min(280, window.innerWidth - 24, window.innerHeight - 24));
+    const gap = 12;
+    const rightSide = rect.right + gap;
+    const left = rightSide + size <= window.innerWidth - 8
+      ? rightSide
+      : Math.max(8, rect.left - size - gap);
+    const top = Math.min(
+      Math.max(8, rect.top + rect.height / 2 - size / 2),
+      Math.max(8, window.innerHeight - size - 8),
+    );
+    setPreview({ left, top, size });
+  };
+
   return (
-    <div className={`${sizeClass} shrink-0 overflow-hidden border border-white/12 bg-white/[0.08]`}>
-      {src ? (
-        <img src={src} alt={item.title_ro || "Termékkép"} className="h-full w-full object-cover" loading="lazy" />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-white/35">
-          <ImageIcon size={compact ? 17 : 20} />
-        </div>
-      )}
-    </div>
+    <>
+      <div
+        className={`${sizeClass} ${src ? "cursor-zoom-in" : ""} shrink-0 overflow-hidden border border-white/12 bg-white/[0.08]`}
+        onMouseEnter={showPreview}
+        onMouseLeave={() => setPreview(null)}
+      >
+        {src ? (
+          <img src={src} alt={item.title_ro || "Termékkép"} className="h-full w-full object-cover" loading="lazy" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-white/35">
+            <ImageIcon size={compact ? 17 : 20} />
+          </div>
+        )}
+      </div>
+      {src && preview && typeof document !== "undefined" ? createPortal(
+        <div
+          aria-hidden="true"
+          className="overflow-hidden rounded-2xl border border-[#7bd7d4]/55 bg-[#263246] p-2 shadow-[0_22px_60px_rgba(0,0,0,.62)]"
+          style={{
+            position: "fixed",
+            zIndex: 600,
+            left: preview.left,
+            top: preview.top,
+            width: preview.size,
+            height: preview.size,
+            pointerEvents: "none",
+          }}
+        >
+          <img src={src} alt="" className="h-full w-full rounded-xl bg-white object-contain" />
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 
@@ -1047,6 +1089,9 @@ export default function AllInStockMoves() {
   const [messageTone, setMessageTone] = useState<MessageTone>("info");
   const [deleteCandidate, setDeleteCandidate] = useState<AifStockMoveItem | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedMoveIds, setSelectedMoveIds] = useState<Set<string>>(() => new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [exportingDirection, setExportingDirection] = useState<"in" | "out" | null>(null);
   const [historyTarget, setHistoryTarget] = useState<AifStockItem | AifStockMoveItem | null>(null);
   const [variantHistory, setVariantHistory] = useState<AifVariantHistoryResponse | null>(null);
@@ -1152,8 +1197,14 @@ export default function AllInStockMoves() {
         fetchAifJSON<{ items: AifStockItem[] }>(`/stock?${stockQ.toString()}`),
         fetchAifJSON<{ items: AifStockMoveItem[]; totals: AifStockMoveTotals }>(`/stock-movements?${movesQ.toString()}`),
       ]);
+      const nextMoveRows = moveData.items || [];
       setStockRows(stockData.items || []);
-      setMoveRows(moveData.items || []);
+      setMoveRows(nextMoveRows);
+      setSelectedMoveIds((current) => {
+        const visibleIds = new Set(nextMoveRows.map((row) => String(row.id)));
+        const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+        return next.size === current.size ? current : next;
+      });
       setTotals(moveData.totals || {});
     } catch (e: any) {
       setMessageTone("error");
@@ -1257,6 +1308,56 @@ export default function AllInStockMoves() {
       setDeletingId(null);
     }
   }, [deleteCandidate, notifyStockMovesChanged, refresh]);
+
+  const selectedMoveCount = selectedMoveIds.size;
+  const allVisibleMovesSelected = moveRows.length > 0 && moveRows.every((row) => selectedMoveIds.has(String(row.id)));
+
+  const toggleMoveSelection = useCallback((id: string) => {
+    setSelectedMoveIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAllVisibleMoves = useCallback(() => {
+    setSelectedMoveIds((current) => {
+      const next = new Set(current);
+      const visibleIds = moveRows.map((row) => String(row.id));
+      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => next.has(id));
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [moveRows]);
+
+  const confirmBulkDeleteMovements = useCallback(async () => {
+    const ids = Array.from(selectedMoveIds);
+    if (!ids.length) return;
+    setBulkDeleting(true);
+    setMessage(null);
+    setMessageTone("info");
+    try {
+      const result = await fetchAifJSON<{ deletedCount?: number; deletedIds?: string[] }>("/stock-movements/bulk-delete", {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      });
+      const deletedIds = new Set((result.deletedIds || ids).map(String));
+      setMoveRows((current) => current.filter((row) => !deletedIds.has(String(row.id))));
+      setSelectedMoveIds(new Set());
+      setBulkDeleteOpen(false);
+      notifyStockMovesChanged();
+      await refresh({ silent: true });
+      setMessageTone("info");
+      setMessage(`${formatQty(result.deletedCount ?? deletedIds.size)} kijelölt naplóbejegyzés végleg törölve. A készlet mennyisége nem változott.`);
+    } catch (e: any) {
+      setMessageTone("error");
+      setMessage(e?.message || "A kijelölt naplóbejegyzések törlése nem sikerült.");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [notifyStockMovesChanged, refresh, selectedMoveIds]);
 
   const exportPdf = useCallback(async (kind: "in" | "out") => {
     if (typeof window === "undefined") return;
@@ -1497,6 +1598,14 @@ export default function AllInStockMoves() {
                   <Download size={15} /> {exportingDirection === "out" ? "Készül..." : "Kimenő PDF"}
                 </button>
                 <div className="text-sm text-white/62">{formatQty(moveRows.length)} sor megjelenítve</div>
+                <button type="button" onClick={toggleAllVisibleMoves} disabled={!moveRows.length || bulkDeleting} className={btnSoft}>
+                  <CheckCircle2 size={15} /> {allVisibleMovesSelected ? "Kijelölés törlése" : "Összes kijelölése"}
+                </button>
+                {selectedMoveCount > 0 ? (
+                  <button type="button" onClick={() => setBulkDeleteOpen(true)} disabled={bulkDeleting} className={redBtn}>
+                    <Trash2 size={15} /> Kijelöltek törlése ({formatQty(selectedMoveCount)})
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -1504,6 +1613,16 @@ export default function AllInStockMoves() {
               <table className="w-full min-w-[1080px] border-collapse text-[13px]">
                 <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.08em] text-white/72">
                   <tr>
+                    <th className="w-10 px-2 py-2.5 text-center font-normal">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleMovesSelected}
+                        onChange={toggleAllVisibleMoves}
+                        disabled={!moveRows.length || bulkDeleting}
+                        className="h-4 w-4 cursor-pointer accent-[#2a8d8b]"
+                        aria-label="Összes látható mozgás kijelölése"
+                      />
+                    </th>
                     <th className="px-3 py-2.5 text-left font-normal">Termék</th>
                     <th className="px-3 py-2.5 text-left font-normal">Dátum / óra</th>
                     <th className="px-3 py-2.5 text-left font-normal">Helyszín</th>
@@ -1520,7 +1639,17 @@ export default function AllInStockMoves() {
                     const Icon = meta.icon;
                     const delta = Math.abs(n(row.qty_delta));
                     return (
-                      <tr key={row.id} className="border-t border-white/10 leading-tight hover:bg-white/[0.04]">
+                      <tr key={row.id} className={`border-t border-white/10 leading-tight hover:bg-white/[0.04] ${selectedMoveIds.has(String(row.id)) ? "bg-[#2a8d8b]/12" : ""}`}>
+                        <td className="px-2 py-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedMoveIds.has(String(row.id))}
+                            onChange={() => toggleMoveSelection(String(row.id))}
+                            disabled={bulkDeleting}
+                            className="h-4 w-4 cursor-pointer accent-[#2a8d8b]"
+                            aria-label={`${displayName(row)} mozgás kijelölése`}
+                          />
+                        </td>
                         <td className="px-3 py-2">
                           <div className="flex min-w-0 items-center gap-2">
                             <ProductThumb item={row} compact />
@@ -1589,7 +1718,7 @@ export default function AllInStockMoves() {
                     );
                   })}
                   {!moveRows.length && (
-                    <tr><td colSpan={8} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban.</td></tr>
+                    <tr><td colSpan={9} className="px-4 py-12 text-center text-white/55">Nincs mozgás ebben az időszakban.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1601,10 +1730,18 @@ export default function AllInStockMoves() {
                 const Icon = meta.icon;
                 const delta = Math.abs(n(row.qty_delta));
                 return (
-                  <div key={row.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
-                    <div className="flex gap-3">
+                  <div key={row.id} className={`rounded-2xl border p-3 ${selectedMoveIds.has(String(row.id)) ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/12" : "border-white/12 bg-white/[0.05]"}`}>
+                    <div className="flex items-start gap-3">
                       <ProductThumb item={row} />
                       <div className="min-w-0 flex-1"><ProductText item={row} /></div>
+                      <input
+                        type="checkbox"
+                        checked={selectedMoveIds.has(String(row.id))}
+                        onChange={() => toggleMoveSelection(String(row.id))}
+                        disabled={bulkDeleting}
+                        className="mt-1 h-5 w-5 shrink-0 cursor-pointer accent-[#2a8d8b]"
+                        aria-label={`${displayName(row)} mozgás kijelölése`}
+                      />
                     </div>
                     <div className="mt-3 grid gap-2 text-xs text-white/68 sm:grid-cols-2">
                       <div className="rounded-xl bg-[#354153] px-3 py-2"><Clock3 className="mr-1 inline" size={13} /> {formatDateTime(row.created_at)}</div>
@@ -1768,6 +1905,29 @@ export default function AllInStockMoves() {
           onReload={reloadVariantHistory}
           onClose={closeVariantHistory}
         />
+      )}
+
+      {bulkDeleteOpen && selectedMoveCount > 0 && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-red-300/25 bg-[#404a5b] shadow-2xl">
+            <div className="border-b border-white/12 px-5 py-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-red-100/55">Végleges törlés</p>
+              <h3 className="mt-1 text-lg font-normal text-white">{formatQty(selectedMoveCount)} kijelölt naplósor törlése</h3>
+            </div>
+            <div className="space-y-3 px-5 py-4 text-sm text-white/75">
+              <p>A kijelölt sorok végleg eltűnnek a mozgásnaplóból. A jelenlegi készlet mennyisége nem változik.</p>
+              <div className="rounded-xl border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs text-red-50/85">
+                Ez naplótakarítás, nem készletkorrekció. Pont ezért kell megerősíteni, mert a tesztadatok és a valódi események külsőre meglepően hasonlóak.
+              </div>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-white/12 px-5 py-4 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setBulkDeleteOpen(false)} disabled={bulkDeleting} className={btnSoft}>Mégse</button>
+              <button type="button" onClick={confirmBulkDeleteMovements} disabled={bulkDeleting} className={redBtn}>
+                <Trash2 size={16} /> {bulkDeleting ? "Törlés..." : `Végleges törlés (${formatQty(selectedMoveCount)})`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {deleteCandidate && (
