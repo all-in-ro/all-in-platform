@@ -127,7 +127,7 @@ export async function ensureAifStockTransferDocumentSchema(target) {
         document_subtitle text NULL,
         transfer_title text NULL,
         note text NULL,
-        status text NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','cancelled')),
+        status text NOT NULL DEFAULT 'issued' CHECK (status IN ('draft','issued','cancelled')),
         line_count integer NOT NULL DEFAULT 0,
         total_qty integer NOT NULL DEFAULT 0,
         total_value numeric(14,2) NOT NULL DEFAULT 0,
@@ -177,6 +177,22 @@ export async function ensureAifStockTransferDocumentSchema(target) {
     `);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS total_value numeric(14,2) NOT NULL DEFAULT 0`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
+    await target.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','issued','cancelled')`);
+    await target.query(`DO $$
+      DECLARE c record;
+      BEGIN
+        FOR c IN
+          SELECT conname FROM pg_constraint
+          WHERE conrelid='aif_stock_transfer_documents'::regclass
+            AND contype='c'
+            AND pg_get_constraintdef(oid) ILIKE '%status%'
+        LOOP
+          EXECUTE format('ALTER TABLE aif_stock_transfer_documents DROP CONSTRAINT %I', c.conname);
+        END LOOP;
+      END $$`);
+    await target.query(`ALTER TABLE aif_stock_transfer_documents
+      ADD CONSTRAINT aif_stock_transfer_documents_status_check
+      CHECK (status IN ('draft','issued','cancelled'))`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS line_total numeric(14,2) NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
@@ -296,7 +312,7 @@ function documentLocationSummary(values) {
 function serializeDocument(item) {
   if (!item) return null;
   const legacy = Boolean(item.legacy || item.isLegacy || item.status === "legacy");
-  const status = legacy ? "legacy" : item.status === "cancelled" ? "cancelled" : "issued";
+  const status = legacy ? "legacy" : item.status === "draft" ? "draft" : item.status === "cancelled" ? "cancelled" : "issued";
   return {
     ...item,
     id: cleanText(item.id),
@@ -453,7 +469,7 @@ export async function createAifStockTransferDocument(client, input = {}) {
        document_type, source_location_id, target_location_id, operation_direction, price_basis,
        created_at, updated_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed',$11,$12,$13,'RON',$14::text[],$15::text[],$16,$17::jsonb,
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'issued',$11,$12,$13,'RON',$14::text[],$15::text[],$16,$17::jsonb,
        'internal_transfer',$18,$19,'transfer','selling_price',now(),now()
      ) RETURNING *`,
     [
@@ -743,8 +759,9 @@ function documentMatches(item, filters) {
     ].filter(Boolean).join(" "));
     if (!haystack.includes(q)) return false;
   }
-  if (filters.kind === "official" && !item.official) return false;
+  if (filters.kind === "official" && (!item.official || item.status === "draft")) return false;
   if (filters.kind === "legacy" && !item.legacy) return false;
+  if (filters.kind === "draft" && item.status !== "draft") return false;
   const requestedDocumentType = cleanAifStockDocumentType(filters.kind, null);
   if (requestedDocumentType && cleanAifStockDocumentType(item.document_type, "internal_transfer") !== requestedDocumentType) return false;
   if (filters.status && filters.status !== "all" && String(item.status) !== filters.status) return false;
@@ -834,7 +851,7 @@ export function registerAifStockTransferDocumentRoutes(router, { pool, requireAu
         to: cleanText(req.query.to),
         fromLocation: resolveLocation(req.query.fromLocation || req.query.from_location),
         toLocation: resolveLocation(req.query.toLocation || req.query.to_location),
-        kind: (["official", "legacy"].includes(type) || cleanAifStockDocumentType(type, null)) ? type : "all",
+        kind: (["official", "legacy", "draft"].includes(type) || cleanAifStockDocumentType(type, null)) ? type : "all",
         status: type === "cancelled" ? "cancelled" : cleanText(req.query.status || "all"),
       };
       const allRaw = [...official, ...legacy]
@@ -853,7 +870,8 @@ export function registerAifStockTransferDocumentRoutes(router, { pool, requireAu
       const slicedItems = all.slice(offset, offset + limit);
       const totals = {
         total,
-        official: all.filter((item) => item.source === "official" && item.status !== "cancelled").length,
+        official: all.filter((item) => item.source === "official" && item.status !== "draft" && item.status !== "cancelled").length,
+        draft: all.filter((item) => item.status === "draft").length,
         legacy: all.filter((item) => item.isLegacy).length,
         cancelled: all.filter((item) => item.status === "cancelled").length,
         totalQty: all.reduce((sum, item) => sum + Number(item.total_qty || 0), 0),
