@@ -836,6 +836,87 @@ function documentFlowGroups(detail: DocumentDetail, locations: LocationItem[] = 
   return { focusLocationName, incoming, outgoing, other };
 }
 
+function flowSectionTotals(rows: IndexedDocumentLine[]) {
+  return rows.reduce(
+    (totals, row) => {
+      totals.qty += n(row.line.qty);
+      totals.value += lineTotalValue(row.line) || 0;
+      return totals;
+    },
+    { qty: 0, value: 0 },
+  );
+}
+
+function DocumentFlowOverview({
+  flow,
+  totalQty,
+  totalValue,
+}: {
+  flow: DocumentFlowGroups;
+  totalQty: number;
+  totalValue: number;
+}) {
+  const incoming = flowSectionTotals(flow.incoming);
+  const outgoing = flowSectionTotals(flow.outgoing);
+
+  return (
+    <div className="overflow-hidden rounded-[22px] border border-white/12 bg-[#313c4e] shadow-[0_18px_44px_rgba(15,23,42,.18)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.16em] text-white/38">Mozgási áttekintés</p>
+          <p className="mt-1 text-sm text-white/82">Egyetlen pillantással látszik, mi érkezik és mi indul tovább.</p>
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-white/55">
+          <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1">{quantity(totalQty)} db</span>
+          <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-2.5 py-1 text-[#d7fffd]">{moneyRon(totalValue)}</span>
+        </div>
+      </div>
+
+      <div className="grid gap-2 p-3 lg:grid-cols-[minmax(0,1fr)_42px_minmax(220px,.72fr)_42px_minmax(0,1fr)] lg:items-stretch">
+        <div className="relative overflow-hidden rounded-2xl border border-[#2dd4bf]/22 bg-gradient-to-br from-[#29434a] to-[#2d394a] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <div className="absolute inset-y-0 left-0 w-1 bg-[#2dd4bf]" />
+          <div className="flex items-start justify-between gap-3 pl-1">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#5eead4]/25 bg-[#2dd4bf]/14 text-[#99f6e4]"><ArrowDownLeft size={17} /></span>
+              <div><p className="text-[9px] uppercase tracking-[0.16em] text-[#99f6e4]/70">Bejövő</p><p className="mt-0.5 text-sm text-white">Az aktív üzletbe érkezik</p></div>
+            </div>
+            <span className="rounded-full border border-[#5eead4]/20 bg-[#2dd4bf]/10 px-2 py-1 text-[10px] text-[#ccfbf1]">{flow.incoming.length} sor</span>
+          </div>
+          <div className="mt-4 flex items-end justify-between gap-3 pl-1">
+            <div><p className="text-[26px] leading-none text-white">{quantity(incoming.qty)} <span className="text-xs text-white/45">db</span></p><p className="mt-1 text-[10px] text-white/42">fogadott mennyiség</p></div>
+            <p className="text-sm text-[#ccfbf1]">{moneyRon(incoming.value)}</p>
+          </div>
+        </div>
+
+        <div className="hidden items-center justify-center lg:flex"><span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#2dd4bf]/24 bg-[#2dd4bf]/10 text-[#5eead4]"><ArrowRight size={15} /></span></div>
+
+        <div className="flex min-h-[112px] flex-col items-center justify-center rounded-2xl border border-white/14 bg-[#263246] px-4 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/14 bg-white/[0.06] text-[#d7fffd]"><MapPin size={19} /></span>
+          <p className="mt-2 text-[9px] uppercase tracking-[0.16em] text-white/38">Aktív üzlet</p>
+          <p className="mt-1 max-w-[240px] text-sm leading-snug text-white">{flow.focusLocationName}</p>
+        </div>
+
+        <div className="hidden items-center justify-center lg:flex"><span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-400/24 bg-red-500/10 text-red-400"><ArrowRight size={15} /></span></div>
+
+        <div className="relative overflow-hidden rounded-2xl border border-red-400/22 bg-gradient-to-br from-[#433039] to-[#303949] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+          <div className="absolute inset-y-0 left-0 w-1 bg-red-500" />
+          <div className="flex items-start justify-between gap-3 pl-1">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-red-300/25 bg-red-500/14 text-red-200"><ArrowUpRight size={17} /></span>
+              <div><p className="text-[9px] uppercase tracking-[0.16em] text-red-300/75">Kimenő</p><p className="mt-0.5 text-sm text-white">Az aktív üzletből indul</p></div>
+            </div>
+            <span className="rounded-full border border-red-300/20 bg-red-500/10 px-2 py-1 text-[10px] text-red-100">{flow.outgoing.length} sor</span>
+          </div>
+          <div className="mt-4 flex items-end justify-between gap-3 pl-1">
+            <div><p className="text-[26px] leading-none text-white">{quantity(outgoing.qty)} <span className="text-xs text-white/45">db</span></p><p className="mt-1 text-[10px] text-white/42">kiadott mennyiség</p></div>
+            <p className="text-sm text-red-100">{moneyRon(outgoing.value)}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocumentFlowSection({
   title,
   subtitle,
@@ -852,52 +933,48 @@ function DocumentFlowSection({
   if (!rows.length) return null;
   const incomingTone = tone === "incoming";
   const outgoingTone = tone === "outgoing";
-  const sectionQty = rows.reduce((sum, row) => sum + n(row.line.qty), 0);
-  const sectionValue = rows.reduce((sum, row) => sum + (lineTotalValue(row.line) || 0), 0);
-  const headerClass = incomingTone
-    ? "border-[#7bd7d4]/35 bg-[#174c55]/92 text-[#d7fffd]"
+  const section = flowSectionTotals(rows);
+  const accentClass = incomingTone ? "bg-[#2dd4bf]" : outgoingTone ? "bg-red-500" : "bg-slate-400";
+  const iconClass = incomingTone
+    ? "border-[#5eead4]/28 bg-[#2dd4bf]/12 text-[#99f6e4]"
     : outgoingTone
-      ? "border-red-400/45 bg-red-950/55 text-red-50"
-      : "border-white/12 bg-[#354153] text-white";
+      ? "border-red-300/28 bg-red-500/12 text-red-200"
+      : "border-white/14 bg-white/[0.06] text-white/70";
+  const quantityClass = incomingTone
+    ? "border-[#5eead4]/22 bg-[#2dd4bf]/10 text-[#ccfbf1]"
+    : outgoingTone
+      ? "border-red-300/22 bg-red-500/10 text-red-100"
+      : "border-white/12 bg-white/[0.05] text-white/72";
   const Icon = incomingTone ? ArrowDownLeft : outgoingTone ? ArrowUpRight : ArrowRightLeft;
 
   return (
-    <div className={`overflow-hidden rounded-2xl border ${headerClass}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <span className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border ${
-            incomingTone
-              ? "border-[#7bd7d4]/40 bg-[#2a8d8b]/28 text-[#d7fffd]"
-              : outgoingTone
-                ? "border-red-300/45 bg-red-600 text-white"
-                : "border-white/16 bg-white/[0.08] text-white"
-          }`}>
-            <Icon size={16} />
-          </span>
-          <div>
-            <p className="text-sm">{title}</p>
-            <p className="mt-0.5 text-[10px] opacity-65">{subtitle}</p>
-          </div>
+    <div className="overflow-hidden rounded-[20px] border border-white/12 bg-[#3b4657] shadow-[0_14px_34px_rgba(15,23,42,.14)]">
+      <div className={`h-1 ${accentClass}`} />
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#354052] px-3.5 py-2.5">
+        <div className="flex items-center gap-2.5">
+          <span className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border ${iconClass}`}><Icon size={17} /></span>
+          <div><p className="text-sm text-white">{title}</p><p className="mt-0.5 text-[10px] text-white/42">{subtitle}</p></div>
         </div>
-        <span className="rounded-full border border-white/16 bg-black/10 px-2.5 py-1 text-[10px]">
-          {rows.length} sor • {quantity(sectionQty)} db • {moneyRon(sectionValue)}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-lg border px-2.5 py-1.5 text-[10px] ${quantityClass}`}>{rows.length} sor · {quantity(section.qty)} db</span>
+          <span className="rounded-lg border border-white/12 bg-white/[0.05] px-2.5 py-1.5 text-[10px] text-white/78">{moneyRon(section.value)}</span>
+        </div>
       </div>
 
-      <div className="overflow-x-auto bg-[#404a5b]">
-        <table className="min-w-[1280px] w-full text-left text-xs">
-          <thead className="bg-[#303a4c] text-[9px] font-normal uppercase tracking-[0.08em] text-white/48">
+      <div className="overflow-x-auto">
+        <table className="min-w-[1220px] w-full text-left text-xs">
+          <thead className="bg-[#2d3748] text-[9px] font-normal uppercase tracking-[0.08em] text-white/44">
             <tr>
-              <th className="px-2 py-2 font-normal">#</th>
-              <th className="px-2 py-2 font-normal">Kép</th>
-              <th className="px-2 py-2 font-normal">Termék</th>
-              <th className="px-2 py-2 font-normal">Márka / kategória</th>
-              <th className="px-2 py-2 font-normal">Azonosító</th>
-              <th className="px-2 py-2 font-normal">Variáns</th>
-              <th className="px-2 py-2 font-normal">Mozgás iránya</th>
-              <th className="px-2 py-2 text-right font-normal">Db</th>
-              <th className="px-2 py-2 text-right font-normal">P.U. RON</th>
-              <th className="px-2 py-2 text-right font-normal">Érték RON</th>
+              <th className="px-2.5 py-2 font-normal">#</th>
+              <th className="px-2.5 py-2 font-normal">Kép</th>
+              <th className="px-2.5 py-2 font-normal">Termék</th>
+              <th className="px-2.5 py-2 font-normal">Márka / kategória</th>
+              <th className="px-2.5 py-2 font-normal">Azonosító</th>
+              <th className="px-2.5 py-2 font-normal">Variáns</th>
+              <th className="px-2.5 py-2 font-normal">Útvonal</th>
+              <th className="px-2.5 py-2 text-right font-normal">Db</th>
+              <th className="px-2.5 py-2 text-right font-normal">P.U. RON</th>
+              <th className="px-2.5 py-2 text-right font-normal">Érték RON</th>
             </tr>
           </thead>
           <tbody>
@@ -905,42 +982,33 @@ function DocumentFlowSection({
               const routeFrom = lineLocationName(line, "from", locations);
               const routeTo = lineLocationName(line, "to", locations);
               return (
-                <tr key={line.id || `${line.line_no}-${index}`} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]">
-                  <td className="px-2 py-2 text-white/45">{index + 1}</td>
-                  <td className="px-2 py-2"><ProductThumb item={line} className="h-11 w-11" /></td>
-                  <td className="px-2 py-2">
-                    <p className="max-w-[250px] truncate text-white">{line.product_title || "Produs"}</p>
-                    <p className="mt-0.5 max-w-[250px] truncate text-[10px] text-white/42">{line.product_code || "-"}</p>
+                <tr key={line.id || `${line.line_no}-${index}`} className="border-t border-white/[0.07] align-middle odd:bg-black/[0.025] hover:bg-white/[0.035]">
+                  <td className="px-2.5 py-2 text-white/35">{index + 1}</td>
+                  <td className="px-2.5 py-2"><ProductThumb item={line} className="h-11 w-11" /></td>
+                  <td className="px-2.5 py-2"><p className="max-w-[245px] truncate text-white">{line.product_title || "Produs"}</p><p className="mt-0.5 max-w-[245px] truncate text-[10px] text-white/38">{line.product_code || "-"}</p></td>
+                  <td className="px-2.5 py-2"><p className="text-white/82">{line.brand_name || "-"}</p><p className="mt-0.5 text-[10px] text-white/38">{line.category_name || "-"}</p></td>
+                  <td className="px-2.5 py-2 font-mono text-[10px] text-white/68">{line.barcode || "-"}</td>
+                  <td className="px-2.5 py-2 text-white/76">{[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</td>
+                  <td className="px-2.5 py-2">
+                    <div className="flex min-w-[300px] items-center gap-1.5 text-[10px]">
+                      <span className="max-w-[140px] truncate rounded-lg border border-red-400/18 bg-red-500/[0.07] px-2 py-1 text-red-100" title={routeFrom}>{routeFrom}</span>
+                      <ArrowRight size={12} className="shrink-0 text-white/30" />
+                      <span className="max-w-[140px] truncate rounded-lg border border-[#5eead4]/18 bg-[#2dd4bf]/[0.07] px-2 py-1 text-[#ccfbf1]" title={routeTo}>{routeTo}</span>
+                    </div>
                   </td>
-                  <td className="px-2 py-2">
-                    <p>{line.brand_name || "-"}</p>
-                    <p className="mt-0.5 text-[10px] text-white/42">{line.category_name || "-"}</p>
-                  </td>
-                  <td className="px-2 py-2 font-mono text-[10px]">{line.barcode || "-"}</td>
-                  <td className="px-2 py-2">{[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</td>
-                  <td className="px-2 py-2 text-[10px] leading-snug">
-                    <span className="flex items-center gap-1 text-red-100">
-                      <ArrowUpRight size={12} className="shrink-0 text-red-500" />
-                      <span className="max-w-[230px] truncate"><span className="text-red-300">Kimenő:</span> {routeFrom}</span>
-                    </span>
-                    <span className="mt-1 flex items-center gap-1 text-[#d7fffd]">
-                      <ArrowDownLeft size={12} className="shrink-0 text-[#2dd4bf]" />
-                      <span className="max-w-[230px] truncate"><span className="text-[#7bd7d4]">Bejövő:</span> {routeTo}</span>
-                    </span>
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{quantity(line.qty)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{moneyRon(lineUnitPrice(line), false)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(lineTotalValue(line), false)}</td>
+                  <td className="px-2.5 py-2 text-right"><span className={`inline-flex min-w-9 justify-center rounded-lg border px-2 py-1 text-[11px] ${quantityClass}`}>{quantity(line.qty)}</span></td>
+                  <td className="px-2.5 py-2 text-right tabular-nums text-white/74">{moneyRon(lineUnitPrice(line), false)}</td>
+                  <td className="px-2.5 py-2 text-right tabular-nums text-white">{moneyRon(lineTotalValue(line), false)}</td>
                 </tr>
               );
             })}
           </tbody>
           <tfoot>
-            <tr className={incomingTone ? "border-t border-[#7bd7d4]/35 bg-[#214e54]" : outgoingTone ? "border-t border-red-400/40 bg-red-950/45" : "border-t border-white/20 bg-[#354153]"}>
-              <td colSpan={7} className="px-3 py-2.5 text-right text-[10px] uppercase tracking-[0.08em]">Részösszeg</td>
-              <td className="px-2 py-2.5 text-right">{quantity(sectionQty)}</td>
+            <tr className="border-t border-white/10 bg-[#313c4d]">
+              <td colSpan={7} className="px-3 py-2.5 text-right text-[9px] uppercase tracking-[0.1em] text-white/38">Részösszeg</td>
+              <td className={`px-2.5 py-2.5 text-right text-sm ${incomingTone ? "text-[#99f6e4]" : outgoingTone ? "text-red-200" : "text-white"}`}>{quantity(section.qty)}</td>
               <td></td>
-              <td className="px-2 py-2.5 text-right text-sm">{moneyRon(sectionValue)}</td>
+              <td className="px-2.5 py-2.5 text-right text-sm text-white">{moneyRon(section.value)}</td>
             </tr>
           </tfoot>
         </table>
@@ -1087,7 +1155,7 @@ function makePrintHtml(detail: DocumentDetail) {
   .route{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3mm;margin-bottom:3.5mm}.routeCard{border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm 3mm;background:#f7faf9}.routeCard span{display:block;color:#6a7683;font-size:8px;letter-spacing:.08em;text-transform:uppercase}.routeCard strong{display:block;margin-top:1mm;font-size:11px}
   .routeOutgoing{border-color:#ef4444;background:#fff1f2}.routeOutgoing span,.routeOutgoing strong{color:#991b1b}.routeIncoming{border-color:#0f9f8f;background:#ecfdf9}.routeIncoming span,.routeIncoming strong{color:#0f5f59}
   .declaration{margin-bottom:3.5mm;border-left:3px solid #255f54;background:#f5f8f7;padding:2.5mm 3mm;color:#354353;line-height:1.45}.note{margin-bottom:3.5mm;border:1px solid #d3dcda;border-radius:2.5mm;padding:2.5mm 3mm}
-  .flowSection{margin-top:3.5mm;break-inside:auto}.flowHeader{display:flex;align-items:center;justify-content:space-between;gap:5mm;padding:2.2mm 3mm;border-radius:2.5mm 2.5mm 0 0;color:#fff}.flowHeader div{display:grid;gap:.7mm}.flowHeader strong{font-size:10px;letter-spacing:.09em}.flowHeader span{font-size:7.5px;opacity:.85}.flowHeader b{font-size:9px;white-space:nowrap}.flowSection.incoming .flowHeader{background:#167f78}.flowSection.outgoing .flowHeader{background:#dc2626}.flowSection.neutral .flowHeader{background:#475569}
+  .flowSection{margin-top:3.5mm;break-inside:auto;border:1px solid #d8e1e5;border-radius:2.5mm;overflow:hidden}.flowHeader{display:flex;align-items:center;justify-content:space-between;gap:5mm;padding:2.4mm 3mm;background:#f8fafc;border-top:3px solid #64748b;border-bottom:1px solid #d8e1e5;color:#172033}.flowHeader div{display:grid;gap:.7mm}.flowHeader strong{font-size:10px;letter-spacing:.09em}.flowHeader span{font-size:7.5px;color:#64748b}.flowHeader b{font-size:9px;white-space:nowrap}.flowSection.incoming .flowHeader{background:#ecfdf9;border-top-color:#14b8a6;color:#0f5f59}.flowSection.outgoing .flowHeader{background:#fff1f2;border-top-color:#ef4444;color:#991b1b}.flowSection.neutral .flowHeader{background:#f1f5f9;border-top-color:#64748b;color:#334155}
   table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}th{background:#26384b;color:#fff;border:1px solid #26384b;padding:2.2mm 1.4mm;font-size:7.7px;line-height:1.2;text-transform:uppercase;text-align:left}td{border:1px solid #d4dcdf;padding:1.7mm 1.4mm;font-size:8.5px;line-height:1.25;vertical-align:middle;overflow-wrap:anywhere}tbody tr:nth-child(even) td{background:#f8fafb}
   th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:43mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:34mm}th:nth-child(6),td:nth-child(6){width:9mm}th:nth-child(7),td:nth-child(7){width:10mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
   .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.routeCell{font-size:7.3px;line-height:1.4;color:#354353}.routeCell span{display:block}.routeOut{color:#dc2626;font-weight:700}.routeIn{color:#0f766e;font-weight:700;margin-top:.5mm}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}.product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}.img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
@@ -2219,32 +2287,52 @@ export default function AllInProductMoves() {
             ];
         return (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetail(null); }}>
-            <div className="flex max-h-[95vh] w-full max-w-[1360px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
+            <div className="flex max-h-[95vh] w-full max-w-[1420px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-[#414b5b] shadow-[0_34px_100px_rgba(2,6,23,.52)]">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#233044] via-[#2d3a4d] to-[#31525a] px-4 py-3.5">
                 <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-1 truncate text-xs text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div></div>
                 <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3.5">
-                <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-                  <div className="min-w-0 overflow-hidden rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" ? "Előkészítési azonosító" : "Bizonylatszám"}</p><p className="mt-1 truncate text-[12px]" title={displayDocumentNumber(doc)}>{displayDocumentNumber(doc)}</p></div>
-                  <div className="min-w-0 overflow-hidden rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p><p className="mt-1 truncate text-[12px]" title={dateTime(doc.updated_at || doc.created_at)}>{dateTime(doc.updated_at || doc.created_at)}</p></div>
-                  <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Típus</p><p className="mt-1 text-sm text-[#d7fffd]">{meta.shortLabel}</p></div>
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Rögzítette</p><p className="mt-1 truncate text-sm">{doc.actor || "-"}</p></div>
-                  <div className="rounded-2xl border border-red-400/30 bg-red-950/25 px-3 py-2.5"><p className="flex items-center gap-1 text-[9px] uppercase tracking-[0.12em] text-red-300"><ArrowUpRight size={11} /> Kimenő / forrás</p><p className="mt-1 truncate text-sm text-red-50">{detailFromSummary}</p></div>
-                  <div className="rounded-2xl border border-[#7bd7d4]/30 bg-[#174c55]/35 px-3 py-2.5"><p className="flex items-center gap-1 text-[9px] uppercase tracking-[0.12em] text-[#7bd7d4]"><ArrowDownLeft size={11} /> Bejövő / cél</p><p className="mt-1 truncate text-sm text-[#d7fffd]">{detailToSummary}</p></div>
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Sor / darab</p><p className="mt-1 text-sm">{detail.lines.length} sor • {quantity(doc.total_qty)} db</p></div>
-                  <div className="rounded-2xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/14 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/58">Bizonylat értéke</p><p className="mt-1 text-sm text-[#d7fffd]">{moneyRon(detailValue)}</p>{detailMissingPrices ? <p className="mt-0.5 text-[9px] text-amber-100/70">{detailMissingPrices} sor ár nélkül</p> : null}</div>
+                <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-5">
+                  <div className="min-w-0 rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
+                    <div className="flex items-center justify-between gap-2"><p className="text-[9px] uppercase tracking-[0.14em] text-white/38">{doc.status === "draft" ? "Előkészítési azonosító" : "Bizonylatszám"}</p>{doc.status === "preparation" || doc.status === "draft" ? <span className="rounded-full border border-red-300/25 bg-red-500/12 px-2 py-0.5 text-[9px] text-red-100">Előkészítés</span> : <span className="rounded-full border border-[#5eead4]/22 bg-[#2dd4bf]/10 px-2 py-0.5 text-[9px] text-[#ccfbf1]">Hivatalos</span>}</div>
+                    <p className="mt-2 truncate text-[15px] text-white" title={displayDocumentNumber(doc)}>{displayDocumentNumber(doc)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p>
+                    <p className="mt-2 truncate text-sm text-white/88">{dateTime(doc.updated_at || doc.created_at)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-[#5eead4]/16 bg-[#2a8d8b]/[0.08] px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-[#99f6e4]/55">Típus / rögzítette</p>
+                    <p className="mt-2 truncate text-sm text-[#d7fffd]">{meta.shortLabel}</p><p className="mt-0.5 truncate text-[10px] text-white/42">{doc.actor || "-"}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/11 bg-[#354052] px-3.5 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Tartalom</p>
+                    <p className="mt-2 text-[18px] text-white">{quantity(doc.total_qty)} <span className="text-[10px] text-white/42">db</span></p><p className="mt-0.5 text-[10px] text-white/42">{detail.lines.length} terméksor</p>
+                  </div>
+                  <div className="rounded-2xl border border-[#5eead4]/20 bg-gradient-to-br from-[#214e54] to-[#2c3c4c] px-3.5 py-3 text-right shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-[#99f6e4]/55">Bizonylat értéke</p>
+                    <p className="mt-2 text-[18px] text-white">{moneyRon(detailValue)}</p>{detailMissingPrices ? <p className="mt-0.5 text-[9px] text-amber-100/65">{detailMissingPrices} sor ár nélkül</p> : <p className="mt-0.5 text-[9px] text-white/35">RON összérték</p>}
+                  </div>
                 </div>
                 {(doc.reason_code || doc.reason_text || doc.external_reference || doc.note) ? <div className="mt-3 grid gap-2 md:grid-cols-3"><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Ok</p><p className="mt-1 text-xs text-white/78">{reasonLabel(documentTypeOf(doc), doc.reason_code, doc.reason_text)}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Hivatkozás</p><p className="mt-1 text-xs text-white/78">{doc.external_reference || "-"}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Megjegyzés</p><p className="mt-1 text-xs text-white/78">{doc.note || "-"}</p></div></div> : null}
 
                 <div className="mt-3 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/12 bg-[#354153] px-3 py-2.5">
-                    <div className="flex items-center gap-2 text-sm"><Boxes size={16} /> Termékmozgások irány szerint</div>
-                    <div className="flex flex-wrap items-center gap-2 text-[10px]">
-                      {documentTypeOf(doc) === "internal_transfer" ? <span className="rounded-full border border-white/14 bg-white/[0.05] px-2.5 py-1 text-white/62">Nézet üzlete: {flow.focusLocationName}</span> : null}
-                      <span className="rounded-full border border-white/14 bg-white/[0.05] px-2.5 py-1 text-white/62">{detail.lines.length} sor • {quantity(doc.total_qty)} db</span>
+                  {documentTypeOf(doc) === "internal_transfer" ? (
+                    <DocumentFlowOverview flow={flow} totalQty={n(doc.total_qty)} totalValue={detailValue} />
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-[20px] border border-white/12 bg-[#313c4e] px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,.14)]">
+                      <div><p className="text-[9px] uppercase tracking-[0.16em] text-white/38">Bizonylat tartalma</p><p className="mt-1 text-sm text-white/82">{meta.shortLabel}</p></div>
+                      <div className="flex gap-2 text-[10px]"><span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-white/60">{detail.lines.length} sor · {quantity(doc.total_qty)} db</span><span className="rounded-full border border-[#5eead4]/20 bg-[#2dd4bf]/10 px-2.5 py-1 text-[#ccfbf1]">{moneyRon(detailValue)}</span></div>
                     </div>
+                  )}
+
+                  <div className="flex items-center gap-3 px-1 pt-1">
+                    <span className="h-px flex-1 bg-white/10" />
+                    <span className="flex items-center gap-2 text-[9px] uppercase tracking-[0.16em] text-white/36"><Boxes size={13} /> Részletes terméksorok</span>
+                    <span className="h-px flex-1 bg-white/10" />
                   </div>
+
                   {directionalSections.map((section) => (
                     <DocumentFlowSection
                       key={section.key}
@@ -2255,11 +2343,12 @@ export default function AllInProductMoves() {
                       locations={locations}
                     />
                   ))}
+
                   {directionalSections.length > 1 ? (
-                    <div className="flex items-center justify-end gap-5 rounded-2xl border border-[#7bd7d4]/30 bg-[#214e54] px-4 py-3 text-sm">
-                      <span className="text-[#d7fffd]/70">Dokumentum összesen</span>
-                      <span className="text-[#d7fffd]">{quantity(doc.total_qty)} db</span>
-                      <span className="text-white">{moneyRon(detailValue)}</span>
+                    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-5 rounded-2xl border border-white/12 bg-[#303b4c] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,.035)]">
+                      <span className="text-[10px] uppercase tracking-[0.14em] text-white/38">Dokumentum összesen</span>
+                      <span className="text-sm text-[#ccfbf1]">{quantity(doc.total_qty)} db</span>
+                      <span className="text-sm text-white">{moneyRon(detailValue)}</span>
                     </div>
                   ) : null}
                 </div>
