@@ -174,6 +174,148 @@ function ProductImage({ src, title, size = "md" }: { src?: string | null; title?
   );
 }
 
+
+function PurchaseOrderLineEditor({
+  line,
+  index,
+  currencyCode,
+  expanded,
+  onToggle,
+  onChange,
+  onRemove,
+}: {
+  line: PurchaseOrderDraftLine;
+  index: number;
+  currencyCode: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: (patch: Partial<PurchaseOrderDraftLine>) => void;
+  onRemove: () => void;
+}) {
+  const lineValue = Math.max(0, toNumber(line.qty)) * Math.max(0, toNumber(line.unitPrice));
+  const compactMeta = [line.brandName, line.colorName, line.size, line.barcode || line.modelCode]
+    .map((value) => cleanText(value))
+    .filter(Boolean)
+    .join(" • ");
+
+  return (
+    <article className="overflow-hidden rounded-2xl border border-white/14 bg-[#354153]">
+      <div className="grid gap-3 p-3 lg:grid-cols-[auto_minmax(260px,1.6fr)_minmax(150px,.8fr)_120px_130px_auto] lg:items-end">
+        <div className="self-center">
+          <ProductImage src={imageUrlOf(line)} title={String(line.productTitle || "")} />
+        </div>
+
+        <div className="min-w-0">
+          <label className={label}>
+            Terméknév
+            <input
+              className={input}
+              value={String(line.productTitle || "")}
+              onChange={(event) => onChange({ productTitle: event.target.value })}
+            />
+          </label>
+          <p className="mt-1.5 truncate text-xs normal-case tracking-normal text-white/50">
+            {compactMeta || `Rendelési sor ${index + 1}`}
+          </p>
+        </div>
+
+        <label className={label}>
+          Beszállítói kód
+          <input
+            className={input}
+            value={String(line.supplierProductCode || "")}
+            onChange={(event) => onChange({ supplierProductCode: event.target.value })}
+          />
+        </label>
+
+        <label className={label}>
+          Darab
+          <div className="grid grid-cols-[32px_1fr_32px]">
+            <button className={neutralBtn} onClick={() => onChange({ qty: Math.max(1, toNumber(line.qty) - 1) })} type="button"><Minus size={13} /></button>
+            <input
+              className={`${input} rounded-none text-center`}
+              value={line.qty}
+              onChange={(event) => onChange({ qty: Math.max(1, Math.floor(toNumber(event.target.value) || 1)) })}
+              inputMode="numeric"
+            />
+            <button className={primaryBtn} onClick={() => onChange({ qty: Math.max(1, toNumber(line.qty)) + 1 })} type="button"><Plus size={13} /></button>
+          </div>
+        </label>
+
+        <label className={label}>
+          Egységár
+          <input
+            className={input}
+            value={line.unitPrice}
+            onChange={(event) => onChange({ unitPrice: event.target.value })}
+            inputMode="decimal"
+          />
+        </label>
+
+        <div className="flex min-w-[190px] flex-col gap-2 lg:items-end">
+          <p className="text-xs text-white/65">
+            Sorérték: {lineValue > 0 ? money(lineValue, currencyCode) : "-"}
+          </p>
+          <div className="flex gap-1.5">
+            <button className={neutralBtn} onClick={onToggle} type="button">
+              <Edit3 size={13} /> {expanded ? "Kevesebb adat" : "Minden adat"}
+            </button>
+            <button className={dangerBtn} onClick={onRemove} type="button" title="Rendelési sor törlése"><Trash2 size={14} /></button>
+          </div>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-white/12 bg-[#303b4e]/55 p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[9px] uppercase tracking-[0.14em] text-[#bff8f5]/70">Részletes soradatok</p>
+              <p className="mt-1 text-xs text-white/55">A rendelésbe mentett pillanatkép minden mezője módosítható.</p>
+            </div>
+            {line.variantId && <span className="rounded-full border border-white/14 bg-white/[0.05] px-2 py-1 text-[10px] text-white/50">Kapcsolt raktári termék</span>}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <label className={label}>Beszállítói variánskód<input className={input} value={String(line.supplierVariantCode || "")} onChange={(event) => onChange({ supplierVariantCode: event.target.value })} /></label>
+            <label className={label}>Modellkód<input className={input} value={String(line.modelCode || "")} onChange={(event) => onChange({ modelCode: event.target.value })} /></label>
+            <label className={label}>Márka<input className={input} value={String(line.brandName || "")} onChange={(event) => onChange({ brandName: event.target.value })} /></label>
+            <label className={label}>Kategória / alkategória<input className={input} value={String(line.categoryName || "")} onChange={(event) => onChange({ categoryName: event.target.value })} /></label>
+
+            <label className={label}>Vonalkód<input className={input} value={String(line.barcode || "")} onChange={(event) => onChange({ barcode: event.target.value })} /></label>
+            <label className={label}>S/N/COD<input className={input} value={String(line.snCod || "")} onChange={(event) => onChange({ snCod: event.target.value })} /></label>
+            <label className={label}>Vámtarifakód<input className={input} value={String(line.customsTariffCode || "")} onChange={(event) => onChange({ customsTariffCode: event.target.value })} /></label>
+            <label className={label}>Eladási ár<input className={input} value={String(line.sellPrice ?? "")} onChange={(event) => onChange({ sellPrice: event.target.value === "" ? null : toNumber(event.target.value) })} inputMode="decimal" /></label>
+
+            <label className={label}>Szín<input className={input} value={String(line.colorName || "")} onChange={(event) => onChange({ colorName: event.target.value })} /></label>
+            <label className={label}>Színkód<input className={input} value={String(line.colorCode || "")} onChange={(event) => onChange({ colorCode: event.target.value })} /></label>
+            <label className={label}>Méret<input className={input} value={String(line.size || "")} onChange={(event) => onChange({ size: event.target.value })} /></label>
+            <label className={label}>Nem<input className={input} value={String(line.gender || "")} onChange={(event) => onChange({ gender: event.target.value })} /></label>
+
+            <label className={label}>Terméktípus<input className={input} value={String(line.productType || "")} onChange={(event) => onChange({ productType: event.target.value })} /></label>
+            <label className={`${label} xl:col-span-3`}>Anyagösszetétel<input className={input} value={String(line.material || "")} onChange={(event) => onChange({ material: event.target.value })} /></label>
+
+            <label className={`${label} md:col-span-2 xl:col-span-4`}>Fotó URL<input className={input} value={String(line.imageUrl || "")} onChange={(event) => onChange({ imageUrl: event.target.value })} /></label>
+            <label className={`${label} md:col-span-2 xl:col-span-4`}>
+              Román termékleírás
+              <textarea
+                className={`${input} min-h-[88px] resize-y py-2`}
+                value={String(line.descriptionRo || "")}
+                onChange={(event) => onChange({ descriptionRo: event.target.value })}
+              />
+            </label>
+          </div>
+
+          {line.variantId && (
+            <p className="mt-3 rounded-xl border border-amber-200/16 bg-amber-300/[0.06] px-3 py-2 text-[11px] leading-relaxed text-amber-50/70">
+              Ezek a módosítások csak a beszerzési rendelés sorát írják át. A raktári termék törzsadatait nem módosítják.
+            </p>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
 function buildPurchaseOrderPdf(detail: AifPurchaseOrderDetail, settings: AifPurchaseOrderSettings | null) {
   const item = detail.item;
   const lines = detail.lines || [];
@@ -285,6 +427,7 @@ export default function AllInOrderHistory() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState("");
+  const [editingOrderNumber, setEditingOrderNumber] = useState("");
   const [formSupplierId, setFormSupplierId] = useState("");
   const [formLocationId, setFormLocationId] = useState("");
   const [formCurrencyCode, setFormCurrencyCode] = useState("RON");
@@ -293,6 +436,7 @@ export default function AllInOrderHistory() {
   const [formExternalReference, setFormExternalReference] = useState("");
   const [formNote, setFormNote] = useState("");
   const [draftLines, setDraftLines] = useState<PurchaseOrderDraftLine[]>([]);
+  const [expandedLineKeys, setExpandedLineKeys] = useState<Record<string, boolean>>({});
   const [inventory, setInventory] = useState<AifInventoryItem[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [productSearch, setProductSearch] = useState("");
@@ -344,6 +488,8 @@ export default function AllInOrderHistory() {
     const value = draftLines.reduce((sum, line) => sum + Math.max(0, toNumber(line.qty)) * Math.max(0, toNumber(line.unitPrice)), 0);
     return { qty, value: Math.round((value + Number.EPSILON) * 100) / 100 };
   }, [draftLines]);
+
+  const allDraftLinesExpanded = draftLines.length > 0 && draftLines.every((line) => expandedLineKeys[line.key]);
 
   async function loadMeta() {
     const meta = await apiAifMeta();
@@ -429,6 +575,7 @@ export default function AllInOrderHistory() {
 
   function resetEditor() {
     setEditingId("");
+    setEditingOrderNumber("");
     setFormSupplierId("");
     setFormLocationId(locations[0]?.id || "");
     setFormCurrencyCode(currencies.some((item) => item.code === "RON") ? "RON" : (currencies[0]?.code || "RON"));
@@ -437,6 +584,7 @@ export default function AllInOrderHistory() {
     setFormExternalReference("");
     setFormNote("");
     setDraftLines([]);
+    setExpandedLineKeys({});
     setProductSearch("");
     setManualOpen(false);
     setManualTitle("");
@@ -461,6 +609,7 @@ export default function AllInOrderHistory() {
       const response = await apiAifGetPurchaseOrder(order.id);
       if (response.item.status !== "draft") throw new Error("Csak vázlat rendelés szerkeszthető.");
       setEditingId(response.item.id);
+      setEditingOrderNumber(response.item.order_number || "");
       setFormSupplierId(response.item.supplier_id);
       setFormLocationId(response.item.target_location_id || "");
       setFormCurrencyCode(response.item.currency_code || "RON");
@@ -468,7 +617,7 @@ export default function AllInOrderHistory() {
       setFormExpectedDate(String(response.item.expected_date || "").slice(0, 10));
       setFormExternalReference(response.item.external_reference || "");
       setFormNote(response.item.note || "");
-      setDraftLines((response.lines || []).map((line) => ({
+      const mappedLines = (response.lines || []).map((line) => ({
         key: line.id || newLineKey(),
         variantId: line.variant_id || null,
         supplierProductCode: line.supplier_product_code || "",
@@ -491,7 +640,10 @@ export default function AllInOrderHistory() {
         sellPrice: line.sell_price ?? null,
         qty: Math.max(1, toNumber(line.qty_ordered)),
         unitPrice: line.unit_price === null || line.unit_price === undefined ? "" : String(line.unit_price),
-      })));
+      }));
+      setDraftLines(mappedLines);
+      const initiallyExpanded = mappedLines.length <= 5 ? mappedLines : mappedLines.slice(0, 1);
+      setExpandedLineKeys(Object.fromEntries(initiallyExpanded.map((line) => [line.key, true])));
       setEditorOpen(true);
       await ensureInventory();
     } catch (error: any) {
@@ -502,30 +654,37 @@ export default function AllInOrderHistory() {
   }
 
   function addInventoryLine(item: AifInventoryItem) {
-    setDraftLines((current) => {
-      const index = current.findIndex((line) => String(line.variantId || "") === String(item.variant_id));
-      if (index >= 0) return current.map((line, rowIndex) => rowIndex === index ? { ...line, qty: Math.max(1, toNumber(line.qty)) + 1 } : line);
-      return [...current, {
-        key: newLineKey(),
-        variantId: item.variant_id,
-        supplierProductCode: firstSupplierCode(item.supplier_source_codes) || item.model_code || item.internal_sku || "",
-        modelCode: item.model_code || "",
-        productTitle: item.title_ro,
-        brandName: item.brand_name || "",
-        categoryName: item.subcategory_name_ro || item.category_name_ro || "",
-        barcode: item.barcode || "",
-        snCod: item.sn_cod || "",
-        colorName: item.color_name || "",
-        colorCode: item.color_code || "",
-        size: item.size || "",
-        productType: item.product_type || "",
-        material: item.material || "",
-        imageUrl: item.image_url || "",
-        sellPrice: item.sell_price ?? null,
-        qty: 1,
-        unitPrice: item.buy_price === null || item.buy_price === undefined ? "" : String(item.buy_price),
-      }];
-    });
+    const existing = draftLines.find((line) => String(line.variantId || "") === String(item.variant_id));
+    if (existing) {
+      setDraftLines((current) => current.map((line) => line.key === existing.key ? { ...line, qty: Math.max(1, toNumber(line.qty)) + 1 } : line));
+      setExpandedLineKeys((expanded) => ({ ...expanded, [existing.key]: true }));
+      setProductSearch("");
+      return;
+    }
+
+    const newKey = newLineKey();
+    setDraftLines((current) => [...current, {
+      key: newKey,
+      variantId: item.variant_id,
+      supplierProductCode: firstSupplierCode(item.supplier_source_codes) || item.model_code || item.internal_sku || "",
+      modelCode: item.model_code || "",
+      productTitle: item.title_ro,
+      brandName: item.brand_name || "",
+      categoryName: item.subcategory_name_ro || item.category_name_ro || "",
+      barcode: item.barcode || "",
+      snCod: item.sn_cod || "",
+      colorName: item.color_name || "",
+      colorCode: item.color_code || "",
+      size: item.size || "",
+      gender: item.gender || "",
+      productType: item.product_type || "",
+      material: item.material || "",
+      imageUrl: item.image_url || "",
+      sellPrice: item.sell_price ?? null,
+      qty: 1,
+      unitPrice: item.buy_price === null || item.buy_price === undefined ? "" : String(item.buy_price),
+    }]);
+    setExpandedLineKeys((expanded) => ({ ...expanded, [newKey]: true }));
     setProductSearch("");
   }
 
@@ -535,8 +694,9 @@ export default function AllInOrderHistory() {
       return;
     }
     const qty = Math.max(1, Math.floor(toNumber(manualQty) || 1));
+    const key = newLineKey();
     setDraftLines((current) => [...current, {
-      key: newLineKey(),
+      key,
       variantId: null,
       supplierProductCode: manualCode.trim(),
       modelCode: manualCode.trim(),
@@ -548,6 +708,7 @@ export default function AllInOrderHistory() {
       qty,
       unitPrice: manualPrice.trim(),
     }]);
+    setExpandedLineKeys((expanded) => ({ ...expanded, [key]: true }));
     setManualTitle("");
     setManualCode("");
     setManualBarcode("");
@@ -563,8 +724,25 @@ export default function AllInOrderHistory() {
     setDraftLines((current) => current.map((line) => line.key === key ? { ...line, ...patch } : line));
   }
 
+  function toggleDraftLine(key: string) {
+    setExpandedLineKeys((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  function toggleAllDraftLines() {
+    if (allDraftLinesExpanded) {
+      setExpandedLineKeys({});
+      return;
+    }
+    setExpandedLineKeys(Object.fromEntries(draftLines.map((line) => [line.key, true])));
+  }
+
   function removeDraftLine(key: string) {
     setDraftLines((current) => current.filter((line) => line.key !== key));
+    setExpandedLineKeys((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   async function saveOrder() {
@@ -861,7 +1039,7 @@ export default function AllInOrderHistory() {
         <div className={modalBackdrop} role="dialog" aria-modal="true">
           <div className={`${modalCard} max-w-[1320px]`}>
             <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3">
-              <div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">{editingId ? "Rendelés szerkesztése" : "Új beszerzési rendelés"}</p><h2 className="mt-1 text-lg">{editingId || settings?.previewNumber || "Új rendelés"}</h2></div>
+              <div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">{editingId ? "Rendelés szerkesztése" : "Új beszerzési rendelés"}</p><h2 className="mt-1 text-lg">{editingOrderNumber || editingId || settings?.previewNumber || "Új rendelés"}</h2></div>
               <div className="flex gap-2"><button className={primaryBtn} onClick={() => void saveOrder()} disabled={busy} type="button">{busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Mentés</button><button className={neutralBtn} onClick={() => setEditorOpen(false)} type="button"><X size={14} /> Bezárás</button></div>
             </div>
             <div className="space-y-4 p-4">
@@ -889,8 +1067,31 @@ export default function AllInOrderHistory() {
               </section>
 
               <section className="overflow-hidden rounded-2xl border border-white/16 bg-[#4d5869]">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3"><div><h3>Rendelési sorok</h3><p className="mt-1 text-xs text-white/50">{draftLines.length} sor • {draftTotals.qty} db</p></div><p className="text-sm">Összesen: {draftTotals.value > 0 ? money(draftTotals.value, formCurrencyCode) : "ár nélkül"}</p></div>
-                <div className="grid gap-2 p-3">{draftLines.map((line, index) => <article key={line.key} className="grid gap-3 rounded-2xl border border-white/14 bg-[#354153] p-3 lg:grid-cols-[auto_minmax(220px,1.5fr)_minmax(150px,.8fr)_120px_130px_auto] lg:items-center"><ProductImage src={imageUrlOf(line)} title={String(line.productTitle || "")} /><div><p className="text-sm">{line.productTitle || "-"}</p><p className="mt-1 text-xs text-white/50">{[line.brandName, line.colorName, line.size, line.barcode || line.supplierProductCode].filter(Boolean).join(" • ") || "Új manuális terméksor"}</p></div><label className={label}>Beszállítói kód<input className={input} value={String(line.supplierProductCode || "")} onChange={(event) => updateDraftLine(line.key, { supplierProductCode: event.target.value })} /></label><label className={label}>Darab<div className="grid grid-cols-[32px_1fr_32px]"><button className={neutralBtn} onClick={() => updateDraftLine(line.key, { qty: Math.max(1, toNumber(line.qty) - 1) })} type="button"><Minus size={13} /></button><input className={`${input} rounded-none text-center`} value={line.qty} onChange={(event) => updateDraftLine(line.key, { qty: Math.max(1, Math.floor(toNumber(event.target.value) || 1)) })} /><button className={primaryBtn} onClick={() => updateDraftLine(line.key, { qty: Math.max(1, toNumber(line.qty)) + 1 })} type="button"><Plus size={13} /></button></div></label><label className={label}>Egységár<input className={input} value={line.unitPrice} onChange={(event) => updateDraftLine(line.key, { unitPrice: event.target.value })} inputMode="decimal" /></label><button className={dangerBtn} onClick={() => removeDraftLine(line.key)} type="button"><Trash2 size={14} /></button></article>)}{!draftLines.length && <div className="py-12 text-center text-white/50"><ShoppingCart className="mx-auto mb-3" size={32} /><p>Még nincs termék a rendelésben.</p></div>}</div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3">
+                  <div>
+                    <h3>Rendelési sorok</h3>
+                    <p className="mt-1 text-xs text-white/50">{draftLines.length} sor • {draftTotals.qty} db • minden rendelési adat szerkeszthető</p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {draftLines.length > 0 && <button className={neutralBtn} onClick={toggleAllDraftLines} type="button"><Edit3 size={13} /> {allDraftLinesExpanded ? "Minden sor összecsukása" : "Minden sor kibontása"}</button>}
+                    <p className="text-sm">Összesen: {draftTotals.value > 0 ? money(draftTotals.value, formCurrencyCode) : "ár nélkül"}</p>
+                  </div>
+                </div>
+                <div className="grid gap-2 p-3">
+                  {draftLines.map((line, index) => (
+                    <PurchaseOrderLineEditor
+                      key={line.key}
+                      line={line}
+                      index={index}
+                      currencyCode={formCurrencyCode}
+                      expanded={Boolean(expandedLineKeys[line.key])}
+                      onToggle={() => toggleDraftLine(line.key)}
+                      onChange={(patch) => updateDraftLine(line.key, patch)}
+                      onRemove={() => removeDraftLine(line.key)}
+                    />
+                  ))}
+                  {!draftLines.length && <div className="py-12 text-center text-white/50"><ShoppingCart className="mx-auto mb-3" size={32} /><p>Még nincs termék a rendelésben.</p></div>}
+                </div>
               </section>
             </div>
           </div>
