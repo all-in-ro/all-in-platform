@@ -703,13 +703,15 @@ export type AifVariantHistoryResponse = {
 const AIF_BASE = "/api/aif";
 
 async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const requestHeaders = new Headers(init?.headers || {});
+  if (!requestHeaders.has("Content-Type")) {
+    requestHeaders.set("Content-Type", "application/json");
+  }
+
   const res = await fetch(`${AIF_BASE}${path}`, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
     ...init,
+    credentials: "include",
+    headers: requestHeaders,
   });
 
   const text = await res.text();
