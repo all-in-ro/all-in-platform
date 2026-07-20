@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
+  ChevronDown,
+  CheckCircle2,
   Activity,
   ArrowDownLeft,
   ArrowRightLeft,
@@ -35,7 +38,6 @@ const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 ro
 const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const tinyDangerBtn = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
-const select = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chipBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs transition-colors";
 const chipActive = `${chipBase} border-[#2a8d8b]/60 bg-[#2a8d8b] text-white shadow-[0_0_0_1px_rgba(42,141,139,0.18)]`;
@@ -48,6 +50,169 @@ const stockMovesChangedEventName = "aif:stock-moves-changed";
 function goHome() {
   window.location.hash = "#allin";
 }
+
+type CompactSelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+};
+
+type CompactSelectProps = {
+  value: string;
+  options: CompactSelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  size?: "compact" | "default";
+  menuMinWidth?: number;
+};
+
+function CompactSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Válassz",
+  className = "",
+  disabled = false,
+  ariaLabel,
+  size = "default",
+  menuMinWidth = 220,
+}: CompactSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.value === value) || null;
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || typeof window === "undefined") return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const maxWidth = Math.min(360, window.innerWidth - viewportPadding * 2);
+    const width = Math.min(Math.max(rect.width, menuMinWidth), maxWidth);
+    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
+    const roomBelow = window.innerHeight - rect.bottom;
+    const openUp = roomBelow < 250 && rect.top > roomBelow;
+    setMenuPosition(openUp
+      ? { left, width, bottom: Math.max(viewportPadding, window.innerHeight - rect.top + 6) }
+      : { left, width, top: Math.min(window.innerHeight - viewportPadding, rect.bottom + 6) });
+  }, [menuMinWidth]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("mousedown", closeOnOutside, true);
+    window.addEventListener("keydown", closeOnEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside, true);
+      window.removeEventListener("keydown", closeOnEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  const heightClass = size === "compact" ? "h-9 rounded-lg" : "h-10 rounded-xl";
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/22 bg-[#3f4959] px-3 text-left text-xs text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45 ${heightClass}`}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className={`truncate ${selected ? "text-white" : "text-white/48"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && menuPosition && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="overflow-hidden rounded-xl border shadow-2xl"
+          style={{
+            position: "fixed",
+            zIndex: 500,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            top: menuPosition.top,
+            bottom: menuPosition.bottom,
+            color: "#ffffff",
+            backgroundColor: "#26364c",
+            borderColor: "rgba(142, 230, 226, 0.48)",
+            boxShadow: "0 18px 46px rgba(2, 6, 23, 0.58)",
+          }}
+        >
+          <div className="max-h-64 overflow-y-auto p-1">
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value || "__empty"}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  disabled={option.disabled}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{
+                    color: "#ffffff",
+                    backgroundColor: active ? "#2a8d8b" : "#354153",
+                  }}
+                  onMouseEnter={(event) => {
+                    if (!option.disabled) event.currentTarget.style.backgroundColor = active ? "#319c99" : "#415064";
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.backgroundColor = active ? "#2a8d8b" : "#354153";
+                  }}
+                  onClick={() => {
+                    if (option.disabled) return;
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="truncate" style={{ color: "#ffffff" }}>{option.label}</span>
+                  <CheckCircle2 size={13} color="#ffffff" className={active ? "shrink-0 opacity-100" : "shrink-0 opacity-0"} />
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
 
 type AifLocation = {
   id: string;
@@ -1181,12 +1346,15 @@ export default function AllInStockMoves() {
             <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[minmax(190px,0.9fr)_minmax(220px,1.1fr)_minmax(260px,1.3fr)_minmax(150px,0.65fr)_minmax(180px,0.8fr)_auto] xl:items-end">
               <label className={label}>
                 Helyszín
-                <select value={locationId} onChange={(e) => setLocationId(e.target.value)} className={select}>
-                  <option value="">Minden helyszín</option>
-                  {locations.map((loc) => (
-                    <option key={loc.id || loc.code} value={loc.id || loc.code}>{loc.name}</option>
-                  ))}
-                </select>
+                <CompactSelect
+                  value={locationId}
+                  onChange={setLocationId}
+                  placeholder="Minden helyszín"
+                  options={[
+                    { value: "", label: "Minden helyszín" },
+                    ...locations.map((loc) => ({ value: loc.id || loc.code, label: loc.name })),
+                  ]}
+                />
               </label>
 
               <label className={label}>
@@ -1226,23 +1394,32 @@ export default function AllInStockMoves() {
 
               <label className={label}>
                 Irány
-                <select value={direction} onChange={(e) => setDirection(e.target.value as DirectionFilter)} className={select}>
-                  <option value="all">Minden mozgás</option>
-                  <option value="in">Csak bejött</option>
-                  <option value="out">Csak kiment</option>
-                  <option value="adjust">Korrekció</option>
-                </select>
+                <CompactSelect
+                  value={direction}
+                  onChange={(next) => setDirection(next as DirectionFilter)}
+                  menuMinWidth={180}
+                  options={[
+                    { value: "all", label: "Minden mozgás" },
+                    { value: "in", label: "Csak bejött" },
+                    { value: "out", label: "Csak kiment" },
+                    { value: "adjust", label: "Korrekció" },
+                  ]}
+                />
               </label>
 
               <label className={label}>
                 Bizonylat / művelet
-                <select value={documentType} onChange={(e) => setDocumentType(e.target.value as StockDocumentTypeFilter)} className={select}>
-                  <option value="all">Minden típus</option>
-                  <option value="internal_transfer">Belső átadás</option>
-                  <option value="supplier_return">Beszállítói retur</option>
-                  <option value="damaged_writeoff">Sérült / kivezetés</option>
-                  <option value="stock_correction">Készletkorrekció</option>
-                </select>
+                <CompactSelect
+                  value={documentType}
+                  onChange={(next) => setDocumentType(next as StockDocumentTypeFilter)}
+                  options={[
+                    { value: "all", label: "Minden típus" },
+                    { value: "internal_transfer", label: "Belső átadás" },
+                    { value: "supplier_return", label: "Beszállítói retur" },
+                    { value: "damaged_writeoff", label: "Sérült / kivezetés" },
+                    { value: "stock_correction", label: "Készletkorrekció" },
+                  ]}
+                />
               </label>
 
               <button type="button" onClick={() => refresh()} disabled={loading} className={primaryBtn}>
