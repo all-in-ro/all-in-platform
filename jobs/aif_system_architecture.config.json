@@ -1,0 +1,43 @@
+{
+  "title": "AllInFashion - teljes rendszertérkép és adatfolyam-dokumentáció",
+  "company": "TITAN EURO-COM SRL",
+  "scope": "all",
+  "include": [
+    "src",
+    "api",
+    "jobs",
+    "migrations",
+    "scripts",
+    "package.json",
+    "render.yaml",
+    "vite.config.ts",
+    "vite.config.js"
+  ],
+  "excludeDirectories": [
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    ".cache",
+    ".vite",
+    "artifacts",
+    "tmp",
+    "uploads"
+  ],
+  "extensions": [".js", ".cjs", ".mjs", ".ts", ".tsx", ".sql", ".json", ".liquid", ".md", ".yml", ".yaml"],
+  "routeBases": {
+    "api/routes/aif.js": "/api/aif"
+  },
+  "databaseEnvVars": ["DATABASE_URL"],
+  "maxSourceFileBytes": 2500000,
+  "projectLabels": {
+    "src/pages": "Frontend oldalak",
+    "src/components": "Frontend komponensek",
+    "src/lib": "Frontend API és segédkönyvtárak",
+    "api/routes": "Backend API route-ok",
+    "api": "Backend",
+    "jobs": "Háttérfolyamatok és ellenőrző jobok",
+    "migrations": "Adatbázis-migrációk"
+  }
+}
