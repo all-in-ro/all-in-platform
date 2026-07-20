@@ -569,6 +569,8 @@ type PreparedPurchaseOrderWorkRow = {
   supplierId: string;
   supplierName: string;
   qty: number;
+  unitPrice: number | null;
+  lineValue: number | null;
   valid: boolean;
   problem: string;
 };
@@ -6955,6 +6957,8 @@ export default function AllInWarehouse() {
       };
       const supplier = supplierByValue(draft.supplierId);
       const qty = Math.max(0, Math.floor(n(draft.qty)));
+      const unitPrice = priceNumber(item.buy_price);
+      const lineValue = unitPrice === null ? null : Math.round((qty * unitPrice + Number.EPSILON) * 100) / 100;
       let problem = "";
       if (!variantId) problem = "Hiányzik a termékazonosító.";
       else if (!supplier) problem = "Válassz beszállítót.";
@@ -6965,6 +6969,8 @@ export default function AllInWarehouse() {
         supplierId: supplier ? supplierValue(supplier) : "",
         supplierName: supplier ? String(supplier.name || supplier.code || "Beszállító") : "",
         qty,
+        unitPrice,
+        lineValue,
         valid: !problem,
         problem,
       };
@@ -6977,16 +6983,18 @@ export default function AllInWarehouse() {
   );
 
   const purchaseOrderWorkGroups = useMemo(() => {
-    const groups = new Map<string, { supplierId: string; supplierName: string; rows: number; qty: number }>();
+    const groups = new Map<string, { supplierId: string; supplierName: string; rows: number; qty: number; value: number }>();
     for (const row of preparedPurchaseOrderRows.filter((item) => item.valid)) {
       const current = groups.get(row.supplierId) || {
         supplierId: row.supplierId,
         supplierName: row.supplierName,
         rows: 0,
         qty: 0,
+        value: 0,
       };
       current.rows += 1;
       current.qty += row.qty;
+      current.value += row.lineValue || 0;
       groups.set(row.supplierId, current);
     }
     return Array.from(groups.values()).sort((a, b) => a.supplierName.localeCompare(b.supplierName, "hu", { sensitivity: "base" }));
@@ -6996,6 +7004,9 @@ export default function AllInWarehouse() {
   const purchaseOrderWorkTotalQty = preparedPurchaseOrderRows
     .filter((row) => row.valid)
     .reduce((sum, row) => sum + row.qty, 0);
+  const purchaseOrderWorkTotalValue = preparedPurchaseOrderRows
+    .filter((row) => row.valid)
+    .reduce((sum, row) => sum + (row.lineValue || 0), 0);
   const purchaseOrderWorkCanSave =
     selectedWorkPanel === "order" &&
     preparedPurchaseOrderRows.length > 0 &&
@@ -7033,6 +7044,7 @@ export default function AllInWarehouse() {
           supplierId: row.supplierId,
           variantId: row.variantId,
           qty: row.qty,
+          unitPrice: row.unitPrice,
         })),
       });
 
@@ -10867,7 +10879,7 @@ export default function AllInWarehouse() {
                         <p className="mb-1.5 text-[10px] uppercase tracking-[0.08em] text-white/48">Rendelések</p>
                         <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-xl border border-white/12 bg-[#253247] px-2.5 py-1.5">
                           {purchaseOrderWorkGroups.map((group) => (
-                            <span key={group.supplierId} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 px-2 text-[11px] text-[#d7fffd]" title={`${group.rows} terméksor, ${group.qty} db`}>
+                            <span key={group.supplierId} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 px-2 text-[11px] text-[#d7fffd]" title={`${group.rows} terméksor, ${group.qty} db, ismert vételár alapján ${money(group.value)} RON`}>
                               {group.supplierName}
                               <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] text-white">{group.rows}/{group.qty}</span>
                             </span>
@@ -10896,14 +10908,16 @@ export default function AllInWarehouse() {
                       <div className="flex items-center gap-2 text-[11px]">
                         <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-0.5 text-white/65">{selectedOrderItems.length} sor</span>
                         <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2 py-0.5 text-[#d7fffd]">{purchaseOrderWorkTotalQty} db</span>
+                        <span className="rounded-full border border-amber-200/20 bg-amber-300/[0.08] px-2 py-0.5 text-amber-50" title="Csak a rögzített vételárak összege. Eladási ár nem kerül a beszerzési rendelésbe.">{money(purchaseOrderWorkTotalValue)} RON</span>
                       </div>
                     </div>
 
-                    <div className="hidden shrink-0 border-b border-white/[0.09] bg-[#202c3e] px-3 py-2 text-[10px] uppercase tracking-[0.08em] text-white/56 lg:grid lg:grid-cols-[24px_44px_minmax(270px,1.25fr)_minmax(250px,.9fr)_132px_86px] lg:items-center lg:gap-2.5">
+                    <div className="hidden shrink-0 border-b border-white/[0.09] bg-[#202c3e] px-3 py-2 text-[10px] uppercase tracking-[0.08em] text-white/56 lg:grid lg:grid-cols-[24px_44px_minmax(250px,1.2fr)_minmax(220px,.85fr)_112px_132px_86px] lg:items-center lg:gap-2.5">
                       <span />
                       <span />
                       <span>Termék</span>
                       <span>Beszállító</span>
+                      <span className="text-right">Vételár</span>
                       <span>Rendelendő</span>
                       <span />
                     </div>
@@ -10921,7 +10935,7 @@ export default function AllInWarehouse() {
 
                         return (
                           <article key={variantId} className={`${rowProblem ? "bg-rose-500/[0.06]" : "bg-[#344257] hover:bg-[#3d4c61]"} transition-colors`}>
-                            <div className="grid gap-2.5 px-3 py-2 lg:grid-cols-[24px_44px_minmax(270px,1.25fr)_minmax(250px,.9fr)_132px_86px] lg:items-center">
+                            <div className="grid gap-2.5 px-3 py-2 lg:grid-cols-[24px_44px_minmax(250px,1.2fr)_minmax(220px,.85fr)_112px_132px_86px] lg:items-center">
                               <div className="flex justify-center">
                                 <input
                                   className={selectBox}
@@ -10956,6 +10970,12 @@ export default function AllInWarehouse() {
                                 options={supplierOptions}
                                 onChange={(supplierId) => setPurchaseOrderWorkRowField(variantId, { supplierId })}
                               />
+
+                              <div className="text-right text-[12px] tabular-nums" title="A termék rögzített vételára. Eladási ár nem kerül a beszerzési rendelésbe.">
+                                {prepared?.unitPrice === null || prepared?.unitPrice === undefined
+                                  ? <span className="text-white/38">nincs adat</span>
+                                  : <span className="text-amber-50">{money(prepared.unitPrice)} RON</span>}
+                              </div>
 
                               <div className="grid h-10 grid-cols-[32px,minmax(48px,1fr),32px] overflow-hidden rounded-xl border border-white/18 bg-[#253247] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                                 <button
