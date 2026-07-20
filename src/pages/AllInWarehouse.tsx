@@ -3048,7 +3048,8 @@ function logicalWarehouseVariantHistoryEvents(rows: VariantHistoryEvent[]) {
     const raw = event.raw && typeof event.raw === "object" ? event.raw : {};
     const transferId = firstWarehouseText(raw.transferId, raw.transfer_id);
     const lineNo = firstWarehouseText(raw.lineNo, raw.line_no, "1");
-    const key = transferId ? `${transferId}:${lineNo}` : `movement:${event.id}`;
+    const movementGroupId = firstWarehouseText(raw.movementGroupId, raw.movement_group_id);
+    const key = movementGroupId || (transferId ? `${transferId}:${lineNo}` : `movement:${event.id}`);
     const group = transferGroups.get(key) || [];
     group.push(event);
     transferGroups.set(key, group);
@@ -3932,7 +3933,7 @@ function stockTransferPayloadFingerprint(payload: Omit<StockTransferApiPayload, 
 }
 
 async function apiStockTransfer(payload: StockTransferApiPayload) {
-  return fetchJSON<{ ok: true; duplicate?: boolean; idempotencyKey?: string | null; transferId: string; documentId?: string | null; documentNumber?: string | null; documentCreatedAt?: string | null; documentTitle?: string | null; documentSubtitle?: string | null; document?: Record<string, any> | null; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; items?: any[] }>("/api/aif/stock-transfers", {
+  return fetchJSON<{ ok: true; duplicate?: boolean; preparationCreated?: boolean; status?: string; idempotencyKey?: string | null; transferId: string; documentId?: string | null; documentNumber?: string | null; documentCreatedAt?: string | null; documentTitle?: string | null; documentSubtitle?: string | null; document?: Record<string, any> | null; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; documentLineCount?: number; documentTotalQty?: number; documentTotalValue?: number; items?: any[] }>("/api/aif/stock-transfers", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -5091,6 +5092,47 @@ export default function AllInWarehouse() {
     return found ? String(found.code || found.id || "") : "";
   }
 
+  function stockEditorTransferLines() {
+    if (!stockEditorTarget?.variant_id) return [] as Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }>;
+    const donors = stockLocationRows
+      .map((loc) => {
+        const before = stockEditorOriginalQty(loc);
+        const desired = Math.max(stockEditorReservedQty(loc), Math.floor(n(stockEditorRows[locationKey(loc)])));
+        return { loc, qty: Math.max(0, before - desired) };
+      })
+      .filter((row) => row.qty > 0);
+    const receivers = stockLocationRows
+      .map((loc) => {
+        const before = stockEditorOriginalQty(loc);
+        const desired = Math.max(stockEditorReservedQty(loc), Math.floor(n(stockEditorRows[locationKey(loc)])));
+        return { loc, qty: Math.max(0, desired - before) };
+      })
+      .filter((row) => row.qty > 0);
+    const lines: Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }> = [];
+    let donorIndex = 0;
+    let receiverIndex = 0;
+    while (donorIndex < donors.length && receiverIndex < receivers.length) {
+      const donor = donors[donorIndex];
+      const receiver = receivers[receiverIndex];
+      const qty = Math.min(donor.qty, receiver.qty);
+      if (qty > 0) {
+        lines.push({
+          variantId: String(stockEditorTarget.variant_id),
+          fromLocationId: String(donor.loc.id || ""),
+          toLocationId: String(receiver.loc.id || ""),
+          qty,
+        });
+        donor.qty -= qty;
+        receiver.qty -= qty;
+      }
+      if (donor.qty <= 0) donorIndex += 1;
+      if (receiver.qty <= 0) receiverIndex += 1;
+    }
+    const remainder = donors.reduce((sum, row) => sum + row.qty, 0) + receivers.reduce((sum, row) => sum + row.qty, 0);
+    if (remainder > 0) throw new Error("A készletáthelyezés forrás- és célmennyisége nem egyezik.");
+    return lines;
+  }
+
   async function saveStockEditor() {
     if (!stockEditorTarget?.variant_id) return;
     const beforeTotal = stockEditorOriginalTotal();
@@ -5124,14 +5166,32 @@ export default function AllInWarehouse() {
         };
       });
       const changedVariantId = String(stockEditorTarget.variant_id || "");
-      await apiVariantStockUpdate(changedVariantId, rows, {
-        mode: stockEditorAllowTotalChange ? "correction" : "redistribute",
-        allowTotalChange: stockEditorAllowTotalChange,
-        reasonCode: stockEditorAllowTotalChange ? stockEditorReasonCode : "",
-        reasonText: stockEditorAllowTotalChange ? stockEditorReasonText.trim() : "",
-        note: stockEditorAllowTotalChange ? stockEditorNote.trim() : "",
-      });
-      notifyStockMovesChanged({ variantId: changedVariantId, source: stockEditorAllowTotalChange ? "warehouse_stock_correction" : "warehouse_stock_redistribution" });
+      let preparationNumber = "";
+      if (stockEditorAllowTotalChange) {
+        await apiVariantStockUpdate(changedVariantId, rows, {
+          mode: "correction",
+          allowTotalChange: true,
+          reasonCode: stockEditorReasonCode,
+          reasonText: stockEditorReasonText.trim(),
+          note: stockEditorNote.trim(),
+        });
+        notifyStockMovesChanged({ variantId: changedVariantId, source: "warehouse_stock_correction" });
+      } else {
+        const transferLines = stockEditorTransferLines();
+        if (!transferLines.length) {
+          setMessage("Nem változott a készlet elosztása, ezért nem került új sor az előkészítésbe.");
+          closeStockEditor();
+          return;
+        }
+        const transferResult = await apiStockTransfer({
+          title: "Aviz intern de transfer stoc",
+          note: stockEditorNote.trim(),
+          idempotencyKey: createStockTransferIdempotencyKey(),
+          lines: transferLines,
+        });
+        preparationNumber = String(transferResult.documentNumber || transferResult.transferId || "");
+        notifyStockMovesChanged({ variantId: changedVariantId, source: "warehouse_transfer_preparation", transferId: transferResult.transferId, documentId: transferResult.documentId });
+      }
       await load();
       if (detail?.item?.id && String(detail.item.id) === String(stockEditorTarget.variant_id)) {
         const d = await apiVariantDetail(stockEditorTarget.variant_id);
@@ -5140,7 +5200,7 @@ export default function AllInWarehouse() {
       }
       setMessage(stockEditorAllowTotalChange
         ? `Készletkorrekció mentve. Teljes változás: ${totalDelta > 0 ? "+" : ""}${totalDelta} db.`
-        : "Készlet áthelyezés mentve, a teljes darabszám nem változott.");
+        : `Készlet áthelyezve és hozzáadva a ${preparationNumber || "nyitott PV"} előkészítéshez. A teljes darabszám nem változott.`);
       setStockEditorTarget(null);
       setStockEditorRows({});
       setStockEditorAllowTotalChange(false);
@@ -6879,8 +6939,8 @@ export default function AllInWarehouse() {
       const officialDocumentNumber = String(result.documentNumber || "").trim();
       setMessage(
         result.duplicate
-          ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. ${officialDocumentNumber ? `Proces-verbal: ${officialDocumentNumber}. ` : ""}A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
-          : `Készletmozgatás és hivatalos átadási bizonylat rögzítve: ${officialDocumentNumber || result.transferId}. ${movedLines} sor, ${movedQty} db. A bizonylat bármikor újranyomtatható a Termékátadások oldalon.`
+          ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. ${officialDocumentNumber ? `Előkészítés: ${officialDocumentNumber}. ` : ""}A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
+          : `Készletmozgatás hozzáadva az átadási előkészítéshez: ${officialDocumentNumber || result.transferId}. ${movedLines} sor, ${movedQty} db. Az előkészítés a Készletbizonylatok oldalon szerkeszthető és lezárható.`
       );
       if (!selectionCleanup.synced) {
         setMessage((current) => `${current} A kész termékeket helyben kivettem a kijelölésből, de a szerveres munkalista mentése hibázott.`);
@@ -10103,15 +10163,15 @@ export default function AllInWarehouse() {
                 <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#404a5b]/98 px-4 py-2.5 shadow-[0_-14px_32px_rgba(15,23,42,0.25)] backdrop-blur">
                   <div className="min-w-0 text-xs leading-relaxed text-white/62">
                     <span className="font-semibold text-white">{moveValidRows.length} sor • {moveTotalQty} db • {money(moveTotalValue)} RON</span>
-                    <span className="ml-2">Mentés után ténylegesen átírja a készletet és bekerül a mozgásnaplóba.</span>
+                    <span className="ml-2">Mentés után ténylegesen átírja a készletet és hozzáadja a nyitott PV-előkészítéshez.</span>
                     {!moveHasSingleRoute ? <span className="ml-2 text-amber-200">Több útvonal van kijelölve. Egy bizonylathoz egy forrás és egy cél kell.</span> : !moveAllRowsValid && selectedMoveItems.length > 0 ? <span className="ml-2 text-amber-200">Van javítandó sor.</span> : null}
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     <button className={btnSoft} onClick={printStockMoveTransferPdf} type="button" disabled={!moveAllRowsValid}>
                       <Printer size={15} /> PDF előnézet
                     </button>
-                    <button className={primaryBtn} onClick={requestSaveSelectedMoveTransfers} type="button" disabled={!moveCanSave} title="Végleges művelet: készletet módosít és mozgásnaplóba ír, előtte megerősítést kér.">
-                      <PackageCheck size={15} /> {stockMoveSaving ? "Mentés..." : "Véglegesítés: készlet mozgatása"}
+                    <button className={primaryBtn} onClick={requestSaveSelectedMoveTransfers} type="button" disabled={!moveCanSave} title="A készletet módosítja és a nyitott PV-előkészítéshez adja; előtte megerősítést kér.">
+                      <PackageCheck size={15} /> {stockMoveSaving ? "Mentés..." : "Mozgatás az előkészítésbe"}
                     </button>
                   </div>
                 </div>
@@ -10139,11 +10199,11 @@ export default function AllInWarehouse() {
           <div className="w-full max-w-md rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
             <div className="border-b border-white/12 bg-[#404a5b]/98 px-4 py-3">
               <p className="text-xs uppercase tracking-[0.16em] text-amber-100/80">Megerősítés</p>
-              <h2 className="mt-1 text-lg text-white">Készlet mozgatása véglegesen?</h2>
+              <h2 className="mt-1 text-lg text-white">Készlet mozgatása az előkészítésbe?</h2>
             </div>
             <div className="space-y-3 p-4 text-sm text-white/74">
               <div className="rounded-xl border border-amber-200/28 bg-amber-300/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
-                Ez nem csak PDF-nyomtatás: mentés után a készlet ténylegesen átkerül a kiválasztott forrásból a célhelyre.
+                A készlet ténylegesen átkerül a kiválasztott forrásból a célhelyre, és a sor bekerül a nyitott PV-előkészítésbe.
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-2">
@@ -10158,7 +10218,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button className={btnSoft} onClick={() => setStockMoveConfirmOpen(false)} type="button" disabled={stockMoveSaving}>Mégsem</button>
                 <button className={primaryBtn} onClick={saveSelectedMoveTransfers} type="button" disabled={!moveCanSave}>
-                  <PackageCheck size={15} /> Igen, készletet mozgat
+                  <PackageCheck size={15} /> Igen, mozgatás és hozzáadás
                 </button>
               </div>
             </div>
