@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  ArrowRightLeft,
   Barcode,
   Boxes,
   ClipboardList,
