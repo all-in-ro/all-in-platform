@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -31,12 +31,17 @@ import {
   Save,
   Search,
   ShoppingBag,
+  ShoppingCart,
   X,
 } from "lucide-react";
 import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
 import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
 import ShopifyStatusIcon, { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
-import { apiAifAddItemsToOpenPurchaseOrders } from "../lib/aif/api";
+import {
+  apiAifAddItemsToOpenPurchaseOrders,
+  apiAifGetPurchaseOrder,
+  apiAifListPurchaseOrders,
+} from "../lib/aif/api";
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
 const shell = "mx-auto max-w-7xl space-y-4";
@@ -116,6 +121,8 @@ const warehouseShowAllAfterIncomingEventName = "aif:warehouse-show-all-after-inc
 const warehouseLocalPriceHistoryStorageKey = "allinfashion:warehouse:localPriceHistory:v1";
 const warehouseBarcodeReturnStorageKey = "allinfashion:warehouse:barcodeReturn:v1";
 const warehouseBarcodeChangedStorageKey = "allinfashion:barcode:changed:v1";
+const purchaseOrdersChangedStorageKey = "allinfashion:purchaseOrders:changed:v1";
+const purchaseOrdersChangedEventName = "aif:purchase-orders-changed";
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -1247,6 +1254,170 @@ function n(v: unknown) {
   const x = Number(v || 0);
   return Number.isFinite(x) ? x : 0;
 }
+
+function formatQty(value: unknown) {
+  return Math.trunc(n(value)).toLocaleString("hu-HU");
+}
+
+
+type OpenPurchaseOrderBadgeOrder = {
+  id: string;
+  orderNumber: string;
+  supplierName: string;
+  status: string;
+  qty: number;
+};
+
+type OpenPurchaseOrderBadgeInfo = {
+  totalQty: number;
+  orders: OpenPurchaseOrderBadgeOrder[];
+};
+
+function purchaseOrderStatusText(status: unknown) {
+  const raw = String(status || "").trim().toLowerCase();
+  if (raw === "draft") return "Nyitott";
+  if (raw === "ordered") return "Rendelve";
+  if (raw === "partially_received") return "Részben beérkezett";
+  return raw || "Folyamatban";
+}
+
+async function fetchOpenPurchaseOrderVariantMap() {
+  const list = await apiAifListPurchaseOrders({ limit: 1000 });
+  const activeOrders = (list.items || []).filter((order) =>
+    ["draft", "ordered", "partially_received"].includes(String(order.status || "").toLowerCase()),
+  );
+  const details = await Promise.all(activeOrders.map(async (order) => {
+    try {
+      return await apiAifGetPurchaseOrder(order.id);
+    } catch {
+      return null;
+    }
+  }));
+  const result: Record<string, OpenPurchaseOrderBadgeInfo> = {};
+  for (const detail of details) {
+    if (!detail?.item) continue;
+    for (const line of detail.lines || []) {
+      const variantId = String(line.variant_id || "").trim();
+      if (!variantId) continue;
+      const ordered = Math.max(0, n(line.qty_ordered));
+      const received = Math.max(0, n(line.qty_received));
+      const remainingRaw = line.qty_remaining === null || line.qty_remaining === undefined
+        ? ordered - received
+        : n(line.qty_remaining);
+      const qty = Math.max(0, Math.trunc(remainingRaw));
+      if (qty <= 0) continue;
+      const current = result[variantId] || { totalQty: 0, orders: [] };
+      current.totalQty += qty;
+      const existing = current.orders.find((order) => order.id === detail.item.id);
+      if (existing) existing.qty += qty;
+      else current.orders.push({
+        id: detail.item.id,
+        orderNumber: String(detail.item.order_number || "Rendelés"),
+        supplierName: String(detail.item.supplier_name || "Beszállító"),
+        status: purchaseOrderStatusText(detail.item.status),
+        qty,
+      });
+      result[variantId] = current;
+    }
+  }
+  return result;
+}
+
+function OpenPurchaseOrderBadge({
+  info,
+  children,
+  className = "",
+  onClick,
+  title = "Rendelés alatt",
+}: {
+  info: OpenPurchaseOrderBadgeInfo;
+  children: React.ReactNode;
+  className?: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
+
+  const updateTooltipPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const node = buttonRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const width = 330;
+    const padding = 10;
+    const left = Math.min(
+      Math.max(padding, rect.left + rect.width / 2 - width / 2),
+      Math.max(padding, window.innerWidth - width - padding),
+    );
+    const openUp = rect.bottom + 190 > window.innerHeight;
+    setTooltipStyle({
+      position: "fixed",
+      left,
+      top: openUp ? rect.top - 8 : rect.bottom + 8,
+      width,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483000,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!tooltipOpen) return;
+    updateTooltipPosition();
+    const reposition = () => updateTooltipPosition();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [tooltipOpen, updateTooltipPosition]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={className}
+        onClick={onClick}
+        onMouseEnter={() => { updateTooltipPosition(); setTooltipOpen(true); }}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={() => { updateTooltipPosition(); setTooltipOpen(true); }}
+        onBlur={() => setTooltipOpen(false)}
+        aria-label={`${title}: ${info.totalQty} darab`}
+      >
+        {children}
+      </button>
+      {tooltipOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="pointer-events-none rounded-2xl border border-orange-200/55 bg-[#202838] p-3 text-left text-[11px] leading-snug text-white shadow-[0_24px_60px_rgba(0,0,0,.55)]"
+          style={tooltipStyle}
+          role="tooltip"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+            <span className="inline-flex items-center gap-2 text-orange-100"><ShoppingCart size={15} /> {title}</span>
+            <span className="rounded-full border border-orange-200/55 bg-[#ff6a00] px-2 py-0.5 text-[10px] text-white">{formatQty(info.totalQty)} db</span>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {info.orders.map((order) => (
+              <div key={order.id} className="grid grid-cols-[1fr_auto] gap-3 rounded-xl bg-white/[0.06] px-2.5 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-white">{order.orderNumber} • {order.supplierName}</div>
+                  <div className="mt-0.5 text-[10px] text-white/48">{order.status}</div>
+                </div>
+                <div className="self-center whitespace-nowrap tabular-nums text-orange-100">{formatQty(order.qty)} db</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 border-t border-white/10 pt-2 text-[10px] text-white/42">Kattintás: művelet folytatása</div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 
 function money(v: unknown) {
   if (v === null || v === undefined || v === "") return "-";
@@ -3053,6 +3224,19 @@ function VariantCodesTooltip({ item, openUp = false, buttonLabel = "Azonosítók
 }
 
 
+
+function ProductCodeTooltipButton({ item, openUp = false }: { item: InventoryItem; openUp?: boolean }) {
+  const code = itemProductCode(item);
+  return (
+    <VariantCodesTooltip
+      item={item}
+      openUp={openUp}
+      buttonLabel={code ? `Termékkód: ${code}` : "Nincs termékkód"}
+      buttonClassName="inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
+    />
+  );
+}
+
 function historyDateTime(value?: string | null) {
   if (!value) return "-";
   const d = new Date(String(value));
@@ -4651,6 +4835,7 @@ export default function AllInWarehouse() {
   const [purchaseOrderWorkRows, setPurchaseOrderWorkRows] = useState<Record<string, PurchaseOrderWorkDraftRow>>({});
   const [purchaseOrderTargetLocationId, setPurchaseOrderTargetLocationId] = useState("");
   const [purchaseOrderWorkSaving, setPurchaseOrderWorkSaving] = useState(false);
+  const [openPurchaseOrdersByVariant, setOpenPurchaseOrdersByVariant] = useState<Record<string, OpenPurchaseOrderBadgeInfo>>({});
   const purchaseOrderWorkSubmitLockRef = useRef(false);
   const purchaseOrderWorkIdempotencyKeyRef = useRef("");
   const [stockMoveRows, setStockMoveRows] = useState<Record<string, StockTransferDraftRow>>({});
@@ -4703,12 +4888,37 @@ export default function AllInWarehouse() {
   const pendingProductJumpCandidateIdsRef = useRef<string[]>([]);
   const pendingProductJumpFallbackRef = useRef<{ productPage: number; scrollY: number } | null>(null);
 
+  const loadOpenPurchaseOrderState = useCallback(async () => {
+    try {
+      setOpenPurchaseOrdersByVariant(await fetchOpenPurchaseOrderVariantMap());
+    } catch {
+      // A raktárlista ettől még használható; a jelzés a következő fókusznál újrapróbálkozik.
+    }
+  }, []);
+
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
 
   useEffect(() => {
     setIncomingSelectedVariants({});
   }, [incomingFocus?.batchId]);
+
+  useEffect(() => {
+    void loadOpenPurchaseOrderState();
+    if (typeof window === "undefined") return;
+    const refreshOrders = () => void loadOpenPurchaseOrderState();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === purchaseOrdersChangedStorageKey) refreshOrders();
+    };
+    window.addEventListener(purchaseOrdersChangedEventName, refreshOrders as EventListener);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", refreshOrders);
+    return () => {
+      window.removeEventListener(purchaseOrdersChangedEventName, refreshOrders as EventListener);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", refreshOrders);
+    };
+  }, [loadOpenPurchaseOrderState]);
 
   const inventoryDisplayItems = useMemo(() => {
     const baseItems = items.filter((item) => !isArchivedInventoryItem(item));
@@ -6135,18 +6345,6 @@ export default function AllInWarehouse() {
     );
   }
 
-  function ProductCodeTooltipButton({ item, openUp = false }: { item: InventoryItem; openUp?: boolean }) {
-    const code = itemProductCode(item);
-    return (
-      <VariantCodesTooltip
-        item={item}
-        openUp={openUp}
-        buttonLabel={code ? `Termékkód: ${code}` : "Nincs termékkód"}
-        buttonClassName="inline-flex h-6 max-w-[220px] shrink-0 items-center justify-start gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[#5bd0cc]/35 bg-[#203f49] px-2 text-[11px] leading-none text-[#cffffd] transition hover:bg-[#25535c] focus:outline-none focus:ring-2 focus:ring-[#2a8d8b]/45"
-      />
-    );
-  }
-
   const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
   const normalizeSize = (value: unknown) => officialSizeFromTypes(value, sizeTypes);
 
@@ -7064,6 +7262,7 @@ export default function AllInWarehouse() {
         // A következő oldalbetöltés ettől még behozza a rendeléseket.
       }
 
+      await loadOpenPurchaseOrderState();
       purchaseOrderWorkIdempotencyKeyRef.current = "";
       setPurchaseOrderWorkRows({});
       setMessage(
@@ -9975,6 +10174,7 @@ export default function AllInWarehouse() {
                       const invoiceText = selectedInvoiceFilterOption?.invoiceNumber || (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
                       const purchaseDateText = inventoryPurchaseDateLabel(it, selectedInvoiceFilterOption?.invoiceNumber, selectedInvoiceFilterOption?.receptionIds?.[0]);
                       const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
+                      const openOrderInfo = openPurchaseOrdersByVariant[variantId] || null;
                       return (
                       <tr
                         key={it.variant_id}
@@ -10008,6 +10208,16 @@ export default function AllInWarehouse() {
                           </div>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
                             <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
+                            {openOrderInfo ? (
+                              <OpenPurchaseOrderBadge
+                                info={openOrderInfo}
+                                onClick={() => { window.location.hash = "#allinorderhistory"; }}
+                                title="Rendelés alatt"
+                                className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-orange-200/70 bg-[#ff6a00] px-2 text-[10px] leading-none text-white shadow-[0_0_0_1px_rgba(255,106,0,.28),0_6px_14px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
+                              >
+                                <ShoppingCart size={11} /> Rendelés alatt
+                              </OpenPurchaseOrderBadge>
+                            ) : null}
                             {isHighlighted ? (
                               <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-100/75 bg-amber-300 px-2 py-0.5 text-[10px] leading-none text-slate-900 shadow-[0_0_16px_rgba(252,211,77,0.42)]">
                                 <ArrowRight size={10} /> Folytatás innen
@@ -10059,6 +10269,7 @@ export default function AllInWarehouse() {
                   const invoiceText = selectedInvoiceFilterOption?.invoiceNumber || (it.last_invoice_number || inventoryInvoiceNumbers(it)[0] || "");
                   const purchaseDateText = inventoryPurchaseDateLabel(it, selectedInvoiceFilterOption?.invoiceNumber, selectedInvoiceFilterOption?.receptionIds?.[0]);
                   const shopifyConnectedText = warehouseDateLabel(it.shopify_connected_at || it.shopify_export_reconciled_at || it.shopify_mapped_at);
+                  const openOrderInfo = openPurchaseOrdersByVariant[variantId] || null;
                   return (
                   <article
                     key={it.variant_id}
@@ -10088,7 +10299,19 @@ export default function AllInWarehouse() {
                           <WarehouseShopifyStatusIcon item={it} size="sm" />
                         </div>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                        <div className="mt-1"><ProductCodeTooltipButton item={it} /></div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <ProductCodeTooltipButton item={it} />
+                          {openOrderInfo ? (
+                            <OpenPurchaseOrderBadge
+                              info={openOrderInfo}
+                              onClick={() => { window.location.hash = "#allinorderhistory"; }}
+                              title="Rendelés alatt"
+                              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-orange-200/70 bg-[#ff6a00] px-2 text-[10px] leading-none text-white shadow-[0_6px_14px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a]"
+                            >
+                              <ShoppingCart size={11} /> Rendelés alatt
+                            </OpenPurchaseOrderBadge>
+                          ) : null}
+                        </div>
                         {showPurchaseContext && (invoiceText || purchaseDateText) ? <p className="mt-1 text-[11px] text-white/45">{invoiceText ? `Számla: ${invoiceText}` : "Számla nélkül"}{purchaseDateText ? ` • ${purchaseDateText}` : ""}</p> : null}
                         {showShopifyConnectionContext && shopifyConnectedText ? <p className="mt-1 text-[11px] text-[#d7fffd]/72">Shopify kapcsolat: {shopifyConnectedText}</p> : null}
                         {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
