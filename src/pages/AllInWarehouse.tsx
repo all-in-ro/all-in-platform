@@ -4882,6 +4882,7 @@ export default function AllInWarehouse() {
   const [incomingFocusItems, setIncomingFocusItems] = useState<InventoryItem[]>([]);
   const productListRef = useRef<HTMLElement | null>(null);
   const detailReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
+  const stockEditorReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
   const selectionReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
   const lastSelectionVariantIdRef = useRef("");
   const pendingProductJumpViewportTopRef = useRef<number | null>(null);
@@ -5334,6 +5335,7 @@ export default function AllInWarehouse() {
   }
 
   function openStockEditor(item: InventoryItem) {
+    rememberStockEditorReturnAnchor(item.variant_id);
     const rows = stockRowsForVariant(item.variant_id);
     const next: Record<string, string> = {};
     for (const loc of stockLocationRows) {
@@ -5371,8 +5373,7 @@ export default function AllInWarehouse() {
     await openProductHistory(historyTarget);
   }
 
-  function closeStockEditor() {
-    if (stockEditorSaving) return;
+  function resetStockEditorState() {
     setStockEditorTarget(null);
     setStockEditorRows({});
     setStockEditorAllowTotalChange(false);
@@ -5380,6 +5381,18 @@ export default function AllInWarehouse() {
     setStockEditorReasonText("");
     setStockEditorNote("");
     setStockEditorWarning("");
+  }
+
+  function finishCloseStockEditor(options: { restorePosition?: boolean } = {}) {
+    resetStockEditorState();
+    if (options.restorePosition !== false) {
+      window.requestAnimationFrame(() => restoreStockEditorReturnPosition());
+    }
+  }
+
+  function closeStockEditor() {
+    if (stockEditorSaving) return;
+    finishCloseStockEditor();
   }
 
   function stockEditorReservedQty(location: MetaItem) {
@@ -5611,7 +5624,7 @@ export default function AllInWarehouse() {
         const transferLines = stockEditorTransferLines();
         if (!transferLines.length) {
           setMessage("Nem változott a készlet elosztása, ezért nem került új sor az előkészítésbe.");
-          closeStockEditor();
+          finishCloseStockEditor();
           return;
         }
         const transferResult = await apiStockTransfer({
@@ -5632,13 +5645,7 @@ export default function AllInWarehouse() {
       setMessage(stockEditorAllowTotalChange
         ? `Készletkorrekció mentve. Teljes változás: ${totalDelta > 0 ? "+" : ""}${totalDelta} db.`
         : `Készlet áthelyezve és hozzáadva a ${preparationNumber || "nyitott PV"} előkészítéshez. A teljes darabszám nem változott.`);
-      setStockEditorTarget(null);
-      setStockEditorRows({});
-      setStockEditorAllowTotalChange(false);
-      setStockEditorReasonCode("");
-      setStockEditorReasonText("");
-      setStockEditorNote("");
-      setStockEditorWarning("");
+      finishCloseStockEditor();
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült módosítani a készletet.");
     } finally {
@@ -6719,6 +6726,56 @@ export default function AllInWarehouse() {
         ? anchor.rowViewportTop
         : null;
       setListOpen(true);
+      setPendingProductJumpId(candidates[0]);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: Math.max(0, anchor.scrollY || 0), behavior: "auto" });
+    });
+  }
+
+  function rememberStockEditorReturnAnchor(variantId: unknown) {
+    const id = String(variantId || "").trim();
+    if (!id || typeof window === "undefined") return;
+    const index = filtered.findIndex((item) => String(item.variant_id || "") === id);
+    const node = findVisibleProductNode(id);
+    const rowViewportTop = node ? node.getBoundingClientRect().top : null;
+    stockEditorReturnAnchorRef.current = {
+      variantId: id,
+      nextVariantId: index >= 0 ? String(filtered[index + 1]?.variant_id || "") || null : null,
+      previousVariantId: index > 0 ? String(filtered[index - 1]?.variant_id || "") || null : null,
+      productPage: safeProductPage,
+      scrollY: window.scrollY,
+      rowViewportTop: typeof rowViewportTop === "number" && Number.isFinite(rowViewportTop) ? rowViewportTop : null,
+      filters: currentWarehouseFilterSnapshot(),
+    };
+  }
+
+  function restoreStockEditorReturnPosition() {
+    const anchor = stockEditorReturnAnchorRef.current;
+    if (!anchor || typeof window === "undefined") return;
+    stockEditorReturnAnchorRef.current = null;
+
+    restoreWarehouseFilterSnapshot(anchor.filters);
+    setProductPage(Math.max(1, anchor.productPage || 1));
+
+    const candidates = [anchor.variantId, anchor.nextVariantId, anchor.previousVariantId]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    if (candidates.length) {
+      pendingProductJumpCandidateIdsRef.current = Array.from(new Set(candidates));
+      pendingProductJumpFallbackRef.current = {
+        productPage: Math.max(1, anchor.productPage || 1),
+        scrollY: Math.max(0, anchor.scrollY || 0),
+      };
+      pendingProductJumpViewportTopRef.current =
+        typeof anchor.rowViewportTop === "number" && Number.isFinite(anchor.rowViewportTop)
+          ? anchor.rowViewportTop
+          : null;
+      setListOpen(true);
+      setHighlightProductId(candidates[0]);
       setPendingProductJumpId(candidates[0]);
       return;
     }
@@ -10208,16 +10265,6 @@ export default function AllInWarehouse() {
                           </div>
                           <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible text-[11px] leading-4">
                             <span className="relative z-40 min-w-0 overflow-visible"><ProductCodeTooltipButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></span>
-                            {openOrderInfo ? (
-                              <OpenPurchaseOrderBadge
-                                info={openOrderInfo}
-                                onClick={() => { window.location.hash = "#allinorderhistory"; }}
-                                title="Rendelés alatt"
-                                className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-orange-200/70 bg-[#ff6a00] px-2 text-[10px] leading-none text-white shadow-[0_0_0_1px_rgba(255,106,0,.28),0_6px_14px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
-                              >
-                                <ShoppingCart size={11} /> Rendelés alatt
-                              </OpenPurchaseOrderBadge>
-                            ) : null}
                             {isHighlighted ? (
                               <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-100/75 bg-amber-300 px-2 py-0.5 text-[10px] leading-none text-slate-900 shadow-[0_0_16px_rgba(252,211,77,0.42)]">
                                 <ArrowRight size={10} /> Folytatás innen
@@ -10240,7 +10287,21 @@ export default function AllInWarehouse() {
                         </td>
                         <td className="px-2 py-2.5 text-center align-middle" title={colorDisplay(it.color_name, it.color_code)}><ColorNameWithCode item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
-                        <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap"><StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
+                        <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">
+                          <div className="flex flex-col items-center justify-center gap-1">
+                            <StockQtyButton item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} />
+                            {openOrderInfo ? (
+                              <OpenPurchaseOrderBadge
+                                info={openOrderInfo}
+                                onClick={() => { window.location.hash = "#allinorderhistory"; }}
+                                title="Rendelés alatt"
+                                className="inline-flex h-5 min-w-[94px] shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200/75 bg-[#ff6a00] px-2 text-[9px] leading-none text-white shadow-[0_0_0_1px_rgba(255,106,0,.28),0_5px_12px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
+                              >
+                                <ShoppingCart size={10} /> Rendelés alatt
+                              </OpenPurchaseOrderBadge>
+                            ) : null}
+                          </div>
+                        </td>
                         <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><MaskedBuyPrice value={it.buy_price} /></td>
                         <td className="px-2 py-2.5 text-center align-middle tabular-nums whitespace-nowrap"><SellPriceWithMarkup sellPrice={it.sell_price} buyPrice={it.buy_price} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle"><span className="inline-flex w-full justify-center"><MissingDataIndicator item={it} openUp={index >= Math.max(0, productPageItems.length - 2)} /></span></td>
@@ -10301,22 +10362,24 @@ export default function AllInWarehouse() {
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <ProductCodeTooltipButton item={it} />
-                          {openOrderInfo ? (
-                            <OpenPurchaseOrderBadge
-                              info={openOrderInfo}
-                              onClick={() => { window.location.hash = "#allinorderhistory"; }}
-                              title="Rendelés alatt"
-                              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-orange-200/70 bg-[#ff6a00] px-2 text-[10px] leading-none text-white shadow-[0_6px_14px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a]"
-                            >
-                              <ShoppingCart size={11} /> Rendelés alatt
-                            </OpenPurchaseOrderBadge>
-                          ) : null}
                         </div>
                         {showPurchaseContext && (invoiceText || purchaseDateText) ? <p className="mt-1 text-[11px] text-white/45">{invoiceText ? `Számla: ${invoiceText}` : "Számla nélkül"}{purchaseDateText ? ` • ${purchaseDateText}` : ""}</p> : null}
                         {showShopifyConnectionContext && shopifyConnectedText ? <p className="mt-1 text-[11px] text-[#d7fffd]/72">Shopify kapcsolat: {shopifyConnectedText}</p> : null}
                         {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <StockQtyButton item={it} />
+                        <div className="mt-2 flex flex-wrap items-start gap-1.5">
+                          <div className="flex flex-col items-start gap-1">
+                            <StockQtyButton item={it} />
+                            {openOrderInfo ? (
+                              <OpenPurchaseOrderBadge
+                                info={openOrderInfo}
+                                onClick={() => { window.location.hash = "#allinorderhistory"; }}
+                                title="Rendelés alatt"
+                                className="inline-flex h-5 min-w-[94px] shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200/75 bg-[#ff6a00] px-2 text-[9px] leading-none text-white shadow-[0_5px_12px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
+                              >
+                                <ShoppingCart size={10} /> Rendelés alatt
+                              </OpenPurchaseOrderBadge>
+                            ) : null}
+                          </div>
                           <MissingDataIndicator item={it} />
                         </div>
                       </div>
