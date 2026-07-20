@@ -1,5 +1,8 @@
 import express from "express";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { startAifShopifyEmbeddedWorker } from "../lib/aifShopifyEmbeddedWorker.js";
 import {
   listAifShopifyInboundEvents,
@@ -13840,6 +13843,182 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       res.status(500).json({ error: error?.message || 'A beszerzési rendelés végleges törlése nem sikerült.' });
     } finally {
       client.release();
+    }
+  });
+
+
+  // Biztonságos, ideiglenes rendszer-dokumentáció letöltés.
+  // A PDF-et továbbra is a Render Shell generálja, majd hitelesített API-kéréssel
+  // feltölti a live web service példányára. Így nem a Shell külön fájlrendszerét
+  // próbáljuk nyilvános URL-ként használni, mert az két külön világ. Micsoda meglepetés.
+  const AIF_SYSTEM_DOCUMENTATION_ROOT = path.join(os.tmpdir(), "allin-system-documentation");
+  const AIF_SYSTEM_DOCUMENTATION_FILE = "AllInFashion_teljes_rendszerterkep.pdf";
+  const AIF_SYSTEM_DOCUMENTATION_MAX_BYTES = 70 * 1024 * 1024;
+  const AIF_SYSTEM_DOCUMENTATION_TTL_MS = 6 * 60 * 60 * 1000;
+
+  function cleanAifSystemDocumentationToken(value) {
+    const token = String(value || "").trim().toLowerCase();
+    return /^[a-f0-9]{32,96}$/.test(token) ? token : null;
+  }
+
+  function aifSystemDocumentationDirectory(token) {
+    return path.join(AIF_SYSTEM_DOCUMENTATION_ROOT, token);
+  }
+
+  function aifSystemDocumentationFilePath(token) {
+    return path.join(aifSystemDocumentationDirectory(token), AIF_SYSTEM_DOCUMENTATION_FILE);
+  }
+
+  function aifSystemDocumentationMetadataPath(token) {
+    return path.join(aifSystemDocumentationDirectory(token), "metadata.json");
+  }
+
+  async function cleanupExpiredAifSystemDocumentation(now = Date.now()) {
+    await fs.promises.mkdir(AIF_SYSTEM_DOCUMENTATION_ROOT, { recursive: true, mode: 0o700 });
+    let entries = [];
+    try {
+      entries = await fs.promises.readdir(AIF_SYSTEM_DOCUMENTATION_ROOT, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
+      const token = cleanAifSystemDocumentationToken(entry.name);
+      if (!token) return;
+      const directory = aifSystemDocumentationDirectory(token);
+      let expiresAt = 0;
+      try {
+        const raw = await fs.promises.readFile(aifSystemDocumentationMetadataPath(token), "utf8");
+        const metadata = JSON.parse(raw);
+        expiresAt = Number(new Date(metadata?.expiresAt || 0).getTime() || 0);
+      } catch {
+        try {
+          const stat = await fs.promises.stat(directory);
+          expiresAt = stat.mtimeMs + AIF_SYSTEM_DOCUMENTATION_TTL_MS;
+        } catch {
+          expiresAt = 0;
+        }
+      }
+      if (!expiresAt || expiresAt <= now) {
+        await fs.promises.rm(directory, { recursive: true, force: true }).catch(() => {});
+      }
+    }));
+  }
+
+  router.post(
+    "/system-documentation/publish",
+    requireAdminOrSecret,
+    express.raw({ type: ["application/pdf", "application/octet-stream"], limit: "75mb" }),
+    async (req, res) => {
+      const token = cleanAifSystemDocumentationToken(
+        req.headers["x-aif-doc-token"] || req.query?.token || req.body?.token
+      );
+      if (!token) {
+        return res.status(400).json({ error: "Érvénytelen dokumentációs token.", code: "invalid_documentation_token" });
+      }
+
+      const payload = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!payload || payload.length < 5) {
+        return res.status(400).json({ error: "A feltöltött PDF üres vagy hiányzik.", code: "missing_pdf_payload" });
+      }
+      if (payload.length > AIF_SYSTEM_DOCUMENTATION_MAX_BYTES) {
+        return res.status(413).json({ error: "A rendszer-dokumentáció PDF túl nagy.", code: "documentation_pdf_too_large" });
+      }
+      if (payload.subarray(0, 5).toString("ascii") !== "%PDF-") {
+        return res.status(400).json({ error: "A feltöltött fájl nem érvényes PDF.", code: "invalid_pdf_payload" });
+      }
+
+      try {
+        await cleanupExpiredAifSystemDocumentation();
+        const directory = aifSystemDocumentationDirectory(token);
+        const filePath = aifSystemDocumentationFilePath(token);
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + AIF_SYSTEM_DOCUMENTATION_TTL_MS);
+
+        await fs.promises.rm(directory, { recursive: true, force: true });
+        await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
+        await fs.promises.writeFile(filePath, payload, { mode: 0o600 });
+        await fs.promises.writeFile(
+          aifSystemDocumentationMetadataPath(token),
+          JSON.stringify({
+            token,
+            filename: AIF_SYSTEM_DOCUMENTATION_FILE,
+            bytes: payload.length,
+            createdAt: now.toISOString(),
+            expiresAt: expiresAt.toISOString(),
+            uploadedBy: actorFrom(req),
+          }, null, 2),
+          { encoding: "utf8", mode: 0o600 }
+        );
+
+        return res.json({
+          ok: true,
+          token,
+          bytes: payload.length,
+          filename: AIF_SYSTEM_DOCUMENTATION_FILE,
+          expiresAt: expiresAt.toISOString(),
+          downloadUrl: `/api/aif/system-documentation/${token}/download`,
+          deleteUrl: `/api/aif/system-documentation/${token}`,
+        });
+      } catch (error) {
+        console.error("AIF system documentation publish failed", error);
+        return res.status(500).json({
+          error: error?.message || "A rendszer-dokumentáció ideiglenes közzététele nem sikerült.",
+          code: error?.code || "documentation_publish_failed",
+        });
+      }
+    }
+  );
+
+  router.get("/system-documentation/:token/download", requireAdminOrSecret, async (req, res) => {
+    const token = cleanAifSystemDocumentationToken(req.params.token);
+    if (!token) return res.status(404).send("A dokumentáció nem található.");
+
+    try {
+      await cleanupExpiredAifSystemDocumentation();
+      const filePath = aifSystemDocumentationFilePath(token);
+      const metadataPath = aifSystemDocumentationMetadataPath(token);
+      let metadata = null;
+      try {
+        metadata = JSON.parse(await fs.promises.readFile(metadataPath, "utf8"));
+      } catch {}
+
+      if (metadata?.expiresAt && new Date(metadata.expiresAt).getTime() <= Date.now()) {
+        await fs.promises.rm(aifSystemDocumentationDirectory(token), { recursive: true, force: true });
+        return res.status(410).send("A dokumentáció letöltési ideje lejárt.");
+      }
+
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile()) return res.status(404).send("A dokumentáció nem található.");
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${AIF_SYSTEM_DOCUMENTATION_FILE}"`);
+      res.setHeader("Content-Length", String(stat.size));
+      res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      const stream = fs.createReadStream(filePath);
+      stream.on("error", (error) => {
+        console.error("AIF system documentation stream failed", error);
+        if (!res.headersSent) res.status(500).send("A PDF letöltése nem sikerült.");
+        else res.destroy(error);
+      });
+      stream.pipe(res);
+    } catch (error) {
+      if (error?.code === "ENOENT") return res.status(404).send("A dokumentáció nem található.");
+      console.error("AIF system documentation download failed", error);
+      return res.status(500).send("A PDF letöltése nem sikerült.");
+    }
+  });
+
+  router.delete("/system-documentation/:token", requireAdminOrSecret, async (req, res) => {
+    const token = cleanAifSystemDocumentationToken(req.params.token);
+    if (!token) return res.status(404).json({ error: "A dokumentáció nem található." });
+    try {
+      await fs.promises.rm(aifSystemDocumentationDirectory(token), { recursive: true, force: true });
+      return res.json({ ok: true, deleted: true, token });
+    } catch (error) {
+      console.error("AIF system documentation delete failed", error);
+      return res.status(500).json({ error: "A dokumentáció törlése nem sikerült.", code: error?.code || null });
     }
   });
 
