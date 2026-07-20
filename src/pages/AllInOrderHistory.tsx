@@ -408,7 +408,7 @@ function PurchaseOrderLineEditor({
         </label>
 
         <label className={label}>
-          Egységár
+          Vételár
           <input
             className={input}
             value={line.unitPrice}
@@ -419,7 +419,7 @@ function PurchaseOrderLineEditor({
 
         <div className="flex min-w-[190px] flex-col gap-2 lg:items-end">
           <p className="text-xs text-white/65">
-            Sorérték: {lineValue > 0 ? money(lineValue, currencyCode) : "-"}
+            Beszerzési érték: {lineValue > 0 ? money(lineValue, currencyCode) : "-"}
           </p>
           <div className="flex gap-1.5">
             <button className={neutralBtn} onClick={onToggle} type="button">
@@ -449,7 +449,6 @@ function PurchaseOrderLineEditor({
             <label className={label}>Vonalkód<input className={input} value={String(line.barcode || "")} onChange={(event) => onChange({ barcode: event.target.value })} /></label>
             <label className={label}>S/N/COD<input className={input} value={String(line.snCod || "")} onChange={(event) => onChange({ snCod: event.target.value })} /></label>
             <label className={label}>Vámtarifakód<input className={input} value={String(line.customsTariffCode || "")} onChange={(event) => onChange({ customsTariffCode: event.target.value })} /></label>
-            <label className={label}>Eladási ár<input className={input} value={String(line.sellPrice ?? "")} onChange={(event) => onChange({ sellPrice: event.target.value === "" ? null : toNumber(event.target.value) })} inputMode="decimal" /></label>
 
             <label className={label}>Szín<input className={input} value={String(line.colorName || "")} onChange={(event) => onChange({ colorName: event.target.value })} /></label>
             <label className={label}>Színkód<input className={input} value={String(line.colorCode || "")} onChange={(event) => onChange({ colorCode: event.target.value })} /></label>
@@ -552,7 +551,7 @@ function buildPurchaseOrderPdf(detail: AifPurchaseOrderDetail, settings: AifPurc
       <div class="box"><div class="label">Termen estimat</div><div class="value">${escapeHtml(dateText(item.expected_date))}</div></div>
     </div>
     <table><colgroup><col style="width:4%"><col style="width:7%"><col style="width:31%"><col style="width:15%"><col style="width:15%"><col style="width:7%"><col style="width:10%"><col style="width:11%"></colgroup>
-      <thead><tr><th>Nr.</th><th>Foto</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>Cod de bare</th><th>Cant.</th><th>P.U.</th><th>Valoare</th></tr></thead>
+      <thead><tr><th>Nr.</th><th>Foto</th><th>Denumire produs / variantă</th><th>Cod produs</th><th>Cod de bare</th><th>Cant.</th><th>P.U. achiziție</th><th>Valoare</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="8" class="center">Nu există produse.</td></tr>`}</tbody>
     </table>
     <div class="total"><div class="total-box"><div class="total-row"><span>Total poziții / buc.</span><strong>${lines.length} / ${totalQty}</strong></div><div class="total-row"><span>Valoare totală</span><strong>${totalValue > 0 ? money(totalValue, item.currency_code) : "Fără prețuri"}</strong></div></div></div>
@@ -802,7 +801,6 @@ export default function AllInOrderHistory() {
         material: line.material || "",
         descriptionRo: line.description_ro || "",
         imageUrl: line.image_url || "",
-        sellPrice: line.sell_price ?? null,
         qty: Math.max(1, toNumber(line.qty_ordered)),
         unitPrice: line.unit_price === null || line.unit_price === undefined ? "" : String(line.unit_price),
       }));
@@ -845,7 +843,6 @@ export default function AllInOrderHistory() {
       productType: item.product_type || "",
       material: item.material || "",
       imageUrl: item.image_url || "",
-      sellPrice: item.sell_price ?? null,
       qty: 1,
       unitPrice: item.buy_price === null || item.buy_price === undefined ? "" : String(item.buy_price),
     }]);
@@ -925,7 +922,13 @@ export default function AllInOrderHistory() {
         expectedDate: formExpectedDate || null,
         externalReference: formExternalReference || null,
         note: formNote || null,
-        lines: draftLines.map((line) => ({ ...line, qtyOrdered: Math.max(1, Math.floor(toNumber(line.qty))), unitPrice: line.unitPrice === "" ? null : toNumber(line.unitPrice) })),
+        lines: draftLines.map((line) => ({
+          ...line,
+          sellPrice: null,
+          sell_price: null,
+          qtyOrdered: Math.max(1, Math.floor(toNumber(line.qty))),
+          unitPrice: line.unitPrice === "" ? null : toNumber(line.unitPrice),
+        })),
       };
       const response = editingId
         ? await apiAifUpdatePurchaseOrder(editingId, payload)
@@ -1227,7 +1230,7 @@ export default function AllInOrderHistory() {
                   {productSearch && <div className="absolute left-0 right-0 top-11 z-30 max-h-80 overflow-y-auto rounded-2xl border border-white/20 bg-[#263246] p-2 shadow-2xl">{inventoryLoading && <p className="p-3 text-sm text-white/60">Termékek betöltése...</p>}{filteredInventory.map((item) => <button key={item.variant_id} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-white/8" onClick={() => addInventoryLine(item)} type="button"><ProductImage src={item.image_url} title={item.title_ro} size="sm" /><span className="min-w-0 flex-1"><span className="block truncate text-sm">{item.title_ro}</span><span className="mt-1 block truncate text-xs text-white/50">{item.brand_name || "-"} • {item.color_name || "-"} • {item.size || "-"} • {item.barcode || item.internal_sku || "-"}</span></span><Plus size={15} /></button>)}{!inventoryLoading && !filteredInventory.length && <p className="p-3 text-sm text-white/55">Nincs találat. Új terméksorként is hozzáadható.</p>}</div>}
                 </div>
 
-                {manualOpen && <div className="mt-3 rounded-2xl border border-[#67d4d1]/30 bg-[#303b4e] p-3"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-8"><label className={`${label} lg:col-span-2`}>Terméknév<input className={input} value={manualTitle} onChange={(event) => setManualTitle(event.target.value)} /></label><label className={label}>Termékkód<input className={input} value={manualCode} onChange={(event) => setManualCode(event.target.value)} /></label><label className={label}>Vonalkód<input className={input} value={manualBarcode} onChange={(event) => setManualBarcode(event.target.value)} /></label><label className={label}>Szín<input className={input} value={manualColor} onChange={(event) => setManualColor(event.target.value)} /></label><label className={label}>Méret<input className={input} value={manualSize} onChange={(event) => setManualSize(event.target.value)} /></label><label className={label}>Darab<input className={input} value={manualQty} onChange={(event) => setManualQty(event.target.value)} inputMode="numeric" /></label><label className={label}>Egységár<input className={input} value={manualPrice} onChange={(event) => setManualPrice(event.target.value)} inputMode="decimal" /></label><label className={`${label} sm:col-span-2 lg:col-span-7`}>Fotó URL, ha van<input className={input} value={manualImage} onChange={(event) => setManualImage(event.target.value)} /></label><div className="flex items-end"><button className={`${primaryBtn} w-full`} onClick={addManualLine} type="button"><Plus size={14} /> Hozzáadás</button></div></div></div>}
+                {manualOpen && <div className="mt-3 rounded-2xl border border-[#67d4d1]/30 bg-[#303b4e] p-3"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-8"><label className={`${label} lg:col-span-2`}>Terméknév<input className={input} value={manualTitle} onChange={(event) => setManualTitle(event.target.value)} /></label><label className={label}>Termékkód<input className={input} value={manualCode} onChange={(event) => setManualCode(event.target.value)} /></label><label className={label}>Vonalkód<input className={input} value={manualBarcode} onChange={(event) => setManualBarcode(event.target.value)} /></label><label className={label}>Szín<input className={input} value={manualColor} onChange={(event) => setManualColor(event.target.value)} /></label><label className={label}>Méret<input className={input} value={manualSize} onChange={(event) => setManualSize(event.target.value)} /></label><label className={label}>Darab<input className={input} value={manualQty} onChange={(event) => setManualQty(event.target.value)} inputMode="numeric" /></label><label className={label}>Vételár<input className={input} value={manualPrice} onChange={(event) => setManualPrice(event.target.value)} inputMode="decimal" /></label><label className={`${label} sm:col-span-2 lg:col-span-7`}>Fotó URL, ha van<input className={input} value={manualImage} onChange={(event) => setManualImage(event.target.value)} /></label><div className="flex items-end"><button className={`${primaryBtn} w-full`} onClick={addManualLine} type="button"><Plus size={14} /> Hozzáadás</button></div></div></div>}
               </section>
 
               <section className="overflow-hidden rounded-2xl border border-white/16 bg-[#4d5869]">
@@ -1268,7 +1271,7 @@ export default function AllInOrderHistory() {
             <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">Beszerzési rendelés</p><h2 className="mt-1 text-xl">{detail.item.order_number}</h2><p className="mt-1 text-xs text-white/55">{detail.item.supplier_name || "-"}</p></div><div className="flex flex-wrap gap-2"><button className={neutralBtn} onClick={() => printOrder(detail.item.id)} type="button"><FileText size={14} /> PDF</button>{detail.item.status === "draft" && <button className={neutralBtn} onClick={() => { setDetail(null); void openEditOrder(detail.item); }} type="button"><Edit3 size={14} /> Szerkesztés</button>}{detail.item.status === "draft" && <button className={primaryBtn} onClick={() => void markOrdered(detail.item.id)} type="button"><Send size={14} /> Rendelés elküldve</button>}{["ordered", "partially_received"].includes(detail.item.status) && <button className={primaryBtn} onClick={() => startReception(detail)} type="button"><Truck size={14} /> Bevételezés indítása</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={14} /> Bezárás</button></div></div>
             <div className="space-y-4 p-4">
               <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">{[["Állapot", statusLabel(detail.item.status)], ["Rendelés dátuma", dateText(detail.item.order_date)], ["Várható", dateText(detail.item.expected_date)], ["Célhely", detail.item.location_name || "-"], ["Rendelt", `${detail.item.total_qty || 0} db`], ["Hátralévő", `${detail.item.remaining_qty || 0} db`]].map(([key, value]) => <div key={String(key)} className="rounded-2xl border border-white/16 bg-[#354153] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/45">{key}</p><p className="mt-1 text-sm">{value}</p></div>)}</section>
-              <section className="overflow-hidden rounded-2xl border border-white/16"><div className="border-b border-white/14 bg-[#303b4e] px-4 py-3"><h3>Rendelt termékek</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead className="bg-[#26364c] text-[9px] uppercase tracking-[0.08em] text-white/65"><tr><th className="px-3 py-3 text-left">#</th><th className="px-3 py-3 text-left">Kép</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Azonosító</th><th className="px-3 py-3 text-center">Rendelt</th><th className="px-3 py-3 text-center">Beérkezett</th><th className="px-3 py-3 text-center">Hátra</th><th className="px-3 py-3 text-right">Egységár</th><th className="px-3 py-3 text-right">Érték</th></tr></thead><tbody>{detail.lines.map((line) => <tr key={line.id} className="border-t border-white/12"><td className="px-3 py-3">{line.line_no}</td><td className="px-3 py-3"><ProductImage src={line.image_url} title={line.product_title} size="sm" /></td><td className="px-3 py-3"><p>{line.product_title}</p><p className="mt-1 text-xs text-white/48">{[line.brand_name, line.color_name, line.size].filter(Boolean).join(" • ")}</p></td><td className="px-3 py-3"><p className="font-mono text-xs">{line.supplier_product_code || line.model_code || "-"}</p><p className="mt-1 font-mono text-[10px] text-white/45">{line.barcode || "-"}</p></td><td className="px-3 py-3 text-center">{line.qty_ordered}</td><td className="px-3 py-3 text-center text-emerald-100">{line.qty_received}</td><td className="px-3 py-3 text-center text-amber-100">{line.qty_remaining}</td><td className="px-3 py-3 text-right">{line.unit_price === null || line.unit_price === undefined ? "-" : money(line.unit_price, detail.item.currency_code)}</td><td className="px-3 py-3 text-right">{line.line_total === null || line.line_total === undefined ? "-" : money(line.line_total, detail.item.currency_code)}</td></tr>)}</tbody></table></div></section>
+              <section className="overflow-hidden rounded-2xl border border-white/16"><div className="border-b border-white/14 bg-[#303b4e] px-4 py-3"><h3>Rendelt termékek</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead className="bg-[#26364c] text-[9px] uppercase tracking-[0.08em] text-white/65"><tr><th className="px-3 py-3 text-left">#</th><th className="px-3 py-3 text-left">Kép</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Azonosító</th><th className="px-3 py-3 text-center">Rendelt</th><th className="px-3 py-3 text-center">Beérkezett</th><th className="px-3 py-3 text-center">Hátra</th><th className="px-3 py-3 text-right">Vételár</th><th className="px-3 py-3 text-right">Érték</th></tr></thead><tbody>{detail.lines.map((line) => <tr key={line.id} className="border-t border-white/12"><td className="px-3 py-3">{line.line_no}</td><td className="px-3 py-3"><ProductImage src={line.image_url} title={line.product_title} size="sm" /></td><td className="px-3 py-3"><p>{line.product_title}</p><p className="mt-1 text-xs text-white/48">{[line.brand_name, line.color_name, line.size].filter(Boolean).join(" • ")}</p></td><td className="px-3 py-3"><p className="font-mono text-xs">{line.supplier_product_code || line.model_code || "-"}</p><p className="mt-1 font-mono text-[10px] text-white/45">{line.barcode || "-"}</p></td><td className="px-3 py-3 text-center">{line.qty_ordered}</td><td className="px-3 py-3 text-center text-emerald-100">{line.qty_received}</td><td className="px-3 py-3 text-center text-amber-100">{line.qty_remaining}</td><td className="px-3 py-3 text-right">{line.unit_price === null || line.unit_price === undefined ? "-" : money(line.unit_price, detail.item.currency_code)}</td><td className="px-3 py-3 text-right">{line.line_total === null || line.line_total === undefined ? "-" : money(line.line_total, detail.item.currency_code)}</td></tr>)}</tbody></table></div></section>
               {detail.item.note && <section className="rounded-2xl border border-white/16 bg-[#354153] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/45">Megjegyzés</p><p className="mt-2 text-sm text-white/85">{detail.item.note}</p></section>}
               <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3"><div>{detail.item.status !== "received" && detail.item.status !== "partially_received" && detail.item.status !== "cancelled" && <button className={dangerBtn} onClick={() => void cancelOrder(detail.item.id)} type="button"><X size={14} /> Törölt állapot</button>}</div><div className="flex gap-2">{toNumber(detail.item.received_qty) <= 0 && <button className={dangerBtn} onClick={() => void deleteOrder(detail.item.id)} type="button"><Trash2 size={14} /> Végleges törlés</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button">Bezárás</button></div></div>
             </div>
