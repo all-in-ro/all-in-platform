@@ -52,7 +52,7 @@ const label = "grid min-w-0 gap-1.5 text-xs text-white/65";
 const API_BASE = "/api/aif";
 
 type DocumentType = "internal_transfer" | "supplier_return" | "damaged_writeoff" | "stock_correction";
-type ArchiveFilter = "all" | "official" | "draft" | "legacy" | "cancelled" | DocumentType;
+type ArchiveFilter = "all" | "official" | "draft" | "preparation" | "legacy" | "cancelled" | DocumentType;
 type CorrectionDirection = "increase" | "decrease";
 
 type LocationItem = { id: string; code?: string | null; name: string; is_active?: boolean };
@@ -128,7 +128,7 @@ type DocumentListItem = {
   title?: string | null;
   subtitle?: string | null;
   note?: string | null;
-  status?: "draft" | "issued" | "cancelled" | "legacy" | string;
+  status?: "draft" | "preparation" | "issued" | "cancelled" | "legacy" | string;
   actor?: string | null;
   owner_key?: string | null;
   line_count?: number | string | null;
@@ -192,6 +192,7 @@ type ListTotals = {
   legacy: number;
   cancelled: number;
   draft?: number;
+  preparation?: number;
   totalQty: number;
   totalValue?: number;
   internalTransfer?: number;
@@ -210,7 +211,7 @@ type ListResponse = {
   locations: LocationItem[];
 };
 
-type DraftLine = { item: InventoryItem; qty: number };
+type DraftLine = { key: string; item: InventoryItem; qty: number; originalQty: number; fromLocationId?: string; toLocationId?: string; lineId?: string | null };
 
 type BarcodeDetectorResult = { rawValue?: string };
 type BarcodeDetectorLike = { detect(source: CanvasImageSource): Promise<BarcodeDetectorResult[]> };
@@ -663,8 +664,11 @@ function CompactSelect({
 }
 
 function documentBadge(item: DocumentListItem) {
+  if (item.status === "preparation") {
+    return { label: "Előkészítés", cls: "border-red-300/75 bg-red-600 text-white shadow-[0_0_18px_rgba(220,38,38,.34)]", icon: Edit3 };
+  }
   if (item.status === "draft") {
-    return { label: "Piszkozat", cls: "border-red-300/70 bg-red-600 text-white shadow-[0_0_18px_rgba(220,38,38,.32)]", icon: Edit3 };
+    return { label: "Piszkozat", cls: "border-amber-200/35 bg-amber-500/14 text-amber-50", icon: Edit3 };
   }
   if (item.isLegacy || item.status === "legacy") {
     return { label: "Régi átadás", cls: "border-amber-200/28 bg-amber-500/12 text-amber-50", icon: Archive };
@@ -944,6 +948,7 @@ export default function AllInProductMoves() {
   const [draftLines, setDraftLines] = useState<Record<string, DraftLine>>({});
   const [editingDraftId, setEditingDraftId] = useState("");
   const [editingDraftNumber, setEditingDraftNumber] = useState("");
+  const [editingDocumentStatus, setEditingDocumentStatus] = useState<"" | "draft" | "preparation">("");
   const [savingDocument, setSavingDocument] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -1121,9 +1126,11 @@ export default function AllInProductMoves() {
     setDraftLines({});
     setEditingDraftId("");
     setEditingDraftNumber("");
+    setEditingDocumentStatus("");
   }
 
   function changeDraftType(nextType: DocumentType) {
+    if (editingDocumentStatus === "preparation") return;
     setDraftType(nextType);
     setTargetLocationId("");
     setSupplierId("");
@@ -1148,13 +1155,16 @@ export default function AllInProductMoves() {
     setError("");
     try {
       const result = await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(id)}`);
-      if (result.document.status !== "draft") throw new Error("Csak piszkozat szerkeszthető.");
+      const status = String(result.document.status || "");
+      if (status !== "draft" && status !== "preparation") throw new Error("Csak piszkozat vagy előkészítés szerkeszthető.");
       const docType = documentTypeOf(result.document);
       setEditingDraftId(result.document.id);
-      setEditingDraftNumber(result.document.document_number || "Piszkozat");
+      setEditingDraftNumber(result.document.document_number || (status === "preparation" ? "Előkészítés" : "Piszkozat"));
+      setEditingDocumentStatus(status as "draft" | "preparation");
       setDraftType(docType);
-      setSourceLocationId(String(result.document.source_location_id || ""));
-      setTargetLocationId(String(result.document.target_location_id || ""));
+      const firstLine = (result.lines || [])[0] || null;
+      setSourceLocationId(String(result.document.source_location_id || firstLine?.from_location_id || ""));
+      setTargetLocationId(String(result.document.target_location_id || firstLine?.to_location_id || ""));
       setSupplierId(String(result.document.supplier_id || ""));
       setReceptionId(String(result.document.reception_id || ""));
       setReasonCode(String(result.document.reason_code || ""));
@@ -1182,7 +1192,20 @@ export default function AllInProductMoves() {
           buy_price: line.price_basis === "purchase_price" ? line.unit_price : null,
           sell_price: line.price_basis === "selling_price" ? line.unit_price : null,
         };
-        rows[idValue] = { item, qty: Math.max(1, Math.floor(n(line.qty))) };
+        const fromId = String(line.from_location_id || result.document.source_location_id || "");
+        const toId = String(line.to_location_id || result.document.target_location_id || "");
+        const qty = Math.max(1, Math.floor(n(line.qty)));
+        const key = docType === "internal_transfer" ? `${idValue}:${fromId}:${toId}` : idValue;
+        const previous = rows[key];
+        rows[key] = {
+          key,
+          item,
+          qty: qty + Number(previous?.qty || 0),
+          originalQty: qty + Number(previous?.originalQty || 0),
+          fromLocationId: fromId || undefined,
+          toLocationId: toId || undefined,
+          lineId: line.id || null,
+        };
       }
       setDraftLines(rows);
       setProductSearch("");
@@ -1197,7 +1220,7 @@ export default function AllInProductMoves() {
       } else setReceptions([]);
       if (!inventory.length || !stock.length) void loadBaseData();
     } catch (editError: any) {
-      setError(editError?.message || "A piszkozat nem tölthető be szerkesztésre.");
+      setError(editError?.message || "A dokumentum nem tölthető be szerkesztésre.");
     } finally {
       setDetailLoading(false);
     }
@@ -1218,8 +1241,10 @@ export default function AllInProductMoves() {
     }
   }
 
-  function maxDraftQty(item: InventoryItem) {
-    return outgoingDraft ? availableAt(item.variant_id, sourceLocationId) : 999999;
+  function maxDraftQty(item: InventoryItem, fromId = sourceLocationId, originalQty = 0) {
+    if (!outgoingDraft) return 999999;
+    const available = availableAt(item.variant_id, fromId);
+    return editingDocumentStatus === "preparation" ? Math.max(0, originalQty) + available : available;
   }
 
   function addDraftItem(item: InventoryItem, amount = 1) {
@@ -1227,47 +1252,66 @@ export default function AllInProductMoves() {
       setError("Előbb válaszd ki a forráshelyet, hogy a rendszer ellenőrizni tudja az elérhető készletet.");
       return;
     }
-    const id = String(item.variant_id || "").trim();
-    if (!id) return;
-    const max = maxDraftQty(item);
-    if (outgoingDraft && max <= 0) {
-      setError(`${productTitle(item)}: nincs szabad készlet a kiválasztott helyen.`);
+    if (draftType === "internal_transfer" && !targetLocationId) {
+      setError("Belső átadáshoz válaszd ki a célhelyet is.");
       return;
     }
+    const id = String(item.variant_id || "").trim();
+    if (!id) return;
+    const fromId = sourceLocationId;
+    const toId = draftType === "internal_transfer" ? targetLocationId : "";
+    const key = draftType === "internal_transfer" ? `${id}:${fromId}:${toId}` : id;
     setDraftLines((current) => {
-      const previous = current[id];
+      const previous = current[key];
+      const originalQty = Number(previous?.originalQty || 0);
+      const max = maxDraftQty(item, fromId, originalQty);
+      if (outgoingDraft && max <= 0) {
+        setError(`${productTitle(item)}: nincs szabad készlet a kiválasztott helyen.`);
+        return current;
+      }
       const wanted = (previous?.qty || 0) + Math.max(1, amount);
       const qty = outgoingDraft ? Math.min(max, wanted) : wanted;
-      return { ...current, [id]: { item, qty } };
+      return {
+        ...current,
+        [key]: {
+          key,
+          item,
+          qty,
+          originalQty,
+          fromLocationId: fromId || undefined,
+          toLocationId: toId || undefined,
+          lineId: previous?.lineId || null,
+        },
+      };
     });
     setError("");
     setProductSearch("");
     setScanValue("");
   }
 
-  function adjustDraftQty(variantId: string, delta: number) {
+  function adjustDraftQty(lineKey: string, delta: number) {
     setDraftLines((current) => {
-      const row = current[variantId];
+      const row = current[lineKey];
       if (!row) return current;
-      const max = maxDraftQty(row.item);
+      const max = maxDraftQty(row.item, row.fromLocationId || sourceLocationId, row.originalQty);
       const nextQty = Math.max(0, outgoingDraft ? Math.min(max, row.qty + delta) : row.qty + delta);
       const next = { ...current };
-      if (nextQty <= 0) delete next[variantId];
-      else next[variantId] = { ...row, qty: nextQty };
+      if (nextQty <= 0) delete next[lineKey];
+      else next[lineKey] = { ...row, qty: nextQty };
       return next;
     });
   }
 
-  function setDraftQty(variantId: string, value: string) {
+  function setDraftQty(lineKey: string, value: string) {
     setDraftLines((current) => {
-      const row = current[variantId];
+      const row = current[lineKey];
       if (!row) return current;
-      const max = maxDraftQty(row.item);
+      const max = maxDraftQty(row.item, row.fromLocationId || sourceLocationId, row.originalQty);
       const parsed = Math.max(0, Math.floor(n(value)));
       const qty = outgoingDraft ? Math.min(max, parsed) : parsed;
       const next = { ...current };
-      if (qty <= 0) delete next[variantId];
-      else next[variantId] = { ...row, qty };
+      if (qty <= 0) delete next[lineKey];
+      else next[lineKey] = { ...row, qty };
       return next;
     });
   }
@@ -1385,16 +1429,20 @@ export default function AllInProductMoves() {
   useEffect(() => () => stopCamera(), []);
 
   function validateDraft() {
-    if (!sourceLocationId) return "A forráshely kötelező.";
-    if (draftType === "internal_transfer" && !targetLocationId) return "A célhely kötelező.";
-    if (draftType === "internal_transfer" && sourceLocationId === targetLocationId) return "A forrás és a cél nem lehet ugyanaz.";
+    if (!sourceLocationId && !draftLineArray.every((row) => row.fromLocationId)) return "A forráshely kötelező.";
+    if (draftType === "internal_transfer" && !targetLocationId && !draftLineArray.every((row) => row.toLocationId)) return "A célhely kötelező.";
+    if (draftType === "internal_transfer" && sourceLocationId && targetLocationId && sourceLocationId === targetLocationId) return "A forrás és a cél nem lehet ugyanaz.";
     if (draftType === "supplier_return" && !supplierId) return "A beszállító kötelező.";
     if (draftType !== "internal_transfer" && !reasonCode) return "A művelet oka kötelező.";
     if (reasonCode === "other" && !reasonText.trim()) return "Az Egyéb ok rövid leírása kötelező.";
     if (!draftLineArray.length) return "Legalább egy terméket adj a bizonylathoz.";
     for (const row of draftLineArray) {
       if (row.qty <= 0) return `${productTitle(row.item)}: érvénytelen mennyiség.`;
-      if (outgoingDraft && row.qty > availableAt(row.item.variant_id, sourceLocationId)) return `${productTitle(row.item)}: nincs elég szabad készlet.`;
+      const fromId = row.fromLocationId || sourceLocationId;
+      const toId = row.toLocationId || targetLocationId;
+      if (draftType === "internal_transfer" && (!fromId || !toId)) return `${productTitle(row.item)}: hiányzik a forrás vagy a cél.`;
+      if (draftType === "internal_transfer" && fromId === toId) return `${productTitle(row.item)}: a forrás és a cél nem lehet ugyanaz.`;
+      if (outgoingDraft && row.qty > maxDraftQty(row.item, fromId, row.originalQty)) return `${productTitle(row.item)}: nincs elég szabad készlet.`;
     }
     return "";
   }
@@ -1411,11 +1459,46 @@ export default function AllInProductMoves() {
       operationDirection: draftType === "stock_correction" ? correctionDirection : null,
       externalReference: externalReference.trim() || null,
       note: note.trim() || null,
-      lines: draftLineArray.map((row) => ({ variantId: row.item.variant_id, qty: row.qty })),
+      lines: draftLineArray.map((row) => ({
+        variantId: row.item.variant_id,
+        qty: row.qty,
+        fromLocationId: row.fromLocationId || sourceLocationId || null,
+        toLocationId: draftType === "internal_transfer" ? row.toLocationId || targetLocationId || null : null,
+      })),
     };
   }
 
   async function saveDraftDocument(closeAfterSave = true) {
+    if (editingDocumentStatus === "preparation") {
+      const validation = validateDraft();
+      if (validation) {
+        setError(validation);
+        return "";
+      }
+      setSavingDocument(true);
+      setError("");
+      setMessage("");
+      try {
+        const result = await fetchJson<{ documentId?: string; documentNumber?: string; totalQty?: number; totalValue?: number; restoredQty?: number; addedQty?: number }>(`/stock-transfer-documents/${encodeURIComponent(editingDraftId)}/preparation`, {
+          method: "PUT",
+          body: JSON.stringify(stockDocumentPayload()),
+        });
+        setEditingDraftNumber(String(result.documentNumber || editingDraftNumber || "Előkészítés"));
+        setMessage(`${result.documentNumber || "Az előkészítés"} mentve. Visszaállítva: ${quantity(result.restoredQty || 0)} db, hozzáadva: ${quantity(result.addedQty || 0)} db.`);
+        await Promise.all([loadList(), loadBaseData()]);
+        if (closeAfterSave) {
+          setCreateOpen(false);
+          resetDraft(draftType);
+        }
+        return String(result.documentId || editingDraftId || "");
+      } catch (saveError: any) {
+        setError(saveError?.message || "Az előkészítés mentése nem sikerült.");
+        return "";
+      } finally {
+        setSavingDocument(false);
+      }
+    }
+
     setSavingDocument(true);
     setError("");
     setMessage("");
@@ -1432,6 +1515,7 @@ export default function AllInProductMoves() {
       const nextId = String(result.documentId || editingDraftId || "");
       setEditingDraftId(nextId);
       setEditingDraftNumber(String(result.documentNumber || editingDraftNumber || "Piszkozat"));
+      setEditingDocumentStatus("draft");
       setMessage(`${result.documentNumber || "A piszkozat"} mentve. A készlet még nem változott.`);
       await loadList();
       if (closeAfterSave) {
@@ -1447,7 +1531,41 @@ export default function AllInProductMoves() {
     }
   }
 
+  async function closePreparationDocument() {
+    const validation = validateDraft();
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    if (!editingDraftId || editingDocumentStatus !== "preparation") return;
+    setSavingDocument(true);
+    setError("");
+    setMessage("");
+    try {
+      await fetchJson(`/stock-transfer-documents/${encodeURIComponent(editingDraftId)}/preparation`, {
+        method: "PUT",
+        body: JSON.stringify(stockDocumentPayload()),
+      });
+      const result = await fetchJson<{ document?: DocumentListItem }>(`/stock-transfer-documents/${encodeURIComponent(editingDraftId)}/close`, { method: "POST", body: "{}" });
+      const closedId = editingDraftId;
+      const number = result.document?.document_number || editingDraftNumber;
+      setCreateOpen(false);
+      resetDraft(draftType);
+      setMessage(`${number || "A PV"} lezárva. A következő készletáthelyezés új PV-előkészítést indít.`);
+      await Promise.all([loadList(), loadBaseData(), loadSettings()]);
+      if (closedId) await openDetailById(closedId);
+    } catch (closeError: any) {
+      setError(closeError?.message || "Az előkészítés lezárása nem sikerült.");
+    } finally {
+      setSavingDocument(false);
+    }
+  }
+
   async function saveDocument() {
+    if (editingDocumentStatus === "preparation") {
+      await closePreparationDocument();
+      return;
+    }
     const validation = validateDraft();
     if (validation) {
       setError(validation);
@@ -1486,6 +1604,31 @@ export default function AllInProductMoves() {
       setError(saveError?.message || "A készletbizonylat véglegesítése nem sikerült.");
     } finally {
       setSavingDocument(false);
+    }
+  }
+
+  async function closePreparationById(item: DocumentListItem) {
+    setError("");
+    try {
+      await fetchJson(`/stock-transfer-documents/${encodeURIComponent(item.id)}/close`, { method: "POST", body: "{}" });
+      setMessage(`${item.document_number} lezárva. A következő mozgatás új PV-előkészítést indít.`);
+      if (detail?.document.id === item.id) setDetail(null);
+      await loadList();
+    } catch (closeError: any) {
+      setError(closeError?.message || "Az előkészítés lezárása nem sikerült.");
+    }
+  }
+
+  async function reopenAsPreparation(item: DocumentListItem) {
+    setError("");
+    try {
+      await fetchJson(`/stock-transfer-documents/${encodeURIComponent(item.id)}/reopen`, { method: "POST", body: "{}" });
+      setMessage(`${item.document_number} visszaállítva Előkészítésre. A következő mozgatások ismét ehhez a PV-hez kerülnek.`);
+      setDetail(null);
+      await loadList();
+      await openDraftForEdit(item.id);
+    } catch (reopenError: any) {
+      setError(reopenError?.message || "A bizonylat nem állítható vissza előkészítésre.");
     }
   }
 
@@ -1541,11 +1684,16 @@ export default function AllInProductMoves() {
     setDeleting(true);
     setError("");
     try {
-      await fetchJson<{ ok: boolean }>(deleteTarget.status === "draft" ? `/stock-documents/${encodeURIComponent(deleteTarget.id)}/draft` : `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}`, { method: "DELETE" });
+      const deletePath = deleteTarget.status === "draft"
+        ? `/stock-documents/${encodeURIComponent(deleteTarget.id)}/draft`
+        : deleteTarget.status === "preparation"
+          ? `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}/preparation`
+          : `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}`;
+      await fetchJson<{ ok: boolean; restoredQty?: number }>(deletePath, { method: "DELETE" });
       const number = deleteTarget.document_number;
       if (detail?.document.id === deleteTarget.id) setDetail(null);
       setDeleteTarget(null);
-      setMessage(`${number} véglegesen törölve az archívumból. A készlet mennyisége nem változott.`);
+      setMessage(deleteTarget.status === "preparation" ? `${number} előkészítés törölve, a benne mozgatott készlet visszaállítva.` : `${number} véglegesen törölve az archívumból. A készlet mennyisége nem változott.`);
       await loadList();
     } catch (deleteError: any) {
       setError(deleteError?.message || "A bizonylat végleges törlése nem sikerült.");
@@ -1561,6 +1709,22 @@ export default function AllInProductMoves() {
 
   const detailValue = useMemo(() => detailTotalValue(detail?.lines || []), [detail]);
   const detailMissingPrices = useMemo(() => (detail?.lines || []).filter((line) => lineUnitPrice(line) === null).length, [detail]);
+
+  function documentActionButtons(item: DocumentListItem, compact = false) {
+    const isPreparation = item.status === "preparation";
+    const isDraft = item.status === "draft";
+    const canReopen = item.status === "issued" && documentTypeOf(item) === "internal_transfer";
+    return (
+      <div className="flex justify-end gap-1.5">
+        <button type="button" className={btnSoft} onClick={() => void openDetailById(item.id)}>{compact ? null : <PackageCheck size={14} />} Részletek</button>
+        {(isPreparation || isDraft) ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(item)}><Edit3 size={14} /> {compact ? "Szerk." : "Szerkesztés"}</button> : null}
+        {isPreparation ? <button type="button" className={primaryBtn} onClick={() => void closePreparationById(item)} title="Előkészítés lezárása"><CheckCircle2 size={14} /> {compact ? "Lezár" : "Lezárás"}</button> : null}
+        {!isPreparation && !isDraft ? <button type="button" className={iconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current); }} title="PDF / nyomtatás"><Printer size={15} /></button> : null}
+        {canReopen ? <button type="button" className={iconBtn} onClick={() => void reopenAsPreparation(item)} title="Visszaállítás Előkészítésre"><RotateCcw size={15} /></button> : null}
+        <button type="button" className={dangerIconBtn} onClick={() => setDeleteTarget(item)} title="Végleges törlés"><Trash2 size={15} /></button>
+      </div>
+    );
+  }
 
   return (
     <div className={page}>
@@ -1588,9 +1752,10 @@ export default function AllInProductMoves() {
         {error ? <div className="rounded-2xl border border-rose-200/25 bg-rose-500/12 px-4 py-3 text-sm text-rose-50">{error}</div> : null}
         {message ? <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#174c55]/72 px-4 py-3 text-sm text-cyan-50">{message}</div> : null}
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
           <SummaryCard labelText="Összes bizonylat" value={quantity(totals.all ?? totals.total)} hint="Kattints a teljes listához" active={type === "all"} onClick={() => applyTypeFilter("all")} />
-          <SummaryCard labelText="Piszkozat" value={quantity(totals.draft || 0)} hint="Félbehagyott, szerkeszthető" tone="red" active={type === "draft"} onClick={() => applyTypeFilter("draft")} />
+          <SummaryCard labelText="Előkészítés" value={quantity(totals.preparation || 0)} hint="Készlet mozgatva, még szerkeszthető" tone="red" active={type === "preparation"} onClick={() => applyTypeFilter("preparation")} />
+          <SummaryCard labelText="Piszkozat" value={quantity(totals.draft || 0)} hint="Készletet még nem módosított" tone="amber" active={type === "draft"} onClick={() => applyTypeFilter("draft")} />
           <SummaryCard labelText="Belső átadás" value={quantity(totals.internalTransfer ?? totals.official)} hint="Aviz / proces-verbal" tone="green" active={type === "internal_transfer"} onClick={() => applyTypeFilter("internal_transfer")} />
           <SummaryCard labelText="Beszállítói retur" value={quantity(totals.supplierReturn || 0)} hint="Készletből kivezetve" tone="blue" active={type === "supplier_return"} onClick={() => applyTypeFilter("supplier_return")} />
           <SummaryCard labelText="Sérült termék" value={quantity(totals.damagedWriteoff || 0)} hint="Scoatere din gestiune" tone="red" active={type === "damaged_writeoff"} onClick={() => applyTypeFilter("damaged_writeoff")} />
@@ -1609,7 +1774,7 @@ export default function AllInProductMoves() {
             <label className={label}>Eddig<input className={input} type="date" value={to} onChange={(event) => { setTo(event.target.value); setPageNo(1); }} /></label>
             <label className={label}>Forrás<CompactSelect value={fromLocation} onChange={(next) => { setFromLocation(next); setPageNo(1); }} placeholder="Minden forrás" options={[{ value: "", label: "Minden forrás" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
             <label className={label}>Cél / partner<CompactSelect value={toLocation} onChange={(next) => { setToLocation(next); setPageNo(1); }} placeholder="Minden célhely / partner" options={[{ value: "", label: "Minden célhely / partner" }, ...locations.map((location) => ({ value: `location:${location.id}`, label: location.name, group: "Készlethelyek" })), ...suppliers.map((supplier) => ({ value: `supplier:${supplier.id}`, label: supplier.name, group: "Beszállítók" }))]} /></label>
-            <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "draft", label: "Piszkozat" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
+            <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "preparation", label: "Előkészítés" }, { value: "draft", label: "Piszkozat" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
             <div className="flex items-end gap-2 lg:col-span-4 xl:col-span-7"><button type="button" className={primaryBtn} onClick={applySearch}><Search size={15} /> Keresés</button><button type="button" className={btnSoft} onClick={clearFilters}><X size={15} /> Szűrők törlése</button></div>
           </div>
         </section>
@@ -1637,7 +1802,7 @@ export default function AllInProductMoves() {
                       <td className="px-4 py-3"><div className="grid gap-1"><span className="inline-flex items-center gap-1.5 text-white/76"><ArrowLeft size={13} className="text-[#7bd7d4]" /> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1.5 text-white/76"><ArrowRight size={13} className="text-[#7bd7d4]" /> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[10px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
                       <td className="px-4 py-3 text-center"><span className="inline-flex flex-col rounded-xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-3 py-1.5 text-xs text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[10px] text-white/58">{moneyRon(item.total_value || 0)}</span></span></td>
                       <td className="px-4 py-3 text-white/65">{item.actor || "-"}</td>
-                      <td className="px-4 py-3"><div className="flex justify-end gap-1.5"><button type="button" className={btnSoft} onClick={() => void openDetailById(item.id)}><PackageCheck size={14} /> Részletek</button>{item.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(item)}><Edit3 size={14} /> Szerkesztés</button> : <button type="button" className={iconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current); }} title="PDF / nyomtatás"><Printer size={15} /></button>}<button type="button" className={dangerIconBtn} onClick={() => setDeleteTarget(item)} title="Végleges törlés"><Trash2 size={15} /></button></div></td>
+                      <td className="px-4 py-3">{documentActionButtons(item)}</td>
                     </tr>
                   );
                 })}
@@ -1657,7 +1822,7 @@ export default function AllInProductMoves() {
                   <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{item.document_number}</p><p className="mt-1 text-xs text-white/48">{dateTime(item.created_at)}</p></div><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span></div>
                   <div className="mt-3 flex items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl bg-[#354153] px-3 py-2"><span className="text-white/42">Forrás</span><p className="mt-0.5 text-white/78">{item.from_location_summary || "-"}</p></div><div className="rounded-xl bg-[#354153] px-3 py-2"><span className="text-white/42">Cél / partner</span><p className="mt-0.5 text-white/78">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
-                  <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-white/50">{item.actor || "-"}</span><div className="flex gap-1.5"><button type="button" className={btnSoft} onClick={() => void openDetailById(item.id)}>Részletek</button>{item.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(item)}><Edit3 size={14} /> Szerkesztés</button> : <button type="button" className={iconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current); }}><Printer size={15} /></button>}<button type="button" className={dangerIconBtn} onClick={() => setDeleteTarget(item)}><Trash2 size={15} /></button></div></div>
+                  <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-white/50">{item.actor || "-"}</span>{documentActionButtons(item, true)}</div>
                 </article>
               );
             })}
@@ -1681,13 +1846,13 @@ export default function AllInProductMoves() {
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetail(null); }}>
             <div className="flex max-h-[95vh] w-full max-w-[1360px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
-                <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "draft" ? "Készletbizonylat piszkozat" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.document_number}</h2><p className="mt-1 truncate text-xs text-white/58">{meta.label} • {doc.subtitle || "-"}</p></div></div>
-                <div className="flex flex-wrap gap-2">{doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Piszkozat folytatása</button> : <button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+                <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" ? "Készletátadás előkészítése" : doc.status === "draft" ? "Készletbizonylat piszkozat" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.document_number}</h2><p className="mt-1 truncate text-xs text-white/58">{meta.label} • {doc.subtitle || "-"}</p></div></div>
+                <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Piszkozat folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button>{documentTypeOf(doc) === "internal_transfer" ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3.5">
                 <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Bizonylatszám</p><p className="mt-1 text-sm">{doc.document_number}</p></div>
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" ? "Utoljára mentve" : "Kibocsátva"}</p><p className="mt-1 text-sm">{dateTime(doc.updated_at || doc.created_at)}</p></div>
+                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p><p className="mt-1 text-sm">{dateTime(doc.updated_at || doc.created_at)}</p></div>
                   <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Típus</p><p className="mt-1 text-sm text-[#d7fffd]">{meta.shortLabel}</p></div>
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Rögzítette</p><p className="mt-1 truncate text-sm">{doc.actor || "-"}</p></div>
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Forrás</p><p className="mt-1 truncate text-sm">{doc.from_location_summary || "-"}</p></div>
@@ -1710,7 +1875,7 @@ export default function AllInProductMoves() {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/45"><span>{doc.status === "draft" ? "ESC: bezárás • a piszkozat nem módosította a készletet" : "ESC: bezárás • a PDF román nyelvű hivatalos formátum"}</span><button type="button" className={btnSoft} onClick={() => setDetail(null)}><X size={14} /> Bezárás</button></div>
+              <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/45"><span>{doc.status === "preparation" ? "ESC: bezárás • a készlet már a sorok szerint át van mozgatva" : doc.status === "draft" ? "ESC: bezárás • a piszkozat nem módosította a készletet" : "ESC: bezárás • a PDF román nyelvű hivatalos formátum"}</span><button type="button" className={btnSoft} onClick={() => setDetail(null)}><X size={14} /> Bezárás</button></div>
             </div>
           </div>
         );
@@ -1720,7 +1885,7 @@ export default function AllInProductMoves() {
         <div className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/75 p-2 backdrop-blur-sm lg:items-center lg:p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !savingDocument) setCreateOpen(false); }}>
           <div className="flex max-h-[96vh] w-full max-w-[1460px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5">
-              <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><PackagePlus size={21} /></span><div><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{editingDraftId ? "Piszkozat szerkesztése" : "Új készletbizonylat"}</p><h2 className="mt-0.5 text-[22px]">{documentMeta(draftType).label}</h2><p className="mt-1 text-xs text-white/58">{editingDraftId ? `${editingDraftNumber} • a készlet csak véglegesítéskor módosul` : "Vonalkódos termékfelvétel, piszkozat és hivatalos véglegesítés"}</p></div></div>
+              <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><PackagePlus size={21} /></span><div><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{editingDocumentStatus === "preparation" ? "Előkészítés szerkesztése" : editingDraftId ? "Piszkozat szerkesztése" : "Új készletbizonylat"}</p><h2 className="mt-0.5 text-[22px]">{documentMeta(draftType).label}</h2><p className="mt-1 text-xs text-white/58">{editingDocumentStatus === "preparation" ? `${editingDraftNumber} • a készlet már át van mozgatva; a módosítás a különbözetet rendezi` : editingDraftId ? `${editingDraftNumber} • a készlet csak véglegesítéskor módosul` : "Vonalkódos termékfelvétel, piszkozat és hivatalos véglegesítés"}</p></div></div>
               <div className="flex gap-2"><button type="button" className={btn} onClick={() => setCreateOpen(false)} disabled={savingDocument}><X size={15} /> Bezárás</button></div>
             </div>
 
@@ -1732,7 +1897,7 @@ export default function AllInProductMoves() {
                 {DOCUMENT_TYPES.map((row) => {
                   const Icon = row.icon;
                   const active = draftType === row.type;
-                  return <button key={row.type} type="button" onClick={() => changeDraftType(row.type)} className={`rounded-2xl border p-3 text-left transition ${active ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/24 shadow-[0_0_0_1px_rgba(123,215,212,.12)]" : "border-white/12 bg-white/[0.05] hover:bg-white/[0.08]"}`}><div className="flex items-center gap-3"><span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${row.tone}`}><Icon size={19} /></span><span><span className="block text-sm text-white">{row.label}</span><span className="mt-0.5 block text-[10px] leading-snug text-white/45">{row.subtitle}</span></span></div></button>;
+                  return <button key={row.type} type="button" onClick={() => changeDraftType(row.type)} disabled={editingDocumentStatus === "preparation"} className={`rounded-2xl border p-3 text-left transition ${active ? "border-[#7bd7d4]/65 bg-[#2a8d8b]/24 shadow-[0_0_0_1px_rgba(123,215,212,.12)]" : "border-white/12 bg-white/[0.05] hover:bg-white/[0.08]"} ${editingDocumentStatus === "preparation" && !active ? "opacity-35" : ""}`}><div className="flex items-center gap-3"><span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${row.tone}`}><Icon size={19} /></span><span><span className="block text-sm text-white">{row.label}</span><span className="mt-0.5 block text-[10px] leading-snug text-white/45">{row.subtitle}</span></span></div></button>;
                 })}
               </div>
 
@@ -1760,14 +1925,18 @@ export default function AllInProductMoves() {
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5"><div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Bizonylat tartalma</p><h3 className="mt-1 flex items-center gap-2 text-sm"><Boxes size={16} /> {draftLineArray.length} terméksor • {draftTotalQty} db</h3></div><span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2.5 py-1 text-[11px] text-[#d7fffd]">Becsült érték: {moneyRon(draftTotalValue)} • {draftPriceBasis}</span></div>
                   <div className="max-h-[520px] overflow-auto">
                     <table className="min-w-[900px] w-full text-left text-xs">
-                      <thead className="sticky top-0 z-10 bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Vonalkód</th><th className="px-2 py-2 text-center">Elérhető</th><th className="px-2 py-2 text-center">Db</th><th className="px-2 py-2 text-right">P.U.</th><th className="px-2 py-2 text-right">Érték</th><th className="px-2 py-2 text-right"></th></tr></thead>
+                      <thead className="sticky top-0 z-10 bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Vonalkód</th>{draftType === "internal_transfer" ? <th className="px-2 py-2">Útvonal</th> : null}<th className="px-2 py-2 text-center">Elérhető</th><th className="px-2 py-2 text-center">Db</th><th className="px-2 py-2 text-right">P.U.</th><th className="px-2 py-2 text-right">Érték</th><th className="px-2 py-2 text-right"></th></tr></thead>
                       <tbody>
                         {draftLineArray.map((row) => {
                           const unit = decimalValue(draftType === "internal_transfer" ? row.item.sell_price : row.item.buy_price);
-                          const available = availableAt(row.item.variant_id, sourceLocationId);
-                          return <tr key={row.item.variant_id} className="border-t border-white/[0.08]"><td className="px-2 py-2"><ProductThumb item={row.item} className="h-11 w-11" /></td><td className="px-2 py-2"><p className="max-w-[260px] truncate text-white">{productTitle(row.item)}</p><p className="mt-0.5 text-[10px] text-white/42">{row.item.brand_name || "-"} • {row.item.color_name || row.item.color_code || "-"} • {row.item.size || "-"}</p></td><td className="px-2 py-2 font-mono text-[10px] text-[#cffffd]/70">{visibleBarcode(row.item) || productCode(row.item) || "-"}</td><td className="px-2 py-2 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${!outgoingDraft || available >= row.qty ? "border-[#7bd7d4]/25 bg-[#2a8d8b]/12 text-[#d7fffd]" : "border-rose-200/30 bg-rose-500/12 text-rose-50"}`}>{outgoingDraft ? `${available} db` : "növelés"}</span></td><td className="px-2 py-2"><div className="mx-auto grid h-8 w-[112px] grid-cols-[30px_1fr_30px] overflow-hidden rounded-lg border border-white/16 bg-[#303a4c]"><button type="button" onClick={() => adjustDraftQty(row.item.variant_id, -1)} className="grid place-items-center hover:bg-white/10"><Minus size={13} /></button><input className="w-full bg-transparent text-center text-xs text-white outline-none" value={row.qty} onChange={(event) => setDraftQty(row.item.variant_id, event.target.value)} inputMode="numeric" /><button type="button" onClick={() => adjustDraftQty(row.item.variant_id, 1)} className="grid place-items-center hover:bg-white/10"><Plus size={13} /></button></div></td><td className="px-2 py-2 text-right tabular-nums">{moneyRon(unit, false)}</td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(unit === null ? null : unit * row.qty, false)}</td><td className="px-2 py-2 text-right"><button type="button" className={dangerIconBtn} onClick={() => setDraftLines((current) => { const next = { ...current }; delete next[row.item.variant_id]; return next; })}><Trash2 size={14} /></button></td></tr>;
+                          const rowFromId = row.fromLocationId || sourceLocationId;
+                          const rowToId = row.toLocationId || targetLocationId;
+                          const available = maxDraftQty(row.item, rowFromId, row.originalQty);
+                          const fromName = locationById(rowFromId)?.name || "-";
+                          const toName = locationById(rowToId)?.name || "-";
+                          return <tr key={row.key} className="border-t border-white/[0.08]"><td className="px-2 py-2"><ProductThumb item={row.item} className="h-11 w-11" /></td><td className="px-2 py-2"><p className="max-w-[260px] truncate text-white">{productTitle(row.item)}</p><p className="mt-0.5 text-[10px] text-white/42">{row.item.brand_name || "-"} • {row.item.color_name || row.item.color_code || "-"} • {row.item.size || "-"}</p></td><td className="px-2 py-2 font-mono text-[10px] text-[#cffffd]/70">{visibleBarcode(row.item) || productCode(row.item) || "-"}</td>{draftType === "internal_transfer" ? <td className="px-2 py-2 text-[10px] leading-snug text-white/68"><span className="block truncate">← {fromName}</span><span className="mt-0.5 block truncate">→ {toName}</span></td> : null}<td className="px-2 py-2 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${!outgoingDraft || available >= row.qty ? "border-[#7bd7d4]/25 bg-[#2a8d8b]/12 text-[#d7fffd]" : "border-rose-200/30 bg-rose-500/12 text-rose-50"}`}>{outgoingDraft ? `${available} db max` : "növelés"}</span></td><td className="px-2 py-2"><div className="mx-auto grid h-8 w-[112px] grid-cols-[30px_1fr_30px] overflow-hidden rounded-lg border border-white/16 bg-[#303a4c]"><button type="button" onClick={() => adjustDraftQty(row.key, -1)} className="grid place-items-center hover:bg-white/10"><Minus size={13} /></button><input className="w-full bg-transparent text-center text-xs text-white outline-none" value={row.qty} onChange={(event) => setDraftQty(row.key, event.target.value)} inputMode="numeric" /><button type="button" onClick={() => adjustDraftQty(row.key, 1)} className="grid place-items-center hover:bg-white/10"><Plus size={13} /></button></div></td><td className="px-2 py-2 text-right tabular-nums">{moneyRon(unit, false)}</td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(unit === null ? null : unit * row.qty, false)}</td><td className="px-2 py-2 text-right"><button type="button" className={dangerIconBtn} onClick={() => setDraftLines((current) => { const next = { ...current }; delete next[row.key]; return next; })}><Trash2 size={14} /></button></td></tr>;
                         })}
-                        {!draftLineArray.length ? <tr><td colSpan={8} className="px-4 py-12 text-center text-white/42">Még nincs termék a bizonylaton. Adj hozzá terméket vonalkóddal vagy kereséssel.</td></tr> : null}
+                        {!draftLineArray.length ? <tr><td colSpan={draftType === "internal_transfer" ? 9 : 8} className="px-4 py-12 text-center text-white/42">Még nincs termék a bizonylaton. Adj hozzá terméket vonalkóddal vagy kereséssel.</td></tr> : null}
                       </tbody>
                     </table>
                   </div>
@@ -1775,7 +1944,7 @@ export default function AllInProductMoves() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3"><div className="text-xs text-white/58"><span className="text-white">{draftLineArray.length} sor • {draftTotalQty} db • {moneyRon(draftTotalValue)}</span><span className="ml-2">Piszkozatnál nincs készletmozgás. Csak a véglegesítés módosítja a készletet.</span></div><div className="flex flex-wrap gap-2"><button type="button" className={btnSoft} onClick={() => setCreateOpen(false)} disabled={savingDocument}>Mégse</button><button type="button" className={dangerBtn} onClick={() => void saveDraftDocument(true)} disabled={savingDocument}><Save size={15} /> {savingDocument ? "Mentés..." : "Piszkozat mentése"}</button><button type="button" className={primaryBtn} onClick={() => void saveDocument()} disabled={savingDocument || !draftLineArray.length}><CheckCircle2 size={15} /> {savingDocument ? "Véglegesítés..." : "Bizonylat véglegesítése"}</button></div></div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3"><div className="text-xs text-white/58"><span className="text-white">{draftLineArray.length} sor • {draftTotalQty} db • {moneyRon(draftTotalValue)}</span><span className="ml-2">{editingDocumentStatus === "preparation" ? "A készlet már át van mozgatva. Mentéskor csak a módosítás különbözete rendeződik." : "Piszkozatnál nincs készletmozgás. Csak a véglegesítés módosítja a készletet."}</span></div><div className="flex flex-wrap gap-2"><button type="button" className={btnSoft} onClick={() => setCreateOpen(false)} disabled={savingDocument}>Mégse</button><button type="button" className={editingDocumentStatus === "preparation" ? btnSoft : dangerBtn} onClick={() => void saveDraftDocument(true)} disabled={savingDocument}><Save size={15} /> {savingDocument ? "Mentés..." : editingDocumentStatus === "preparation" ? "Előkészítés mentése" : "Piszkozat mentése"}</button><button type="button" className={primaryBtn} onClick={() => void saveDocument()} disabled={savingDocument || !draftLineArray.length}><CheckCircle2 size={15} /> {savingDocument ? "Feldolgozás..." : editingDocumentStatus === "preparation" ? "Előkészítés lezárása" : "Bizonylat véglegesítése"}</button></div></div>
           </div>
         </div>
       ) : null}
@@ -1804,7 +1973,7 @@ export default function AllInProductMoves() {
 
       {deleteTarget ? (
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-rose-200/25 bg-[#4b5362] p-4 shadow-2xl"><div className="flex items-start gap-3"><span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200/28 bg-rose-500/14 text-rose-50"><AlertTriangle size={19} /></span><div><h3 className="text-lg">Végleges törlés</h3><p className="mt-1 text-sm leading-relaxed text-white/62">A(z) <span className="text-white">{deleteTarget.document_number}</span> {deleteTarget.status === "draft" ? "piszkozat végleg törlődik. Készletmozgás nem történt." : "bizonylat végleg eltűnik az archívumból. A készletet ez nem írja vissza, mert a valós készletmozgás már megtörtént."}</p></div></div><div className="mt-4 flex justify-end gap-2"><button type="button" className={btnSoft} onClick={() => setDeleteTarget(null)} disabled={deleting}>Mégse</button><button type="button" className={dangerBtn} onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={15} /> {deleting ? "Törlés..." : "Végleges törlés"}</button></div></div>
+          <div className="w-full max-w-lg rounded-2xl border border-rose-200/25 bg-[#4b5362] p-4 shadow-2xl"><div className="flex items-start gap-3"><span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200/28 bg-rose-500/14 text-rose-50"><AlertTriangle size={19} /></span><div><h3 className="text-lg">Végleges törlés</h3><p className="mt-1 text-sm leading-relaxed text-white/62">A(z) <span className="text-white">{deleteTarget.document_number}</span> {deleteTarget.status === "preparation" ? "előkészítés törlődik, és minden benne szereplő mozgatás visszakerül az eredeti készlethelyre." : deleteTarget.status === "draft" ? "piszkozat végleg törlődik. Készletmozgás nem történt." : "bizonylat végleg eltűnik az archívumból. A készletet ez nem írja vissza, mert a valós készletmozgás már megtörtént."}</p></div></div><div className="mt-4 flex justify-end gap-2"><button type="button" className={btnSoft} onClick={() => setDeleteTarget(null)} disabled={deleting}>Mégse</button><button type="button" className={dangerBtn} onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={15} /> {deleting ? "Törlés..." : "Végleges törlés"}</button></div></div>
         </div>
       ) : null}
     </div>
