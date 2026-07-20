@@ -235,6 +235,35 @@ type AifLocation = {
   is_active?: boolean;
 };
 
+function normalizeLocationSearch(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function defaultPurchaseOrderLocationId(locations: AifLocation[]) {
+  const active = (locations || []).filter((location) => location.is_active !== false);
+  const preferred = active.find((location) => {
+    const code = normalizeLocationSearch(location.code);
+    const name = normalizeLocationSearch(location.name);
+    const type = normalizeLocationSearch(location.location_type);
+    return (
+      code === "main warehouse" ||
+      code.includes("main warehouse") ||
+      code.includes("miercurea ciuc") ||
+      code.includes("csikszereda") ||
+      name.includes("magazin miercurea ciuc") ||
+      name.includes("miercurea ciuc") ||
+      name.includes("csikszereda") ||
+      type === "main warehouse"
+    );
+  });
+  return String(preferred?.id || preferred?.code || "").trim();
+}
+
 type AifSupplier = {
   id: string;
   code: string;
@@ -1223,7 +1252,7 @@ export default function AllInStockMoves() {
     setReorderTarget(row);
     setReorderVariantDetail(null);
     setReorderSupplierId("");
-    setReorderLocationId(String(row.location_id || locationId || ""));
+    setReorderLocationId(defaultPurchaseOrderLocationId(locations));
     setReorderQty(Math.max(1, Math.abs(Math.trunc(n(row.qty_delta)))));
     setReorderError(null);
     setReorderLoading(true);
@@ -1243,7 +1272,7 @@ export default function AllInStockMoves() {
     } finally {
       setReorderLoading(false);
     }
-  }, [locationId, suppliers]);
+  }, [locations, suppliers]);
 
   const reorderSupplierOptions = useMemo(() => {
     if (!reorderTarget) return suppliers;
@@ -1268,7 +1297,7 @@ export default function AllInStockMoves() {
       return;
     }
     if (!reorderLocationId) {
-      setReorderError("Válaszd ki, melyik üzletbe érkezzen a rendelés.");
+      setReorderError("Válaszd ki a rendelés központi célhelyét.");
       return;
     }
 
@@ -2156,7 +2185,7 @@ export default function AllInStockMoves() {
                     />
                   </label>
                   <label className={label}>
-                    Célhely
+                    Rendelési célhely
                     <CompactSelect
                       value={reorderLocationId}
                       onChange={setReorderLocationId}
@@ -2166,6 +2195,10 @@ export default function AllInStockMoves() {
                   </label>
                 </div>
               )}
+
+              {!reorderLoading ? (
+                <p className="-mt-2 text-[11px] text-white/48">Alapértelmezett rendelési célhely: Magazin - Miercurea Ciuc. Innen oszlik szét a készlet.</p>
+              ) : null}
 
               <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                 <label className={label}>
