@@ -105,7 +105,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           title text NOT NULL,
           subtitle text NULL,
           note text NULL,
-          status text NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','cancelled')),
+          status text NOT NULL DEFAULT 'issued' CHECK (status IN ('draft','issued','cancelled')),
           actor text NULL,
           owner_key text NULL,
           line_count integer NOT NULL DEFAULT 0,
@@ -177,6 +177,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS price_basis text NOT NULL DEFAULT 'selling_price'`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS total_value numeric(14,2) NOT NULL DEFAULT 0`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
+        await pool.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','issued','cancelled')`);
+        await pool.query(`DO $$
+          DECLARE c record;
+          BEGIN
+            FOR c IN
+              SELECT conname
+              FROM pg_constraint
+              WHERE conrelid='aif_stock_transfer_documents'::regclass
+                AND contype='c'
+                AND pg_get_constraintdef(oid) ILIKE '%status%'
+            LOOP
+              EXECUTE format('ALTER TABLE aif_stock_transfer_documents DROP CONSTRAINT %I', c.conname);
+            END LOOP;
+          END $$`);
+        await pool.query(`ALTER TABLE aif_stock_transfer_documents
+          ADD CONSTRAINT aif_stock_transfer_documents_status_check
+          CHECK (status IN ('draft','issued','cancelled'))`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS line_total numeric(14,2) NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
@@ -8643,7 +8660,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 document_type, source_location_id, target_location_id,
                 supplier_id, supplier_name, reception_id, external_reference,
                 reason_code, reason_text, operation_direction, price_basis,
-                total_value, currency_code
+                total_value, currency_code,
+                COALESCE((
+                  SELECT string_agg(concat_ws(' ',
+                    dl.product_title, dl.brand_name, dl.category_name, dl.product_code,
+                    dl.barcode, dl.color_name, dl.size, dl.from_location_name, dl.to_location_name
+                  ), ' ')
+                  FROM aif_stock_transfer_document_lines dl
+                  WHERE dl.document_id=d.id
+                ), '') AS line_search
          FROM aif_stock_transfer_documents d
          WHERE NOT EXISTS (
            SELECT 1 FROM aif_stock_transfer_document_deletions del WHERE del.transfer_id=d.transfer_id
@@ -8732,30 +8757,47 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }));
 
       let items = [...officialItems, ...legacyItems];
-      if (type === 'official') items = items.filter((item) => !item.isLegacy);
-      else if (type === 'legacy') items = items.filter((item) => item.isLegacy);
-      else if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
-      else {
-        const requestedDocumentType = cleanAifStockDocumentType(type, null);
-        if (requestedDocumentType) items = items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
-      }
       if (from) items = items.filter((item) => new Date(item.created_at).getTime() >= new Date(`${from}T00:00:00`).getTime());
       if (to) items = items.filter((item) => new Date(item.created_at).getTime() < new Date(`${to}T00:00:00`).getTime() + 86400000);
-      if (fromLocation) {
-        const key = fromLocation.toLowerCase();
-        items = items.filter((item) => `${item.from_location_summary || ''} ${JSON.stringify(item.raw || {})}`.toLowerCase().includes(key));
-      }
-      if (toLocation) {
-        const key = toLocation.toLowerCase();
-        items = items.filter((item) => `${item.to_location_summary || ''} ${JSON.stringify(item.raw || {})}`.toLowerCase().includes(key));
-      }
+      const matchesDocumentParty = (item, rawValue, side) => {
+        const value = text(rawValue);
+        if (!value) return true;
+        const supplierMode = value.startsWith('supplier:');
+        const locationMode = value.startsWith('location:');
+        const key = (supplierMode || locationMode ? value.slice(value.indexOf(':') + 1) : value).toLowerCase();
+        if (!key) return true;
+        if (supplierMode) {
+          return String(item.supplier_id || '').toLowerCase() === key
+            || String(item.supplier_name || '').toLowerCase().includes(key);
+        }
+        const directId = side === 'from' ? item.source_location_id : item.target_location_id;
+        const summary = side === 'from' ? item.from_location_summary : item.to_location_summary;
+        if (String(directId || '').toLowerCase() === key) return true;
+        if (String(summary || '').toLowerCase().includes(key)) return true;
+        const raw = item.raw && typeof item.raw === 'object' ? item.raw : {};
+        const candidates = side === 'from'
+          ? [raw.sourceLocationId, raw.source_location_id, raw.fromLocationId, raw.from_location_id, raw.sourceLocationName, raw.fromLocationName, raw.fromLocationIds]
+          : [raw.targetLocationId, raw.target_location_id, raw.toLocationId, raw.to_location_id, raw.targetLocationName, raw.toLocationName, raw.toLocationIds];
+        return JSON.stringify(candidates).toLowerCase().includes(key);
+      };
+      if (fromLocation) items = items.filter((item) => matchesDocumentParty(item, fromLocation, 'from'));
+      if (toLocation) items = items.filter((item) => matchesDocumentParty(item, toLocation, 'to'));
       if (search) {
         items = items.filter((item) => [
           item.document_number, item.transfer_id, item.title, item.subtitle, item.note,
           item.actor, item.from_location_summary, item.to_location_summary,
           item.document_type, item.supplier_name, item.external_reference,
-          item.reason_code, item.reason_text, JSON.stringify(item.raw || {}),
+          item.reason_code, item.reason_text, item.line_search, JSON.stringify(item.raw || {}),
         ].join(' ').toLowerCase().includes(search));
+      }
+      const facetItems = items.slice();
+      if (type === 'official') items = items.filter((item) => !item.isLegacy && item.status !== 'draft' && item.status !== 'cancelled');
+      else if (type === 'legacy') items = items.filter((item) => item.isLegacy);
+      else if (type === 'draft') items = items.filter((item) => item.status === 'draft');
+      else if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
+      else {
+        const requestedDocumentType = cleanAifStockDocumentType(type, null);
+        if (requestedDocumentType) items = items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === requestedDocumentType);
       }
       items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       const total = items.length;
@@ -8764,15 +8806,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const pageItems = items.slice((safePage - 1) * limit, safePage * limit);
       const totals = {
         total,
-        official: items.filter((item) => !item.isLegacy).length,
-        legacy: items.filter((item) => item.isLegacy).length,
-        cancelled: items.filter((item) => item.status === 'cancelled').length,
+        all: facetItems.length,
+        official: facetItems.filter((item) => !item.isLegacy && item.status !== 'draft' && item.status !== 'cancelled').length,
+        draft: facetItems.filter((item) => item.status === 'draft').length,
+        legacy: facetItems.filter((item) => item.isLegacy).length,
+        cancelled: facetItems.filter((item) => item.status === 'cancelled').length,
         totalQty: items.reduce((sum, item) => sum + Number(item.total_qty || 0), 0),
         totalValue: Math.round((items.reduce((sum, item) => sum + Number(item.total_value || 0), 0) + Number.EPSILON) * 100) / 100,
-        internalTransfer: items.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === 'internal_transfer').length,
-        supplierReturn: items.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'supplier_return').length,
-        damagedWriteoff: items.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'damaged_writeoff').length,
-        stockCorrection: items.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'stock_correction').length,
+        internalTransfer: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, 'internal_transfer') === 'internal_transfer').length,
+        supplierReturn: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'supplier_return').length,
+        damagedWriteoff: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'damaged_writeoff').length,
+        stockCorrection: facetItems.filter((item) => cleanAifStockDocumentType(item.document_type, null) === 'stock_correction').length,
         currencyCode: 'RON',
       };
       const locations = await pool.query(`SELECT id::text, code, name FROM aif_locations WHERE COALESCE(is_active,true)=true ORDER BY name ASC`);
@@ -9033,6 +9077,335 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (documentType === 'stock_correction') return operationDirection === 'increase' ? 'Corecție pozitivă' : 'Corecție negativă';
     return null;
   }
+
+  function aifStockDocumentDraftReference(seed = '') {
+    const token = createHash('sha1')
+      .update(`${seed}:${Date.now()}:${Math.random()}`)
+      .digest('hex')
+      .slice(0, 10)
+      .toUpperCase();
+    return {
+      transferId: `draft:${token.toLowerCase()}`,
+      documentNumber: `PISZKOZAT/${token}`,
+    };
+  }
+
+  async function readAifStockDocumentVariantSnapshot(client, input, documentType, receptionId = null) {
+    const variantInput = text(input?.variantId || input?.variant_id || input?.variant || input?.id || input?.barcode);
+    const qty = toInt(input?.qty ?? input?.quantity ?? input?.count);
+    if (!variantInput) throw Object.assign(new Error('A piszkozat egyik sorában hiányzik a termék.'), { statusCode: 400 });
+    if (qty === null || qty <= 0) throw Object.assign(new Error('A piszkozat egyik sorában érvénytelen a mennyiség.'), { statusCode: 400 });
+    const result = await client.query(
+      `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status, v.image_url,
+              v.buy_price, v.sell_price,
+              m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
+              sc.supplier_product_code, sc.supplier_barcode
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_product_code, supplier_barcode
+         FROM aif_variant_supplier_codes x
+         WHERE x.variant_id=v.id AND COALESCE(x.is_active,true)=true
+         ORDER BY x.updated_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1 OR sc.supplier_barcode=$1
+       LIMIT 1`,
+      [variantInput]
+    );
+    if (!result.rowCount) throw Object.assign(new Error('A piszkozat egyik terméke nem található.'), { statusCode: 404 });
+    const variant = result.rows[0];
+    if (String(variant.status || '') === 'archived') throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: archivált termék nem tehető bizonylatra.`), { statusCode: 400 });
+    const priceBasis = AIF_STOCK_DOCUMENT_TYPES[documentType]?.priceBasis || 'purchase_price';
+    const unitPrice = priceBasis === 'selling_price'
+      ? toMoney(variant.sell_price)
+      : await aifStockDocumentPurchasePrice(client, variant.id, receptionId, variant.buy_price);
+    const lineTotal = unitPrice === null ? null : Math.round((qty * unitPrice + Number.EPSILON) * 100) / 100;
+    return {
+      variant,
+      qty,
+      unitPrice,
+      lineTotal,
+      priceBasis,
+      productCode: variant.supplier_product_code || String(variant.model_code || '').split(':').pop() || variant.internal_sku || null,
+      barcode: variant.barcode || variant.supplier_barcode || null,
+    };
+  }
+
+  async function handleSaveStockDocumentDraft(req, res) {
+    const body = req.body || {};
+    const documentType = cleanAifStockDocumentType(body.documentType || body.document_type || body.type, 'internal_transfer');
+    const linesInput = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : Array.isArray(body.rows) ? body.rows : [];
+    const draftId = text(req.params.id || body.draftId || body.draft_id || body.documentId || body.document_id);
+    const sourceLocationInput = text(body.sourceLocationId || body.source_location_id || body.locationId || body.location_id || body.fromLocationId || body.from_location_id);
+    const targetLocationInput = text(body.targetLocationId || body.target_location_id || body.toLocationId || body.to_location_id);
+    const supplierInput = text(body.supplierId || body.supplier_id || body.supplier);
+    const receptionInput = text(body.receptionId || body.reception_id);
+    const reasonCode = normCode(body.reasonCode || body.reason_code || body.reason);
+    const reasonText = emptyToNull(body.reasonText || body.reason_text || body.reasonLabel || body.reason_label);
+    const externalReference = emptyToNull(body.externalReference || body.external_reference || body.reference);
+    const note = emptyToNull(body.note);
+    const operationDirection = documentType === 'stock_correction'
+      ? (normCode(body.operationDirection || body.operation_direction || body.correctionDirection || body.correction_direction) === 'increase' ? 'increase' : 'decrease')
+      : documentType === 'internal_transfer' ? 'transfer' : 'decrease';
+
+    try {
+      await ensureAifStockTransferDocumentsSchema();
+    } catch (schemaError) {
+      return res.status(500).json({ error: 'A piszkozatok előkészítése nem sikerült.', code: schemaError?.code || null });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const actor = actorFrom(req);
+      const ownerKey = selectionOwnerKey(req);
+      const settings = await readAifStockDocumentSettings(client, documentType, false);
+
+      const sourceLocation = sourceLocationInput ? await findByIdOrCode(client, 'aif_locations', sourceLocationInput) : null;
+      if (sourceLocationInput && (!sourceLocation || sourceLocation.is_active === false)) throw Object.assign(new Error('A forráshely érvénytelen vagy inaktív.'), { statusCode: 400 });
+      const targetLocation = targetLocationInput ? await findByIdOrCode(client, 'aif_locations', targetLocationInput) : null;
+      if (targetLocationInput && (!targetLocation || targetLocation.is_active === false)) throw Object.assign(new Error('A célhely érvénytelen vagy inaktív.'), { statusCode: 400 });
+      const supplier = supplierInput ? await findByIdOrCode(client, 'aif_suppliers', supplierInput) : null;
+      if (supplierInput && (!supplier || supplier.is_active === false)) throw Object.assign(new Error('A beszállító érvénytelen vagy inaktív.'), { statusCode: 400 });
+      let reception = null;
+      if (receptionInput) {
+        const rec = await client.query(`SELECT id,invoice_number,supplier_id FROM aif_receptions WHERE id::text=$1 LIMIT 1`, [receptionInput]);
+        reception = rec.rows[0] || null;
+        if (!reception) throw Object.assign(new Error('A kapcsolt receptió nem található.'), { statusCode: 404 });
+      }
+
+      const sourceSummary = sourceLocation?.name || sourceLocation?.code || null;
+      const counterpartySummary = stockDocumentCounterpartySummary({
+        documentType,
+        supplierName: supplier?.name,
+        reasonText,
+        operationDirection,
+        targetLocationName: targetLocation?.name || targetLocation?.code,
+      });
+
+      let document;
+      if (draftId) {
+        const current = await client.query(
+          `SELECT * FROM aif_stock_transfer_documents
+           WHERE (id::text=$1 OR transfer_id=$1 OR document_number=$1)
+           FOR UPDATE`,
+          [draftId]
+        );
+        if (!current.rowCount) throw Object.assign(new Error('A piszkozat nem található.'), { statusCode: 404 });
+        if (current.rows[0].status !== 'draft') throw Object.assign(new Error('Csak piszkozat szerkeszthető.'), { statusCode: 400 });
+        const updated = await client.query(
+          `UPDATE aif_stock_transfer_documents SET
+             title=$2,subtitle=$3,note=$4,actor=$5,owner_key=$6,
+             from_location_summary=$7,to_location_summary=$8,
+             document_type=$9,source_location_id=$10,target_location_id=$11,
+             supplier_id=$12,supplier_name=$13,reception_id=$14,external_reference=$15,
+             reason_code=$16,reason_text=$17,operation_direction=$18,price_basis=$19,
+             raw=COALESCE(raw,'{}'::jsonb) || $20::jsonb,updated_at=now()
+           WHERE id=$1 RETURNING *`,
+          [
+            current.rows[0].id,
+            settings.documentTitle,
+            settings.documentSubtitle,
+            note,
+            actor,
+            ownerKey,
+            sourceSummary,
+            counterpartySummary,
+            documentType,
+            sourceLocation ? String(sourceLocation.id) : null,
+            targetLocation ? String(targetLocation.id) : null,
+            supplier ? String(supplier.id) : null,
+            supplier?.name || null,
+            reception ? String(reception.id) : null,
+            externalReference || reception?.invoice_number || null,
+            reasonCode || null,
+            reasonText,
+            operationDirection,
+            AIF_STOCK_DOCUMENT_TYPES[documentType].priceBasis,
+            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference }),
+          ]
+        );
+        document = updated.rows[0];
+        await client.query(`DELETE FROM aif_stock_transfer_document_lines WHERE document_id=$1`, [document.id]);
+      } else {
+        const ref = aifStockDocumentDraftReference(`${ownerKey}:${documentType}`);
+        const inserted = await client.query(
+          `INSERT INTO aif_stock_transfer_documents (
+             transfer_id,document_number,series,sequence_number,sequence_year,
+             title,subtitle,note,status,actor,owner_key,line_count,total_qty,
+             from_location_summary,to_location_summary,raw,
+             document_type,source_location_id,target_location_id,
+             supplier_id,supplier_name,reception_id,external_reference,
+             reason_code,reason_text,operation_direction,price_basis,
+             total_value,currency_code,created_at,updated_at
+           ) VALUES (
+             $1,$2,'DRAFT',0,$3,$4,$5,$6,'draft',$7,$8,0,0,$9,$10,$11::jsonb,
+             $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0,'RON',now(),now()
+           ) RETURNING *`,
+          [
+            ref.transferId,
+            ref.documentNumber,
+            settings.sequenceYear || new Date().getFullYear(),
+            settings.documentTitle,
+            settings.documentSubtitle,
+            note,
+            actor,
+            ownerKey,
+            sourceSummary,
+            counterpartySummary,
+            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference }),
+            documentType,
+            sourceLocation ? String(sourceLocation.id) : null,
+            targetLocation ? String(targetLocation.id) : null,
+            supplier ? String(supplier.id) : null,
+            supplier?.name || null,
+            reception ? String(reception.id) : null,
+            externalReference || reception?.invoice_number || null,
+            reasonCode || null,
+            reasonText,
+            operationDirection,
+            AIF_STOCK_DOCUMENT_TYPES[documentType].priceBasis,
+          ]
+        );
+        document = inserted.rows[0];
+      }
+
+      let totalQty = 0;
+      let totalValue = 0;
+      for (let index = 0; index < linesInput.length; index += 1) {
+        const snapshot = await readAifStockDocumentVariantSnapshot(client, linesInput[index], documentType, reception?.id || null);
+        const lineTargetName = documentType === 'internal_transfer' ? (targetLocation?.name || targetLocation?.code || null) : counterpartySummary;
+        const raw = {
+          draft: true,
+          documentType,
+          lineNo: index + 1,
+          productTitle: snapshot.variant.title_ro,
+          productCode: snapshot.productCode,
+          barcode: snapshot.barcode,
+          sourceLocationId: sourceLocation ? String(sourceLocation.id) : null,
+          sourceLocationName: sourceSummary,
+          targetLocationId: targetLocation ? String(targetLocation.id) : null,
+          targetLocationName: lineTargetName,
+          supplierId: supplier ? String(supplier.id) : null,
+          supplierName: supplier?.name || null,
+          receptionId: reception ? String(reception.id) : null,
+          reasonCode,
+          reasonText,
+          operationDirection,
+          qty: snapshot.qty,
+          unitPrice: snapshot.unitPrice,
+          lineTotal: snapshot.lineTotal,
+          priceBasis: snapshot.priceBasis,
+          currencyCode: 'RON',
+        };
+        await client.query(
+          `INSERT INTO aif_stock_transfer_document_lines (
+             document_id,line_no,variant_id,product_title,brand_name,category_name,
+             product_code,barcode,color_name,size,image_url,
+             from_location_id,from_location_name,to_location_id,to_location_name,
+             qty,unit_price,line_total,currency_code,price_basis,qty_delta,
+             source_before,source_after,target_before,target_after,raw
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+             $16,$17,$18,'RON',$19,0,NULL,NULL,NULL,NULL,$20::jsonb
+           )`,
+          [
+            document.id,
+            index + 1,
+            String(snapshot.variant.id),
+            snapshot.variant.title_ro,
+            snapshot.variant.brand_name,
+            snapshot.variant.category_name,
+            snapshot.productCode,
+            snapshot.barcode,
+            snapshot.variant.color_name,
+            snapshot.variant.size,
+            snapshot.variant.image_url,
+            sourceLocation ? String(sourceLocation.id) : null,
+            sourceSummary,
+            targetLocation ? String(targetLocation.id) : null,
+            lineTargetName,
+            snapshot.qty,
+            snapshot.unitPrice,
+            snapshot.lineTotal,
+            snapshot.priceBasis,
+            JSON.stringify(raw),
+          ]
+        );
+        totalQty += snapshot.qty;
+        totalValue += snapshot.lineTotal || 0;
+      }
+      totalValue = Math.round((totalValue + Number.EPSILON) * 100) / 100;
+      const updated = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET line_count=$2,total_qty=$3,total_value=$4,currency_code='RON',updated_at=now()
+         WHERE id=$1 RETURNING *`,
+        [document.id, linesInput.length, totalQty, totalValue]
+      );
+      document = updated.rows[0] || document;
+      await client.query('COMMIT');
+      return res.json({
+        ok: true,
+        mode: draftId ? 'draft_updated' : 'draft_created',
+        documentId: String(document.id),
+        documentNumber: document.document_number,
+        documentType,
+        status: 'draft',
+        lineCount: linesInput.length,
+        totalQty,
+        totalValue,
+        currencyCode: 'RON',
+        document,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF save stock document draft failed', error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A piszkozat mentése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post('/stock-documents/draft', requireAuthed, handleSaveStockDocumentDraft);
+  router.put('/stock-documents/:id/draft', requireAuthed, handleSaveStockDocumentDraft);
+  router.patch('/stock-documents/:id/draft', requireAuthed, handleSaveStockDocumentDraft);
+
+  router.delete('/stock-documents/:id/draft', requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Piszkozat azonosító szükséges.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query(
+        `SELECT id,document_number,status
+         FROM aif_stock_transfer_documents
+         WHERE id::text=$1 OR transfer_id=$1 OR document_number=$1
+         FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'A piszkozat nem található.' });
+      }
+      if (current.rows[0].status !== 'draft') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Ezen a végponton csak piszkozat törölhető.' });
+      }
+      await client.query(`DELETE FROM aif_stock_transfer_documents WHERE id=$1`, [current.rows[0].id]);
+      await client.query('COMMIT');
+      return res.json({ ok: true, mode: 'draft_deleted', item: current.rows[0] });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF delete stock document draft failed', error);
+      return res.status(500).json({ error: error?.message || 'A piszkozat törlése nem sikerült.' });
+    } finally {
+      client.release();
+    }
+  });
 
   async function handleCreateStockDocument(req, res) {
     const body = req.body || {};
