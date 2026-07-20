@@ -380,6 +380,37 @@ function firstText(...values: unknown[]) {
   return "";
 }
 
+function lineLocationName(
+  line: DocumentLine,
+  side: "from" | "to",
+  locations: LocationItem[] = [],
+) {
+  const raw = line.raw && typeof line.raw === "object" ? line.raw as Record<string, unknown> : {};
+  const directName = side === "from"
+    ? firstText(
+        line.from_location_name,
+        raw.fromLocationName,
+        raw.from_location_name,
+        raw.sourceLocationName,
+        raw.source_location_name,
+      )
+    : firstText(
+        line.to_location_name,
+        raw.toLocationName,
+        raw.to_location_name,
+        raw.targetLocationName,
+        raw.target_location_name,
+      );
+  if (directName) return directName;
+
+  const locationId = side === "from"
+    ? firstText(line.from_location_id, raw.fromLocationId, raw.from_location_id, raw.sourceLocationId, raw.source_location_id)
+    : firstText(line.to_location_id, raw.toLocationId, raw.to_location_id, raw.targetLocationId, raw.target_location_id);
+  if (!locationId) return "-";
+  const found = locations.find((location) => String(location.id) === locationId || String(location.code || "") === locationId);
+  return found?.name || locationId;
+}
+
 function documentTypeOf(item?: Partial<DocumentListItem> | null): DocumentType {
   const raw = String(item?.document_type || item?.raw?.documentType || item?.raw?.document_type || "").trim();
   return DOCUMENT_TYPES.some((row) => row.type === raw) ? raw as DocumentType : "internal_transfer";
@@ -787,11 +818,14 @@ function makePrintHtml(detail: DocumentDetail) {
       .map((value) => String(value || "").trim())
       .filter(Boolean)
       .join(" • ");
+    const routeFrom = lineLocationName(line, "from");
+    const routeTo = lineLocationName(line, "to");
     return `<tr>
       <td class="center">${index + 1}</td>
       <td><div class="product">${image}<div><strong>${escapeHtml(line.product_title || "Produs")}</strong>${variant ? `<small>${escapeHtml(variant)}</small>` : ""}</div></div></td>
       <td class="code">${escapeHtml(line.product_code || "-")}</td>
       <td class="code">${escapeHtml(line.barcode || "-")}</td>
+      <td class="routeCell"><span>Din: ${escapeHtml(routeFrom)}</span><span>În: ${escapeHtml(routeTo)}</span></td>
       <td class="center">buc.</td>
       <td class="qty">${escapeHtml(quantity(line.qty))}</td>
       <td class="money">${escapeHtml(moneyRon(lineUnitPrice(line), false))}</td>
@@ -825,8 +859,8 @@ function makePrintHtml(detail: DocumentDetail) {
   .route{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3mm;margin-bottom:3.5mm}.routeCard{border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm 3mm;background:#f7faf9}.routeCard span{display:block;color:#6a7683;font-size:8px;letter-spacing:.08em;text-transform:uppercase}.routeCard strong{display:block;margin-top:1mm;font-size:11px}
   .declaration{margin-bottom:3.5mm;border-left:3px solid #255f54;background:#f5f8f7;padding:2.5mm 3mm;color:#354353;line-height:1.45}.note{margin-bottom:3.5mm;border:1px solid #d3dcda;border-radius:2.5mm;padding:2.5mm 3mm}
   table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}th{background:#26384b;color:#fff;border:1px solid #26384b;padding:2.2mm 1.4mm;font-size:7.7px;line-height:1.2;text-transform:uppercase;text-align:left}td{border:1px solid #d4dcdf;padding:1.7mm 1.4mm;font-size:8.5px;line-height:1.25;vertical-align:middle;overflow-wrap:anywhere}tbody tr:nth-child(even) td{background:#f8fafb}
-  th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:54mm}th:nth-child(3),td:nth-child(3){width:24mm}th:nth-child(4),td:nth-child(4){width:27mm}th:nth-child(5),td:nth-child(5){width:10mm}th:nth-child(6),td:nth-child(6){width:11mm}th:nth-child(7),td:nth-child(7){width:24mm}th:nth-child(8),td:nth-child(8){width:28mm}
-  .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}.product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}.img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
+  th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:43mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:34mm}th:nth-child(6),td:nth-child(6){width:9mm}th:nth-child(7),td:nth-child(7){width:10mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
+  .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.routeCell{font-size:7.5px;line-height:1.35;color:#354353}.routeCell span{display:block}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}.product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}.img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
   tfoot td{background:#eef4f2;border-color:#b9c7c4;font-weight:700}tfoot .totalLabel{text-align:right;color:#183d36;letter-spacing:.08em}tfoot .totalValue{background:#255f54;color:#fff;font-size:11px}.total{display:grid;grid-template-columns:minmax(0,1fr) auto;margin-top:2.5mm;border:1px solid #b9c7c4;border-radius:2.5mm;overflow:hidden}.total span{padding:2.4mm 3mm;color:#536171;background:#f5f8f7}.total strong{min-width:44mm;padding:2.4mm 3mm;text-align:center;color:#fff;background:#255f54;font-size:13px}.valuationNote{margin-top:1.5mm;color:#8a5b00;font-size:7.5px;text-align:right}
   .signatures{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4mm;margin-top:13mm;break-inside:avoid}.signature{min-height:27mm;border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm}.signatureTitle{color:#255f54;font-size:8px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.signatureLine{margin-top:9mm;border-top:1px solid #667382;padding-top:1.3mm;color:#667382;font-size:7.2px;text-align:center}.signatureDate{margin-top:2.5mm;color:#7b8793;font-size:7.2px;text-align:center}.footer{display:flex;justify-content:space-between;gap:8mm;margin-top:5mm;padding-top:2.5mm;border-top:1px solid #d7dfdd;color:#7b8793;font-size:7.2px}
 </style>
@@ -841,7 +875,7 @@ function makePrintHtml(detail: DocumentDetail) {
 <div class="declaration">${escapeHtml(meta.declaration)}</div>
 ${reason && type !== "internal_transfer" ? `<div class="note"><strong>Motiv:</strong> ${escapeHtml(reason)}</div>` : ""}
 ${doc.note ? `<div class="note"><strong>Observații interne relevante documentului:</strong> ${escapeHtml(doc.note)}</div>` : ""}
-<table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>U.M.</th><th>Cant.</th><th>P.U. RON</th><th>Valoare RON</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="5" class="totalLabel">TOTAL</td><td class="qty">${escapeHtml(quantity(totalQty))}</td><td></td><td class="money totalValue">${escapeHtml(moneyRon(totalValue, false))}</td></tr></tfoot></table>
+<table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>Traseu</th><th>U.M.</th><th>Cant.</th><th>P.U. RON</th><th>Valoare RON</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="6" class="totalLabel">TOTAL</td><td class="qty">${escapeHtml(quantity(totalQty))}</td><td></td><td class="money totalValue">${escapeHtml(moneyRon(totalValue, false))}</td></tr></tfoot></table>
 <div class="total"><span>Total produse: ${lines.length} poziții • ${quantity(totalQty)} buc.</span><strong>${escapeHtml(moneyRon(totalValue))}</strong></div>
 ${missingPrices ? `<div class="valuationNote">Atenție: ${missingPrices} poziții nu au preț disponibil; totalul valoric include numai pozițiile evaluate.</div>` : ""}
 <div class="signatures">${meta.signatures.map((title) => `<div class="signature"><div class="signatureTitle">${escapeHtml(title)}</div><div class="signatureLine">Nume, prenume și semnătură</div><div class="signatureDate">Data: __________________</div></div>`).join("")}</div>
@@ -1919,6 +1953,22 @@ export default function AllInProductMoves() {
         const doc = detail.document;
         const meta = documentMeta(documentTypeOf(doc));
         const TypeIcon = meta.icon;
+        const routeRows = detail.lines.map((line) => ({
+          from: lineLocationName(line, "from", locations),
+          to: lineLocationName(line, "to", locations),
+        }));
+        const uniqueFrom = Array.from(new Set(routeRows.map((row) => row.from).filter((value) => value && value !== "-")));
+        const uniqueTo = Array.from(new Set(routeRows.map((row) => row.to).filter((value) => value && value !== "-")));
+        const detailFromSummary = uniqueFrom.length === 1
+          ? uniqueFrom[0]
+          : uniqueFrom.length > 1
+            ? "Több forráshely • lásd a terméksorokat"
+            : doc.from_location_summary || "-";
+        const detailToSummary = uniqueTo.length === 1
+          ? uniqueTo[0]
+          : uniqueTo.length > 1
+            ? "Több célhely • lásd a terméksorokat"
+            : doc.supplier_name || doc.to_location_summary || "-";
         return (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetail(null); }}>
             <div className="flex max-h-[95vh] w-full max-w-[1360px] flex-col overflow-hidden rounded-[24px] border border-white/18 bg-[#4b5362] shadow-2xl">
@@ -1932,8 +1982,8 @@ export default function AllInProductMoves() {
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{doc.status === "draft" || doc.status === "preparation" ? "Utoljára mentve" : "Kibocsátva"}</p><p className="mt-1 text-sm">{dateTime(doc.updated_at || doc.created_at)}</p></div>
                   <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/55">Típus</p><p className="mt-1 text-sm text-[#d7fffd]">{meta.shortLabel}</p></div>
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Rögzítette</p><p className="mt-1 truncate text-sm">{doc.actor || "-"}</p></div>
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Forrás</p><p className="mt-1 truncate text-sm">{doc.from_location_summary || "-"}</p></div>
-                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Cél / partner</p><p className="mt-1 truncate text-sm">{doc.supplier_name || doc.to_location_summary || "-"}</p></div>
+                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Forrás</p><p className="mt-1 truncate text-sm">{detailFromSummary}</p></div>
+                  <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Cél / partner</p><p className="mt-1 truncate text-sm">{detailToSummary}</p></div>
                   <div className="rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Sor / darab</p><p className="mt-1 text-sm">{detail.lines.length} sor • {quantity(doc.total_qty)} db</p></div>
                   <div className="rounded-2xl border border-[#7bd7d4]/26 bg-[#2a8d8b]/14 px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/58">Bizonylat értéke</p><p className="mt-1 text-sm text-[#d7fffd]">{moneyRon(detailValue)}</p>{detailMissingPrices ? <p className="mt-0.5 text-[9px] text-amber-100/70">{detailMissingPrices} sor ár nélkül</p> : null}</div>
                 </div>
@@ -1942,12 +1992,16 @@ export default function AllInProductMoves() {
                 <div className="mt-3 overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
                   <div className="flex items-center justify-between border-b border-white/10 px-3 py-2.5"><div className="flex items-center gap-2 text-sm"><Boxes size={16} /> Bizonylat terméksorai</div><span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/52">{detail.lines.length} sor</span></div>
                   <div className="overflow-x-auto">
-                    <table className="min-w-[1120px] w-full text-left text-xs">
-                      <thead className="bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">#</th><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Márka / kategória</th><th className="px-2 py-2">Azonosító</th><th className="px-2 py-2">Variáns</th><th className="px-2 py-2 text-right">Db</th><th className="px-2 py-2 text-right">P.U. RON</th><th className="px-2 py-2 text-right">Érték RON</th></tr></thead>
+                    <table className="min-w-[1280px] w-full text-left text-xs">
+                      <thead className="bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">#</th><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Márka / kategória</th><th className="px-2 py-2">Azonosító</th><th className="px-2 py-2">Variáns</th><th className="px-2 py-2">Honnan → hová</th><th className="px-2 py-2 text-right">Db</th><th className="px-2 py-2 text-right">P.U. RON</th><th className="px-2 py-2 text-right">Érték RON</th></tr></thead>
                       <tbody>
-                        {detail.lines.map((line, index) => <tr key={line.id || `${line.line_no}-${index}`} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]"><td className="px-2 py-2 text-white/45">{index + 1}</td><td className="px-2 py-2"><ProductThumb item={line} className="h-11 w-11" /></td><td className="px-2 py-2"><p className="max-w-[250px] truncate text-white">{line.product_title || "Produs"}</p><p className="mt-0.5 max-w-[250px] truncate text-[10px] text-white/42">{line.product_code || "-"}</p></td><td className="px-2 py-2"><p>{line.brand_name || "-"}</p><p className="mt-0.5 text-[10px] text-white/42">{line.category_name || "-"}</p></td><td className="px-2 py-2 font-mono text-[10px]">{line.barcode || "-"}</td><td className="px-2 py-2">{[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{quantity(line.qty)}</td><td className="px-2 py-2 text-right tabular-nums">{moneyRon(lineUnitPrice(line), false)}</td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(lineTotalValue(line), false)}</td></tr>)}
+                        {detail.lines.map((line, index) => {
+                          const routeFrom = lineLocationName(line, "from", locations);
+                          const routeTo = lineLocationName(line, "to", locations);
+                          return <tr key={line.id || `${line.line_no}-${index}`} className="border-t border-white/[0.08] align-middle hover:bg-white/[0.035]"><td className="px-2 py-2 text-white/45">{index + 1}</td><td className="px-2 py-2"><ProductThumb item={line} className="h-11 w-11" /></td><td className="px-2 py-2"><p className="max-w-[250px] truncate text-white">{line.product_title || "Produs"}</p><p className="mt-0.5 max-w-[250px] truncate text-[10px] text-white/42">{line.product_code || "-"}</p></td><td className="px-2 py-2"><p>{line.brand_name || "-"}</p><p className="mt-0.5 text-[10px] text-white/42">{line.category_name || "-"}</p></td><td className="px-2 py-2 font-mono text-[10px]">{line.barcode || "-"}</td><td className="px-2 py-2">{[line.color_name, line.size].filter(Boolean).join(" • ") || "-"}</td><td className="px-2 py-2 text-[10px] leading-snug text-white/72"><span className="flex items-center gap-1"><ArrowLeft size={11} className="shrink-0 text-[#7bd7d4]" /> <span className="max-w-[210px] truncate">{routeFrom}</span></span><span className="mt-0.5 flex items-center gap-1"><ArrowRight size={11} className="shrink-0 text-[#7bd7d4]" /> <span className="max-w-[210px] truncate">{routeTo}</span></span></td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{quantity(line.qty)}</td><td className="px-2 py-2 text-right tabular-nums">{moneyRon(lineUnitPrice(line), false)}</td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(lineTotalValue(line), false)}</td></tr>;
+                        })}
                       </tbody>
-                      <tfoot><tr className="border-t border-[#7bd7d4]/35 bg-[#214e54]"><td colSpan={6} className="px-3 py-3 text-right text-xs uppercase tracking-[0.08em] text-[#d7fffd]">Total</td><td className="px-2 py-3 text-right">{quantity(doc.total_qty)}</td><td></td><td className="px-2 py-3 text-right text-sm text-white">{moneyRon(detailValue)}</td></tr></tfoot>
+                      <tfoot><tr className="border-t border-[#7bd7d4]/35 bg-[#214e54]"><td colSpan={7} className="px-3 py-3 text-right text-xs uppercase tracking-[0.08em] text-[#d7fffd]">Total</td><td className="px-2 py-3 text-right">{quantity(doc.total_qty)}</td><td></td><td className="px-2 py-3 text-right text-sm text-white">{moneyRon(detailValue)}</td></tr></tfoot>
                     </table>
                   </div>
                 </div>
