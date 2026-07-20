@@ -127,7 +127,7 @@ export async function ensureAifStockTransferDocumentSchema(target) {
         document_subtitle text NULL,
         transfer_title text NULL,
         note text NULL,
-        status text NOT NULL DEFAULT 'issued' CHECK (status IN ('draft','issued','cancelled')),
+        status text NOT NULL DEFAULT 'issued' CHECK (status IN ('draft','preparation','issued','cancelled')),
         line_count integer NOT NULL DEFAULT 0,
         total_qty integer NOT NULL DEFAULT 0,
         total_value numeric(14,2) NOT NULL DEFAULT 0,
@@ -177,7 +177,7 @@ export async function ensureAifStockTransferDocumentSchema(target) {
     `);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS total_value numeric(14,2) NOT NULL DEFAULT 0`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
-    await target.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','issued','cancelled')`);
+    await target.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','preparation','issued','cancelled')`);
     await target.query(`DO $$
       DECLARE c record;
       BEGIN
@@ -192,7 +192,7 @@ export async function ensureAifStockTransferDocumentSchema(target) {
       END $$`);
     await target.query(`ALTER TABLE aif_stock_transfer_documents
       ADD CONSTRAINT aif_stock_transfer_documents_status_check
-      CHECK (status IN ('draft','issued','cancelled'))`);
+      CHECK (status IN ('draft','preparation','issued','cancelled'))`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS line_total numeric(14,2) NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
@@ -210,6 +210,9 @@ export async function ensureAifStockTransferDocumentSchema(target) {
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS operation_direction text NULL`);
     await target.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS price_basis text NOT NULL DEFAULT 'selling_price'`);
     await target.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_type_created_idx ON aif_stock_transfer_documents (document_type, created_at DESC)`);
+    await target.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_uq
+      ON aif_stock_transfer_documents (owner_key)
+      WHERE status='preparation' AND document_type='internal_transfer' AND owner_key IS NOT NULL`);
     await target.query(`CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
       document_type text PRIMARY KEY,
       series text NOT NULL,
@@ -312,7 +315,7 @@ function documentLocationSummary(values) {
 function serializeDocument(item) {
   if (!item) return null;
   const legacy = Boolean(item.legacy || item.isLegacy || item.status === "legacy");
-  const status = legacy ? "legacy" : item.status === "draft" ? "draft" : item.status === "cancelled" ? "cancelled" : "issued";
+  const status = legacy ? "legacy" : item.status === "draft" ? "draft" : item.status === "preparation" ? "preparation" : item.status === "cancelled" ? "cancelled" : "issued";
   return {
     ...item,
     id: cleanText(item.id),
@@ -759,9 +762,10 @@ function documentMatches(item, filters) {
     ].filter(Boolean).join(" "));
     if (!haystack.includes(q)) return false;
   }
-  if (filters.kind === "official" && (!item.official || item.status === "draft")) return false;
+  if (filters.kind === "official" && (!item.official || item.status === "draft" || item.status === "preparation")) return false;
   if (filters.kind === "legacy" && !item.legacy) return false;
   if (filters.kind === "draft" && item.status !== "draft") return false;
+  if (filters.kind === "preparation" && item.status !== "preparation") return false;
   const requestedDocumentType = cleanAifStockDocumentType(filters.kind, null);
   if (requestedDocumentType && cleanAifStockDocumentType(item.document_type, "internal_transfer") !== requestedDocumentType) return false;
   if (filters.status && filters.status !== "all" && String(item.status) !== filters.status) return false;
@@ -870,7 +874,8 @@ export function registerAifStockTransferDocumentRoutes(router, { pool, requireAu
       const slicedItems = all.slice(offset, offset + limit);
       const totals = {
         total,
-        official: all.filter((item) => item.source === "official" && item.status !== "draft" && item.status !== "cancelled").length,
+        official: all.filter((item) => item.source === "official" && item.status !== "draft" && item.status !== "preparation" && item.status !== "cancelled").length,
+        preparation: all.filter((item) => item.status === "preparation").length,
         draft: all.filter((item) => item.status === "draft").length,
         legacy: all.filter((item) => item.isLegacy).length,
         cancelled: all.filter((item) => item.status === "cancelled").length,
