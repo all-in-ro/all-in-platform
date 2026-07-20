@@ -706,6 +706,155 @@ function WarehouseMultiSelect({
   );
 }
 
+
+type WarehouseMoveDropdownOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+function WarehouseMoveDropdown({
+  value,
+  options,
+  onChange,
+  placeholder,
+  ariaLabel,
+  tone = "neutral",
+}: {
+  value: string;
+  options: WarehouseMoveDropdownOption[];
+  onChange: (value: string) => void;
+  placeholder: string;
+  ariaLabel: string;
+  tone?: "neutral" | "source" | "target";
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const selected = options.find((option) => String(option.value) === String(value)) || null;
+
+  const toneClass = tone === "source"
+    ? "border-rose-400/32 focus:border-rose-300/65 focus:ring-rose-400/16"
+    : tone === "target"
+      ? "border-[#7bd7d4]/32 focus:border-[#7bd7d4]/65 focus:ring-[#7bd7d4]/16"
+      : "border-white/18 focus:border-[#7bd7d4]/55 focus:ring-[#7bd7d4]/16";
+
+  function updateMenuPosition() {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const sidePadding = 10;
+    const width = Math.min(Math.max(rect.width, 220), Math.max(220, window.innerWidth - sidePadding * 2));
+    const left = Math.min(Math.max(sidePadding, rect.left), Math.max(sidePadding, window.innerWidth - width - sidePadding));
+    const openUp = rect.bottom + 250 > window.innerHeight && rect.top > 250;
+    setMenuStyle({
+      position: "fixed",
+      left,
+      top: openUp ? rect.top - 6 : rect.bottom + 6,
+      width,
+      transform: openUp ? "translateY(-100%)" : "none",
+    });
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onMove = () => updateMenuPosition();
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, value, options.length]);
+
+  const menu = open && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className="z-[9999] max-h-60 overflow-y-auto rounded-xl border border-white/18 bg-[#354153] py-1 shadow-2xl shadow-black/45"
+          style={menuStyle}
+          role="listbox"
+          aria-label={ariaLabel}
+        >
+          <button
+            type="button"
+            className={`flex min-h-8 w-full items-center px-3 text-left text-xs transition ${!value ? "bg-[#2a8d8b] text-white" : "text-white/72 hover:bg-[#415064]"}`}
+            onClick={() => {
+              onChange("");
+              setOpen(false);
+            }}
+            role="option"
+            aria-selected={!value}
+          >
+            {placeholder}
+          </button>
+          {options.map((option) => {
+            const active = String(option.value) === String(value);
+            return (
+              <button
+                key={option.value}
+                type="button"
+                disabled={option.disabled}
+                className={`flex min-h-8 w-full items-center justify-between gap-3 border-t border-white/[0.06] px-3 text-left text-xs transition first:border-t-0 ${active ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"} disabled:cursor-not-allowed disabled:opacity-35`}
+                onClick={() => {
+                  if (option.disabled) return;
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                role="option"
+                aria-selected={active}
+                title={option.label}
+              >
+                <span className="min-w-0 truncate">{option.label}</span>
+                {option.hint ? <span className="shrink-0 text-[10px] text-white/48">{option.hint}</span> : null}
+              </button>
+            );
+          })}
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-lg border bg-[#3f4959] px-2.5 text-left text-[11px] text-white outline-none transition hover:bg-[#465264] focus:ring-2 ${toneClass}`}
+        onClick={() => {
+          updateMenuPosition();
+          setOpen((current) => !current);
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        title={selected?.label || placeholder}
+      >
+        <span className={`min-w-0 truncate ${selected ? "text-white" : "text-white/48"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {menu}
+    </>
+  );
+}
+
 type BarcodeScannerMode = "search" | "editBarcode";
 
 type BarcodeScannerSession = {
@@ -9938,17 +10087,19 @@ export default function AllInWarehouse() {
 
       {selectedWorkPanel && (
         <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/72 p-3 backdrop-blur-md">
-          <div className={`${selectedWorkPanel === "move" ? "flex max-h-[96vh] max-w-[1480px] flex-col overflow-hidden rounded-[26px]" : "max-h-[88vh] max-w-5xl overflow-auto rounded-2xl"} w-full border border-white/18 bg-[#4b5362] shadow-[0_30px_90px_rgba(2,6,23,0.58)]`}>
-            <div className={`${selectedWorkPanel === "move" ? "bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-4 py-3.5" : "sticky top-0 z-10 bg-[#404a5b]/98 px-4 py-3 backdrop-blur"} flex flex-wrap items-center justify-between gap-3 border-b border-white/12`}>
+          <div className={`${selectedWorkPanel === "move" ? "flex max-h-[94vh] max-w-[1480px] flex-col overflow-hidden rounded-2xl" : "max-h-[88vh] max-w-5xl overflow-auto rounded-2xl"} w-full border border-white/18 bg-[#4b5362] shadow-[0_30px_90px_rgba(2,6,23,0.58)]`}>
+            <div className={`${selectedWorkPanel === "move" ? "bg-gradient-to-r from-[#263246] via-[#334154] to-[#2a8d8b]/55 px-3 py-2.5" : "sticky top-0 z-10 bg-[#404a5b]/98 px-4 py-3 backdrop-blur"} flex flex-wrap items-center justify-between gap-3 border-b border-white/12`}>
               {selectedWorkPanel === "move" ? (
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd] shadow-[0_10px_24px_rgba(15,23,42,0.22)]">
-                    <PackageCheck size={21} />
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/20 text-[#d7fffd]" title="A készlet csak a végső megerősítés után változik.">
+                    <PackageCheck size={18} />
                   </span>
                   <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">Készletmozgatás • PV-előkészítés</p>
-                    <h2 className="mt-0.5 truncate text-[22px] leading-tight text-white">Átadási csomag összeállítása</h2>
-                    <p className="mt-1 truncate text-xs text-white/58">{selectedMoveItems.length} termék • a készlet csak megerősítés után változik</p>
+                    <p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/58">Készletmozgatás • PV-előkészítés</p>
+                    <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                      <h2 className="truncate text-[18px] leading-tight text-white">Átadási csomag</h2>
+                      <span className="shrink-0 rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/58">{selectedMoveItems.length} termék</span>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -9975,141 +10126,117 @@ export default function AllInWarehouse() {
 
             <div className={selectedWorkPanel === "move" ? "min-h-0 flex-1 overflow-auto p-3.5" : "space-y-3 p-4"}>
               {selectedWorkPanel === "move" ? (
-                <div className="space-y-3">
-                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,.75fr)]">
-                    <section className="overflow-hidden rounded-2xl border border-white/12 bg-[#354153] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
-                      <div className="flex items-center gap-2 border-b border-white/10 bg-[#303a4c]/72 px-3.5 py-2.5">
-                        <FileText size={16} className="text-[#7bd7d4]" />
-                        <div>
-                          <p className="text-sm text-white">Dokumentum adatai</p>
-                          <p className="mt-0.5 text-[10px] text-white/42">A cím és a megjegyzés a PDF-en, valamint a mozgásnaplóban jelenik meg.</p>
-                        </div>
-                      </div>
-                      <div className="grid gap-3 p-3 md:grid-cols-[minmax(260px,.85fr)_minmax(360px,1.35fr)]">
-                        <label className="grid min-w-0 gap-1.5 text-[10px] uppercase tracking-[0.07em] text-white/55">
-                          Bizonylat címe
-                          <input className="h-10 w-full rounded-xl border border-white/16 bg-[#293448] px-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18" value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Aviz intern de transfer stoc" />
-                        </label>
-                        <label className="grid min-w-0 gap-1.5 text-[10px] uppercase tracking-[0.07em] text-white/55">
-                          Megjegyzés
-                          <input className="h-10 w-full rounded-xl border border-white/16 bg-[#293448] px-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18" value={stockMoveNote} onChange={(e) => setStockMoveNote(e.target.value)} placeholder="Opcionális megjegyzés az átadáshoz" />
-                        </label>
-                      </div>
-                    </section>
-
-                    <section className={`overflow-hidden rounded-2xl border ${moveAllRowsValid ? "border-[#7bd7d4]/28 bg-[#174c55]/42" : "border-amber-200/24 bg-amber-500/[0.07]"}`}>
-                      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-3.5 py-2.5">
-                        <div>
-                          <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Átadási összesítő</p>
-                          <p className="mt-0.5 text-sm text-white">{moveAllRowsValid ? "Mentésre kész" : "Ellenőrzés szükséges"}</p>
-                        </div>
-                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border ${moveAllRowsValid ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]" : "border-amber-200/28 bg-amber-300/12 text-amber-100"}`}>
-                          {moveAllRowsValid ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 p-3">
-                        <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2 text-center"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Sor</p><p className="mt-1 text-xl text-white">{moveValidRows.length}</p></div>
-                        <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2 text-center"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Darab</p><p className="mt-1 text-xl text-white">{moveTotalQty}</p></div>
-                        <div className="rounded-xl border border-white/10 bg-black/10 px-2.5 py-2 text-center"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Érték</p><p className="mt-1 text-sm text-white">{money(moveTotalValue)} RON</p></div>
-                      </div>
-                      <div className="mx-3 mb-3 flex items-center gap-2 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-[11px]">
-                        <span className="min-w-0 flex-1 truncate text-rose-100" title={moveRouteSummary.from}>{moveRouteSummary.from}</span>
-                        <ArrowRight size={15} className="shrink-0 text-[#7bd7d4]" />
-                        <span className="min-w-0 flex-1 truncate text-[#d7fffd]" title={moveRouteSummary.to}>{moveRouteSummary.to}</span>
-                      </div>
-                    </section>
-                  </div>
-
-                  <section className="overflow-hidden rounded-2xl border border-white/12 bg-[#354153]">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#303a4c]/72 px-3.5 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]"><ArrowRightLeft size={16} /></span>
-                        <div><p className="text-sm text-white">Útvonal gyors beállítása</p><p className="mt-0.5 text-[10px] text-white/42">Egyetlen kattintással minden terméksorra ugyanaz a forrás és cél kerül.</p></div>
-                      </div>
-                      <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/52">Egy PV = egy útvonal</span>
-                    </div>
-                    <div className="grid gap-2.5 p-3 lg:grid-cols-[minmax(220px,1fr)_42px_minmax(220px,1fr)_auto] lg:items-end">
-                      <label className="grid min-w-0 gap-1.5 rounded-xl border border-rose-400/24 bg-rose-950/18 p-2.5 text-[10px] uppercase tracking-[0.07em] text-rose-200">
-                        Kimenő / forrás
-                        <select
-                          className="aif-native-select h-10 w-full truncate rounded-xl border border-rose-400/30 bg-[#293448] px-3 pr-8 text-sm normal-case tracking-normal text-white outline-none focus:border-rose-300/65 focus:ring-2 focus:ring-rose-400/15"
-                          value={stockMoveBulkFrom}
-                          title={locationNameByValue(stockMoveBulkFrom)}
-                          onChange={(e) => {
-                            const fromId = e.target.value;
-                            setStockMoveBulkFrom(fromId);
-                            if (!fromId) return;
-                            setStockMoveBulkTo((current) => current && current !== fromId ? current : defaultStockMoveTo(fromId));
-                          }}
-                          aria-label="Tömeges forrás hely"
-                        >
-                          <option value="">Válassz forrást...</option>
-                          {stockLocationRows.map((loc) => {
-                            const value = locationValue(loc);
-                            return <option key={value} value={value}>{compactWarehouseLocationName(loc, 28)}</option>;
-                          })}
-                        </select>
-                      </label>
-                      <button
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-[#293448] text-white/65 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-                        type="button"
-                        disabled={!stockMoveBulkFrom || !stockMoveBulkTo}
-                        onClick={() => {
-                          const fromId = stockMoveBulkFrom;
-                          setStockMoveBulkFrom(stockMoveBulkTo);
-                          setStockMoveBulkTo(fromId);
-                        }}
-                        title="Forrás és cél felcserélése"
-                        aria-label="Forrás és cél felcserélése"
-                      >
-                        <ArrowRightLeft size={17} />
-                      </button>
-                      <label className="grid min-w-0 gap-1.5 rounded-xl border border-[#7bd7d4]/24 bg-[#174c55]/26 p-2.5 text-[10px] uppercase tracking-[0.07em] text-[#bff7f4]">
-                        Bejövő / cél
-                        <select
-                          className="aif-native-select h-10 w-full truncate rounded-xl border border-[#7bd7d4]/30 bg-[#293448] px-3 pr-8 text-sm normal-case tracking-normal text-white outline-none focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/15"
-                          value={stockMoveBulkTo}
-                          title={locationNameByValue(stockMoveBulkTo)}
-                          onChange={(e) => {
-                            const toId = e.target.value;
-                            setStockMoveBulkTo(toId);
-                            if (!toId) return;
-                            setStockMoveBulkFrom((current) => current && current !== toId ? current : firstDifferentLocation(toId));
-                          }}
-                          aria-label="Tömeges cél hely"
-                        >
-                          <option value="">Válassz célhelyet...</option>
-                          {stockLocationRows.map((loc) => {
-                            const value = locationValue(loc);
-                            return <option key={value} value={value} disabled={value === stockMoveBulkFrom}>{compactWarehouseLocationName(loc, 28)}</option>;
-                          })}
-                        </select>
-                      </label>
-                      <button
-                        className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/40 bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
-                        type="button"
-                        disabled={!moveBulkCanApply}
-                        onClick={applyStockMoveBulkLocations}
-                        title="A kiválasztott útvonalat minden terméksorra ráteszi. Készletet még nem mozgat."
-                      >
-                        <PackageCheck size={15} /> Alkalmazás minden sorra
-                      </button>
+                <div className="space-y-2">
+                  <section className="grid gap-2 rounded-xl border border-white/12 bg-[#354153] p-2 lg:grid-cols-[minmax(230px,.85fr)_minmax(320px,1.25fr)_auto] lg:items-end">
+                    <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.07em] text-white/48" title="Ez a cím jelenik meg a PDF-en és a mozgásnaplóban.">
+                      Bizonylat címe
+                      <input className="h-8 w-full rounded-lg border border-white/16 bg-[#293448] px-2.5 text-xs text-white outline-none placeholder:text-white/35 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/16" value={stockMoveDocumentTitle} onChange={(e) => setStockMoveDocumentTitle(e.target.value)} placeholder="Aviz intern de transfer stoc" />
+                    </label>
+                    <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.07em] text-white/48" title="Opcionális szöveg a PDF-re és a mozgásnaplóba.">
+                      Megjegyzés
+                      <input className="h-8 w-full rounded-lg border border-white/16 bg-[#293448] px-2.5 text-xs text-white outline-none placeholder:text-white/35 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/16" value={stockMoveNote} onChange={(e) => setStockMoveNote(e.target.value)} placeholder="Opcionális" />
+                    </label>
+                    <div className="flex min-w-[290px] items-center justify-end gap-1.5 text-[10px]" title={`${moveRouteSummary.from} → ${moveRouteSummary.to}`}>
+                      <span className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 ${moveAllRowsValid ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/14 text-[#d7fffd]" : "border-amber-200/24 bg-amber-300/[0.08] text-amber-50"}`}>
+                        {moveAllRowsValid ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                        {moveAllRowsValid ? "Menthető" : `${moveInvalidCount} hibás`}
+                      </span>
+                      <span className="h-8 rounded-lg border border-white/10 bg-black/10 px-2.5 leading-8 text-white/72">{moveValidRows.length} sor</span>
+                      <span className="h-8 rounded-lg border border-white/10 bg-black/10 px-2.5 leading-8 text-white/72">{moveTotalQty} db</span>
+                      <span className="h-8 rounded-lg border border-white/10 bg-black/10 px-2.5 leading-8 text-white">{money(moveTotalValue)} RON</span>
                     </div>
                   </section>
 
+                  <section className="grid gap-2 rounded-xl border border-white/12 bg-[#354153] p-2 lg:grid-cols-[auto_minmax(190px,1fr)_32px_minmax(190px,1fr)_auto] lg:items-end">
+                    <span className="inline-flex h-8 items-center gap-2 whitespace-nowrap px-1 text-xs text-white/82" title="Az itt kiválasztott útvonal egy kattintással minden terméksorra rákerül. Egy PV csak egy útvonalat tartalmazhat.">
+                      <ArrowRightLeft size={15} className="text-[#7bd7d4]" /> Gyors útvonal
+                    </span>
+                    <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.07em] text-rose-200">
+                      Kimenő / forrás
+                      <WarehouseMoveDropdown
+                        value={stockMoveBulkFrom}
+                        placeholder="Válassz forrást..."
+                        ariaLabel="Tömeges forrás hely"
+                        tone="source"
+                        options={stockLocationRows.map((loc) => ({ value: locationValue(loc), label: compactWarehouseLocationName(loc, 30) }))}
+                        onChange={(fromId) => {
+                          setStockMoveBulkFrom(fromId);
+                          if (!fromId) return;
+                          setStockMoveBulkTo((current) => current && current !== fromId ? current : defaultStockMoveTo(fromId));
+                        }}
+                      />
+                    </label>
+                    <button
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/14 bg-[#293448] text-white/62 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                      type="button"
+                      disabled={!stockMoveBulkFrom || !stockMoveBulkTo}
+                      onClick={() => {
+                        const fromId = stockMoveBulkFrom;
+                        setStockMoveBulkFrom(stockMoveBulkTo);
+                        setStockMoveBulkTo(fromId);
+                      }}
+                      title="Forrás és cél felcserélése"
+                      aria-label="Forrás és cél felcserélése"
+                    >
+                      <ArrowRightLeft size={15} />
+                    </button>
+                    <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.07em] text-[#bff7f4]">
+                      Bejövő / cél
+                      <WarehouseMoveDropdown
+                        value={stockMoveBulkTo}
+                        placeholder="Válassz célhelyet..."
+                        ariaLabel="Tömeges cél hely"
+                        tone="target"
+                        options={stockLocationRows.map((loc) => {
+                          const value = locationValue(loc);
+                          return { value, label: compactWarehouseLocationName(loc, 30), disabled: value === stockMoveBulkFrom };
+                        })}
+                        onChange={(toId) => {
+                          setStockMoveBulkTo(toId);
+                          if (!toId) return;
+                          setStockMoveBulkFrom((current) => current && current !== toId ? current : firstDifferentLocation(toId));
+                        }}
+                      />
+                    </label>
+                    <button
+                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/40 bg-[#2a8d8b] px-3 text-[11px] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
+                      type="button"
+                      disabled={!moveBulkCanApply}
+                      onClick={applyStockMoveBulkLocations}
+                      title="A kiválasztott útvonalat minden terméksorra ráteszi. Készletet még nem mozgat."
+                    >
+                      <PackageCheck size={14} /> Minden sorra
+                    </button>
+                  </section>
+
                   {(moveRouteProblem || moveInvalidCount > 0) ? (
-                    <div className="flex items-start gap-2 rounded-2xl border border-amber-200/25 bg-amber-500/[0.08] px-3 py-2.5 text-xs leading-relaxed text-amber-50">
-                      <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                      <span>{moveRouteProblem || `${moveInvalidCount} terméksor még hibás. A hibás soroknál külön jelölve van, mit kell javítani.`}</span>
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-200/24 bg-amber-500/[0.08] px-2.5 py-1.5 text-[11px] text-amber-50">
+                      <AlertTriangle size={13} className="shrink-0" />
+                      <span className="truncate" title={moveRouteProblem || `${moveInvalidCount} terméksor hibás.`}>{moveRouteProblem || `${moveInvalidCount} terméksor még hibás.`}</span>
                     </div>
                   ) : null}
 
-                  <section className="overflow-hidden rounded-2xl border border-white/12 bg-[#303a4c]">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3.5 py-2.5">
-                      <div className="flex items-center gap-2"><Boxes size={16} className="text-[#7bd7d4]" /><div><p className="text-sm text-white">Mozgatandó termékek</p><p className="mt-0.5 text-[10px] text-white/42">A piros oldal a forrás, a zöld oldal a cél. Nincs több hieroglifa-fejtés.</p></div></div>
-                      <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/52">{selectedMoveItems.length} termék</span>
+                  <section className="overflow-hidden rounded-xl border border-white/12 bg-[#303a4c]">
+                    <div className="flex h-9 items-center justify-between gap-2 border-b border-white/10 px-3">
+                      <div className="flex items-center gap-2 text-xs text-white/88" title="A terméksorok tömör munkalista nézetben jelennek meg. A részletes magyarázatok a mezők fölé vitt egérrel érhetők el.">
+                        <Boxes size={15} className="text-[#7bd7d4]" /> Mozgatandó termékek
+                      </div>
+                      <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/52">{selectedMoveItems.length}</span>
                     </div>
-                    <div className="space-y-2 p-2.5">
+
+                    <div className="hidden border-b border-white/[0.08] bg-[#293448]/72 px-2 py-1.5 text-[9px] uppercase tracking-[0.07em] text-white/38 xl:grid xl:grid-cols-[22px_38px_minmax(170px,.8fr)_minmax(150px,.7fr)_28px_minmax(150px,.7fr)_108px_74px_56px] xl:items-center xl:gap-2">
+                      <span />
+                      <span />
+                      <span>Termék</span>
+                      <span>Kimenő / forrás</span>
+                      <span />
+                      <span>Bejövő / cél</span>
+                      <span>Mozgatandó</span>
+                      <span className="text-right">Érték</span>
+                      <span />
+                    </div>
+
+                    <div className="max-h-[58vh] divide-y divide-white/[0.08] overflow-y-auto">
                       {selectedMoveItems.map((it) => {
                         const variantId = String(it.variant_id || "");
                         const preparedMove = preparedMoveRowsById.get(variantId);
@@ -10118,93 +10245,78 @@ export default function AllInWarehouse() {
                         const currentQty = qtyAtLocation(variantId, draft.fromLocationId);
                         const reservedQty = reservedAtLocation(variantId, draft.fromLocationId);
                         const rowProblem = preparedMove?.problem || "";
+                        const lineValue = (priceNumber(it.sell_price) || 0) * Math.max(0, n(draft.qty));
                         return (
-                          <article key={it.variant_id} className={`overflow-hidden rounded-2xl border ${rowProblem ? "border-amber-200/28 bg-[#403d3b]" : "border-white/12 bg-[#3b4658]"} shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]`}>
-                            <div className="grid gap-3 p-3 xl:grid-cols-[24px,52px,minmax(250px,.85fr)_minmax(520px,1.55fr)_150px] xl:items-center">
+                          <article key={it.variant_id} className={`${rowProblem ? "bg-amber-500/[0.055]" : "bg-[#3b4658] hover:bg-[#414d60]"} transition`}>
+                            <div className="grid gap-2 px-2 py-1.5 xl:grid-cols-[22px_38px_minmax(170px,.8fr)_minmax(150px,.7fr)_28px_minmax(150px,.7fr)_108px_74px_56px] xl:items-center">
                               <div className="flex justify-center">
                                 <input
                                   className={selectBox}
                                   type="checkbox"
                                   checked
                                   onChange={(e) => {
-                                    if (!e.target.checked) returnSelectedItemToMainList(String(it.variant_id || ""));
+                                    if (!e.target.checked) returnSelectedItemToMainList(variantId);
                                   }}
                                   aria-label="Kivétel ebből a feladatlistából"
-                                  title="Kivétel ebből a feladatlistából, a fő kijelölt listában megmarad"
+                                  title="Kivétel a készletmozgatási listából; a fő kijelölésben megmarad."
                                 />
                               </div>
-                              <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-12 w-12 rounded-xl" iconSize={17} />
-                              <div className="min-w-0">
-                                <div className="flex min-w-0 items-start gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
-                                    <p className="mt-1 truncate text-[11px] text-white/50">{it.brand_name || "-"} • {itemMainCategoryLabel(it)} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
-                                  </div>
-                                  <div className="flex shrink-0 gap-1">
-                                    <button className={moveTinyBtn} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button" title="Termék részletei" aria-label="Termék részletei"><Edit3 size={12} /></button>
-                                    <button className={`${moveTinyBtn} hover:border-rose-300/45 hover:bg-rose-500/16`} onClick={() => returnSelectedItemToMainList(String(it.variant_id || ""))} type="button" title="Kivétel a készletmozgatásból" aria-label="Kivétel a készletmozgatásból"><X size={12} /></button>
-                                  </div>
-                                </div>
-                                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
-                                  <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-white/55">Készlet: {n(it.total_qty)} db</span>
-                                  <span className="max-w-[220px] truncate rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-white/55" title={visibleWarehouseBarcode(it) || "Nincs vonalkód"}>{visibleWarehouseBarcode(it) || "Nincs vonalkód"}</span>
-                                  {itemProductCode(it) ? <span className="max-w-[180px] truncate rounded-full border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-0.5 text-[#d7fffd]/72" title={itemProductCode(it)}>{itemProductCode(it)}</span> : null}
-                                </div>
+                              <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-9 w-9 rounded-lg" iconSize={15} />
+                              <div className="min-w-0" title={`${it.title_ro || "-"} • ${it.brand_name || "-"} • ${itemMainCategoryLabel(it)} • ${colorDisplay(it.color_name, it.color_code)} • ${it.size || "-"} • Készlet: ${n(it.total_qty)} db • Vonalkód: ${visibleWarehouseBarcode(it) || "-"} • Termékkód: ${itemProductCode(it) || "-"}`}>
+                                <p className="truncate text-[12px] text-white">{it.title_ro || "-"}</p>
+                                <p className="mt-0.5 truncate text-[10px] text-white/46">{it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"} • {n(it.total_qty)} db</p>
                               </div>
-
-                              <div className="grid gap-2 md:grid-cols-[minmax(210px,1fr)_34px_minmax(210px,1fr)] md:items-center">
-                                <label className="grid min-w-0 gap-1 rounded-xl border border-rose-400/24 bg-rose-950/16 p-2.5 text-[9px] uppercase tracking-[0.07em] text-rose-200">
-                                  <span className="flex items-center justify-between gap-2"><span>Kimenő / forrás</span><span className="normal-case tracking-normal text-rose-100/65">elérhető {availableFrom} db</span></span>
-                                  <select className="aif-native-select h-9 w-full truncate rounded-lg border border-rose-400/30 bg-[#293448] px-2.5 pr-8 text-xs normal-case tracking-normal text-white outline-none focus:border-rose-300/65" value={draft.fromLocationId} onChange={(e) => setStockMoveRowField(variantId, { fromLocationId: e.target.value })} aria-label="Forrás hely" title={locationNameByValue(draft.fromLocationId)}>
-                                    <option value="">Válassz forrást...</option>
-                                    {stockLocationRows.map((loc) => {
-                                      const value = locationValue(loc);
-                                      const available = availableAtLocation(variantId, value);
-                                      return <option key={value} value={value} title={loc.name || loc.code || ""}>{compactWarehouseLocationName(loc, 24)} ({available})</option>;
-                                    })}
-                                  </select>
-                                  <span className="normal-case tracking-normal text-[9px] text-rose-100/45">összes {currentQty} • foglalt {reservedQty}</span>
-                                </label>
-                                <button
-                                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-[#293448] text-white/58 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-                                  type="button"
-                                  onClick={() => setStockMoveRowField(variantId, { fromLocationId: draft.toLocationId, toLocationId: draft.fromLocationId })}
-                                  disabled={!draft.fromLocationId || !draft.toLocationId}
-                                  title="Forrás és cél felcserélése"
-                                  aria-label="Forrás és cél felcserélése"
-                                >
-                                  <ArrowRightLeft size={15} />
-                                </button>
-                                <label className="grid min-w-0 gap-1 rounded-xl border border-[#7bd7d4]/24 bg-[#174c55]/22 p-2.5 text-[9px] uppercase tracking-[0.07em] text-[#bff7f4]">
-                                  Bejövő / cél
-                                  <select className="aif-native-select h-9 w-full truncate rounded-lg border border-[#7bd7d4]/30 bg-[#293448] px-2.5 pr-8 text-xs normal-case tracking-normal text-white outline-none focus:border-[#7bd7d4]/65" value={draft.toLocationId} onChange={(e) => setStockMoveRowField(variantId, { toLocationId: e.target.value })} aria-label="Cél hely" title={locationNameByValue(draft.toLocationId)}>
-                                    <option value="">Válassz célhelyet...</option>
-                                    {stockLocationRows.map((loc) => {
-                                      const value = locationValue(loc);
-                                      return <option key={value} value={value} disabled={value === draft.fromLocationId} title={loc.name || loc.code || ""}>{compactWarehouseLocationName(loc, 24)}</option>;
-                                    })}
-                                  </select>
-                                  <span className="normal-case tracking-normal text-[9px] text-[#d7fffd]/42">A készlet ide érkezik.</span>
-                                </label>
+                              <WarehouseMoveDropdown
+                                value={draft.fromLocationId}
+                                placeholder="Forrás..."
+                                ariaLabel="Forrás hely"
+                                tone="source"
+                                options={stockLocationRows.map((loc) => {
+                                  const value = locationValue(loc);
+                                  const available = availableAtLocation(variantId, value);
+                                  return { value, label: compactWarehouseLocationName(loc, 26), hint: `${available} db` };
+                                })}
+                                onChange={(fromLocationId) => setStockMoveRowField(variantId, { fromLocationId })}
+                              />
+                              <button
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/12 bg-[#293448] text-white/52 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                                type="button"
+                                onClick={() => setStockMoveRowField(variantId, { fromLocationId: draft.toLocationId, toLocationId: draft.fromLocationId })}
+                                disabled={!draft.fromLocationId || !draft.toLocationId}
+                                title={`Forrás és cél felcserélése. Forráskészlet: ${currentQty} db, foglalt: ${reservedQty} db.`}
+                                aria-label="Forrás és cél felcserélése"
+                              >
+                                <ArrowRightLeft size={13} />
+                              </button>
+                              <WarehouseMoveDropdown
+                                value={draft.toLocationId}
+                                placeholder="Célhely..."
+                                ariaLabel="Cél hely"
+                                tone="target"
+                                options={stockLocationRows.map((loc) => {
+                                  const value = locationValue(loc);
+                                  return { value, label: compactWarehouseLocationName(loc, 26), disabled: value === draft.fromLocationId };
+                                })}
+                                onChange={(toLocationId) => setStockMoveRowField(variantId, { toLocationId })}
+                              />
+                              <div className="grid h-8 grid-cols-[28px,minmax(42px,1fr),28px] overflow-hidden rounded-lg border border-white/16 bg-[#293448]" title={`Legfeljebb ${availableFrom} db mozgatható erről a forráshelyről.`}>
+                                <button className="inline-flex h-8 items-center justify-center border-r border-white/10 text-white/76 hover:bg-white/10 disabled:opacity-35" type="button" onClick={() => adjustStockMoveQty(variantId, -1)} disabled={n(draft.qty) <= 0} aria-label="Darabszám csökkentése"><Minus size={12} /></button>
+                                <input className="w-full min-w-0 bg-transparent px-1 text-center text-xs text-white outline-none tabular-nums" type="text" inputMode="numeric" pattern="[0-9]*" value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value.replace(/[^0-9]/g, "") })} aria-label="Mozgatott darabszám" />
+                                <button className="inline-flex h-8 items-center justify-center border-l border-white/10 text-white/76 hover:bg-white/10 disabled:opacity-35" type="button" onClick={() => adjustStockMoveQty(variantId, 1)} disabled={availableFrom <= 0 || n(draft.qty) >= availableFrom} aria-label="Darabszám növelése"><Plus size={12} /></button>
                               </div>
-
-                              <div className="rounded-xl border border-white/12 bg-[#293448] p-2.5">
-                                <div className="flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.07em] text-white/48"><span>Mozgatandó</span><span className="normal-case tracking-normal text-[#d7fffd]/62">max. {availableFrom}</span></div>
-                                <div className={`${moveQtyBox} mt-2 !min-w-0 !w-full`}>
-                                  <button className={`${moveQtyButton} border-r border-white/12`} type="button" onClick={() => adjustStockMoveQty(variantId, -1)} disabled={n(draft.qty) <= 0} aria-label="Darabszám csökkentése"><Minus size={13} /></button>
-                                  <input className="w-full min-w-0 bg-transparent px-1 text-center text-sm text-white outline-none tabular-nums" type="text" inputMode="numeric" pattern="[0-9]*" value={draft.qty} onChange={(e) => setStockMoveRowField(variantId, { qty: e.target.value.replace(/[^0-9]/g, "") })} aria-label="Mozgatott darabszám" />
-                                  <button className={`${moveQtyButton} border-l border-white/12`} type="button" onClick={() => adjustStockMoveQty(variantId, 1)} disabled={availableFrom <= 0 || n(draft.qty) >= availableFrom} aria-label="Darabszám növelése"><Plus size={13} /></button>
-                                </div>
-                                <p className="mt-2 text-center text-[10px] text-white/45">{money((priceNumber(it.sell_price) || 0) * Math.max(0, n(draft.qty)))} RON</p>
+                              <div className="truncate text-right text-[11px] tabular-nums text-white/72" title={`${money(lineValue)} RON`}>{money(lineValue)}</div>
+                              <div className="flex justify-end gap-1">
+                                <button className={moveTinyBtn} onClick={() => { setSelectedWorkPanel(null); setSelectedPanelOpen(false); openDetail(it.variant_id); }} type="button" title="Termék részletei" aria-label="Termék részletei"><Edit3 size={12} /></button>
+                                <button className={`${moveTinyBtn} hover:border-rose-300/45 hover:bg-rose-500/16`} onClick={() => returnSelectedItemToMainList(variantId)} type="button" title="Kivétel a készletmozgatásból" aria-label="Kivétel a készletmozgatásból"><X size={12} /></button>
                               </div>
                             </div>
                             {rowProblem ? (
-                              <div className="flex items-center gap-2 border-t border-amber-200/16 bg-amber-500/[0.07] px-3 py-2 text-[11px] text-amber-100"><AlertTriangle size={13} className="shrink-0" /> {rowProblem}</div>
+                              <div className="flex items-center gap-1.5 border-t border-amber-200/14 bg-amber-500/[0.06] px-2 py-1 text-[10px] text-amber-100"><AlertTriangle size={11} className="shrink-0" /> {rowProblem}</div>
                             ) : null}
                           </article>
                         );
                       })}
-                      {!selectedMoveItems.length ? <p className="rounded-xl border border-white/12 bg-[#3f4959] px-3 py-8 text-center text-sm text-white/60">Nincs termék ebben a listában.</p> : null}
+                      {!selectedMoveItems.length ? <p className="px-3 py-8 text-center text-sm text-white/60">Nincs termék ebben a listában.</p> : null}
                     </div>
                   </section>
                 </div>
@@ -10249,22 +10361,20 @@ export default function AllInWarehouse() {
             </div>
 
             {selectedWorkPanel === "move" && selectedMoveItems.length > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/12 bg-[#263246]/98 px-4 py-3 shadow-[0_-16px_34px_rgba(15,23,42,0.30)] backdrop-blur">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${moveAllRowsValid ? "border-[#7bd7d4]/30 bg-[#2a8d8b]/16 text-[#d7fffd]" : "border-amber-200/25 bg-amber-300/10 text-amber-50"}`}>
-                      {moveAllRowsValid ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />} {moveAllRowsValid ? "Minden sor rendben" : "Javítás szükséges"}
-                    </span>
-                    <span className="text-white">{moveValidRows.length} sor • {moveTotalQty} db • {money(moveTotalValue)} RON</span>
-                  </div>
-                  <p className="mt-1 max-w-[820px] truncate text-[11px] text-white/45" title={`${moveRouteSummary.from} → ${moveRouteSummary.to}`}>{moveRouteSummary.from} → {moveRouteSummary.to} • Mentéskor a készlet ténylegesen átkerül, és a sorok a nyitott PV-előkészítéshez adódnak.</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#263246]/98 px-3 py-2 shadow-[0_-12px_28px_rgba(15,23,42,0.26)] backdrop-blur">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px]" title={`${moveRouteSummary.from} → ${moveRouteSummary.to}. Mentéskor a készlet ténylegesen átkerül, és a sorok a nyitott PV-előkészítéshez adódnak.`}>
+                  <span className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 ${moveAllRowsValid ? "border-[#7bd7d4]/30 bg-[#2a8d8b]/16 text-[#d7fffd]" : "border-amber-200/25 bg-amber-300/10 text-amber-50"}`}>
+                    {moveAllRowsValid ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />} {moveAllRowsValid ? "Rendben" : "Javítandó"}
+                  </span>
+                  <span className="text-white">{moveValidRows.length} sor • {moveTotalQty} db • {money(moveTotalValue)} RON</span>
+                  <span className="max-w-[520px] truncate text-white/42">{moveRouteSummary.from} → {moveRouteSummary.to}</span>
                 </div>
-                <div className="flex flex-wrap justify-end gap-2">
-                  <button className={btnSoft} onClick={printStockMoveTransferPdf} type="button" disabled={!moveAllRowsValid}>
-                    <Printer size={15} /> PDF előnézet
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <button className={`${btnSoft} !h-8 !rounded-lg`} onClick={printStockMoveTransferPdf} type="button" disabled={!moveAllRowsValid} title="PDF előnézet a jelenlegi sorokból.">
+                    <Printer size={14} /> PDF
                   </button>
-                  <button className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_10px_24px_rgba(15,23,42,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40" onClick={requestSaveSelectedMoveTransfers} type="button" disabled={!moveCanSave} title="A készletet módosítja és a nyitott PV-előkészítéshez adja; előtte megerősítést kér.">
-                    <PackageCheck size={15} /> {stockMoveSaving ? "Mentés..." : "Mozgatás PV-előkészítésbe"}
+                  <button className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-[11px] text-white transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40" onClick={requestSaveSelectedMoveTransfers} type="button" disabled={!moveCanSave} title="Tényleges készletmozgatás és hozzáadás a nyitott PV-előkészítéshez; előtte megerősítést kér.">
+                    <PackageCheck size={14} /> {stockMoveSaving ? "Mentés..." : "Mozgatás PV-be"}
                   </button>
                 </div>
               </div>
