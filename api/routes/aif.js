@@ -105,7 +105,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           title text NOT NULL,
           subtitle text NULL,
           note text NULL,
-          status text NOT NULL DEFAULT 'issued' CHECK (status IN ('draft','issued','cancelled')),
+          status text NOT NULL DEFAULT 'issued' CHECK (status IN ('draft','preparation','issued','cancelled')),
           actor text NULL,
           owner_key text NULL,
           line_count integer NOT NULL DEFAULT 0,
@@ -177,7 +177,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS price_basis text NOT NULL DEFAULT 'selling_price'`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS total_value numeric(14,2) NOT NULL DEFAULT 0`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
-        await pool.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','issued','cancelled')`);
+        await pool.query(`UPDATE aif_stock_transfer_documents SET status='issued' WHERE status NOT IN ('draft','preparation','issued','cancelled')`);
         await pool.query(`DO $$
           DECLARE c record;
           BEGIN
@@ -193,7 +193,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           END $$`);
         await pool.query(`ALTER TABLE aif_stock_transfer_documents
           ADD CONSTRAINT aif_stock_transfer_documents_status_check
-          CHECK (status IN ('draft','issued','cancelled'))`);
+          CHECK (status IN ('draft','preparation','issued','cancelled'))`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS unit_price numeric(14,2) NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS line_total numeric(14,2) NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS currency_code text NOT NULL DEFAULT 'RON'`);
@@ -201,6 +201,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS qty_delta integer NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_type_created_idx
           ON aif_stock_transfer_documents (document_type, created_at DESC)`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_uq
+          ON aif_stock_transfer_documents (owner_key)
+          WHERE status='preparation' AND document_type='internal_transfer' AND owner_key IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
           document_type text PRIMARY KEY,
@@ -8791,9 +8794,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ].join(' ').toLowerCase().includes(search));
       }
       const facetItems = items.slice();
-      if (type === 'official') items = items.filter((item) => !item.isLegacy && item.status !== 'draft' && item.status !== 'cancelled');
+      if (type === 'official') items = items.filter((item) => !item.isLegacy && item.status !== 'draft' && item.status !== 'preparation' && item.status !== 'cancelled');
       else if (type === 'legacy') items = items.filter((item) => item.isLegacy);
       else if (type === 'draft') items = items.filter((item) => item.status === 'draft');
+      else if (type === 'preparation') items = items.filter((item) => item.status === 'preparation');
       else if (type === 'cancelled') items = items.filter((item) => item.status === 'cancelled');
       else {
         const requestedDocumentType = cleanAifStockDocumentType(type, null);
@@ -8807,7 +8811,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const totals = {
         total,
         all: facetItems.length,
-        official: facetItems.filter((item) => !item.isLegacy && item.status !== 'draft' && item.status !== 'cancelled').length,
+        official: facetItems.filter((item) => !item.isLegacy && item.status !== 'draft' && item.status !== 'preparation' && item.status !== 'cancelled').length,
+        preparation: facetItems.filter((item) => item.status === 'preparation').length,
         draft: facetItems.filter((item) => item.status === 'draft').length,
         legacy: facetItems.filter((item) => item.isLegacy).length,
         cancelled: facetItems.filter((item) => item.status === 'cancelled').length,
@@ -8986,7 +8991,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const document = await client.query(
-        `SELECT id, transfer_id, document_number
+        `SELECT id, transfer_id, document_number, status
          FROM aif_stock_transfer_documents
          WHERE id::text=$1 OR transfer_id=$1 OR document_number=$1
          FOR UPDATE`,
@@ -8997,6 +9002,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.status(404).json({ error: 'A készletátadási bizonylat nem található.' });
       }
       const item = document.rows[0];
+      if (item.status === 'preparation') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Az előkészítést a készlet-visszaállító törlés gombbal kell törölni.', code: 'preparation_restore_delete_required' });
+      }
       await client.query(
         `INSERT INTO aif_stock_transfer_document_deletions (
            transfer_id, document_number, source, deleted_by, raw, deleted_at
@@ -9916,6 +9925,444 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       .digest("hex");
   }
 
+  function aifPreparationLineKey(variantId, fromLocationId, toLocationId) {
+    return [variantId, fromLocationId, toLocationId].map((value) => text(value)).join('|');
+  }
+
+  function aifPreparationMovementGroupId(documentId, lineNo) {
+    return `prep:${text(documentId).slice(0, 8)}:${Number(lineNo || 0)}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  async function readAifTransferVariantSnapshot(client, variantInput) {
+    const key = text(variantInput);
+    if (!key) throw Object.assign(new Error('Hiányzik a termék azonosítója.'), { statusCode: 400 });
+    const variant = await client.query(
+      `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status, v.image_url,
+              v.sell_price,
+              m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
+              sc.supplier_product_code, sc.supplier_barcode
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN LATERAL (
+         SELECT supplier_product_code, supplier_barcode
+         FROM aif_variant_supplier_codes x
+         WHERE x.variant_id=v.id AND COALESCE(x.is_active,true)=true
+         ORDER BY x.updated_at DESC NULLS LAST, x.created_at DESC NULLS LAST
+         LIMIT 1
+       ) sc ON true
+       WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1 OR sc.supplier_barcode=$1
+       FOR UPDATE OF v`,
+      [key]
+    );
+    if (!variant.rowCount) throw Object.assign(new Error('A termék nem található.'), { statusCode: 404 });
+    const row = variant.rows[0];
+    if (String(row.status || '') === 'archived') {
+      throw Object.assign(new Error(`${row.title_ro || 'Termék'}: archivált termék nem mozgatható.`), { statusCode: 400 });
+    }
+    return row;
+  }
+
+  async function readAifPreparationLocation(client, value, roleLabel) {
+    const location = await findByIdOrCode(client, 'aif_locations', value);
+    if (!location || location.is_active === false) {
+      throw Object.assign(new Error(`Érvénytelen vagy inaktív ${roleLabel}: ${text(value) || '-'}`), { statusCode: 400 });
+    }
+    return location;
+  }
+
+  async function readAifPreparationStockPair(client, variantId, firstLocationId, secondLocationId) {
+    const ids = Array.from(new Set([String(firstLocationId), String(secondLocationId)]));
+    const rows = await client.query(
+      `SELECT location_id::text AS location_id, qty, reserved_qty
+       FROM aif_stock
+       WHERE variant_id=$1 AND location_id = ANY($2::uuid[])
+       FOR UPDATE`,
+      [variantId, ids]
+    );
+    return new Map(rows.rows.map((row) => [String(row.location_id), row]));
+  }
+
+  async function applyAifPreparationStockDelta(client, {
+    document,
+    lineNo,
+    variant,
+    routeFrom,
+    routeTo,
+    qtyDelta,
+    actor,
+    note = null,
+    title = null,
+    reason = 'preparation_adjustment',
+  }) {
+    const delta = Number(qtyDelta || 0);
+    if (!Number.isFinite(delta) || delta === 0) {
+      const current = await readAifPreparationStockPair(client, variant.id, routeFrom.id, routeTo.id);
+      return {
+        movementRows: 0,
+        routeFromAfter: Number(current.get(String(routeFrom.id))?.qty || 0),
+        routeToAfter: Number(current.get(String(routeTo.id))?.qty || 0),
+      };
+    }
+
+    const quantity = Math.abs(Math.trunc(delta));
+    if (quantity <= 0) throw Object.assign(new Error('Érvénytelen előkészítési mennyiség.'), { statusCode: 400 });
+    const forward = delta > 0;
+    const actualFrom = forward ? routeFrom : routeTo;
+    const actualTo = forward ? routeTo : routeFrom;
+    const stockMap = await readAifPreparationStockPair(client, variant.id, actualFrom.id, actualTo.id);
+    const sourceRow = stockMap.get(String(actualFrom.id));
+    const targetRow = stockMap.get(String(actualTo.id));
+    const sourceBefore = Number(sourceRow?.qty || 0);
+    const sourceReserved = Number(sourceRow?.reserved_qty || 0);
+    const sourceAvailable = sourceBefore - sourceReserved;
+    if (quantity > sourceAvailable) {
+      const action = forward ? 'további mozgatáshoz' : 'visszaállításhoz';
+      throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: ${actualFrom.name || actualFrom.code} helyen csak ${Math.max(0, sourceAvailable)} db szabad készlet van a(z) ${action}.`), {
+        statusCode: 400,
+        code: forward ? 'preparation_source_stock_insufficient' : 'preparation_restore_stock_insufficient',
+      });
+    }
+    const sourceAfter = sourceBefore - quantity;
+    const targetBefore = Number(targetRow?.qty || 0);
+    const targetReserved = Number(targetRow?.reserved_qty || 0);
+    const targetAfter = targetBefore + quantity;
+
+    await client.query(
+      `UPDATE aif_stock
+       SET qty=$3, reserved_qty=$4, updated_at=now()
+       WHERE location_id=$1 AND variant_id=$2`,
+      [actualFrom.id, variant.id, sourceAfter, sourceReserved]
+    );
+    await client.query(
+      `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+       VALUES ($1,$2,$3,$4,now())
+       ON CONFLICT (location_id, variant_id)
+       DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+      [actualTo.id, variant.id, targetAfter, targetReserved]
+    );
+
+    const movementGroupId = aifPreparationMovementGroupId(document.id, lineNo);
+    const rawBase = {
+      reason: 'stock_transfer',
+      preparationReason: reason,
+      preparation: true,
+      preparationAdjustment: true,
+      preparationDirection: forward ? 'forward' : 'reverse',
+      documentType: 'internal_transfer',
+      priceBasis: 'selling_price',
+      transferId: document.transfer_id,
+      documentId: String(document.id),
+      documentNumber: document.document_number,
+      documentStatus: 'preparation',
+      movementGroupId,
+      lineNo,
+      note,
+      title,
+      productTitle: variant.title_ro,
+      barcode: variant.barcode || variant.supplier_barcode || null,
+      originalFromLocationId: String(routeFrom.id),
+      originalFromLocationName: routeFrom.name || routeFrom.code,
+      originalToLocationId: String(routeTo.id),
+      originalToLocationName: routeTo.name || routeTo.code,
+      fromLocationId: String(actualFrom.id),
+      fromLocationCode: actualFrom.code,
+      fromLocationName: actualFrom.name,
+      toLocationId: String(actualTo.id),
+      toLocationCode: actualTo.code,
+      toLocationName: actualTo.name,
+      qty: quantity,
+    };
+
+    let movementRows = 0;
+    if (await insertStockMovementSafe(client, {
+      movementType: 'manual_adjustment',
+      sourceType: 'stock_transfer',
+      sourcePrefix: forward ? 'prep_out' : 'prep_back',
+      fallbackSourceType: 'manual_stock_edit',
+      locationId: actualFrom.id,
+      variantId: variant.id,
+      qtyDelta: -quantity,
+      qtyBefore: sourceBefore,
+      qtyAfter: sourceAfter,
+      actor,
+      raw: { ...rawBase, direction: 'out', side: 'source' },
+    })) movementRows += 1;
+
+    if (await insertStockMovementSafe(client, {
+      movementType: 'incoming',
+      sourceType: 'stock_transfer',
+      sourcePrefix: forward ? 'prep_in' : 'prep_restore',
+      fallbackSourceType: 'manual_stock_edit',
+      locationId: actualTo.id,
+      variantId: variant.id,
+      qtyDelta: quantity,
+      qtyBefore: targetBefore,
+      qtyAfter: targetAfter,
+      actor,
+      raw: { ...rawBase, direction: 'in', side: 'target' },
+    })) movementRows += 1;
+
+    const currentRoute = await readAifPreparationStockPair(client, variant.id, routeFrom.id, routeTo.id);
+    return {
+      movementRows,
+      sourceBefore,
+      sourceAfter,
+      targetBefore,
+      targetAfter,
+      routeFromAfter: Number(currentRoute.get(String(routeFrom.id))?.qty || 0),
+      routeToAfter: Number(currentRoute.get(String(routeTo.id))?.qty || 0),
+    };
+  }
+
+  async function refreshAifPreparationDocument(client, documentId, rawPatch = {}) {
+    const lines = await client.query(
+      `SELECT * FROM aif_stock_transfer_document_lines
+       WHERE document_id=$1
+       ORDER BY line_no ASC, created_at ASC`,
+      [documentId]
+    );
+    const rows = lines.rows || [];
+    const fromNames = Array.from(new Set(rows.map((row) => text(row.from_location_name)).filter(Boolean)));
+    const toNames = Array.from(new Set(rows.map((row) => text(row.to_location_name)).filter(Boolean)));
+    const fromIds = Array.from(new Set(rows.map((row) => text(row.from_location_id)).filter(Boolean)));
+    const toIds = Array.from(new Set(rows.map((row) => text(row.to_location_id)).filter(Boolean)));
+    const totalQty = rows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+    const totalValue = Math.round((rows.reduce((sum, row) => sum + Number(row.line_total || 0), 0) + Number.EPSILON) * 100) / 100;
+    const updated = await client.query(
+      `UPDATE aif_stock_transfer_documents
+       SET line_count=$2, total_qty=$3, total_value=$4, currency_code='RON',
+           from_location_summary=$5, to_location_summary=$6,
+           source_location_id=$7, target_location_id=$8,
+           document_type='internal_transfer', operation_direction='transfer', price_basis='selling_price',
+           raw=COALESCE(raw,'{}'::jsonb) || $9::jsonb,
+           updated_at=now()
+       WHERE id=$1
+       RETURNING *`,
+      [
+        documentId,
+        rows.length,
+        totalQty,
+        totalValue,
+        fromNames.length === 1 ? fromNames[0] : fromNames.length ? 'Conform tabelului' : null,
+        toNames.length === 1 ? toNames[0] : toNames.length ? 'Conform tabelului' : null,
+        fromIds.length === 1 ? fromIds[0] : null,
+        toIds.length === 1 ? toIds[0] : null,
+        JSON.stringify({ preparation: true, documentType: 'internal_transfer', totalValue, currencyCode: 'RON', ...rawPatch }),
+      ]
+    );
+    return { document: updated.rows[0] || null, lines: rows };
+  }
+
+  async function getOrCreateAifOpenPreparation(client, { ownerKey, actor, title, note, idempotencyKey }) {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif:stock-preparation:${ownerKey}`]);
+    const current = await client.query(
+      `SELECT * FROM aif_stock_transfer_documents
+       WHERE owner_key=$1 AND document_type='internal_transfer' AND status='preparation'
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [ownerKey]
+    );
+    if (current.rowCount) {
+      const updated = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET subtitle=COALESCE(NULLIF($2,''),subtitle),
+             note=COALESCE($3,note), actor=$4,
+             raw=COALESCE(raw,'{}'::jsonb) || $5::jsonb,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [
+          current.rows[0].id,
+          title,
+          note,
+          actor,
+          JSON.stringify({ preparation: true, lastIdempotencyKey: idempotencyKey || null, lastAppendAt: new Date().toISOString() }),
+        ]
+      );
+      return { document: updated.rows[0], created: false };
+    }
+
+    const sequence = await allocateAifStockDocumentNumber(client, 'internal_transfer');
+    const transferId = stockMovementSourceId('transfer', 'preparation', 'stock');
+    const inserted = await client.query(
+      `INSERT INTO aif_stock_transfer_documents (
+         transfer_id, document_number, series, sequence_number, sequence_year,
+         title, subtitle, note, status, actor, owner_key, raw,
+         document_type, operation_direction, price_basis, total_value, currency_code,
+         created_at, updated_at
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,'preparation',$9,$10,$11::jsonb,
+         'internal_transfer','transfer','selling_price',0,'RON',now(),now()
+       )
+       RETURNING *`,
+      [
+        transferId,
+        sequence.documentNumber,
+        sequence.series,
+        sequence.sequenceNumber,
+        sequence.sequenceYear,
+        sequence.title,
+        title || sequence.subtitle,
+        note,
+        actor,
+        ownerKey,
+        JSON.stringify({ preparation: true, documentType: 'internal_transfer', idempotencyKey: idempotencyKey || null, openedAt: new Date().toISOString() }),
+      ]
+    );
+    return { document: inserted.rows[0], created: true };
+  }
+
+  async function appendAifPreparationLine(client, { document, input, actor, note, title }) {
+    const variantInput = text(input.variantId || input.variant_id || input.variant || input.id);
+    const fromInput = text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id);
+    const toInput = text(input.toLocationId || input.to_location_id || input.toLocationCode || input.to_location_code || input.to || input.targetLocationId || input.target_location_id);
+    const qty = toInt(input.qty ?? input.quantity ?? input.count);
+    if (!variantInput) throw Object.assign(new Error('Hiányzik a termék.'), { statusCode: 400 });
+    if (!fromInput) throw Object.assign(new Error('Hiányzik a forráshely.'), { statusCode: 400 });
+    if (!toInput) throw Object.assign(new Error('Hiányzik a célhely.'), { statusCode: 400 });
+    if (qty === null || qty <= 0) throw Object.assign(new Error('Érvénytelen mennyiség.'), { statusCode: 400 });
+
+    const variant = await readAifTransferVariantSnapshot(client, variantInput);
+    const routeFrom = await readAifPreparationLocation(client, fromInput, 'forráshely');
+    const routeTo = await readAifPreparationLocation(client, toInput, 'célhely');
+    if (String(routeFrom.id) === String(routeTo.id)) throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: a forrás és a cél nem lehet ugyanaz.`), { statusCode: 400 });
+
+    const existing = await client.query(
+      `SELECT * FROM aif_stock_transfer_document_lines
+       WHERE document_id=$1
+         AND variant_id::text=$2
+         AND COALESCE(from_location_id::text,'')=$3
+         AND COALESCE(to_location_id::text,'')=$4
+       ORDER BY line_no ASC
+       LIMIT 1
+       FOR UPDATE`,
+      [document.id, String(variant.id), String(routeFrom.id), String(routeTo.id)]
+    );
+    let lineNo = Number(existing.rows[0]?.line_no || 0);
+    if (!lineNo) {
+      const next = await client.query(`SELECT COALESCE(max(line_no),0)::int + 1 AS line_no FROM aif_stock_transfer_document_lines WHERE document_id=$1`, [document.id]);
+      lineNo = Number(next.rows[0]?.line_no || 1);
+    }
+
+    const movement = await applyAifPreparationStockDelta(client, {
+      document,
+      lineNo,
+      variant,
+      routeFrom,
+      routeTo,
+      qtyDelta: qty,
+      actor,
+      note,
+      title,
+      reason: existing.rowCount ? 'preparation_append_existing_line' : 'preparation_append_new_line',
+    });
+
+    const productCode = variant.supplier_product_code || String(variant.model_code || '').split(':').pop() || variant.internal_sku || null;
+    const displayBarcode = variant.barcode || variant.supplier_barcode || null;
+    const unitPrice = toMoney(variant.sell_price);
+    const previousQty = Number(existing.rows[0]?.qty || 0);
+    const nextQty = previousQty + qty;
+    const lineTotal = unitPrice === null ? null : Math.round((nextQty * unitPrice + Number.EPSILON) * 100) / 100;
+    const lineRaw = {
+      ...(existing.rows[0]?.raw && typeof existing.rows[0].raw === 'object' ? existing.rows[0].raw : {}),
+      preparation: true,
+      documentType: 'internal_transfer',
+      transferId: document.transfer_id,
+      documentId: String(document.id),
+      documentNumber: document.document_number,
+      lineNo,
+      productTitle: variant.title_ro,
+      productCode,
+      barcode: displayBarcode,
+      fromLocationId: String(routeFrom.id),
+      fromLocationName: routeFrom.name || routeFrom.code,
+      toLocationId: String(routeTo.id),
+      toLocationName: routeTo.name || routeTo.code,
+      qty: nextQty,
+      unitPrice,
+      lineTotal,
+      priceBasis: 'selling_price',
+      currencyCode: 'RON',
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (existing.rowCount) {
+      await client.query(
+        `UPDATE aif_stock_transfer_document_lines
+         SET qty=$2, unit_price=$3, line_total=$4, currency_code='RON', price_basis='selling_price', qty_delta=0,
+             source_after=$5, target_after=$6, raw=$7::jsonb
+         WHERE id=$1`,
+        [existing.rows[0].id, nextQty, unitPrice, lineTotal, movement.routeFromAfter, movement.routeToAfter, JSON.stringify(lineRaw)]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO aif_stock_transfer_document_lines (
+           document_id,line_no,variant_id,product_title,brand_name,category_name,
+           product_code,barcode,color_name,size,image_url,
+           from_location_id,from_location_name,to_location_id,to_location_name,
+           qty,unit_price,line_total,currency_code,price_basis,qty_delta,
+           source_before,source_after,target_before,target_after,raw
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+           $16,$17,$18,'RON','selling_price',0,$19,$20,$21,$22,$23::jsonb
+         )`,
+        [
+          document.id,
+          lineNo,
+          String(variant.id),
+          variant.title_ro,
+          variant.brand_name,
+          variant.category_name,
+          productCode,
+          displayBarcode,
+          variant.color_name,
+          variant.size,
+          variant.image_url,
+          String(routeFrom.id),
+          routeFrom.name || routeFrom.code,
+          String(routeTo.id),
+          routeTo.name || routeTo.code,
+          nextQty,
+          unitPrice,
+          lineTotal,
+          movement.sourceBefore,
+          movement.routeFromAfter,
+          movement.targetBefore,
+          movement.routeToAfter,
+          JSON.stringify(lineRaw),
+        ]
+      );
+    }
+
+    return {
+      movementRows: movement.movementRows,
+      item: {
+        variantId: String(variant.id),
+        title: variant.title_ro,
+        brandName: variant.brand_name,
+        categoryName: variant.category_name,
+        productCode,
+        barcode: displayBarcode,
+        colorName: variant.color_name,
+        size: variant.size,
+        imageUrl: variant.image_url,
+        qty,
+        accumulatedQty: nextQty,
+        unitPrice,
+        lineTotal: unitPrice === null ? null : Math.round((qty * unitPrice + Number.EPSILON) * 100) / 100,
+        currencyCode: 'RON',
+        priceBasis: 'selling_price',
+        fromLocationId: String(routeFrom.id),
+        fromLocation: routeFrom.name || routeFrom.code,
+        toLocationId: String(routeTo.id),
+        toLocation: routeTo.name || routeTo.code,
+      },
+    };
+  }
+
   async function handleStockTransfer(req, res) {
     const body = req.body || {};
     const rowsInput = Array.isArray(body.rows)
@@ -9927,382 +10374,99 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           : [];
     const note = emptyToNull(body.note);
     const title = emptyToNull(body.title || body.documentTitle || body.document_title);
-    const idempotencyKey = text(
-      req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key
-    ).slice(0, 200);
-    if (!rowsInput.length) return res.status(400).json({ error: "Nincs menthető készletmozgatási sor." });
+    const idempotencyKey = text(req.get('Idempotency-Key') || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+    if (!rowsInput.length) return res.status(400).json({ error: 'Nincs menthető készletmozgatási sor.' });
 
     try {
       await ensureAifStockTransferDocumentsSchema();
+      if (idempotencyKey) await ensureAifStockTransferIdempotencySchema();
     } catch (schemaError) {
-      console.error("AIF stock transfer document schema failed", schemaError);
-      return res.status(500).json({
-        error: "A készletátadási bizonylatok előkészítése nem sikerült.",
-        code: schemaError?.code || "stock_transfer_document_schema_failed",
-      });
-    }
-
-    if (idempotencyKey) {
-      try {
-        await ensureAifStockTransferIdempotencySchema();
-      } catch (schemaError) {
-        console.error("AIF stock transfer idempotency schema failed", schemaError);
-        return res.status(500).json({
-          error: "A készletmozgatás ismétlésvédelmének előkészítése nem sikerült.",
-          code: schemaError?.code || "stock_transfer_idempotency_schema_failed",
-        });
-      }
+      console.error('AIF stock transfer preparation schema failed', schemaError);
+      return res.status(500).json({ error: 'A készletátadási előkészítés nem indítható.', code: schemaError?.code || 'stock_transfer_preparation_schema_failed' });
     }
 
     const client = await pool.connect();
     const actor = actorFrom(req);
     const ownerKey = selectionOwnerKey(req);
     const requestHash = idempotencyKey ? stockTransferRequestHash(rowsInput, title, note) : null;
-    const movedItems = [];
-    let movedQty = 0;
-    let movementRows = 0;
-    let transferId = null;
-    let transferDocument = null;
-
     try {
-      await client.query("BEGIN");
+      await client.query('BEGIN');
       try { await client.query("SELECT set_config('aif.actor', $1, true)", [actor]); } catch {}
 
       if (idempotencyKey) {
         const claim = await client.query(
-          `INSERT INTO aif_stock_transfer_requests (
-             owner_key, idempotency_key, request_hash, status, created_at, updated_at
-           ) VALUES ($1,$2,$3,'processing',now(),now())
-           ON CONFLICT (owner_key, idempotency_key) DO NOTHING
-           RETURNING owner_key, idempotency_key`,
+          `INSERT INTO aif_stock_transfer_requests (owner_key,idempotency_key,request_hash,status,created_at,updated_at)
+           VALUES ($1,$2,$3,'processing',now(),now())
+           ON CONFLICT (owner_key,idempotency_key) DO NOTHING
+           RETURNING owner_key`,
           [ownerKey, idempotencyKey, requestHash]
         );
-
         if (!claim.rowCount) {
           const existing = await client.query(
-            `SELECT request_hash, status, transfer_id, response
+            `SELECT request_hash,status,transfer_id,response
              FROM aif_stock_transfer_requests
              WHERE owner_key=$1 AND idempotency_key=$2
              FOR UPDATE`,
             [ownerKey, idempotencyKey]
           );
           const row = existing.rows[0] || null;
-          if (!row) {
-            throw Object.assign(new Error("Az ismétlésvédelmi rekord nem található."), {
-              statusCode: 409,
-              code: "stock_transfer_idempotency_record_missing",
-            });
+          if (!row) throw Object.assign(new Error('Az ismétlésvédelmi rekord nem található.'), { statusCode: 409, code: 'stock_transfer_idempotency_record_missing' });
+          if (text(row.request_hash) !== text(requestHash)) throw Object.assign(new Error('Ezt az ismétlésvédelmi kulcsot már másik készletmozgatáshoz használták.'), { statusCode: 409, code: 'stock_transfer_idempotency_key_reused' });
+          if (row.status === 'completed' && row.response) {
+            const previousResponse = typeof row.response === 'object' ? row.response : {};
+            await client.query('COMMIT');
+            return res.json({ ...previousResponse, ok: true, duplicate: true, idempotencyKey, transferId: previousResponse.transferId || row.transfer_id });
           }
-          if (text(row.request_hash) !== text(requestHash)) {
-            throw Object.assign(new Error("Ezt az ismétlésvédelmi kulcsot már egy másik készletmozgatáshoz használták."), {
-              statusCode: 409,
-              code: "stock_transfer_idempotency_key_reused",
-            });
-          }
-          if (row.status === "completed" && row.response) {
-            const previousResponse = typeof row.response === "object" ? row.response : {};
-            await client.query("COMMIT");
-            return res.json({
-              ...previousResponse,
-              ok: true,
-              duplicate: true,
-              idempotencyKey,
-              transferId: previousResponse.transferId || row.transfer_id,
-            });
-          }
-          throw Object.assign(new Error("Ez a készletmozgatás már feldolgozás alatt van. Várj néhány másodpercet, majd frissíts."), {
-            statusCode: 409,
-            code: "stock_transfer_already_processing",
-          });
+          throw Object.assign(new Error('Ez a készletmozgatás már feldolgozás alatt van. Várj néhány másodpercet, majd frissíts.'), { statusCode: 409, code: 'stock_transfer_already_processing' });
         }
       }
 
-      transferId = stockMovementSourceId("transfer", "batch", "stock");
-      const documentSequence = await allocateAifStockDocumentNumber(client, 'internal_transfer');
-      const insertedDocument = await client.query(
-        `INSERT INTO aif_stock_transfer_documents (
-           transfer_id, document_number, series, sequence_number, sequence_year,
-           title, subtitle, note, actor, owner_key, raw,
-           document_type, price_basis, total_value, currency_code,
-           created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,
-           'internal_transfer','selling_price',0,'RON',now(),now())
-         RETURNING id::text, transfer_id, document_number, series, sequence_number, sequence_year,
-                   title, subtitle, note, status, actor, owner_key, created_at, updated_at`,
-        [
-          transferId,
-          documentSequence.documentNumber,
-          documentSequence.series,
-          documentSequence.sequenceNumber,
-          documentSequence.sequenceYear,
-          documentSequence.title,
-          title || documentSequence.subtitle,
-          note,
-          actor,
-          ownerKey,
-          JSON.stringify({ idempotencyKey: idempotencyKey || null, requestTitle: title, requestNote: note }),
-        ]
-      );
-      transferDocument = insertedDocument.rows[0];
-
-      for (let index = 0; index < rowsInput.length; index++) {
-        const input = rowsInput[index] || {};
-        const variantInput = text(input.variantId || input.variant_id || input.variant || input.id);
-        const fromInput = text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id);
-        const toInput = text(input.toLocationId || input.to_location_id || input.toLocationCode || input.to_location_code || input.to || input.targetLocationId || input.target_location_id);
-        const qty = toInt(input.qty ?? input.quantity ?? input.count);
-
-        if (!variantInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a termék.`), { statusCode: 400 });
-        if (!fromInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a forrás helyszín.`), { statusCode: 400 });
-        if (!toInput) throw Object.assign(new Error(`A(z) ${index + 1}. sorban hiányzik a cél helyszín.`), { statusCode: 400 });
-        if (qty === null || qty <= 0) throw Object.assign(new Error(`A(z) ${index + 1}. sor mennyisége érvénytelen.`), { statusCode: 400 });
-
-        const variant = await client.query(
-          `SELECT v.id, v.internal_sku, v.barcode, v.size, v.color_name, v.status, v.image_url,
-                  v.sell_price,
-                  m.title_ro, m.model_code, b.name AS brand_name, c.name_ro AS category_name,
-                  sc.supplier_product_code, sc.supplier_barcode
-           FROM aif_product_variants v
-           JOIN aif_product_models m ON m.id=v.model_id
-           LEFT JOIN aif_brands b ON b.id=m.brand_id
-           LEFT JOIN aif_categories c ON c.id=m.category_id
-           LEFT JOIN LATERAL (
-             SELECT supplier_product_code, supplier_barcode
-             FROM aif_variant_supplier_codes x
-             WHERE x.variant_id=v.id AND COALESCE(x.is_active,true)=true
-             LIMIT 1
-           ) sc ON true
-           WHERE v.id::text=$1 OR v.internal_sku=$1 OR v.barcode=$1
-           FOR UPDATE OF v`,
-          [variantInput]
-        );
-        if (!variant.rowCount) throw Object.assign(new Error(`A(z) ${index + 1}. sor terméke nem található.`), { statusCode: 404 });
-        const variantRow = variant.rows[0];
-        if (String(variantRow.status || "") === "archived") throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: archivált termék nem mozgatható.`), { statusCode: 400 });
-
-        const fromLocation = await findByIdOrCode(client, "aif_locations", fromInput);
-        const toLocation = await findByIdOrCode(client, "aif_locations", toInput);
-        if (!fromLocation || fromLocation.is_active === false) throw Object.assign(new Error(`Érvénytelen vagy inaktív forrás helyszín: ${fromInput}`), { statusCode: 400 });
-        if (!toLocation || toLocation.is_active === false) throw Object.assign(new Error(`Érvénytelen vagy inaktív cél helyszín: ${toInput}`), { statusCode: 400 });
-        if (String(fromLocation.id) === String(toLocation.id)) throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: a forrás és a cél nem lehet ugyanaz.`), { statusCode: 400 });
-
-        const sourceStock = await client.query(
-          `SELECT qty, reserved_qty
-           FROM aif_stock
-           WHERE location_id=$1 AND variant_id=$2
-           FOR UPDATE`,
-          [fromLocation.id, variantRow.id]
-        );
-        if (!sourceStock.rowCount) throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: nincs készlet a forráshelyen.`), { statusCode: 400 });
-        const sourceBefore = Number(sourceStock.rows[0].qty || 0);
-        const sourceReserved = Number(sourceStock.rows[0].reserved_qty || 0);
-        const sourceAvailable = sourceBefore - sourceReserved;
-        if (qty > sourceAvailable) {
-          throw Object.assign(new Error(`${variantRow.title_ro || "Termék"}: ${fromLocation.name || fromLocation.code} helyen csak ${Math.max(0, sourceAvailable)} db elérhető.`), { statusCode: 400 });
+      const preparation = await getOrCreateAifOpenPreparation(client, { ownerKey, actor, title, note, idempotencyKey });
+      let document = preparation.document;
+      const movedItems = [];
+      let movementRows = 0;
+      let movedQty = 0;
+      for (let index = 0; index < rowsInput.length; index += 1) {
+        try {
+          const result = await appendAifPreparationLine(client, { document, input: rowsInput[index] || {}, actor, note, title });
+          movedItems.push(result.item);
+          movementRows += result.movementRows;
+          movedQty += Number(result.item.qty || 0);
+        } catch (lineError) {
+          if (!lineError.statusCode) lineError.statusCode = 400;
+          lineError.message = `A(z) ${index + 1}. sor: ${lineError.message || lineError}`;
+          throw lineError;
         }
-        const sourceAfter = sourceBefore - qty;
-
-        const targetStock = await client.query(
-          `SELECT qty, reserved_qty
-           FROM aif_stock
-           WHERE location_id=$1 AND variant_id=$2
-           FOR UPDATE`,
-          [toLocation.id, variantRow.id]
-        );
-        const targetBefore = targetStock.rowCount ? Number(targetStock.rows[0].qty || 0) : 0;
-        const targetReserved = targetStock.rowCount ? Number(targetStock.rows[0].reserved_qty || 0) : 0;
-        const targetAfter = targetBefore + qty;
-
-        await client.query(
-          `UPDATE aif_stock
-           SET qty=$3, reserved_qty=$4, updated_at=now()
-           WHERE location_id=$1 AND variant_id=$2`,
-          [fromLocation.id, variantRow.id, sourceAfter, sourceReserved]
-        );
-
-        await client.query(
-          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
-           VALUES ($1,$2,$3,$4,now())
-           ON CONFLICT (location_id, variant_id)
-           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
-          [toLocation.id, variantRow.id, targetAfter, targetReserved]
-        );
-
-        const rawBase = {
-          reason: "stock_transfer",
-          documentType: "internal_transfer",
-          priceBasis: "selling_price",
-          transferId,
-          documentId: transferDocument?.id || null,
-          documentNumber: transferDocument?.document_number || null,
-          idempotencyKey: idempotencyKey || null,
-          lineNo: index + 1,
-          note,
-          title,
-          productTitle: variantRow.title_ro,
-          barcode: variantRow.barcode,
-          fromLocationId: fromLocation.id,
-          fromLocationCode: fromLocation.code,
-          fromLocationName: fromLocation.name,
-          toLocationId: toLocation.id,
-          toLocationCode: toLocation.code,
-          toLocationName: toLocation.name,
-          qty,
-        };
-
-        const outLogged = await insertStockMovementSafe(client, {
-          movementType: "manual_adjustment",
-          sourceType: "stock_transfer",
-          sourcePrefix: "transfer_out",
-          fallbackSourceType: "manual_stock_edit",
-          locationId: fromLocation.id,
-          variantId: variantRow.id,
-          qtyDelta: -qty,
-          qtyBefore: sourceBefore,
-          qtyAfter: sourceAfter,
-          actor,
-          raw: { ...rawBase, direction: "out", side: "source" },
-        });
-        if (outLogged) movementRows++;
-
-        const inLogged = await insertStockMovementSafe(client, {
-          movementType: "incoming",
-          sourceType: "stock_transfer",
-          sourcePrefix: "transfer_in",
-          fallbackSourceType: "manual_stock_edit",
-          locationId: toLocation.id,
-          variantId: variantRow.id,
-          qtyDelta: qty,
-          qtyBefore: targetBefore,
-          qtyAfter: targetAfter,
-          actor,
-          raw: { ...rawBase, direction: "in", side: "target" },
-        });
-        if (inLogged) movementRows++;
-
-        const productCode = variantRow.supplier_product_code || String(variantRow.model_code || "").split(":").pop() || variantRow.internal_sku || null;
-        const displayBarcode = variantRow.barcode || variantRow.supplier_barcode || null;
-        const unitPrice = toMoney(variantRow.sell_price);
-        const lineTotal = unitPrice === null ? null : Math.round((qty * unitPrice + Number.EPSILON) * 100) / 100;
-        rawBase.unitPrice = unitPrice;
-        rawBase.lineTotal = lineTotal;
-        rawBase.currencyCode = "RON";
-        await client.query(
-          `INSERT INTO aif_stock_transfer_document_lines (
-             document_id, line_no, variant_id, product_title, brand_name, category_name,
-             product_code, barcode, color_name, size, image_url,
-             from_location_id, from_location_name, to_location_id, to_location_name,
-             qty, unit_price, line_total, currency_code, price_basis, qty_delta,
-             source_before, source_after, target_before, target_after, raw
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'RON','selling_price',0,$19,$20,$21,$22,$23::jsonb)`,
-          [
-            transferDocument.id,
-            index + 1,
-            String(variantRow.id),
-            variantRow.title_ro,
-            variantRow.brand_name,
-            variantRow.category_name,
-            productCode,
-            displayBarcode,
-            variantRow.color_name,
-            variantRow.size,
-            variantRow.image_url,
-            String(fromLocation.id),
-            fromLocation.name || fromLocation.code,
-            String(toLocation.id),
-            toLocation.name || toLocation.code,
-            qty,
-            unitPrice,
-            lineTotal,
-            sourceBefore,
-            sourceAfter,
-            targetBefore,
-            targetAfter,
-            JSON.stringify(rawBase),
-          ]
-        );
-
-        movedQty += qty;
-        movedItems.push({
-          variantId: variantRow.id,
-          title: variantRow.title_ro,
-          brandName: variantRow.brand_name,
-          categoryName: variantRow.category_name,
-          productCode,
-          barcode: displayBarcode,
-          colorName: variantRow.color_name,
-          size: variantRow.size,
-          imageUrl: variantRow.image_url,
-          qty,
-          unitPrice,
-          lineTotal,
-          currencyCode: "RON",
-          priceBasis: "selling_price",
-          fromLocationId: String(fromLocation.id),
-          fromLocation: fromLocation.name || fromLocation.code,
-          toLocationId: String(toLocation.id),
-          toLocation: toLocation.name || toLocation.code,
-          sourceBefore,
-          sourceAfter,
-          targetBefore,
-          targetAfter,
-        });
       }
 
-      const fromLocations = Array.from(new Set(movedItems.map((item) => item.fromLocation).filter(Boolean)));
-      const toLocations = Array.from(new Set(movedItems.map((item) => item.toLocation).filter(Boolean)));
-      const fromLocationSummary = fromLocations.length === 1 ? fromLocations[0] : "Conform tabelului";
-      const toLocationSummary = toLocations.length === 1 ? toLocations[0] : "Conform tabelului";
-      const updatedDocument = await client.query(
-        `UPDATE aif_stock_transfer_documents
-         SET line_count=$2, total_qty=$3, from_location_summary=$4, to_location_summary=$5,
-             source_location_id=$6, target_location_id=$7,
-             total_value=$8, currency_code='RON', document_type='internal_transfer', price_basis='selling_price',
-             raw=COALESCE(raw,'{}'::jsonb) || $9::jsonb, updated_at=now()
-         WHERE id=$1::uuid
-         RETURNING id::text, transfer_id, document_number, series, sequence_number, sequence_year,
-                   title, subtitle, note, status, actor, owner_key, line_count, total_qty,
-                   from_location_summary, to_location_summary, created_at, updated_at`,
-        [
-          transferDocument.id,
-          movedItems.length,
-          movedQty,
-          fromLocationSummary,
-          toLocationSummary,
-          movedItems[0]?.fromLocationId || null,
-          movedItems[0]?.toLocationId || null,
-          Math.round((movedItems.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0) + Number.EPSILON) * 100) / 100,
-          JSON.stringify({
-            idempotencyKey: idempotencyKey || null,
-            documentType: "internal_transfer",
-            priceBasis: "selling_price",
-            currencyCode: "RON",
-            totalValue: Math.round((movedItems.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0) + Number.EPSILON) * 100) / 100,
-            fromLocationIds: Array.from(new Set(movedItems.map((item) => item.fromLocationId).filter(Boolean))),
-            toLocationIds: Array.from(new Set(movedItems.map((item) => item.toLocationId).filter(Boolean))),
-            items: movedItems,
-          }),
-        ]
-      );
-      transferDocument = updatedDocument.rows[0] || transferDocument;
-
+      const refreshed = await refreshAifPreparationDocument(client, document.id, {
+        lastIdempotencyKey: idempotencyKey || null,
+        lastAppendAt: new Date().toISOString(),
+        lastAppendedItems: movedItems,
+      });
+      document = refreshed.document || document;
       const responsePayload = {
         ok: true,
         duplicate: false,
+        preparationCreated: preparation.created,
+        status: 'preparation',
         idempotencyKey: idempotencyKey || null,
-        transferId,
-        documentId: transferDocument?.id || null,
-        documentNumber: transferDocument?.document_number || null,
-        documentCreatedAt: transferDocument?.created_at || null,
-        documentTitle: transferDocument?.title || null,
-        documentSubtitle: transferDocument?.subtitle || null,
-        document: transferDocument,
+        transferId: document.transfer_id,
+        documentId: String(document.id),
+        documentNumber: document.document_number,
+        documentCreatedAt: document.created_at || null,
+        documentTitle: document.title || null,
+        documentSubtitle: document.subtitle || null,
+        document,
         title,
         lineCount: movedItems.length,
         movedRows: movedItems.length,
         movedLines: movedItems.length,
         movedQty,
         totalQty: movedQty,
+        documentLineCount: Number(document.line_count || refreshed.lines.length || 0),
+        documentTotalQty: Number(document.total_qty || 0),
+        documentTotalValue: Number(document.total_value || 0),
         movements: movementRows,
         items: movedItems,
       };
@@ -10310,27 +10474,408 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (idempotencyKey) {
         await client.query(
           `UPDATE aif_stock_transfer_requests
-           SET status='completed', transfer_id=$3, response=$4::jsonb, updated_at=now()
+           SET status='completed',transfer_id=$3,response=$4::jsonb,updated_at=now()
            WHERE owner_key=$1 AND idempotency_key=$2`,
-          [ownerKey, idempotencyKey, transferId, JSON.stringify(responsePayload)]
+          [ownerKey, idempotencyKey, document.transfer_id, JSON.stringify(responsePayload)]
         );
       }
-
-      await client.query("COMMIT");
-      res.json(responsePayload);
-    } catch (e) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error("AIF stock transfer failed", e);
-      const status = Number(e?.statusCode || 500);
-      res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A készletmozgatás mentése nem sikerült.", code: e?.code || null });
+      await client.query('COMMIT');
+      return res.json(responsePayload);
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF stock transfer preparation failed', error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A készletmozgatás mentése nem sikerült.', code: error?.code || null });
     } finally {
       client.release();
     }
   }
 
-  router.post("/stock-transfers", requireAuthed, handleStockTransfer);
-  router.post("/stock/transfers", requireAuthed, handleStockTransfer);
+  async function handleUpdateStockTransferPreparation(req, res) {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const linesInput = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : Array.isArray(body.rows) ? body.rows : [];
+    if (!id) return res.status(400).json({ error: 'Előkészítés azonosító szükséges.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifStockTransferDocumentsSchema();
+      const current = await client.query(
+        `SELECT * FROM aif_stock_transfer_documents
+         WHERE (id::text=$1 OR transfer_id=$1 OR document_number=$1)
+         FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) throw Object.assign(new Error('Az előkészítés nem található.'), { statusCode: 404 });
+      let document = current.rows[0];
+      if (document.status !== 'preparation' || cleanAifStockDocumentType(document.document_type, null) !== 'internal_transfer') {
+        throw Object.assign(new Error('Csak belső átadási előkészítés szerkeszthető.'), { statusCode: 400 });
+      }
+      const actor = actorFrom(req);
+      const ownerKey = selectionOwnerKey(req);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif:stock-preparation:${document.owner_key || ownerKey}`]);
 
+      const existingResult = await client.query(
+        `SELECT * FROM aif_stock_transfer_document_lines
+         WHERE document_id=$1
+         ORDER BY line_no ASC
+         FOR UPDATE`,
+        [document.id]
+      );
+      const existingByKey = new Map();
+      for (const line of existingResult.rows) {
+        const key = aifPreparationLineKey(line.variant_id, line.from_location_id, line.to_location_id);
+        const currentLine = existingByKey.get(key);
+        if (!currentLine) {
+          existingByKey.set(key, { ...line, qty: Number(line.qty || 0), duplicate_ids: [] });
+        } else {
+          currentLine.qty = Number(currentLine.qty || 0) + Number(line.qty || 0);
+          currentLine.duplicate_ids.push(line.id);
+        }
+      }
+
+      const desiredByKey = new Map();
+      for (let index = 0; index < linesInput.length; index += 1) {
+        const input = linesInput[index] || {};
+        const variant = await readAifTransferVariantSnapshot(client, input.variantId || input.variant_id || input.variant || input.id);
+        const fromValue = input.fromLocationId || input.from_location_id || input.sourceLocationId || input.source_location_id || document.source_location_id;
+        const toValue = input.toLocationId || input.to_location_id || input.targetLocationId || input.target_location_id || document.target_location_id;
+        const routeFrom = await readAifPreparationLocation(client, fromValue, 'forráshely');
+        const routeTo = await readAifPreparationLocation(client, toValue, 'célhely');
+        if (String(routeFrom.id) === String(routeTo.id)) throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: a forrás és a cél nem lehet ugyanaz.`), { statusCode: 400 });
+        const qty = Math.max(0, Number(toInt(input.qty ?? input.quantity ?? input.count) || 0));
+        if (qty <= 0) continue;
+        const key = aifPreparationLineKey(variant.id, routeFrom.id, routeTo.id);
+        const currentDesired = desiredByKey.get(key);
+        desiredByKey.set(key, {
+          key,
+          variant,
+          routeFrom,
+          routeTo,
+          qty: qty + Number(currentDesired?.qty || 0),
+          firstIndex: currentDesired?.firstIndex ?? index,
+        });
+      }
+
+      let nextLineNo = existingResult.rows.reduce((max, line) => Math.max(max, Number(line.line_no || 0)), 0) + 1;
+      let movementRows = 0;
+      let restoredQty = 0;
+      let addedQty = 0;
+      const allKeys = new Set([...existingByKey.keys(), ...desiredByKey.keys()]);
+      for (const key of allKeys) {
+        const existing = existingByKey.get(key) || null;
+        let desired = desiredByKey.get(key) || null;
+        if (!desired && existing) {
+          const variant = await readAifTransferVariantSnapshot(client, existing.variant_id);
+          const routeFrom = await readAifPreparationLocation(client, existing.from_location_id, 'forráshely');
+          const routeTo = await readAifPreparationLocation(client, existing.to_location_id, 'célhely');
+          desired = { key, variant, routeFrom, routeTo, qty: 0, firstIndex: Number(existing.line_no || 0) };
+        }
+        if (!desired) continue;
+        const previousQty = Number(existing?.qty || 0);
+        const delta = desired.qty - previousQty;
+        const lineNo = Number(existing?.line_no || nextLineNo++);
+        const movement = await applyAifPreparationStockDelta(client, {
+          document,
+          lineNo,
+          variant: desired.variant,
+          routeFrom: desired.routeFrom,
+          routeTo: desired.routeTo,
+          qtyDelta: delta,
+          actor,
+          note: emptyToNull(body.note) ?? document.note,
+          title: emptyToNull(body.title || body.documentTitle || body.document_title) ?? document.subtitle,
+          reason: delta < 0 ? 'preparation_quantity_restore' : existing ? 'preparation_quantity_increase' : 'preparation_line_add',
+        });
+        movementRows += movement.movementRows;
+        if (delta < 0) restoredQty += Math.abs(delta);
+        if (delta > 0) addedQty += delta;
+
+        if (desired.qty <= 0) {
+          if (existing) {
+            const ids = [existing.id, ...(existing.duplicate_ids || [])].filter(Boolean);
+            await client.query(`DELETE FROM aif_stock_transfer_document_lines WHERE id = ANY($1::uuid[])`, [ids]);
+          }
+          continue;
+        }
+
+        const productCode = desired.variant.supplier_product_code || String(desired.variant.model_code || '').split(':').pop() || desired.variant.internal_sku || null;
+        const displayBarcode = desired.variant.barcode || desired.variant.supplier_barcode || null;
+        const unitPrice = toMoney(desired.variant.sell_price);
+        const lineTotal = unitPrice === null ? null : Math.round((desired.qty * unitPrice + Number.EPSILON) * 100) / 100;
+        const raw = {
+          ...(existing?.raw && typeof existing.raw === 'object' ? existing.raw : {}),
+          preparation: true,
+          documentType: 'internal_transfer',
+          transferId: document.transfer_id,
+          documentId: String(document.id),
+          documentNumber: document.document_number,
+          lineNo,
+          productTitle: desired.variant.title_ro,
+          productCode,
+          barcode: displayBarcode,
+          fromLocationId: String(desired.routeFrom.id),
+          fromLocationName: desired.routeFrom.name || desired.routeFrom.code,
+          toLocationId: String(desired.routeTo.id),
+          toLocationName: desired.routeTo.name || desired.routeTo.code,
+          qty: desired.qty,
+          unitPrice,
+          lineTotal,
+          priceBasis: 'selling_price',
+          currencyCode: 'RON',
+          updatedAt: new Date().toISOString(),
+        };
+
+        if (existing) {
+          await client.query(
+            `UPDATE aif_stock_transfer_document_lines
+             SET qty=$2,unit_price=$3,line_total=$4,currency_code='RON',price_basis='selling_price',qty_delta=0,
+                 source_after=$5,target_after=$6,raw=$7::jsonb
+             WHERE id=$1`,
+            [existing.id, desired.qty, unitPrice, lineTotal, movement.routeFromAfter, movement.routeToAfter, JSON.stringify(raw)]
+          );
+          if (existing.duplicate_ids?.length) {
+            await client.query(`DELETE FROM aif_stock_transfer_document_lines WHERE id = ANY($1::uuid[])`, [existing.duplicate_ids]);
+          }
+        } else {
+          await client.query(
+            `INSERT INTO aif_stock_transfer_document_lines (
+               document_id,line_no,variant_id,product_title,brand_name,category_name,
+               product_code,barcode,color_name,size,image_url,
+               from_location_id,from_location_name,to_location_id,to_location_name,
+               qty,unit_price,line_total,currency_code,price_basis,qty_delta,
+               source_before,source_after,target_before,target_after,raw
+             ) VALUES (
+               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+               $16,$17,$18,'RON','selling_price',0,$19,$20,$21,$22,$23::jsonb
+             )`,
+            [
+              document.id,
+              lineNo,
+              String(desired.variant.id),
+              desired.variant.title_ro,
+              desired.variant.brand_name,
+              desired.variant.category_name,
+              productCode,
+              displayBarcode,
+              desired.variant.color_name,
+              desired.variant.size,
+              desired.variant.image_url,
+              String(desired.routeFrom.id),
+              desired.routeFrom.name || desired.routeFrom.code,
+              String(desired.routeTo.id),
+              desired.routeTo.name || desired.routeTo.code,
+              desired.qty,
+              unitPrice,
+              lineTotal,
+              movement.sourceBefore,
+              movement.routeFromAfter,
+              movement.targetBefore,
+              movement.routeToAfter,
+              JSON.stringify(raw),
+            ]
+          );
+        }
+      }
+
+      const subtitle = emptyToNull(body.title || body.documentTitle || body.document_title);
+      const note = body.note === undefined ? document.note : emptyToNull(body.note);
+      const header = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET subtitle=COALESCE($2,subtitle),note=$3,actor=$4,owner_key=COALESCE(owner_key,$5),updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [document.id, subtitle, note, actor, ownerKey]
+      );
+      document = header.rows[0] || document;
+      const refreshed = await refreshAifPreparationDocument(client, document.id, {
+        lastEditedAt: new Date().toISOString(),
+        lastEditedBy: actor,
+        restoredQty,
+        addedQty,
+      });
+      document = refreshed.document || document;
+      await client.query('COMMIT');
+      return res.json({
+        ok: true,
+        status: 'preparation',
+        documentId: String(document.id),
+        documentNumber: document.document_number,
+        document,
+        lines: refreshed.lines,
+        lineCount: Number(document.line_count || 0),
+        totalQty: Number(document.total_qty || 0),
+        totalValue: Number(document.total_value || 0),
+        restoredQty,
+        addedQty,
+        movementRows,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF update stock transfer preparation failed', error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'Az előkészítés mentése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  async function closeAifStockTransferPreparation(req, res) {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Előkészítés azonosító szükséges.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query(
+        `SELECT * FROM aif_stock_transfer_documents
+         WHERE (id::text=$1 OR transfer_id=$1 OR document_number=$1)
+         FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) throw Object.assign(new Error('Az előkészítés nem található.'), { statusCode: 404 });
+      const document = current.rows[0];
+      if (document.status === 'issued') {
+        await client.query('COMMIT');
+        return res.json({ ok: true, unchanged: true, status: 'issued', document });
+      }
+      if (document.status !== 'preparation') throw Object.assign(new Error('Csak előkészítés zárható le.'), { statusCode: 400 });
+      if (Number(document.line_count || 0) <= 0 || Number(document.total_qty || 0) <= 0) throw Object.assign(new Error('Üres előkészítés nem zárható le.'), { statusCode: 400 });
+      const actor = actorFrom(req);
+      const updated = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET status='issued',actor=$2,
+             raw=COALESCE(raw,'{}'::jsonb) || $3::jsonb,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [document.id, actor, JSON.stringify({ preparation: false, closedAt: new Date().toISOString(), closedBy: actor })]
+      );
+      await client.query('COMMIT');
+      return res.json({ ok: true, status: 'issued', document: updated.rows[0] });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'Az előkészítés lezárása nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  async function reopenAifStockTransferPreparation(req, res) {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Bizonylat azonosító szükséges.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const actor = actorFrom(req);
+      const ownerKey = selectionOwnerKey(req);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif:stock-preparation:${ownerKey}`]);
+      const current = await client.query(
+        `SELECT * FROM aif_stock_transfer_documents
+         WHERE (id::text=$1 OR transfer_id=$1 OR document_number=$1)
+         FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) throw Object.assign(new Error('A bizonylat nem található.'), { statusCode: 404 });
+      const document = current.rows[0];
+      if (cleanAifStockDocumentType(document.document_type, null) !== 'internal_transfer') throw Object.assign(new Error('Csak belső átadási bizonylat állítható vissza előkészítésre.'), { statusCode: 400 });
+      if (document.status === 'preparation') {
+        await client.query('COMMIT');
+        return res.json({ ok: true, unchanged: true, status: 'preparation', document });
+      }
+      if (document.status !== 'issued') throw Object.assign(new Error('Csak lezárt bizonylat állítható vissza előkészítésre.'), { statusCode: 400 });
+      const other = await client.query(
+        `SELECT document_number FROM aif_stock_transfer_documents
+         WHERE owner_key=$1 AND document_type='internal_transfer' AND status='preparation' AND id<>$2
+         LIMIT 1`,
+        [ownerKey, document.id]
+      );
+      if (other.rowCount) throw Object.assign(new Error(`Már van nyitott előkészítés: ${other.rows[0].document_number}. Előbb zárd le vagy töröld azt.`), { statusCode: 409, code: 'another_preparation_is_open' });
+      const updated = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET status='preparation',owner_key=$2,actor=$3,
+             raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [document.id, ownerKey, actor, JSON.stringify({ preparation: true, reopenedAt: new Date().toISOString(), reopenedBy: actor })]
+      );
+      await client.query('COMMIT');
+      return res.json({ ok: true, status: 'preparation', document: updated.rows[0] });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A bizonylat nem állítható vissza előkészítésre.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  async function deleteAifStockTransferPreparation(req, res) {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Előkészítés azonosító szükséges.' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query(
+        `SELECT * FROM aif_stock_transfer_documents
+         WHERE (id::text=$1 OR transfer_id=$1 OR document_number=$1)
+         FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) throw Object.assign(new Error('Az előkészítés nem található.'), { statusCode: 404 });
+      const document = current.rows[0];
+      if (document.status !== 'preparation') throw Object.assign(new Error('Csak előkészítés törölhető készlet-visszaállítással.'), { statusCode: 400 });
+      const lines = await client.query(`SELECT * FROM aif_stock_transfer_document_lines WHERE document_id=$1 ORDER BY line_no DESC FOR UPDATE`, [document.id]);
+      const actor = actorFrom(req);
+      let restoredQty = 0;
+      let movementRows = 0;
+      for (const line of lines.rows) {
+        const variant = await readAifTransferVariantSnapshot(client, line.variant_id);
+        const routeFrom = await readAifPreparationLocation(client, line.from_location_id, 'forráshely');
+        const routeTo = await readAifPreparationLocation(client, line.to_location_id, 'célhely');
+        const quantity = Number(line.qty || 0);
+        if (quantity <= 0) continue;
+        const movement = await applyAifPreparationStockDelta(client, {
+          document,
+          lineNo: line.line_no,
+          variant,
+          routeFrom,
+          routeTo,
+          qtyDelta: -quantity,
+          actor,
+          note: document.note,
+          title: document.subtitle,
+          reason: 'preparation_deleted_restore',
+        });
+        restoredQty += quantity;
+        movementRows += movement.movementRows;
+      }
+      await client.query(
+        `INSERT INTO aif_stock_transfer_document_deletions (transfer_id,document_number,source,deleted_by,raw,deleted_at)
+         VALUES ($1,$2,'official',$3,$4::jsonb,now())
+         ON CONFLICT (transfer_id) DO UPDATE SET document_number=EXCLUDED.document_number,source='official',deleted_by=EXCLUDED.deleted_by,raw=EXCLUDED.raw,deleted_at=now()`,
+        [document.transfer_id, document.document_number, actor, JSON.stringify({ preparationDeleted: true, restoredQty, documentId: String(document.id) })]
+      );
+      await client.query(`DELETE FROM aif_stock_transfer_documents WHERE id=$1`, [document.id]);
+      await client.query('COMMIT');
+      return res.json({ ok: true, mode: 'preparation_deleted_and_stock_restored', restoredQty, movementRows, documentNumber: document.document_number });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'Az előkészítés törlése és a készlet visszaállítása nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
+  router.post('/stock-transfers', requireAuthed, handleStockTransfer);
+  router.post('/stock/transfers', requireAuthed, handleStockTransfer);
+  router.put('/stock-transfer-documents/:id/preparation', requireAuthed, handleUpdateStockTransferPreparation);
+  router.patch('/stock-transfer-documents/:id/preparation', requireAuthed, handleUpdateStockTransferPreparation);
+  router.post('/stock-transfer-documents/:id/close', requireAuthed, closeAifStockTransferPreparation);
+  router.post('/stock-transfer-documents/:id/reopen', requireAuthed, reopenAifStockTransferPreparation);
+  router.delete('/stock-transfer-documents/:id/preparation', requireAuthed, deleteAifStockTransferPreparation);
 
   async function listStockMovements(req, res) {
     const location = text(req.query.location || req.query.locationCode || req.query.location_id);
