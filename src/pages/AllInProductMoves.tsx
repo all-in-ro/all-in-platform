@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   Archive,
@@ -10,6 +11,7 @@ import {
   Camera,
   CheckCircle2,
   ChevronLeft,
+  ChevronDown,
   Edit3,
   ChevronRight,
   FileText,
@@ -46,7 +48,6 @@ const iconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl bord
 const dangerIconBtn = "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-300/35 bg-rose-600 text-white shadow-[0_7px_18px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
 const dangerBtn = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-rose-300/35 bg-rose-600 px-3 text-xs text-white shadow-[0_7px_18px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20";
-const select = "h-10 w-full rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/20";
 const label = "grid min-w-0 gap-1.5 text-xs text-white/65";
 const API_BASE = "/api/aif";
 
@@ -258,7 +259,7 @@ const DOCUMENT_TYPES: Array<{
     type: "damaged_writeoff",
     label: "Produse deteriorate",
     shortLabel: "Sérült / kivezetés",
-    subtitle: "Sérült vagy elveszett termék hivatalos kivezetése",
+    subtitle: "Sérült vagy nem értékesíthető termék hivatalos kivezetése",
     icon: PackageX,
     tone: "border-rose-200/28 bg-rose-500/12 text-rose-50",
   },
@@ -283,8 +284,6 @@ const REASON_OPTIONS: Record<DocumentType, Array<{ value: string; label: string;
   ],
   damaged_writeoff: [
     { value: "damaged", label: "Sérült termék", ro: "Produs deteriorat" },
-    { value: "lost", label: "Elveszett", ro: "Produs lipsă / pierdut" },
-    { value: "theft", label: "Lopás", ro: "Furt" },
     { value: "unusable", label: "Nem értékesíthető", ro: "Produs impropriu vânzării" },
     { value: "other", label: "Egyéb", ro: "Alt motiv" },
   ],
@@ -380,8 +379,13 @@ function documentMeta(type: DocumentType) {
 }
 
 function reasonLabel(type: DocumentType, code?: string | null, explicit?: string | null, romanian = false) {
+  const normalizedCode = String(code || "").trim().toLowerCase();
+  const normalizedExplicit = normalize(explicit);
+  if (["lost", "theft"].includes(normalizedCode) || ["elveszett", "lopas", "furt", "produs lipsa pierdut"].includes(normalizedExplicit)) {
+    return romanian ? "Alt motiv" : "Egyéb";
+  }
   if (explicit) return explicit;
-  const row = (REASON_OPTIONS[type] || []).find((option) => option.value === String(code || ""));
+  const row = (REASON_OPTIONS[type] || []).find((option) => option.value === normalizedCode);
   return row ? (romanian ? row.ro : row.label) : String(code || "-");
 }
 
@@ -484,6 +488,166 @@ function createIdempotencyKey() {
 
 function goHome() {
   window.location.hash = "#allin";
+}
+
+type CompactSelectOption = {
+  value: string;
+  label: string;
+  group?: string;
+  disabled?: boolean;
+};
+
+type CompactSelectProps = {
+  value: string;
+  options: CompactSelectOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+};
+
+function CompactSelect({
+  value,
+  options,
+  onChange,
+  placeholder = "Válassz",
+  className = "",
+  disabled = false,
+  ariaLabel,
+}: CompactSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    width: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const selected = options.find((option) => option.value === value) || null;
+  const groupedOptions = useMemo(() => {
+    const groups: Array<{ label: string; items: CompactSelectOption[] }> = [];
+    for (const option of options) {
+      const groupLabel = option.group || "";
+      const current = groups[groups.length - 1];
+      if (!current || current.label !== groupLabel) groups.push({ label: groupLabel, items: [option] });
+      else current.items.push(option);
+    }
+    return groups;
+  }, [options]);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || typeof window === "undefined") return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const width = Math.min(Math.max(rect.width, 150), window.innerWidth - viewportPadding * 2);
+    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
+    const roomBelow = window.innerHeight - rect.bottom;
+    const openUp = roomBelow < 250 && rect.top > roomBelow;
+    setMenuPosition(openUp
+      ? { left, width, bottom: Math.max(viewportPadding, window.innerHeight - rect.top + 6) }
+      : { left, width, top: Math.min(window.innerHeight - viewportPadding, rect.bottom + 6) });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("mousedown", closeOnOutside, true);
+    window.addEventListener("keydown", closeOnEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside, true);
+      window.removeEventListener("keydown", closeOnEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-white/22 bg-[#3f4959] px-3 text-left text-xs text-white outline-none transition hover:bg-[#465264] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/18 disabled:cursor-not-allowed disabled:opacity-45"
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className={`truncate ${selected ? "text-white" : "text-white/48"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && menuPosition && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="overflow-hidden rounded-xl border border-white/20 bg-[#354153] shadow-2xl"
+          style={{
+            position: "fixed",
+            zIndex: 500,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            top: menuPosition.top,
+            bottom: menuPosition.bottom,
+          }}
+        >
+          <div className="max-h-64 overflow-y-auto p-1">
+            {groupedOptions.map((group, groupIndex) => (
+              <div key={`${group.label}:${groupIndex}`} className={groupIndex ? "mt-1 border-t border-white/10 pt-1" : ""}>
+                {group.label ? <div className="px-2 py-1 text-[9px] uppercase tracking-[0.12em] text-white/38">{group.label}</div> : null}
+                {group.items.map((option) => {
+                  const active = option.value === value;
+                  return (
+                    <button
+                      key={`${group.label}:${option.value}`}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      disabled={option.disabled}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${
+                        active ? "bg-[#2a8d8b] text-white" : "text-white/82 hover:bg-[#415064]"
+                      } disabled:cursor-not-allowed disabled:opacity-40`}
+                      onClick={() => {
+                        if (option.disabled) return;
+                        onChange(option.value);
+                        setOpen(false);
+                      }}
+                    >
+                      <span className="truncate">{option.label}</span>
+                      <CheckCircle2 size={13} className={active ? "shrink-0 opacity-100" : "shrink-0 opacity-0"} />
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
 }
 
 function documentBadge(item: DocumentListItem) {
@@ -1431,9 +1595,9 @@ export default function AllInProductMoves() {
             <label className={`${label} lg:col-span-2 xl:col-span-2`}>Keresés<div className="relative"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" /><input className={`${input} pl-9`} value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") applySearch(); }} placeholder="Bizonylatszám, termék, vonalkód, beszállító..." /></div></label>
             <label className={label}>Ettől<input className={input} type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPageNo(1); }} /></label>
             <label className={label}>Eddig<input className={input} type="date" value={to} onChange={(event) => { setTo(event.target.value); setPageNo(1); }} /></label>
-            <label className={label}>Forrás<select className={select} value={fromLocation} onChange={(event) => { setFromLocation(event.target.value); setPageNo(1); }}><option value="">Minden forrás</option>{locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
-            <label className={label}>Cél / partner<select className={select} value={toLocation} onChange={(event) => { setToLocation(event.target.value); setPageNo(1); }}><option value="">Minden célhely / partner</option><optgroup label="Készlethelyek">{locations.map((location) => <option key={location.id} value={`location:${location.id}`}>{location.name}</option>)}</optgroup><optgroup label="Beszállítók">{suppliers.map((supplier) => <option key={supplier.id} value={`supplier:${supplier.id}`}>{supplier.name}</option>)}</optgroup></select></label>
-            <label className={label}>Típus<select className={select} value={type} onChange={(event) => { setType(event.target.value as ArchiveFilter); setPageNo(1); }}><option value="all">Minden bizonylat</option><option value="draft">Piszkozat</option><option value="internal_transfer">Belső átadás</option><option value="supplier_return">Beszállítói retur</option><option value="damaged_writeoff">Sérült / kivezetés</option><option value="stock_correction">Készletkorrekció</option><option value="legacy">Régi archívum</option><option value="cancelled">Sztornózott</option></select></label>
+            <label className={label}>Forrás<CompactSelect value={fromLocation} onChange={(next) => { setFromLocation(next); setPageNo(1); }} placeholder="Minden forrás" options={[{ value: "", label: "Minden forrás" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
+            <label className={label}>Cél / partner<CompactSelect value={toLocation} onChange={(next) => { setToLocation(next); setPageNo(1); }} placeholder="Minden célhely / partner" options={[{ value: "", label: "Minden célhely / partner" }, ...locations.map((location) => ({ value: `location:${location.id}`, label: location.name, group: "Készlethelyek" })), ...suppliers.map((supplier) => ({ value: `supplier:${supplier.id}`, label: supplier.name, group: "Beszállítók" }))]} /></label>
+            <label className={label}>Típus<CompactSelect value={type} onChange={(next) => { setType(next as ArchiveFilter); setPageNo(1); }} options={[{ value: "all", label: "Minden bizonylat" }, { value: "draft", label: "Piszkozat" }, { value: "internal_transfer", label: "Belső átadás" }, { value: "supplier_return", label: "Beszállítói retur" }, { value: "damaged_writeoff", label: "Sérült / kivezetés" }, { value: "stock_correction", label: "Készletkorrekció" }, { value: "legacy", label: "Régi archívum" }, { value: "cancelled", label: "Sztornózott" }]} /></label>
             <div className="flex items-end gap-2 lg:col-span-4 xl:col-span-7"><button type="button" className={primaryBtn} onClick={applySearch}><Search size={15} /> Keresés</button><button type="button" className={btnSoft} onClick={clearFilters}><X size={15} /> Szűrők törlése</button></div>
           </div>
         </section>
@@ -1441,7 +1605,7 @@ export default function AllInProductMoves() {
         <section className={panel}>
           <div className={panelHead}>
             <div><p className="text-[10px] uppercase tracking-[0.17em] text-white/40">Bizonylati archívum</p><h2 className="mt-1 flex items-center gap-2 text-base"><FileText size={17} /> Hivatalos készletbizonylatok és előzmények</h2></div>
-            <div className="flex items-center gap-2 text-xs text-white/55"><span>{quantity(totals.total)} találat</span><select className="h-9 rounded-xl border border-white/14 bg-[#354153] px-2 text-xs text-white" value={limit} onChange={(event) => { setLimit(Number(event.target.value)); setPageNo(1); }}><option value={30}>30 / oldal</option><option value={50}>50 / oldal</option><option value={100}>100 / oldal</option></select></div>
+            <div className="flex items-center gap-2 text-xs text-white/55"><span>{quantity(totals.total)} találat</span><CompactSelect className="w-[112px]" value={String(limit)} onChange={(next) => { setLimit(Number(next)); setPageNo(1); }} options={[{ value: "30", label: "30 / oldal" }, { value: "50", label: "50 / oldal" }, { value: "100", label: "100 / oldal" }]} /></div>
           </div>
 
           <div className="hidden overflow-x-auto lg:block">
@@ -1561,11 +1725,11 @@ export default function AllInProductMoves() {
               </div>
 
               <div className="mt-3 grid gap-3 rounded-2xl border border-white/12 bg-white/[0.045] p-3 md:grid-cols-2 xl:grid-cols-4">
-                <label className={label}>Forráshely / érintett készlethely<select className={select} value={sourceLocationId} onChange={(event) => setSourceLocationId(event.target.value)}><option value="">Válassz helyszínt</option>{locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
-                {draftType === "internal_transfer" ? <label className={label}>Célhely<select className={select} value={targetLocationId} onChange={(event) => setTargetLocationId(event.target.value)}><option value="">Válassz célhelyet</option>{locations.filter((location) => location.id !== sourceLocationId).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label> : null}
-                {draftType === "supplier_return" ? <><label className={label}>Beszállító<select className={select} value={supplierId} onChange={(event) => void loadSupplierReceptions(event.target.value)}><option value="">Válassz beszállítót</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label><label className={label}>Kapcsolt receptió / számla<select className={select} value={receptionId} onChange={(event) => setReceptionId(event.target.value)}><option value="">Nincs megadva</option>{selectedSupplierReceptions.map((reception) => <option key={reception.id} value={reception.id}>{reception.invoice_number || "Számla nélkül"} • {reception.reception_date ? String(reception.reception_date).slice(0, 10) : "-"}</option>)}</select></label></> : null}
-                {draftType === "stock_correction" ? <label className={label}>Korrekció iránya<select className={select} value={correctionDirection} onChange={(event) => { setCorrectionDirection(event.target.value as CorrectionDirection); setDraftLines({}); }}><option value="decrease">Készlet csökkentése</option><option value="increase">Készlet növelése</option></select></label> : null}
-                {draftType !== "internal_transfer" ? <label className={label}>Művelet oka<select className={select} value={reasonCode} onChange={(event) => setReasonCode(event.target.value)}><option value="">Válassz okot</option>{REASON_OPTIONS[draftType].map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label> : null}
+                <label className={label}>Forráshely / érintett készlethely<CompactSelect value={sourceLocationId} onChange={setSourceLocationId} placeholder="Válassz helyszínt" options={[{ value: "", label: "Válassz helyszínt" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
+                {draftType === "internal_transfer" ? <label className={label}>Célhely<CompactSelect value={targetLocationId} onChange={setTargetLocationId} placeholder="Válassz célhelyet" options={[{ value: "", label: "Válassz célhelyet" }, ...locations.filter((location) => location.id !== sourceLocationId).map((location) => ({ value: location.id, label: location.name }))]} /></label> : null}
+                {draftType === "supplier_return" ? <><label className={label}>Beszállító<CompactSelect value={supplierId} onChange={(next) => void loadSupplierReceptions(next)} placeholder="Válassz beszállítót" options={[{ value: "", label: "Válassz beszállítót" }, ...suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))]} /></label><label className={label}>Kapcsolt receptió / számla<CompactSelect value={receptionId} onChange={setReceptionId} placeholder="Nincs megadva" options={[{ value: "", label: "Nincs megadva" }, ...selectedSupplierReceptions.map((reception) => ({ value: reception.id, label: `${reception.invoice_number || "Számla nélkül"} • ${reception.reception_date ? String(reception.reception_date).slice(0, 10) : "-"}` }))]} /></label></> : null}
+                {draftType === "stock_correction" ? <label className={label}>Korrekció iránya<CompactSelect value={correctionDirection} onChange={(next) => { setCorrectionDirection(next as CorrectionDirection); setDraftLines({}); }} options={[{ value: "decrease", label: "Készlet csökkentése" }, { value: "increase", label: "Készlet növelése" }]} /></label> : null}
+                {draftType !== "internal_transfer" ? <label className={label}>Művelet oka<CompactSelect value={reasonCode} onChange={setReasonCode} placeholder="Válassz okot" options={[{ value: "", label: "Válassz okot" }, ...REASON_OPTIONS[draftType].map((option) => ({ value: option.value, label: option.label }))]} /></label> : null}
                 {draftType !== "internal_transfer" ? <label className={label}>Ok pontosítása<input className={input} value={reasonText} onChange={(event) => setReasonText(event.target.value)} placeholder={reasonCode === "other" ? "Kötelező rövid leírás" : "Opcionális pontosítás"} /></label> : null}
                 <label className={label}>Hivatkozás / számlaszám<input className={input} value={externalReference} onChange={(event) => setExternalReference(event.target.value)} placeholder="Opcionális" /></label>
                 <label className={`${label} md:col-span-2`}>Megjegyzés a bizonylathoz<input className={input} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Csak a dokumentumhoz tartozó releváns megjegyzés" /></label>
@@ -1591,7 +1755,7 @@ export default function AllInProductMoves() {
                           const available = availableAt(row.item.variant_id, sourceLocationId);
                           return <tr key={row.item.variant_id} className="border-t border-white/[0.08]"><td className="px-2 py-2"><ProductThumb item={row.item} className="h-11 w-11" /></td><td className="px-2 py-2"><p className="max-w-[260px] truncate text-white">{productTitle(row.item)}</p><p className="mt-0.5 text-[10px] text-white/42">{row.item.brand_name || "-"} • {row.item.color_name || row.item.color_code || "-"} • {row.item.size || "-"}</p></td><td className="px-2 py-2 font-mono text-[10px] text-[#cffffd]/70">{visibleBarcode(row.item) || productCode(row.item) || "-"}</td><td className="px-2 py-2 text-center"><span className={`rounded-full border px-2 py-1 text-[10px] ${!outgoingDraft || available >= row.qty ? "border-[#7bd7d4]/25 bg-[#2a8d8b]/12 text-[#d7fffd]" : "border-rose-200/30 bg-rose-500/12 text-rose-50"}`}>{outgoingDraft ? `${available} db` : "növelés"}</span></td><td className="px-2 py-2"><div className="mx-auto grid h-8 w-[112px] grid-cols-[30px_1fr_30px] overflow-hidden rounded-lg border border-white/16 bg-[#303a4c]"><button type="button" onClick={() => adjustDraftQty(row.item.variant_id, -1)} className="grid place-items-center hover:bg-white/10"><Minus size={13} /></button><input className="w-full bg-transparent text-center text-xs text-white outline-none" value={row.qty} onChange={(event) => setDraftQty(row.item.variant_id, event.target.value)} inputMode="numeric" /><button type="button" onClick={() => adjustDraftQty(row.item.variant_id, 1)} className="grid place-items-center hover:bg-white/10"><Plus size={13} /></button></div></td><td className="px-2 py-2 text-right tabular-nums">{moneyRon(unit, false)}</td><td className="px-2 py-2 text-right tabular-nums text-[#d7fffd]">{moneyRon(unit === null ? null : unit * row.qty, false)}</td><td className="px-2 py-2 text-right"><button type="button" className={dangerIconBtn} onClick={() => setDraftLines((current) => { const next = { ...current }; delete next[row.item.variant_id]; return next; })}><Trash2 size={14} /></button></td></tr>;
                         })}
-                        {!draftLineArray.length ? <tr><td colSpan={8} className="px-4 py-12 text-center text-white/42">Még nincs termék a bizonylaton. A civilizáció eddig sem omlott össze, de most már ideje becsipogtatni valamit.</td></tr> : null}
+                        {!draftLineArray.length ? <tr><td colSpan={8} className="px-4 py-12 text-center text-white/42">Még nincs termék a bizonylaton. Adj hozzá terméket vonalkóddal vagy kereséssel.</td></tr> : null}
                       </tbody>
                     </table>
                   </div>
