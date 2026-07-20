@@ -288,7 +288,7 @@ function fileSafe(value: unknown) {
 }
 
 function statusLabel(status: AifPurchaseOrderStatus | string) {
-  if (status === "draft") return "Vázlat";
+  if (status === "draft") return "Nyitott";
   if (status === "ordered") return "Rendelve";
   if (status === "partially_received") return "Részben beérkezett";
   if (status === "received") return "Beérkezett";
@@ -297,11 +297,12 @@ function statusLabel(status: AifPurchaseOrderStatus | string) {
 }
 
 function statusClass(status: AifPurchaseOrderStatus | string) {
-  if (status === "draft") return "border-white/20 bg-white/8 text-white/80";
+  if (status === "draft") return "border-rose-200/55 bg-[#d31126] text-white shadow-[0_6px_16px_rgba(211,17,38,0.26)]";
   if (status === "ordered") return "border-amber-200/35 bg-amber-300/12 text-amber-50";
   if (status === "partially_received") return "border-sky-200/35 bg-sky-300/12 text-sky-50";
   if (status === "received") return "border-emerald-200/35 bg-emerald-300/12 text-emerald-50";
-  return "border-red-200/35 bg-red-300/12 text-red-50";
+  if (status === "cancelled") return "border-white/18 bg-[#303b4e] text-white/58";
+  return "border-white/18 bg-white/8 text-white/70";
 }
 
 function newLineKey() {
@@ -771,7 +772,7 @@ export default function AllInOrderHistory() {
     setDetailLoading(true);
     try {
       const response = await apiAifGetPurchaseOrder(order.id);
-      if (response.item.status !== "draft") throw new Error("Csak vázlat rendelés szerkeszthető.");
+      if (response.item.status !== "draft") throw new Error("Csak nyitott rendelés szerkeszthető.");
       setEditingId(response.item.id);
       setEditingOrderNumber(response.item.order_number || "");
       setFormSupplierId(response.item.supplier_id);
@@ -931,7 +932,7 @@ export default function AllInOrderHistory() {
         : await apiAifCreatePurchaseOrder(payload);
       setEditorOpen(false);
       resetEditor();
-      setMessage(`${response.item.order_number} mentve vázlatként.`);
+      setMessage(`${response.item.order_number} nyitott rendelésként mentve.`);
       await loadOrders();
       await openDetail(response.item.id);
     } catch (error: any) {
@@ -1144,7 +1145,7 @@ export default function AllInOrderHistory() {
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {[
             ["Összes rendelés", summary.total, <ClipboardList size={16} />],
-            ["Vázlat", summary.draft, <Edit3 size={16} />],
+            ["Nyitott", summary.draft, <Edit3 size={16} />],
             ["Rendelve", summary.ordered, <Send size={16} />],
             ["Részben beérkezett", summary.partiallyReceived, <Truck size={16} />],
             ["Beérkezett", summary.received, <PackageCheck size={16} />],
@@ -1162,7 +1163,7 @@ export default function AllInOrderHistory() {
             <input className={input} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadOrders(); }} placeholder="Rendelésszám, termék, kód, beszállító..." />
             <CompactSelect size="compact" value={supplierFilter} onChange={setSupplierFilter} placeholder="Minden beszállító" options={[{ value: "", label: "Minden beszállító" }, ...suppliers.map((item) => ({ value: item.id, label: item.name }))]} />
             <CompactSelect size="compact" value={locationFilter} onChange={setLocationFilter} placeholder="Minden célhely" options={[{ value: "", label: "Minden célhely" }, ...locations.map((item) => ({ value: item.id, label: item.name }))]} />
-            <CompactSelect size="compact" value={statusFilter} onChange={(next) => setStatusFilter(next as "all" | AifPurchaseOrderStatus)} options={[{ value: "all", label: "Minden állapot" }, { value: "draft", label: "Vázlat" }, { value: "ordered", label: "Rendelve" }, { value: "partially_received", label: "Részben beérkezett" }, { value: "received", label: "Beérkezett" }, { value: "cancelled", label: "Törölt" }]} />
+            <CompactSelect size="compact" value={statusFilter} onChange={(next) => setStatusFilter(next as "all" | AifPurchaseOrderStatus)} options={[{ value: "all", label: "Minden állapot" }, { value: "draft", label: "Nyitott" }, { value: "ordered", label: "Rendelve" }, { value: "partially_received", label: "Részben beérkezett" }, { value: "received", label: "Beérkezett" }, { value: "cancelled", label: "Törölt" }]} />
             <input className={input} type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
             <input className={input} type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
             <button className={primaryBtn} onClick={() => void loadOrders()} disabled={busy} type="button"><Search size={14} /> Keresés</button>
