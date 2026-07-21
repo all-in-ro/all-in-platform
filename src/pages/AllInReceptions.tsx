@@ -137,7 +137,7 @@ function salesTvaShort(settings?: SalesTvaSettings | null) {
   return `${rate.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%`;
 }
 
-function rowSellPriceRon(row: any, draft: any) {
+function rowSellEnteredPriceRon(row: any, draft: any) {
   const candidates = [
     draft?.sellPriceRon,
     draft?.sell_price_ron,
@@ -155,9 +155,28 @@ function rowSellPriceRon(row: any, draft: any) {
   return 0;
 }
 
-function rowSellValueRon(row: any, draft: any) {
+function salesGrossPriceRon(value: unknown, settings?: SalesTvaSettings | null) {
+  const entered = n(value);
+  if (entered <= 0) return entered;
+  if (salesIncludesTvaOf(settings)) return entered;
+  return entered * (1 + salesTvaRateOf(settings) / 100);
+}
+
+function salesNetPriceRon(value: unknown, settings?: SalesTvaSettings | null) {
+  const entered = n(value);
+  if (entered <= 0) return entered;
+  if (!salesIncludesTvaOf(settings)) return entered;
+  const factor = 1 + salesTvaRateOf(settings) / 100;
+  return factor > 0 ? entered / factor : entered;
+}
+
+function rowSellGrossPriceRon(row: any, draft: any, settings?: SalesTvaSettings | null) {
+  return salesGrossPriceRon(rowSellEnteredPriceRon(row, draft), settings);
+}
+
+function rowSellValueRon(row: any, draft: any, settings?: SalesTvaSettings | null) {
   const qty = n(draft?.qty ?? row?.qty ?? row?.normalized?.qty);
-  return qty * rowSellPriceRon(row, draft);
+  return qty * rowSellGrossPriceRon(row, draft, settings);
 }
 
 const page = "min-h-screen bg-[#4b5362] px-3 py-3 text-white font-normal sm:px-4 sm:py-4";
@@ -246,51 +265,77 @@ function rowDraftValue(row: any, drafts: Record<string, Record<string, unknown>>
   return qty * buyPrice;
 }
 
-function receptionBalance(item: any, rows: any[], drafts: Record<string, Record<string, unknown>>) {
-  const invoiceGross = n(item?.invoice_gross);
-  const shipping = n(item?.shipping_cost);
-  const tvaRate = n(item?.tva_rate);
-  const tvaMode = String(item?.tva_mode || "without_tva");
+function receptionBalance(
+  item: any,
+  rows: any[],
+  drafts: Record<string, Record<string, unknown>>,
+  headerDraft?: Record<string, string>,
+) {
+  const invoiceGross = n(headerDraft?.invoiceGross ?? item?.invoice_gross);
+  const shipping = n(headerDraft?.shippingCost ?? item?.shipping_cost);
+  const tvaRate = n(headerDraft?.tvaRate ?? item?.tva_rate);
+  const tvaMode = String(headerDraft?.tvaMode ?? item?.tva_mode ?? "no_tva");
   const rowsValue = (rows || []).reduce((sum, row) => sum + rowDraftValue(row, drafts), 0);
+  const baseTotal = rowsValue + shipping;
+  const grossFromNet = rowsValue + rowsValue * (tvaRate / 100) + shipping;
   let tvaValue = 0;
-  let calculatedTotal = rowsValue + shipping;
+  let calculatedTotal = baseTotal;
 
-  if (tvaMode === "without_tva") {
+  if (tvaMode === "without_tva" && tvaRate > 0) {
     tvaValue = rowsValue * (tvaRate / 100);
-    calculatedTotal = rowsValue + tvaValue + shipping;
+    calculatedTotal = grossFromNet;
   } else if (tvaMode === "with_tva" && tvaRate > 0) {
     tvaValue = rowsValue - rowsValue / (1 + tvaRate / 100);
-    calculatedTotal = rowsValue + shipping;
+    calculatedTotal = baseTotal;
   }
 
   const diff = invoiceGross - calculatedTotal;
   const absDiff = Math.abs(diff);
   const isOk = absDiff < 0.01;
+  const noVatWouldMatch = Math.abs(invoiceGross - baseTotal) < 0.01;
+  const suggestedNoVat = !isOk && tvaMode === "without_tva" && tvaRate > 0 && noVatWouldMatch;
   const isMissing = diff > 0;
-  const status = isOk ? "Egyezik" : isMissing ? "Hiányzik a sorokból" : "Túllépés";
+  const status = isOk
+    ? "Egyezik"
+    : suggestedNoVat
+      ? "Csak a beszerzési TVA mód hibás"
+      : isMissing
+        ? "Hiányzik a sorokból"
+        : "Túllépés";
   const className = isOk
     ? "border-[#2a8d8b]/55 bg-[#2a8d8b]/10"
-    : "border-red-300/55 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.18),0_0_24px_rgba(239,68,68,0.24)]";
+    : suggestedNoVat
+      ? "border-amber-300/55 bg-amber-500/12 shadow-[0_0_0_1px_rgba(245,158,11,0.12)]"
+      : "border-red-300/55 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.18),0_0_24px_rgba(239,68,68,0.24)]";
   const badgeClassName = isOk
     ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/14 text-white"
-    : "border-red-200/35 bg-red-500/18 text-red-50 shadow-[0_0_12px_rgba(239,68,68,0.35)]";
-  const amountClassName = isOk ? "text-white" : "text-red-100";
-  const labelClassName = isOk ? "text-white/72" : "text-red-100/88";
+    : suggestedNoVat
+      ? "border-amber-200/45 bg-amber-500/18 text-amber-50"
+      : "border-red-200/35 bg-red-500/18 text-red-50 shadow-[0_0_12px_rgba(239,68,68,0.35)]";
+  const amountClassName = isOk ? "text-white" : suggestedNoVat ? "text-amber-50" : "text-red-100";
+  const labelClassName = isOk ? "text-white/72" : suggestedNoVat ? "text-amber-50/88" : "text-red-100/88";
   const ledClassName = isOk
     ? "bg-[#2a8d8b] shadow-[0_0_10px_rgba(42,141,139,0.85)]"
-    : "bg-red-400 shadow-[0_0_12px_rgba(248,113,113,1),0_0_24px_rgba(239,68,68,0.8)] animate-pulse";
+    : suggestedNoVat
+      ? "bg-amber-300 shadow-[0_0_12px_rgba(252,211,77,0.9)]"
+      : "bg-red-400 shadow-[0_0_12px_rgba(248,113,113,1),0_0_24px_rgba(239,68,68,0.8)] animate-pulse";
 
   return {
     invoiceGross,
     rowsValue,
     shipping,
+    tvaRate,
+    tvaMode,
     tvaValue,
+    baseTotal,
+    grossFromNet,
     calculatedTotal,
     diff,
     absDiff,
     status,
     isOk,
     isMissing,
+    suggestedNoVat,
     className,
     badgeClassName,
     amountClassName,
@@ -383,7 +428,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
     const qty = n(draft.qty ?? row.qty);
     const price = n(draft.buyPrice ?? row.buy_price ?? draft.buyPriceOriginal);
     const priceRon = price * rate;
-    const sellPriceRon = rowSellPriceRon(row, draft);
+    const sellPriceRon = rowSellGrossPriceRon(row, draft, salesTva);
     const sellValueRon = qty * sellPriceRon;
     const value = qty * price;
     return { row, draft, qty, price, priceRon, sellPriceRon, sellValueRon, value };
@@ -1079,7 +1124,11 @@ export default function AllInReceptions(_props: Props) {
   function updateReceptionDraft(key: string, value: string) {
     setReceptionDraft((prev) => {
       const next = { ...prev, [key]: value };
-      if (key === "tvaMode" && value !== "with_tva") next.tvaRate = "0";
+      if (key === "tvaMode" && value === "no_tva") {
+        next.tvaRate = "0";
+      } else if (key === "tvaMode" && (value === "without_tva" || value === "with_tva") && n(next.tvaRate) <= 0) {
+        next.tvaRate = String(n(detail?.item?.tva_rate) || 21);
+      }
       return next;
     });
   }
@@ -1095,8 +1144,37 @@ export default function AllInReceptions(_props: Props) {
 
   const detailBalance = useMemo(() => {
     if (!detail) return null;
-    return receptionBalance(detail.item, detail.rows || [], rowDrafts);
-  }, [detail, rowDrafts]);
+    return receptionBalance(detail.item, detail.rows || [], rowDrafts, receptionDraft);
+  }, [detail, rowDrafts, receptionDraft]);
+
+  async function applyNoPurchaseVatAndSave() {
+    if (!detail) return;
+    setSavingHeader(true);
+    setMessage("");
+    try {
+      const nextDraft = { ...receptionDraft, tvaMode: "no_tva", tvaRate: "0" };
+      setReceptionDraft(nextDraft);
+      await apiAifUpdateReception(detail.item.id, {
+        invoiceNumber: nextDraft.invoiceNumber,
+        invoiceDate: nextDraft.invoiceDate,
+        receptionDate: nextDraft.receptionDate,
+        currencyCode: nextDraft.currencyCode,
+        exchangeRateToRon: nextDraft.exchangeRateToRon,
+        tvaMode: "no_tva",
+        tvaRate: 0,
+        shippingCost: nextDraft.shippingCost,
+        invoiceGross: nextDraft.invoiceGross,
+        note: nextDraft.note,
+      });
+      await reloadDetail(detail.item.id);
+      await load();
+      setMessage("A beszerzési TVA mód „Nincs TVA” értékre állítva. A számla most a terméksorokkal egyezik.");
+    } catch (e: any) {
+      setMessage(e?.message || "A beszerzési TVA mód automatikus javítása nem sikerült.");
+    } finally {
+      setSavingHeader(false);
+    }
+  }
 
   async function saveReceptionHeader() {
     if (!detail) return;
@@ -1506,19 +1584,28 @@ export default function AllInReceptions(_props: Props) {
                   <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex items-start gap-3">
                       <div className="relative mt-0.5 shrink-0">
-                        {!detailBalance.isOk && <span className="absolute inset-0 rounded-full bg-red-400/55 blur-md animate-pulse" />}
+                        {!detailBalance.isOk && !detailBalance.suggestedNoVat && <span className="absolute inset-0 rounded-full bg-red-400/55 blur-md animate-pulse" />}
                         <span className={`relative block h-3.5 w-3.5 rounded-full ${detailBalance.ledClassName}`} />
                       </div>
                       <div>
                         <p className={`text-[11px] uppercase tracking-[0.14em] ${detailBalance.labelClassName}`}>Számla egyeztetés</p>
                         <div className="mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1">
                           <p className={`text-base sm:text-lg ${detailBalance.amountClassName}`}>
-                            Különbözet: <span className={!detailBalance.isOk ? "text-red-50 [text-shadow:0_0_14px_rgba(248,113,113,0.45)]" : ""}>{money(detailBalance.diff, detail.item.currency_code)}</span>
+                            {detailBalance.suggestedNoVat ? (
+                              <>A sorok összege helyes: <span className="text-amber-50">{money(detailBalance.baseTotal, detail.item.currency_code)}</span></>
+                            ) : (
+                              <>Különbözet: <span className={!detailBalance.isOk ? "text-red-50 [text-shadow:0_0_14px_rgba(248,113,113,0.45)]" : ""}>{money(detailBalance.diff, detail.item.currency_code)}</span></>
+                            )}
                           </p>
-                          {!detailBalance.isOk && (
+                          {!detailBalance.isOk && !detailBalance.suggestedNoVat && (
                             <span className="inline-flex items-center gap-1 rounded-full border border-red-200/35 bg-red-500/15 px-2 py-0.5 text-[11px] text-red-50 shadow-[0_0_14px_rgba(239,68,68,0.35)]">
                               <span className="h-2 w-2 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.95)] animate-pulse" />
                               Figyelem: a számla még nem talál
+                            </span>
+                          )}
+                          {detailBalance.suggestedNoVat && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200/45 bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-50">
+                              A sorok összege pontosan egyezik a számlával. Csak a beszerzési TVA mód van rosszul beállítva.
                             </span>
                           )}
                         </div>
@@ -1527,11 +1614,22 @@ export default function AllInReceptions(_props: Props) {
                     <span className={`self-start rounded-full border px-2.5 py-1 text-xs ${detailBalance.badgeClassName}`}>{detailBalance.status}</span>
                   </div>
                   <div className="mt-2 grid gap-2 text-xs sm:grid-cols-4">
-                    <div className={detailBalance.labelClassName}>Sorok értéke: <span className="text-white">{money(detailBalance.rowsValue, detail.item.currency_code)}</span></div>
-                    <div className={detailBalance.labelClassName}>TVA: <span className="text-white">{money(detailBalance.tvaValue, detail.item.currency_code)}</span></div>
+                    <div className={detailBalance.labelClassName}>Sorok: <span className="text-white">{money(detailBalance.rowsValue, detail.item.currency_code)}</span></div>
+                    <div className={detailBalance.labelClassName}>Beszerzési TVA: <span className="text-white">{money(detailBalance.tvaValue, detail.item.currency_code)}</span></div>
                     <div className={detailBalance.labelClassName}>Szállítás: <span className="text-white">{money(detailBalance.shipping, detail.item.currency_code)}</span></div>
-                    <div className={detailBalance.labelClassName}>Számított: <span className="text-white">{money(detailBalance.calculatedTotal, detail.item.currency_code)}</span></div>
+                    <div className={detailBalance.labelClassName}>Számított számla: <span className="text-white">{money(detailBalance.calculatedTotal, detail.item.currency_code)}</span></div>
                   </div>
+                  {detailBalance.suggestedNoVat && (
+                    <div className="mt-2 flex flex-col gap-2 rounded-xl border border-amber-200/35 bg-amber-500/[0.08] px-3 py-2 text-xs text-amber-50 sm:flex-row sm:items-center sm:justify-between">
+                      <span>
+                        {money(detailBalance.rowsValue, detail.item.currency_code)} termék + {money(detailBalance.shipping, detail.item.currency_code)} szállítás = {money(detailBalance.invoiceGross, detail.item.currency_code)} számla.
+                        A plusz {money(detailBalance.tvaValue, detail.item.currency_code)} csak a hibás beszerzési TVA-beállításból jön.
+                      </span>
+                      <button className={primaryBtn} onClick={() => void applyNoPurchaseVatAndSave()} disabled={savingHeader || busy} type="button">
+                        Nincs beszerzési TVA • javítás és mentés
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1539,7 +1637,11 @@ export default function AllInReceptions(_props: Props) {
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-xs uppercase tracking-[0.1em] text-white/70">Eladási ár / TVA</p>
-                    <p className="mt-1 text-sm text-white">Az eladási ár RON-os végárként szerepel. Központi TVA: {salesTvaText}.</p>
+                    <p className="mt-1 text-sm text-white">
+                      {salesIncludesTvaOf(salesTvaSettings)
+                        ? `A megadott eladási ár már végár, a ${salesTvaShort(salesTvaSettings)} TVA benne van.`
+                        : `A megadott eladási ár nettó, a rendszer hozzáadja a ${salesTvaShort(salesTvaSettings)} TVA-t.`}
+                    </p>
                     {salesTvaUpdatedAt && <p className="mt-1 text-[11px] text-white/55">Utolsó központi mentés: {String(salesTvaUpdatedAt).slice(0, 16).replace("T", " ")}{salesTvaUpdatedBy ? ` • ${salesTvaUpdatedBy}` : ""}</p>}
                   </div>
                   <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} disabled={salesTvaSettingsLoading} type="button">Beállítás</button>
@@ -1560,8 +1662,8 @@ export default function AllInReceptions(_props: Props) {
                   <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
                   <label className={lightLabel}>Pénznem<select className={lightSelect} value={receptionDraft.currencyCode || ""} onChange={(e) => updateReceptionDraft("currencyCode", e.target.value)}>{(meta?.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} - {c.name}</option>)}</select></label>
                   <label className={lightLabel}>Árfolyam RON<input className={lightInput} value={receptionDraft.exchangeRateToRon || ""} onChange={(e) => updateReceptionDraft("exchangeRateToRon", e.target.value)} /></label>
-                  <label className={lightLabel}>TVA kezelés<select className={lightSelect} value={receptionDraft.tvaMode || "without_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="without_tva">Árak nettóban</option><option value="with_tva">Árak bruttóban</option><option value="no_tva">TVA nélkül</option></select></label>
-                  <label className={lightLabel}>TVA %<input className={lightInput} disabled={receptionDraft.tvaMode !== "with_tva"} value={receptionDraft.tvaMode === "with_tva" ? (receptionDraft.tvaRate || "") : "0"} onChange={(e) => updateReceptionDraft("tvaRate", e.target.value)} /></label>
+                  <label className={lightLabel}>Beszerzési TVA kezelése<select className={lightSelect} value={receptionDraft.tvaMode || "no_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="no_tva">Nincs beszerzési TVA</option><option value="without_tva">Nettó vételár + TVA</option><option value="with_tva">Bruttó vételár, TVA benne van</option></select></label>
+                  <label className={lightLabel}>Beszerzési TVA %<input className={lightInput} disabled={receptionDraft.tvaMode === "no_tva"} value={receptionDraft.tvaMode === "no_tva" ? "0" : (receptionDraft.tvaRate || "")} onChange={(e) => updateReceptionDraft("tvaRate", e.target.value)} /></label>
                   <label className={lightLabel}>Szállítás<input className={lightInput} value={receptionDraft.shippingCost || ""} onChange={(e) => updateReceptionDraft("shippingCost", e.target.value)} /></label>
                   <label className={lightLabel}>Számla végösszeg<input className={lightInput} value={receptionDraft.invoiceGross || ""} onChange={(e) => updateReceptionDraft("invoiceGross", e.target.value)} /></label>
                   <label className={`${lightLabel} lg:col-span-3`}>Megjegyzés<input className={lightInput} value={receptionDraft.note || ""} onChange={(e) => updateReceptionDraft("note", e.target.value)} /></label>
@@ -1606,7 +1708,7 @@ export default function AllInReceptions(_props: Props) {
                       <span className="text-right">Db</span>
                       <span className="text-right">Vételár</span>
                       <span className="text-right">Vételár RON</span>
-                      <span className="text-right">Eladási ár</span>
+                      <span className="text-right">{salesIncludesTvaOf(salesTvaSettings) ? "Eladási végár" : "Eladási nettó"}</span>
                       <span className="text-right">Eladás / TVA</span>
                       <span className="text-center">Művelet</span>
                     </div>
@@ -1617,7 +1719,7 @@ export default function AllInReceptions(_props: Props) {
                       const checked = canCommitOrMove && selectedRows.has(r.id);
                       const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
                       const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
-                      const sellPriceRonPreview = rowSellPriceRon(r, draft);
+                      const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
                       const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
                       const rowTone = r.status === "committed"
                         ? "bg-emerald-50/65 hover:bg-emerald-50"
@@ -1678,7 +1780,7 @@ export default function AllInReceptions(_props: Props) {
                     const checked = canCommitOrMove && selectedRows.has(r.id);
                     const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
                     const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
-                    const sellPriceRonPreview = rowSellPriceRon(r, draft);
+                    const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
                     const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
                     return (
                       <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm ${checked ? "border-[#8edbd7] bg-[#effbf9]" : hasRowError ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-white"}`}>
@@ -1701,7 +1803,7 @@ export default function AllInReceptions(_props: Props) {
                           <label className={rowLabel}>Darab<input className={`${rowInput} text-right`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
                           <label className={rowLabel}>Vételár<input className={`${rowInput} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /></label>
                           <label className={rowLabel}>Vételár RON<span className={rowRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span></label>
-                          <label className={rowLabel}>Eladási ár RON<input className={`${rowInput} text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /></label>
+                          <label className={rowLabel}>{salesIncludesTvaOf(salesTvaSettings) ? "Eladási végár RON" : "Eladási nettó RON"}<input className={`${rowInput} text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /></label>
                           <label className={rowLabel}>Eladás / TVA<span className={rowRead}>{money(sellPriceRonPreview, "RON")} • {salesTvaShort(salesTvaSettings)}</span></label>
                         </div>
                       </div>
@@ -1730,11 +1832,13 @@ export default function AllInReceptions(_props: Props) {
               <label className={label}>Eladási TVA %<input className={`${input} w-full`} value={salesTvaRate} onChange={(e) => setSalesTvaRate(e.target.value)} placeholder="pl. 21" /></label>
               <label className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#354153] px-3 py-2 text-sm text-white/82">
                 <input className="h-4 w-4 accent-[#2a8d8b]" type="checkbox" checked={salesPriceIncludesTva} onChange={(e) => setSalesPriceIncludesTva(e.target.checked)} />
-                Az eladási ár TVA-val együtt értendő
+                A megadott eladási ár már tartalmazza a TVA-t
               </label>
             </div>
             <div className="mt-3 rounded-xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/10 px-3 py-2 text-sm text-white/82">
-              A receptió sorain az eladási ár RON-ban van. A PDF és a készletre vétel ezt a központi TVA szabályt használja.
+              {salesPriceIncludesTva
+                ? `Példa: 100 RON megadva → 100 RON végár, ebből számolja vissza a ${salesTvaRate || 0}% TVA-t.`
+                : `Példa: 100 RON megadva → ${money(100 * (1 + n(salesTvaRate) / 100), "RON")} végár, mert a rendszer ráteszi a ${salesTvaRate || 0}% TVA-t.`}
               {salesTvaUpdatedAt && <span className="mt-1 block text-white/45">Utolsó központi mentés: {String(salesTvaUpdatedAt).slice(0, 16).replace("T", " ")}{salesTvaUpdatedBy ? ` • ${salesTvaUpdatedBy}` : ""}</span>}
             </div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
