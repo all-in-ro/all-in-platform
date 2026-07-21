@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  ShoppingCart,
   Trash2,
   UploadCloud,
   X,
@@ -34,6 +35,7 @@ import {
   AifBrandColorCode,
   AifColorType,
   AifPurchaseOrderDetail,
+  AifPurchaseOrderSummary,
   apiAifCommitImportBatch,
   apiAifAppendImportRows,
   apiAifDeleteImportBatchHistory,
@@ -48,6 +50,7 @@ import {
   apiAifListReceptions,
   apiAifGetReception,
   apiAifGetPurchaseOrder,
+  apiAifListPurchaseOrders,
   apiAifListLocationTypes,
   apiAifUpdateLocation,
   apiAifUpdateLocationType,
@@ -795,6 +798,13 @@ function receptionStatusLabel(value?: string | null) {
   return value || "-";
 }
 
+function receivablePurchaseOrderStatusLabel(value?: string | null) {
+  const v = String(value || "").toLowerCase();
+  if (v === "ordered") return "Rendelve";
+  if (v === "partially_received") return "Részben beérkezett";
+  return value || "-";
+}
+
 function moneyText(value: number, currency = "") {
   const n = Number.isFinite(value) ? value : 0;
   return `${n.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency ? ` ${currency}` : ""}`;
@@ -1522,6 +1532,10 @@ export default function AllInIncoming(_props: Props) {
   const [receptionPickerId, setReceptionPickerId] = useState("");
   const [loadedReception, setLoadedReception] = useState<AifReceptionDetail | null>(null);
   const [purchaseOrderSource, setPurchaseOrderSource] = useState<AifPurchaseOrderDetail | null>(null);
+  const [purchaseOrderPickerOpen, setPurchaseOrderPickerOpen] = useState(false);
+  const [purchaseOrderPickerLoading, setPurchaseOrderPickerLoading] = useState(false);
+  const [purchaseOrderPickerError, setPurchaseOrderPickerError] = useState("");
+  const [receivablePurchaseOrders, setReceivablePurchaseOrders] = useState<AifPurchaseOrderSummary[]>([]);
   const [receptionListOpen, setReceptionListOpen] = useState(false);
   const [batches, setBatches] = useState<AifImportBatchSummary[]>([]);
   const [deleteImportBatchTarget, setDeleteImportBatchTarget] = useState<AifImportBatchSummary | null>(null);
@@ -1609,7 +1623,7 @@ export default function AllInIncoming(_props: Props) {
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<AifLocation | null>(null);
 
   useEffect(() => {
-    const anyModalOpen = Boolean(invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen || manualBarcodeScannerOpen);
+    const anyModalOpen = Boolean(invoiceDifferencePrompt || salesTvaModalOpen || locationModalOpen || currencyModalOpen || manualBarcodeScannerOpen || purchaseOrderPickerOpen);
     if (!anyModalOpen) return;
 
     const previousOverflow = document.body.style.overflow;
@@ -1620,7 +1634,8 @@ export default function AllInIncoming(_props: Props) {
       event.preventDefault();
       event.stopPropagation();
 
-      if (manualBarcodeScannerOpen) closeManualBarcodeScanner();
+      if (purchaseOrderPickerOpen) setPurchaseOrderPickerOpen(false);
+      else if (manualBarcodeScannerOpen) closeManualBarcodeScanner();
       else if (invoiceDifferencePrompt) setInvoiceDifferencePrompt(null);
       else if (salesTvaModalOpen) setSalesTvaModalOpen(false);
       else if (locationModalOpen) setLocationModalOpen(false);
@@ -1632,7 +1647,7 @@ export default function AllInIncoming(_props: Props) {
       document.removeEventListener("keydown", closeTopModal, true);
       document.body.style.overflow = previousOverflow;
     };
-  }, [invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen, manualBarcodeScannerOpen]);
+  }, [invoiceDifferencePrompt, salesTvaModalOpen, locationModalOpen, currencyModalOpen, manualBarcodeScannerOpen, purchaseOrderPickerOpen]);
 
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === supplierId) || null,
@@ -3155,26 +3170,15 @@ export default function AllInIncoming(_props: Props) {
     };
   }
 
-  async function loadPurchaseOrderHandoff() {
-    if (typeof window === "undefined") return false;
-    let stored = "";
-    try { stored = window.sessionStorage.getItem(AIF_PURCHASE_ORDER_RECEIVE_HANDOFF_KEY) || ""; } catch {}
-    if (!stored) return false;
-    let orderId = stored;
-    try {
-      const parsed = JSON.parse(stored);
-      orderId = String(parsed?.id || parsed?.purchaseOrderId || parsed?.orderId || stored).trim();
-    } catch {}
-    if (!orderId) return false;
-
-    const detail = await apiAifGetPurchaseOrder(orderId);
+  async function applyPurchaseOrderToIncoming(detail: AifPurchaseOrderDetail) {
     const remainingLines = (detail.lines || []).filter((line) =>
       Math.max(0, toNumber(line.qty_remaining ?? (toNumber(line.qty_ordered) - toNumber(line.qty_received)))) > 0
     );
     if (!remainingLines.length) {
       setPurchaseOrderSource(detail);
+      setPurchaseOrderPickerOpen(false);
       setMessage(`${detail.item.order_number}: nincs hátralévő bevételezendő terméksor.`);
-      return true;
+      return false;
     }
 
     startNewEmptyReception(false);
@@ -3197,7 +3201,62 @@ export default function AllInIncoming(_props: Props) {
     setIncomingStep("reception");
     setManualRowsOpen(false);
     setWorkbenchOpen(false);
+    setPurchaseOrderPickerOpen(false);
     setMessage(`${detail.item.order_number} betöltve: ${remainingLines.length} terméksor, ${remainingLines.reduce((sum, line) => sum + Math.max(0, toNumber(line.qty_remaining ?? (toNumber(line.qty_ordered) - toNumber(line.qty_received)))), 0)} db vár bevételezésre. Töltsd ki a számla adatait, majd mentsd a receptiót.`);
+    return true;
+  }
+
+  async function loadReceivablePurchaseOrders() {
+    setPurchaseOrderPickerLoading(true);
+    setPurchaseOrderPickerError("");
+    try {
+      const response = await apiAifListPurchaseOrders({ limit: 1000 });
+      const next = (response.items || [])
+        .filter((order) => ["ordered", "partially_received"].includes(String(order.status || "")))
+        .filter((order) => toNumber(order.remaining_qty) > 0)
+        .sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
+      setReceivablePurchaseOrders(next);
+      return next;
+    } catch (error: any) {
+      setPurchaseOrderPickerError(error?.message || "A bevételezhető rendelések nem tölthetők be.");
+      return [];
+    } finally {
+      setPurchaseOrderPickerLoading(false);
+    }
+  }
+
+  async function openPurchaseOrderPicker() {
+    setPurchaseOrderPickerOpen(true);
+    await loadReceivablePurchaseOrders();
+  }
+
+  async function choosePurchaseOrderForReception(orderId: string) {
+    setPurchaseOrderPickerLoading(true);
+    setPurchaseOrderPickerError("");
+    try {
+      const detail = await apiAifGetPurchaseOrder(orderId);
+      await applyPurchaseOrderToIncoming(detail);
+    } catch (error: any) {
+      setPurchaseOrderPickerError(error?.message || "A rendelés nem tölthető be bevételezéshez.");
+    } finally {
+      setPurchaseOrderPickerLoading(false);
+    }
+  }
+
+  async function loadPurchaseOrderHandoff() {
+    if (typeof window === "undefined") return false;
+    let stored = "";
+    try { stored = window.sessionStorage.getItem(AIF_PURCHASE_ORDER_RECEIVE_HANDOFF_KEY) || ""; } catch {}
+    if (!stored) return false;
+    let orderId = stored;
+    try {
+      const parsed = JSON.parse(stored);
+      orderId = String(parsed?.id || parsed?.purchaseOrderId || parsed?.orderId || stored).trim();
+    } catch {}
+    if (!orderId) return false;
+
+    const detail = await apiAifGetPurchaseOrder(orderId);
+    await applyPurchaseOrderToIncoming(detail);
     return true;
   }
 
@@ -4503,6 +4562,41 @@ export default function AllInIncoming(_props: Props) {
       <datalist id="aif-size-options">
         {sizeDatalistOptions.map((size) => <option key={size} value={size} />)}
       </datalist>
+      {purchaseOrderPickerOpen && (
+        <div
+          className={modalBackdrop}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="purchase-order-picker-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !purchaseOrderPickerLoading) setPurchaseOrderPickerOpen(false);
+          }}
+        >
+          <div className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-4xl overflow-y-auto rounded-2xl border border-white/22 bg-[#4b5566] text-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#67d4d1]/40 bg-[#2a8d8b] text-white"><ShoppingCart size={19} /></span>
+                <div><p id="purchase-order-picker-title" className="text-lg">Bevételezés beszerzési rendelésből</p><p className="mt-1 text-xs text-white/58">Csak a Rendelve vagy Részben beérkezett, még nyitott mennyiséget tartalmazó rendelések látszanak.</p></div>
+              </div>
+              <div className="flex gap-2"><button className={neutralBtn} type="button" onClick={() => void loadReceivablePurchaseOrders()} disabled={purchaseOrderPickerLoading}><RefreshCw size={14} className={purchaseOrderPickerLoading ? "animate-spin" : ""} /> Frissítés</button><button className={neutralBtn} type="button" onClick={() => setPurchaseOrderPickerOpen(false)} disabled={purchaseOrderPickerLoading}><X size={14} /> Bezárás</button></div>
+            </div>
+            <div className="space-y-2 p-4">
+              {purchaseOrderPickerError && <div className="rounded-xl border border-red-300/30 bg-red-500/12 px-3 py-2 text-sm text-red-50">{purchaseOrderPickerError}</div>}
+              {receivablePurchaseOrders.map((order) => (
+                <article key={order.id} className="grid gap-3 rounded-2xl border border-white/14 bg-[#354153] p-3 md:grid-cols-[1.2fr_1fr_120px_120px_auto] md:items-center">
+                  <div><p className="text-sm text-white">{order.order_number}</p><p className="mt-1 text-xs text-white/50">{order.supplier_name || "-"} • {order.location_name || "Nincs célhely"}</p></div>
+                  <div><p className="text-xs text-white/45">Rendelés / várható</p><p className="mt-1 text-xs text-white/80">{dateOnly(order.order_date) || "-"} • {dateOnly(order.expected_date) || "-"}</p></div>
+                  <div className="rounded-xl border border-white/12 bg-[#303b4e] px-3 py-2 text-center"><p className="text-[9px] uppercase text-white/45">Hátralévő</p><p className="mt-1 text-sm text-white">{toNumber(order.remaining_qty)} db</p></div>
+                  <div className="rounded-xl border border-sky-200/20 bg-sky-400/10 px-3 py-2 text-center text-xs text-sky-50">{receivablePurchaseOrderStatusLabel(order.status)}</div>
+                  <button className={primaryBtn} type="button" onClick={() => void choosePurchaseOrderForReception(order.id)} disabled={purchaseOrderPickerLoading}><ShoppingCart size={14} /> Bevételezés</button>
+                </article>
+              ))}
+              {!purchaseOrderPickerLoading && !receivablePurchaseOrders.length && !purchaseOrderPickerError && <div className="rounded-2xl border border-white/14 bg-[#354153] px-4 py-10 text-center text-sm text-white/55">Nincs bevételezhető beszerzési rendelés.</div>}
+              {purchaseOrderPickerLoading && <div className="rounded-2xl border border-white/14 bg-[#354153] px-4 py-10 text-center text-sm text-white/55"><RefreshCw size={20} className="mx-auto mb-2 animate-spin" /> Rendelések betöltése...</div>}
+            </div>
+          </div>
+        </div>
+      )}
       {manualBarcodeScannerOpen && (
         <div
           className="fixed inset-0 z-[150] flex items-start justify-center overflow-y-auto bg-slate-950/82 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-4 sm:py-6"
@@ -5006,6 +5100,9 @@ export default function AllInIncoming(_props: Props) {
             <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
               <button className={headerPrimaryBtn} onClick={() => startNewEmptyReception()} disabled={busy} type="button">
                 <Plus size={15} /> Új üres
+              </button>
+              <button className={headerBtn} onClick={() => void openPurchaseOrderPicker()} disabled={busy} type="button">
+                <ShoppingCart size={15} /> Rendelésből
               </button>
               <button className={headerBtnSoft} onClick={reloadAll} disabled={busy} type="button">
                 <RefreshCw size={15} /> Frissítés
