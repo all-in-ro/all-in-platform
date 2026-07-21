@@ -59,7 +59,7 @@ const card = "rounded-[22px] border border-white/16 bg-[#344154] shadow-[0_14px_
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
 const primaryButton = `${button} border-[#8ce7e2]/40 bg-[#2a8d8b] hover:bg-[#319c99]`;
 const neutralButton = `${button} border-white/18 bg-[#3d495b] hover:bg-[#465467]`;
-const inputClass = "h-10 w-full rounded-xl border border-white/18 bg-[#2d394b] px-3 text-sm text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
+const inputClass = "h-10 min-w-0 w-full rounded-xl border border-white/18 bg-[#2d394b] px-3 text-sm font-normal text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
 
 function localIsoDate(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -199,7 +199,7 @@ function SmartSelect({
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, 210), window.innerWidth - 16);
+    const width = Math.min(Math.max(rect.width, 240), window.innerWidth - 16);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
     const roomBelow = window.innerHeight - rect.bottom;
     if (roomBelow < 260 && rect.top > roomBelow) {
@@ -238,13 +238,13 @@ function SmartSelect({
       <button
         ref={triggerRef}
         type="button"
-        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#2d394b] px-3 text-left text-xs text-white outline-none transition hover:bg-[#344256] focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15"
+        className="flex h-10 min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-xl border border-white/18 bg-[#2d394b] px-3 text-left text-sm font-normal text-white outline-none transition hover:bg-[#344256] focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15"
         onClick={() => {
           if (!open) updatePosition();
           setOpen((current) => !current);
         }}
       >
-        <span className={selected ? "truncate text-white" : "truncate text-white/42"}>
+        <span title={selected?.label || placeholder} className={selected ? "min-w-0 flex-1 truncate text-white" : "min-w-0 flex-1 truncate text-white/42"}>
           {selected?.label || placeholder}
         </span>
         <ChevronDown size={14} className={`shrink-0 text-white/52 transition ${open ? "rotate-180" : ""}`} />
@@ -270,7 +270,7 @@ function SmartSelect({
                 <button
                   key={option.value || "__all"}
                   type="button"
-                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-normal transition ${
                     active ? "bg-[#2a8d8b] text-white" : "bg-[#344154] text-white/78 hover:bg-[#435168]"
                   }`}
                   onClick={() => {
@@ -335,18 +335,18 @@ function MetricCard({
         : "border-white/16 bg-gradient-to-br from-[#3c495c] to-[#344154]";
 
   return (
-    <article className={`rounded-[22px] border p-4 shadow-[0_12px_30px_rgba(15,23,42,0.16)] ${toneClass}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <article className={`min-w-0 rounded-[20px] border p-3.5 shadow-[0_12px_30px_rgba(15,23,42,0.16)] ${toneClass}`}>
+      <div className="flex min-w-0 items-start justify-between gap-2.5">
+        <div className="min-w-0">
           <p className="text-[9px] uppercase tracking-[0.14em] text-white/48">{title}</p>
-          <p className="mt-2 text-[clamp(1.25rem,2vw,1.85rem)] tracking-tight text-white">{value}</p>
+          <p className="mt-2 whitespace-nowrap text-[clamp(1rem,1.3vw,1.38rem)] leading-tight tracking-tight text-white">{value}</p>
         </div>
-        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#bff8f5]">
-          <Icon size={19} />
+        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#bff8f5]">
+          <Icon size={17} />
         </span>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="text-[11px] text-white/48">{hint}</span>
+      <div className="mt-2.5 flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[10px] text-white/48" title={hint}>{hint}</span>
         <DeltaBadge current={current} previous={previous} />
       </div>
     </article>
@@ -585,11 +585,10 @@ export default function AllInAdminMagazinDashboard({
   const summary = data?.summary;
   const previous = data?.previousSummary;
   const stock = data?.stockSnapshot;
-  const movements = data?.movementSummary;
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-[#5f6b7b] via-[#566171] to-[#485361] p-3 text-white sm:p-4 lg:p-6">
-      <div className="mx-auto max-w-[1580px] space-y-4">
+      <div className="mx-auto max-w-[1580px] space-y-3.5">
         <header className="rounded-[26px] border border-white/20 bg-[#2f3b4f] px-4 py-4 shadow-[0_20px_55px_rgba(15,23,42,0.28)] sm:px-5">
           <div className="flex flex-wrap items-center gap-4">
             <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/38 bg-[#2a8d8b]/22 text-[#cffffd]">
@@ -655,82 +654,96 @@ export default function AllInAdminMagazinDashboard({
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2.5 md:grid-cols-2 xl:grid-cols-[140px_140px_1fr_1fr_1fr_1fr_1.3fr_auto]">
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Ettől
-              <input className={inputClass} type="date" value={draft.from} onChange={(event) => setDraft({ ...draft, from: event.target.value })} />
-            </label>
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Eddig
-              <input className={inputClass} type="date" value={draft.to} onChange={(event) => setDraft({ ...draft, to: event.target.value })} />
-            </label>
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Eladó
-              <SmartSelect
-                value={draft.employee}
-                onChange={(value) => setDraft({ ...draft, employee: value })}
-                placeholder="Minden eladó"
-                options={[{ value: "", label: "Minden eladó" }, ...(data?.filterOptions.employees || []).map((value) => ({ value, label: value }))]}
-              />
-            </label>
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Fizetés
-              <SmartSelect
-                value={draft.paymentStatus}
-                onChange={(value) => setDraft({ ...draft, paymentStatus: value })}
-                placeholder="Minden fizetés"
-                options={[
-                  { value: "", label: "Minden fizetés" },
-                  { value: "paid", label: "Kifizetve" },
-                  { value: "partial", label: "Részben fizetve" },
-                  { value: "unpaid", label: "Nincs fizetve" },
-                  { value: "credit", label: "Hitel" },
-                ]}
-              />
-            </label>
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Típus
-              <SmartSelect
-                value={draft.saleType}
-                onChange={(value) => setDraft({ ...draft, saleType: value })}
-                placeholder="Minden eladás"
-                options={[
-                  { value: "", label: "Minden eladás" },
-                  { value: "sale", label: "Normál eladás" },
-                  { value: "reservation", label: "Félretett" },
-                  { value: "credit", label: "Hitel" },
-                ]}
-              />
-            </label>
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Márka
-              <SmartSelect
-                value={draft.brand}
-                onChange={(value) => setDraft({ ...draft, brand: value })}
-                placeholder="Minden márka"
-                options={[{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))]}
-              />
-            </label>
-            <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-              Keresés
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-3 text-white/38" size={15} />
-                <input
-                  className={`${inputClass} pl-9`}
-                  value={draft.search}
-                  onChange={(event) => setDraft({ ...draft, search: event.target.value })}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") applyFilters();
-                  }}
-                  placeholder="Bizonylat, kliens, termék..."
+          <div className="mt-4 space-y-2.5">
+            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[170px_170px_minmax(190px,1fr)_minmax(190px,1fr)_minmax(190px,1fr)]">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Ettől
+                <input className={inputClass} type="date" value={draft.from} onChange={(event) => setDraft({ ...draft, from: event.target.value })} />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Eddig
+                <input className={inputClass} type="date" value={draft.to} onChange={(event) => setDraft({ ...draft, to: event.target.value })} />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Eladó
+                <SmartSelect
+                  value={draft.employee}
+                  onChange={(value) => setDraft({ ...draft, employee: value })}
+                  placeholder="Minden eladó"
+                  options={[{ value: "", label: "Minden eladó" }, ...(data?.filterOptions.employees || []).map((value) => ({ value, label: value }))]}
                 />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Fizetés
+                <SmartSelect
+                  value={draft.paymentStatus}
+                  onChange={(value) => setDraft({ ...draft, paymentStatus: value })}
+                  placeholder="Minden fizetés"
+                  options={[
+                    { value: "", label: "Minden fizetés" },
+                    { value: "paid", label: "Kifizetve" },
+                    { value: "partial", label: "Részben fizetve" },
+                    { value: "unpaid", label: "Nincs fizetve" },
+                    { value: "credit", label: "Hitel" },
+                  ]}
+                />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Típus
+                <SmartSelect
+                  value={draft.saleType}
+                  onChange={(value) => setDraft({ ...draft, saleType: value })}
+                  placeholder="Minden eladás"
+                  options={[
+                    { value: "", label: "Minden eladás" },
+                    { value: "sale", label: "Normál eladás" },
+                    { value: "reservation", label: "Félretett" },
+                    { value: "credit", label: "Hitel" },
+                  ]}
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[minmax(210px,0.8fr)_minmax(210px,0.8fr)_minmax(340px,2fr)_auto]">
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Márka
+                <SmartSelect
+                  value={draft.brand}
+                  onChange={(value) => setDraft({ ...draft, brand: value })}
+                  placeholder="Minden márka"
+                  options={[{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))]}
+                />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Kategória
+                <SmartSelect
+                  value={draft.category}
+                  onChange={(value) => setDraft({ ...draft, category: value })}
+                  placeholder="Minden kategória"
+                  options={[{ value: "", label: "Minden kategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))]}
+                />
+              </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                Keresés
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-3 text-white/38" size={15} />
+                  <input
+                    className={`${inputClass} pl-9`}
+                    value={draft.search}
+                    onChange={(event) => setDraft({ ...draft, search: event.target.value })}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") applyFilters();
+                    }}
+                    placeholder="Bizonylat, kliens, termék..."
+                  />
+                </div>
+              </label>
+              <div className="flex items-end">
+                <button className={`${primaryButton} w-full xl:min-w-[126px]`} type="button" onClick={applyFilters}>
+                  <Search size={15} />
+                  Alkalmazás
+                </button>
               </div>
-            </label>
-            <div className="flex items-end">
-              <button className={`${primaryButton} w-full xl:w-auto`} type="button" onClick={applyFilters}>
-                <Search size={15} />
-                Alkalmazás
-              </button>
             </div>
           </div>
         </section>
@@ -741,7 +754,7 @@ export default function AllInAdminMagazinDashboard({
           </div>
         ) : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
           <MetricCard
             title="Forgalom"
             value={money(summary?.revenue)}
@@ -833,20 +846,25 @@ export default function AllInAdminMagazinDashboard({
           </div>
 
           <div className={`${card} p-4`}>
-            <div>
-              <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Készletmozgási háttér</p>
-              <h2 className="mt-1 text-base">A kiválasztott időszakban</h2>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Értékesítési kép</p>
+                <h2 className="mt-1 text-base">Csak a kiválasztott üzleti eladások</h2>
+              </div>
+              <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-3 py-1 text-[10px] text-[#cffffd]/70">
+                Nem tartalmaz áthelyezést
+              </span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {[
-                ["Bejött", `${integer(movements?.incomingQty)} db`, "text-emerald-100"],
-                ["Kiment", `${integer(movements?.outgoingQty)} db`, "text-rose-100"],
-                ["Mozgások", integer(movements?.movementCount), "text-white"],
-                ["Termékek", integer(movements?.distinctVariants), "text-white"],
+                ["Eladott", `${integer(summary?.itemsSold)} db`, "text-[#bff8f5]"],
+                ["Tranzakció", integer(summary?.transactions), "text-white"],
+                ["Fizetve", money(summary?.paidTotal), "text-emerald-100"],
+                ["Kedvezmény", money(summary?.discountTotal), "text-amber-50"],
               ].map(([title, value, tone]) => (
-                <div key={String(title)} className="rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-3">
+                <div key={String(title)} className="min-w-0 rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-3">
                   <p className="text-[9px] uppercase tracking-[0.1em] text-white/42">{String(title)}</p>
-                  <p className={`mt-2 text-lg ${String(tone)}`}>{String(value)}</p>
+                  <p className={`mt-2 truncate text-base ${String(tone)}`} title={String(value)}>{String(value)}</p>
                 </div>
               ))}
             </div>
@@ -877,14 +895,14 @@ export default function AllInAdminMagazinDashboard({
           <RankingBars title="Top termékek" subtitle="Forgalom szerint" items={data?.products || []} icon={ShoppingBag} />
         </section>
 
-        <section className="grid gap-3 xl:grid-cols-[1fr_1.55fr]">
+        <section className="grid gap-3">
           <div className={`${card} overflow-hidden`}>
             <div className="border-b border-white/10 px-4 py-3">
               <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Csapat</p>
               <h2 className="mt-1 text-base">Eladók teljesítménye</h2>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] border-collapse text-xs">
+              <table className="w-full min-w-[760px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
                     <th className="px-3 py-3 text-left">Eladó</th>
@@ -923,7 +941,7 @@ export default function AllInAdminMagazinDashboard({
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] border-collapse text-xs">
+              <table className="w-full min-w-[1080px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
                     <th className="px-3 py-3 text-left">Időpont</th>
@@ -940,7 +958,7 @@ export default function AllInAdminMagazinDashboard({
                 <tbody>
                   {(data?.recentSales || []).map((sale) => (
                     <tr key={sale.id} className="border-t border-white/8 hover:bg-white/[0.035]">
-                      <td className="px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
                       <td className="px-3 py-3"><p className="text-white">{sale.saleNumber}</p><p className="mt-1 text-[10px] text-white/38">{saleTypeLabel(sale.saleType)}</p></td>
                       <td className="px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
                       <td className="px-3 py-3 text-center"><span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px]">{saleTypeLabel(sale.saleType)}</span></td>
