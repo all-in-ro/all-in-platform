@@ -2313,6 +2313,45 @@ export const apiAifShopifyOrderEvents = apiAifListShopifyOrderEvents;
 
 export type AifShopSalePaymentMethod = "cash" | "card" | "bank_transfer" | "credit";
 
+export type AifShopCustomer = {
+  id: string;
+  fullName: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  city?: string | null;
+  notes?: string | null;
+  creditLimit: number;
+  isActive: boolean;
+  openBalance: number;
+  openSales: number;
+  saleCount: number;
+  lastSaleAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export function apiAifListShopCustomers(options?: { search?: string; limit?: number }) {
+  const q = new URLSearchParams();
+  if (options?.search?.trim()) q.set("q", options.search.trim());
+  q.set("limit", String(options?.limit || 60));
+  return fetchAifJSON<{ ok: true; items: AifShopCustomer[]; count: number }>(`/shop-customers?${q.toString()}`);
+}
+
+export function apiAifCreateShopCustomer(input: {
+  fullName: string;
+  phone: string;
+  email?: string | null;
+  address?: string | null;
+  city?: string | null;
+  note?: string | null;
+}) {
+  return fetchAifJSON<{ ok: true; duplicate?: boolean; item: AifShopCustomer }>("/shop-customers", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export type AifShopSaleCatalogItem = {
   variantId: string;
   internalSku?: string | null;
