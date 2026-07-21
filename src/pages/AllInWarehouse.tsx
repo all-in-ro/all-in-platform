@@ -123,6 +123,7 @@ const warehouseBarcodeReturnStorageKey = "allinfashion:warehouse:barcodeReturn:v
 const warehouseBarcodeChangedStorageKey = "allinfashion:barcode:changed:v1";
 const purchaseOrdersChangedStorageKey = "allinfashion:purchaseOrders:changed:v1";
 const purchaseOrdersChangedEventName = "aif:purchase-orders-changed";
+const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -1321,6 +1322,27 @@ async function fetchOpenPurchaseOrderVariantMap() {
     }
   }
   return result;
+}
+
+
+function openPurchaseOrderFromWarehouse(info: OpenPurchaseOrderBadgeInfo, variantId: string) {
+  const cleanVariantId = String(variantId || "").trim();
+  const targetOrder = (info.orders || [])[0] || null;
+  const orderId = String(targetOrder?.id || "").trim();
+  if (!orderId) return;
+
+  try {
+    window.sessionStorage.setItem(OPEN_ORDER_HANDOFF_KEY, JSON.stringify({
+      orderId,
+      variantId: cleanVariantId || null,
+      orderNumber: targetOrder?.orderNumber || null,
+      source: "warehouse",
+    }));
+  } catch {
+    // A navigáció ettől még működjön; legfeljebb a céloldal nem tud automatikusan fókuszálni.
+  }
+
+  window.location.hash = "#allinorderhistory";
 }
 
 function OpenPurchaseOrderBadge({
@@ -10293,7 +10315,7 @@ export default function AllInWarehouse() {
                             {openOrderInfo ? (
                               <OpenPurchaseOrderBadge
                                 info={openOrderInfo}
-                                onClick={() => { window.location.hash = "#allinorderhistory"; }}
+                                onClick={() => openPurchaseOrderFromWarehouse(openOrderInfo, it.variant_id)}
                                 title="Rendelés alatt"
                                 className="inline-flex h-5 min-w-[94px] shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200/75 bg-[#ff6a00] px-2 text-[9px] leading-none text-white shadow-[0_0_0_1px_rgba(255,106,0,.28),0_5px_12px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
                               >
@@ -10372,7 +10394,7 @@ export default function AllInWarehouse() {
                             {openOrderInfo ? (
                               <OpenPurchaseOrderBadge
                                 info={openOrderInfo}
-                                onClick={() => { window.location.hash = "#allinorderhistory"; }}
+                                onClick={() => openPurchaseOrderFromWarehouse(openOrderInfo, it.variant_id)}
                                 title="Rendelés alatt"
                                 className="inline-flex h-5 min-w-[94px] shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200/75 bg-[#ff6a00] px-2 text-[9px] leading-none text-white shadow-[0_5px_12px_rgba(255,106,0,.20)] transition hover:bg-[#ff7a1a] focus:outline-none focus:ring-2 focus:ring-orange-200/45"
                               >
