@@ -840,7 +840,7 @@ export default function AllInMagazinSale({
             </div>
 
             <div className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
-              <button type="button" onClick={() => setDiscountEditor(null)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
+              <button type="button" onClick={() => setDiscountEditor(null)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
               <button type="button" onClick={applyDiscountEditor} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99]"><CheckCircle2 size={17} /> Alkalmazás</button>
             </div>
           </div>
@@ -850,7 +850,7 @@ export default function AllInMagazinSale({
 
       {customerModalOpen && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[210] flex items-center justify-center bg-[#111827]/80 p-3 backdrop-blur-sm sm:p-5">
-          <div className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/38 bg-[#303a4c] shadow-[0_36px_110px_rgba(0,0,0,0.55)]">
+          <div style={{ color: "#ffffff" }} className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/38 bg-[#303a4c] text-white [&_button]:!text-white [&_input]:!text-white [&_textarea]:!text-white [&_label]:!text-white [&_p]:!text-white [&_h2]:!text-white [&_h3]:!text-white shadow-[0_36px_110px_rgba(0,0,0,0.55)]">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><Users size={24} /></span>
@@ -860,9 +860,9 @@ export default function AllInMagazinSale({
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => { setCustomerModalMode("search"); setCustomerQuery(""); void loadCustomers(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${customerModalMode === "search" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><Search size={15} /> Keresés</button>
-                <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft(EMPTY_CUSTOMER); setError(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${customerModalMode === "new" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><UserPlus size={15} /> Új kliens</button>
-                <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] hover:bg-white/[0.1]"><X size={18} /></button>
+                <button type="button" onClick={() => { setCustomerModalMode("search"); setCustomerQuery(""); void loadCustomers(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white ${customerModalMode === "search" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><Search size={15} /> Keresés</button>
+                <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft(EMPTY_CUSTOMER); setError(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white ${customerModalMode === "new" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><UserPlus size={15} /> Új kliens</button>
+                <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button>
               </div>
             </div>
 
@@ -878,10 +878,10 @@ export default function AllInMagazinSale({
                         onChange={(event) => setCustomerQuery(event.target.value)}
                         onKeyDown={(event) => { if (event.key === "Enter") void loadCustomers(customerQuery); }}
                         placeholder="Keresés név, telefonszám vagy e-mail alapján…"
-                        className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-base outline-none focus:border-[#72d8d4] focus:ring-4 focus:ring-[#2a8d8b]/16"
+                        className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-base text-white outline-none placeholder:text-white/48 focus:border-[#72d8d4] focus:ring-4 focus:ring-[#2a8d8b]/16"
                       />
                     </label>
-                    <button type="button" onClick={() => void loadCustomers(customerQuery)} className="inline-flex h-14 min-w-[140px] items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99]">{customerLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
+                    <button type="button" onClick={() => void loadCustomers(customerQuery)} className="inline-flex h-14 min-w-[140px] items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99]">{customerLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
                   </div>
 
                   <div className="mt-4 grid gap-2 lg:grid-cols-2">
@@ -892,7 +892,7 @@ export default function AllInMagazinSale({
                         key={item.id}
                         type="button"
                         onClick={() => chooseCustomer(item)}
-                        className={`group rounded-[20px] border p-4 text-left transition hover:border-[#72d8d4]/50 hover:bg-[#3c4a5f] ${selectedCustomer?.id === item.id ? "border-[#9be9e5]/55 bg-[#2a8d8b]/20" : "border-white/13 bg-[#374357]"}`}
+                        className={`group rounded-[20px] border p-4 text-left text-white transition hover:border-[#72d8d4]/50 hover:bg-[#3c4a5f] ${selectedCustomer?.id === item.id ? "border-[#9be9e5]/55 bg-[#2a8d8b]/20" : "border-white/13 bg-[#374357]"}`}
                       >
                         <div className="flex items-start gap-3">
                           <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><UserRound size={20} /></span>
@@ -918,7 +918,7 @@ export default function AllInMagazinSale({
                         <Users size={38} className="text-white/28" />
                         <p className="mt-3 text-base text-white/68">Nincs találat</p>
                         <p className="mt-1 text-xs text-white/42">Keress másképp, vagy rögzíts új klienst.</p>
-                        <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft({ ...EMPTY_CUSTOMER, fullName: customerQuery }); }} className="mt-4 inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm"><UserPlus size={17} /> Új kliens</button>
+                        <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft({ ...EMPTY_CUSTOMER, fullName: customerQuery }); }} className="mt-4 inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm text-white"><UserPlus size={17} /> Új kliens</button>
                       </div>
                     )}
                   </div>
@@ -931,12 +931,12 @@ export default function AllInMagazinSale({
                       <div><p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Új kliens</p><h3 className="mt-1 text-lg text-white">Adatok rögzítése</h3></div>
                     </div>
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Név *<input autoFocus value={customerDraft.fullName} onChange={(event) => setCustomerDraft((current) => ({ ...current, fullName: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
-                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Telefonszám *<input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
-                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">E-mail<input type="email" value={customerDraft.email} onChange={(event) => setCustomerDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
-                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Cím<input value={customerDraft.address} onChange={(event) => setCustomerDraft((current) => ({ ...current, address: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Név *<input autoFocus value={customerDraft.fullName} onChange={(event) => setCustomerDraft((current) => ({ ...current, fullName: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Telefonszám *<input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">E-mail<input type="email" value={customerDraft.email} onChange={(event) => setCustomerDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Cím<input value={customerDraft.address} onChange={(event) => setCustomerDraft((current) => ({ ...current, address: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                     </div>
-                    <label className="mt-3 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megjegyzés<textarea value={customerDraft.note} onChange={(event) => setCustomerDraft((current) => ({ ...current, note: event.target.value }))} rows={3} className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                    <label className="mt-3 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megjegyzés<textarea value={customerDraft.note} onChange={(event) => setCustomerDraft((current) => ({ ...current, note: event.target.value }))} rows={3} className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                   </div>
                 </div>
               )}
@@ -946,7 +946,7 @@ export default function AllInMagazinSale({
               <p className="text-xs text-white/42">A kiválasztott kliens automatikusan visszakerül az eladáshoz.</p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
-                {customerModalMode === "new" ? <button type="button" onClick={() => void saveNewCustomer()} disabled={customerSaving} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99] disabled:opacity-60">{customerSaving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Mentés és kiválasztás</button> : null}
+                {customerModalMode === "new" ? <button type="button" onClick={() => void saveNewCustomer()} disabled={customerSaving} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-60">{customerSaving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Mentés és kiválasztás</button> : null}
               </div>
             </div>
           </div>
