@@ -15086,7 +15086,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           [location.id, line.variantId, after]
         );
         const movementLogged = await insertStockMovementSafe(client, {
-          movementType: "outgoing",
+          movementType: "sale",
           sourceType: "shop_sale",
           sourcePrefix: "shop_sale",
           fallbackSourceType: "manual_stock_edit",
