@@ -601,6 +601,7 @@ export default function AllInOrderHistory() {
   const [toDate, setToDate] = useState("");
 
   const [detail, setDetail] = useState<AifPurchaseOrderDetail | null>(null);
+  const [focusedVariantId, setFocusedVariantId] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
   const [confirmAction, setConfirmAction] = useState<PurchaseOrderConfirmAction>(null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -712,11 +713,26 @@ export default function AllInOrderHistory() {
         setSummary(response.summary || summary);
 
         let openOrderId = "";
+        let openVariantId = "";
         try {
-          openOrderId = window.sessionStorage.getItem(OPEN_ORDER_HANDOFF_KEY) || "";
-          if (openOrderId) window.sessionStorage.removeItem(OPEN_ORDER_HANDOFF_KEY);
+          const rawHandoff = window.sessionStorage.getItem(OPEN_ORDER_HANDOFF_KEY) || "";
+          if (rawHandoff) window.sessionStorage.removeItem(OPEN_ORDER_HANDOFF_KEY);
+          if (rawHandoff) {
+            try {
+              const parsed = JSON.parse(rawHandoff);
+              if (parsed && typeof parsed === "object") {
+                openOrderId = cleanText(parsed.orderId || parsed.id);
+                openVariantId = cleanText(parsed.variantId || parsed.variant_id);
+              } else {
+                openOrderId = cleanText(rawHandoff);
+              }
+            } catch {
+              // Régi kliens egyszerűen az order id-t mentette ebbe a kulcsba.
+              openOrderId = cleanText(rawHandoff);
+            }
+          }
         } catch {}
-        if (openOrderId) await openDetail(openOrderId);
+        if (openOrderId) await openDetail(openOrderId, openVariantId);
       } catch (error: any) {
         setMessage(error?.message || "A beszerzési rendelések nem tölthetők be.");
       } finally {
@@ -967,16 +983,37 @@ export default function AllInOrderHistory() {
     }
   }
 
-  async function openDetail(id: string) {
+  async function openDetail(id: string, focusVariantId = "") {
     setDetailLoading(true);
+    setFocusedVariantId(cleanText(focusVariantId));
     try {
-      setDetail(await apiAifGetPurchaseOrder(id));
+      const nextDetail = await apiAifGetPurchaseOrder(id);
+      setDetail(nextDetail);
+      if (focusVariantId && !(nextDetail.lines || []).some((line) => String(line.variant_id || "") === String(focusVariantId))) {
+        setFocusedVariantId("");
+        setMessage("A rendelés megnyílt, de a raktárból kijelölt terméksor már nincs benne.");
+      }
     } catch (error: any) {
+      setFocusedVariantId("");
       setMessage(error?.message || "A rendelés részletei nem tölthetők be.");
     } finally {
       setDetailLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!detail || !focusedVariantId) return;
+    const focusedLine = (detail.lines || []).find((line) => String(line.variant_id || "") === String(focusedVariantId));
+    if (!focusedLine) return;
+
+    const timer = window.setTimeout(() => {
+      const node = document.getElementById(`aif-purchase-order-line-${focusedLine.id}`);
+      node?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 140);
+
+    return () => window.clearTimeout(timer);
+  }, [detail?.item.id, detail?.lines, focusedVariantId]);
+
 
   async function markOrdered(id: string) {
     setBusy(true);
@@ -1336,7 +1373,32 @@ export default function AllInOrderHistory() {
             <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">Beszerzési rendelés</p><h2 className="mt-1 text-xl">{detail.item.order_number}</h2><p className="mt-1 text-xs text-white/55">{detail.item.supplier_name || "-"}</p></div><div className="flex flex-wrap gap-2"><button className={neutralBtn} onClick={() => printOrder(detail.item.id)} type="button"><FileText size={14} /> PDF</button>{detail.item.status === "draft" && <button className={neutralBtn} onClick={() => { setDetail(null); void openEditOrder(detail.item); }} type="button"><Edit3 size={14} /> Szerkesztés</button>}{detail.item.status === "draft" && <button className={primaryBtn} onClick={() => requestPurchaseOrderConfirmation("ordered", detail.item.id)} type="button"><Send size={14} /> Rendelés elküldve</button>}{["ordered", "partially_received"].includes(detail.item.status) && <button className={primaryBtn} onClick={() => startReception(detail)} type="button"><Truck size={14} /> Bevételezés indítása</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={14} /> Bezárás</button></div></div>
             <div className="space-y-4 p-4">
               <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">{[["Állapot", statusLabel(detail.item.status)], ["Rendelés dátuma", dateText(detail.item.order_date)], ["Várható", dateText(detail.item.expected_date)], ["Célhely", detail.item.location_name || "-"], ["Rendelt", `${detail.item.total_qty || 0} db`], ["Hátralévő", `${detail.item.remaining_qty || 0} db`]].map(([key, value]) => <div key={String(key)} className="rounded-2xl border border-white/16 bg-[#354153] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/45">{key}</p><p className="mt-1 text-sm">{value}</p></div>)}</section>
-              <section className="overflow-hidden rounded-2xl border border-white/16"><div className="border-b border-white/14 bg-[#303b4e] px-4 py-3"><h3>Rendelt termékek</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead className="bg-[#26364c] text-[9px] uppercase tracking-[0.08em] text-white/65"><tr><th className="px-3 py-3 text-left">#</th><th className="px-3 py-3 text-left">Kép</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Azonosító</th><th className="px-3 py-3 text-center">Rendelt</th><th className="px-3 py-3 text-center">Beérkezett</th><th className="px-3 py-3 text-center">Hátra</th><th className="px-3 py-3 text-right">Vételár</th><th className="px-3 py-3 text-right">Érték</th></tr></thead><tbody>{detail.lines.map((line) => <tr key={line.id} className="border-t border-white/12"><td className="px-3 py-3">{line.line_no}</td><td className="px-3 py-3"><ProductImage src={line.image_url} title={line.product_title} size="sm" /></td><td className="px-3 py-3"><p>{line.product_title}</p><p className="mt-1 text-xs text-white/48">{[line.brand_name, line.color_name, line.size].filter(Boolean).join(" • ")}</p></td><td className="px-3 py-3"><p className="font-mono text-xs">{line.supplier_product_code || line.model_code || "-"}</p><p className="mt-1 font-mono text-[10px] text-white/45">{line.barcode || "-"}</p></td><td className="px-3 py-3 text-center">{line.qty_ordered}</td><td className="px-3 py-3 text-center text-emerald-100">{line.qty_received}</td><td className="px-3 py-3 text-center text-amber-100">{line.qty_remaining}</td><td className="px-3 py-3 text-right">{line.unit_price === null || line.unit_price === undefined ? "-" : money(line.unit_price, detail.item.currency_code)}</td><td className="px-3 py-3 text-right">{line.line_total === null || line.line_total === undefined ? "-" : money(line.line_total, detail.item.currency_code)}</td></tr>)}</tbody></table></div></section>
+              <section className="overflow-hidden rounded-2xl border border-white/16"><div className="border-b border-white/14 bg-[#303b4e] px-4 py-3"><h3>Rendelt termékek</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead className="bg-[#26364c] text-[9px] uppercase tracking-[0.08em] text-white/65"><tr><th className="px-3 py-3 text-left">#</th><th className="px-3 py-3 text-left">Kép</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Azonosító</th><th className="px-3 py-3 text-center">Rendelt</th><th className="px-3 py-3 text-center">Beérkezett</th><th className="px-3 py-3 text-center">Hátra</th><th className="px-3 py-3 text-right">Vételár</th><th className="px-3 py-3 text-right">Érték</th></tr></thead><tbody>{detail.lines.map((line) => {
+                      const focused = Boolean(focusedVariantId) && String(line.variant_id || "") === String(focusedVariantId);
+                      return (
+                        <tr
+                          id={`aif-purchase-order-line-${line.id}`}
+                          key={line.id}
+                          className={`border-t transition ${focused ? "border-orange-200/70 bg-orange-500/18 shadow-[inset_4px_0_0_#ff6a00,0_0_22px_rgba(255,106,0,0.16)]" : "border-white/12"}`}
+                        >
+                          <td className="px-3 py-3">{line.line_no}</td>
+                          <td className="px-3 py-3"><ProductImage src={line.image_url} title={line.product_title} size="sm" /></td>
+                          <td className="px-3 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p>{line.product_title}</p>
+                              {focused && <span className="rounded-full border border-orange-200/70 bg-[#ff6a00] px-2 py-0.5 text-[10px] text-white shadow-[0_4px_12px_rgba(255,106,0,0.28)]">Raktárból megnyitva</span>}
+                            </div>
+                            <p className="mt-1 text-xs text-white/48">{[line.brand_name, line.color_name, line.size].filter(Boolean).join(" • ")}</p>
+                          </td>
+                          <td className="px-3 py-3"><p className="font-mono text-xs">{line.supplier_product_code || line.model_code || "-"}</p><p className="mt-1 font-mono text-[10px] text-white/45">{line.barcode || "-"}</p></td>
+                          <td className="px-3 py-3 text-center">{line.qty_ordered}</td>
+                          <td className="px-3 py-3 text-center text-emerald-100">{line.qty_received}</td>
+                          <td className="px-3 py-3 text-center text-amber-100">{line.qty_remaining}</td>
+                          <td className="px-3 py-3 text-right">{line.unit_price === null || line.unit_price === undefined ? "-" : money(line.unit_price, detail.item.currency_code)}</td>
+                          <td className="px-3 py-3 text-right">{line.line_total === null || line.line_total === undefined ? "-" : money(line.line_total, detail.item.currency_code)}</td>
+                        </tr>
+                      );
+                    })}</tbody></table></div></section>
               {Boolean(detail.receipts?.length) && (
                 <section className="overflow-hidden rounded-2xl border border-white/16">
                   <div className="flex items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3">
