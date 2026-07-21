@@ -14698,6 +14698,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  function aifShopCustomerResponse(row = {}) {
+    return {
+      id: String(row.id),
+      fullName: row.full_name || "",
+      phone: row.phone || null,
+      email: row.email || null,
+      address: row.address || null,
+      city: row.city || null,
+      notes: row.notes || null,
+      creditLimit: aifNumber(row.credit_limit),
+      isActive: row.is_active !== false,
+      openBalance: aifNumber(row.open_balance),
+      openSales: aifNumber(row.open_sales),
+      saleCount: aifNumber(row.sale_count),
+      lastSaleAt: row.last_sale_at ? new Date(row.last_sale_at).toISOString() : null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+    };
+  }
+
   async function aifLoadShopSaleResult(client, saleId) {
     const result = await client.query(
       `SELECT s.*,
@@ -14712,6 +14732,118 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
     return result.rows[0] || null;
   }
+
+  router.get("/shop-customers", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const search = text(req.query.q || req.query.search);
+      const limit = Math.min(150, Math.max(1, Number(req.query.limit || 60)));
+      const args = [];
+      const where = ["c.is_active=true"];
+      if (search) {
+        args.push(`%${search}%`);
+        where.push(`(
+          c.full_name ILIKE $1
+          OR COALESCE(c.phone,'') ILIKE $1
+          OR COALESCE(c.email,'') ILIKE $1
+          OR COALESCE(c.address,'') ILIKE $1
+          OR COALESCE(c.city,'') ILIKE $1
+        )`);
+      }
+      args.push(limit);
+      const limitParam = `$${args.length}`;
+      const result = await pool.query(
+        `SELECT
+           c.*,
+           COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0)::numeric AS open_balance,
+           count(s.id) FILTER (WHERE s.status='completed' AND s.balance_due > 0)::int AS open_sales,
+           count(s.id) FILTER (WHERE s.status='completed')::int AS sale_count,
+           max(s.sold_at) FILTER (WHERE s.status='completed') AS last_sale_at
+         FROM aif_shop_customers c
+         LEFT JOIN aif_shop_sales s ON s.customer_id=c.id
+         WHERE ${where.join(" AND ")}
+         GROUP BY c.id
+         ORDER BY
+           CASE WHEN COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0) > 0 THEN 0 ELSE 1 END,
+           max(s.sold_at) DESC NULLS LAST,
+           lower(c.full_name) ASC
+         LIMIT ${limitParam}`,
+        args
+      );
+      res.json({ ok: true, items: result.rows.map(aifShopCustomerResponse), count: result.rowCount });
+    } catch (error) {
+      console.error("AIF shop customers list failed", error);
+      res.status(500).json({ error: error?.message || "A kliensek nem tölthetők be." });
+    }
+  });
+
+  router.post("/shop-customers", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const body = req.body || {};
+      const fullName = text(body.fullName || body.full_name || body.name);
+      const phone = text(body.phone);
+      const email = emptyToNull(body.email);
+      const address = emptyToNull(body.address);
+      const city = emptyToNull(body.city);
+      const notes = emptyToNull(body.note || body.notes);
+      if (!fullName) return res.status(400).json({ error: "A kliens neve kötelező." });
+      if (!phone) return res.status(400).json({ error: "A kliens telefonszáma kötelező." });
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const existing = await client.query(
+          `SELECT id FROM aif_shop_customers
+           WHERE lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) = lower(regexp_replace($1,'[^0-9+]','','g'))
+           ORDER BY is_active DESC, updated_at DESC
+           LIMIT 1
+           FOR UPDATE`,
+          [phone]
+        );
+        let row;
+        let duplicate = false;
+        if (existing.rowCount) {
+          duplicate = true;
+          const updated = await client.query(
+            `UPDATE aif_shop_customers
+             SET full_name=$2,
+                 phone=$3,
+                 email=COALESCE($4,email),
+                 address=COALESCE($5,address),
+                 city=COALESCE($6,city),
+                 notes=COALESCE($7,notes),
+                 is_active=true,
+                 updated_by=$8,
+                 updated_at=now()
+             WHERE id=$1
+             RETURNING *`,
+            [existing.rows[0].id, fullName, phone, email, address, city, notes, actorFrom(req)]
+          );
+          row = updated.rows[0];
+        } else {
+          const created = await client.query(
+            `INSERT INTO aif_shop_customers (
+               full_name, phone, email, address, city, notes, created_by, updated_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+             RETURNING *`,
+            [fullName, phone, email, address, city, notes, actorFrom(req)]
+          );
+          row = created.rows[0];
+        }
+        await client.query("COMMIT");
+        res.json({ ok: true, duplicate, item: aifShopCustomerResponse(row) });
+      } catch (error) {
+        try { await client.query("ROLLBACK"); } catch {}
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error("AIF shop customer save failed", error);
+      res.status(500).json({ error: error?.message || "A kliens mentése nem sikerült." });
+    }
+  });
 
   router.get("/shop-sales/catalog", requireAuthed, async (req, res) => {
     try {
