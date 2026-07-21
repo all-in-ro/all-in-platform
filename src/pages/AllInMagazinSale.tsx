@@ -791,7 +791,7 @@ export default function AllInMagazinSale({
 
       {discountEditor && editingDiscountLine && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-[#111827]/78 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-[620px] overflow-hidden rounded-[28px] border border-[#9be9e5]/40 bg-[#303a4c] shadow-[0_34px_100px_rgba(0,0,0,0.5)]">
+          <div style={{ color: "#ffffff" }} className="w-full max-w-[620px] overflow-hidden rounded-[28px] border border-[#9be9e5]/40 bg-[#303a4c] text-white [&_button]:!text-white [&_input]:!text-white [&_label]:!text-white [&_span]:!text-white [&_p]:!text-white [&_h2]:!text-white shadow-[0_34px_100px_rgba(0,0,0,0.5)]">
             <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><Percent size={22} /></span>
@@ -819,8 +819,10 @@ export default function AllInMagazinSale({
                     inputMode="decimal"
                     value={discountEditor.value}
                     onChange={(event) => setDiscountEditor((current) => current ? { ...current, value: event.target.value.replace(/[^0-9.,]/g, "").replace(",", ".") } : current)}
+                    onFocus={(event) => event.currentTarget.select()}
+                    onClick={(event) => event.currentTarget.select()}
                     onKeyDown={(event) => { if (event.key === "Enter") applyDiscountEditor(); }}
-                    className="h-16 min-w-0 bg-transparent px-5 text-right text-3xl text-white outline-none"
+                    className="h-16 min-w-0 bg-transparent px-5 text-right text-3xl text-white caret-[#8ee6e2] outline-none selection:bg-[#2a8d8b] selection:text-white"
                     placeholder="0"
                   />
                   <span className="inline-flex h-16 min-w-16 items-center justify-center border-l border-white/12 bg-white/[0.04] text-xl text-white/58">%</span>
@@ -829,7 +831,7 @@ export default function AllInMagazinSale({
 
               <div className="mt-3 flex flex-wrap gap-2">
                 {[0, 5, 10, 15, 20, 25, 30].map((value) => (
-                  <button key={value} type="button" onClick={() => setDiscountEditor((current) => current ? { ...current, value: String(value) } : current)} className={`h-10 rounded-xl border px-4 text-sm transition ${editingDiscountValue === value ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white/65 hover:bg-white/[0.09]"}`}>{value}%</button>
+                  <button key={value} type="button" onClick={() => setDiscountEditor((current) => current ? { ...current, value: String(value) } : current)} className={`h-10 rounded-xl border px-4 text-sm transition ${editingDiscountValue === value ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.09]"}`}>{value}%</button>
                 ))}
               </div>
 
@@ -841,7 +843,7 @@ export default function AllInMagazinSale({
 
             <div className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
               <button type="button" onClick={() => setDiscountEditor(null)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
-              <button type="button" onClick={applyDiscountEditor} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99]"><CheckCircle2 size={17} /> Alkalmazás</button>
+              <button type="button" onClick={applyDiscountEditor} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99]"><CheckCircle2 size={17} /> Alkalmazás</button>
             </div>
           </div>
         </div>,
