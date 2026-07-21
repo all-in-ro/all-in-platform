@@ -128,6 +128,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sales_payment_idx ON aif_shop_sales (location_id, payment_status, sold_at DESC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sales_actor_idx ON aif_shop_sales (location_id, actor, sold_at DESC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sales_customer_idx ON aif_shop_sales (customer_id, sold_at DESC)`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_sales ADD COLUMN IF NOT EXISTS client_request_id text NULL`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_sales_client_request_uq
+          ON aif_shop_sales (client_request_id) WHERE client_request_id IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_sale_lines (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -14588,6 +14591,595 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       refundedSales: aifNumber(row.refunded_sales),
     };
   }
+
+
+  const AIF_SHOP_LOCATION_ALIASES = Object.freeze({
+    csikszereda: "main_warehouse",
+    ciuc: "main_warehouse",
+    miercurea_ciuc: "main_warehouse",
+    main_warehouse: "main_warehouse",
+    kezdivasarhely: "magazin_targu_secuiesc",
+    kezdi: "magazin_targu_secuiesc",
+    targu_secuiesc: "magazin_targu_secuiesc",
+    magazin_targu_secuiesc: "magazin_targu_secuiesc",
+  });
+
+  function aifShopLocationCode(value) {
+    const normalized = normCode(value);
+    return AIF_SHOP_LOCATION_ALIASES[normalized] || text(value);
+  }
+
+  async function aifResolveShopLocation(req, client = pool, requestedLocation = null) {
+    const sessionRole = normCode(req.session?.role);
+    const sessionShop = text(req.session?.shopId || req.session?.shop_id);
+    let locationCode = aifShopLocationCode(requestedLocation || req.query?.location || req.body?.location);
+
+    if (sessionRole === "shop") {
+      const sessionLocationCode = aifShopLocationCode(sessionShop);
+      if (!sessionLocationCode) {
+        const error = new Error("Az üzleti munkamenethez nincs érvényes üzlet rendelve.");
+        error.statusCode = 403;
+        throw error;
+      }
+      locationCode = sessionLocationCode;
+    }
+
+    if (!locationCode) {
+      const error = new Error("Üzlet kiválasztása kötelező.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const result = await client.query(
+      `SELECT id, code, name
+       FROM aif_locations
+       WHERE (id::text=$1 OR code=$1 OR lower(name)=lower($1))
+         AND COALESCE(is_active,true)=true
+       LIMIT 1`,
+      [locationCode]
+    );
+    if (!result.rowCount) {
+      const error = new Error("A kiválasztott üzlet nem található vagy inaktív.");
+      error.statusCode = 404;
+      throw error;
+    }
+    return result.rows[0];
+  }
+
+  function aifRoundMoney(value) {
+    return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  }
+
+  function aifSaleLocationTag(locationCode) {
+    return locationCode === "main_warehouse" ? "CIUC" : "KEZDI";
+  }
+
+  async function aifAllocateShopSaleNumber(client, location) {
+    const yearResult = await client.query(
+      `SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Europe/Bucharest'))::integer AS year`
+    );
+    const year = Number(yearResult.rows[0]?.year || new Date().getFullYear());
+    const tag = aifSaleLocationTag(location.code);
+    const prefix = `EL/${tag}/${year}/`;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_sale:${location.id}:${year}`]);
+    const sequenceResult = await client.query(
+      `SELECT COALESCE(max(seq),0)::bigint + 1 AS next_number
+       FROM (
+         SELECT ((regexp_match(sale_number, '/([0-9]+)$'))[1])::bigint AS seq
+         FROM aif_shop_sales
+         WHERE location_id=$1
+           AND sale_number LIKE $2
+           AND sale_number ~ '/[0-9]+$'
+       ) numbered`,
+      [location.id, `${prefix}%`]
+    );
+    const nextNumber = Math.max(1, Number(sequenceResult.rows[0]?.next_number || 1));
+    return `${prefix}${String(nextNumber).padStart(6, "0")}`;
+  }
+
+  function aifShopSaleResponse(row, location, duplicate = false) {
+    return {
+      ok: true,
+      duplicate,
+      saleId: String(row.id),
+      saleNumber: row.sale_number,
+      status: row.status,
+      paymentStatus: row.payment_status,
+      saleType: row.sale_type,
+      location: { id: String(location.id), code: location.code, name: location.name },
+      subtotal: aifNumber(row.subtotal),
+      discountTotal: aifNumber(row.discount_total),
+      total: aifNumber(row.total),
+      paidTotal: aifNumber(row.paid_total),
+      balanceDue: aifNumber(row.balance_due),
+      lineCount: aifNumber(row.line_count),
+      itemCount: aifNumber(row.item_count),
+      soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : new Date().toISOString(),
+    };
+  }
+
+  async function aifLoadShopSaleResult(client, saleId) {
+    const result = await client.query(
+      `SELECT s.*,
+              count(sl.id)::int AS line_count,
+              COALESCE(sum(sl.quantity),0)::int AS item_count
+       FROM aif_shop_sales s
+       LEFT JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+       WHERE s.id=$1
+       GROUP BY s.id
+       LIMIT 1`,
+      [saleId]
+    );
+    return result.rows[0] || null;
+  }
+
+  router.get("/shop-sales/catalog", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const search = text(req.query.q || req.query.search);
+      const limit = Math.min(150, Math.max(1, Number(req.query.limit || 60)));
+      const args = [location.id];
+      const where = [
+        `s.location_id=$1`,
+        `COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) > 0`,
+        `COALESCE(v.status,'active')='active'`,
+        `COALESCE(m.status,'active')='active'`,
+      ];
+      let orderPrefix = "";
+      if (search) {
+        args.push(search, `%${search}%`);
+        const exact = `$${args.length - 1}`;
+        const pattern = `$${args.length}`;
+        where.push(`(
+          COALESCE(v.barcode,'') ILIKE ${pattern}
+          OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
+          OR COALESCE(m.title_ro,'') ILIKE ${pattern}
+          OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
+          OR COALESCE(m.model_code,'') ILIKE ${pattern}
+          OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
+          OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
+        )`);
+        orderPrefix = `CASE
+          WHEN lower(COALESCE(v.barcode,''))=lower(${exact}) THEN 0
+          WHEN lower(COALESCE(v.internal_sku,''))=lower(${exact}) THEN 1
+          WHEN lower(COALESCE(sc.supplier_product_code,''))=lower(${exact}) THEN 2
+          ELSE 3
+        END,`;
+      }
+      args.push(limit);
+      const result = await pool.query(
+        `SELECT
+           v.id AS variant_id,
+           v.internal_sku,
+           v.barcode,
+           v.size,
+           v.color_name,
+           v.color_code,
+           v.image_url,
+           v.sell_price,
+           m.model_code,
+           COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
+           b.name AS brand_name,
+           c.name_ro AS category_name,
+           sc.supplier_product_code,
+           s.qty,
+           s.reserved_qty,
+           (s.qty - s.reserved_qty) AS available_qty
+         FROM aif_stock s
+         JOIN aif_product_variants v ON v.id=s.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN LATERAL (
+           SELECT supplier_product_code, supplier_variant_code
+           FROM aif_variant_supplier_codes
+           WHERE variant_id=v.id AND COALESCE(is_active,true)=true
+           ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
+         WHERE ${where.join(" AND ")}
+         ORDER BY ${orderPrefix} lower(COALESCE(m.title_ro,m.shopify_title,m.model_code,'')) ASC,
+                  lower(COALESCE(v.color_name,'')) ASC,
+                  lower(COALESCE(v.size,'')) ASC
+         LIMIT $${args.length}`,
+        args
+      );
+
+      const items = result.rows.map((row) => ({
+        variantId: String(row.variant_id),
+        internalSku: row.internal_sku || null,
+        barcode: row.barcode || null,
+        productCode: row.supplier_product_code || row.model_code || row.internal_sku || null,
+        modelCode: row.model_code || null,
+        title: row.title || "Ismeretlen termék",
+        brandName: row.brand_name || null,
+        categoryName: row.category_name || null,
+        colorName: row.color_name || null,
+        colorCode: row.color_code || null,
+        size: row.size || null,
+        imageUrl: row.image_url || null,
+        sellPrice: aifNumber(row.sell_price),
+        qty: aifNumber(row.qty),
+        reservedQty: aifNumber(row.reserved_qty),
+        availableQty: aifNumber(row.available_qty),
+      }));
+
+      res.json({
+        ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        items,
+        count: items.length,
+      });
+    } catch (error) {
+      console.error("AIF shop sale catalog failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az üzleti terméklista nem tölthető be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
+  router.post("/shop-sales/complete", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const linesInput = Array.isArray(body.lines) ? body.lines : [];
+    const paymentMethod = normCode(body.paymentMethod || body.payment_method || "cash");
+    const allowedPayments = new Set(["cash", "card", "bank_transfer", "credit"]);
+    const idempotencyKey = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+
+    if (!linesInput.length) return res.status(400).json({ error: "A kosár üres." });
+    if (linesInput.length > 250) return res.status(400).json({ error: "Egy eladásban legfeljebb 250 tétel lehet." });
+    if (!allowedPayments.has(paymentMethod)) return res.status(400).json({ error: "Érvénytelen fizetési mód." });
+    if (!idempotencyKey) return res.status(400).json({ error: "Hiányzik az eladás biztonsági azonosítója." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, client, body.location);
+
+      const duplicate = await client.query(
+        `SELECT id FROM aif_shop_sales WHERE client_request_id=$1 LIMIT 1`,
+        [idempotencyKey]
+      );
+      if (duplicate.rowCount) {
+        const previous = await aifLoadShopSaleResult(client, duplicate.rows[0].id);
+        await client.query("COMMIT");
+        return res.json(aifShopSaleResponse(previous, location, true));
+      }
+
+      const preparedInput = [];
+      const seenVariants = new Set();
+      for (const input of linesInput) {
+        const variantId = text(input.variantId || input.variant_id);
+        if (!isUuidText(variantId)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Az egyik kosártétel termékazonosítója érvénytelen." });
+        }
+        if (seenVariants.has(variantId)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Ugyanaz a termék kétszer szerepel a kosárban." });
+        }
+        seenVariants.add(variantId);
+        const quantity = toInt(input.quantity ?? input.qty);
+        const discountPercent = toMoney(input.discountPercent ?? input.discount_percent ?? 0) ?? 0;
+        if (!quantity || quantity <= 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Minden kosártételnél pozitív darabszám szükséges." });
+        }
+        if (discountPercent < 0 || discountPercent > 100) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "A kedvezmény 0 és 100% között lehet." });
+        }
+        preparedInput.push({ variantId, quantity, discountPercent });
+      }
+
+      const variantIds = preparedInput.map((item) => item.variantId).sort();
+      const stockResult = await client.query(
+        `SELECT
+           s.location_id, s.variant_id, s.qty, s.reserved_qty,
+           v.internal_sku, v.barcode, v.sell_price, v.buy_price, v.size, v.color_name,
+           m.model_code, COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
+           b.name AS brand_name,
+           c.name_ro AS category_name,
+           sc.supplier_product_code
+         FROM aif_stock s
+         JOIN aif_product_variants v ON v.id=s.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN LATERAL (
+           SELECT supplier_product_code
+           FROM aif_variant_supplier_codes
+           WHERE variant_id=v.id AND COALESCE(is_active,true)=true
+           ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+           LIMIT 1
+         ) sc ON true
+         WHERE s.location_id=$1
+           AND s.variant_id = ANY($2::uuid[])
+           AND COALESCE(v.status,'active')='active'
+           AND COALESCE(m.status,'active')='active'
+         ORDER BY s.variant_id
+         FOR UPDATE OF s`,
+        [location.id, variantIds]
+      );
+      const stockByVariant = new Map(stockResult.rows.map((row) => [String(row.variant_id), row]));
+      if (stockByVariant.size !== preparedInput.length) {
+        const missing = preparedInput.find((item) => !stockByVariant.has(item.variantId));
+        const error = new Error(`A termék nem található az üzlet aktív készletében: ${missing?.variantId || "ismeretlen"}.`);
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const saleLines = [];
+      let subtotal = 0;
+      let total = 0;
+      let itemCount = 0;
+      for (const input of preparedInput) {
+        const stock = stockByVariant.get(input.variantId);
+        const available = Number(stock.qty || 0) - Number(stock.reserved_qty || 0);
+        if (available < input.quantity) {
+          const error = new Error(`${stock.title || "A termék"}: csak ${Math.max(0, available)} db eladható készlet van.`);
+          error.statusCode = 409;
+          error.code = "insufficient_stock";
+          throw error;
+        }
+        const listPrice = toMoney(stock.sell_price);
+        if (listPrice === null || listPrice < 0) {
+          const error = new Error(`${stock.title || "A termék"}: nincs érvényes eladási ár.`);
+          error.statusCode = 400;
+          error.code = "missing_sell_price";
+          throw error;
+        }
+        const unitPrice = aifRoundMoney(listPrice * (1 - input.discountPercent / 100));
+        const lineSubtotal = aifRoundMoney(listPrice * input.quantity);
+        const lineTotal = aifRoundMoney(unitPrice * input.quantity);
+        const lineDiscount = aifRoundMoney(lineSubtotal - lineTotal);
+        subtotal = aifRoundMoney(subtotal + lineSubtotal);
+        total = aifRoundMoney(total + lineTotal);
+        itemCount += input.quantity;
+        saleLines.push({
+          ...input,
+          stock,
+          listPrice: aifRoundMoney(listPrice),
+          unitPrice,
+          lineTotal,
+          lineDiscount,
+        });
+      }
+      const discountTotal = aifRoundMoney(subtotal - total);
+
+      const customerInput = body.customer && typeof body.customer === "object" ? body.customer : {};
+      let customerRow = null;
+      const requestedCustomerId = text(customerInput.id || customerInput.customerId || customerInput.customer_id);
+      const customerName = text(customerInput.fullName || customerInput.full_name || customerInput.name);
+      const customerPhone = text(customerInput.phone);
+      const customerEmail = emptyToNull(customerInput.email);
+      const customerAddress = emptyToNull(customerInput.address);
+      const customerNote = emptyToNull(customerInput.note);
+
+      if (paymentMethod === "credit" && (!customerName || !customerPhone)) {
+        const error = new Error("Utólagos fizetésnél a kliens neve és telefonszáma kötelező.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      if (requestedCustomerId) {
+        const customerResult = await client.query(
+          `SELECT * FROM aif_shop_customers WHERE id::text=$1 AND is_active=true FOR UPDATE`,
+          [requestedCustomerId]
+        );
+        if (!customerResult.rowCount) {
+          const error = new Error("A kiválasztott kliens nem található vagy inaktív.");
+          error.statusCode = 400;
+          throw error;
+        }
+        customerRow = customerResult.rows[0];
+      } else if (customerName || customerPhone) {
+        if (customerPhone) {
+          const existingCustomer = await client.query(
+            `SELECT * FROM aif_shop_customers
+             WHERE lower(COALESCE(phone,''))=lower($1)
+             ORDER BY is_active DESC, updated_at DESC
+             LIMIT 1
+             FOR UPDATE`,
+            [customerPhone]
+          );
+          if (existingCustomer.rowCount) {
+            const updatedCustomer = await client.query(
+              `UPDATE aif_shop_customers
+               SET full_name=COALESCE(NULLIF($2,''),full_name),
+                   email=COALESCE($3,email),
+                   address=COALESCE($4,address),
+                   notes=COALESCE($5,notes),
+                   is_active=true,
+                   updated_by=$6,
+                   updated_at=now()
+               WHERE id=$1
+               RETURNING *`,
+              [existingCustomer.rows[0].id, customerName, customerEmail, customerAddress, customerNote, actorFrom(req)]
+            );
+            customerRow = updatedCustomer.rows[0];
+          }
+        }
+        if (!customerRow && customerName) {
+          const createdCustomer = await client.query(
+            `INSERT INTO aif_shop_customers (
+               full_name, phone, email, address, notes, created_by, updated_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$6)
+             RETURNING *`,
+            [customerName, customerPhone || null, customerEmail, customerAddress, customerNote, actorFrom(req)]
+          );
+          customerRow = createdCustomer.rows[0];
+        }
+      }
+
+      const saleNumber = await aifAllocateShopSaleNumber(client, location);
+      const isCredit = paymentMethod === "credit";
+      const saleInsert = await client.query(
+        `INSERT INTO aif_shop_sales (
+           sale_number, location_id, customer_id, status, sale_type, payment_status,
+           actor, sold_at, subtotal, discount_total, total, paid_total, balance_due,
+           currency_code, customer_name, customer_phone, note, client_request_id, raw
+         ) VALUES (
+           $1,$2,$3,'completed',$4,$5,$6,now(),$7,$8,$9,$10,$11,
+           'RON',$12,$13,$14,$15,$16::jsonb
+         ) RETURNING *`,
+        [
+          saleNumber,
+          location.id,
+          customerRow?.id || null,
+          isCredit ? "credit" : "sale",
+          isCredit ? "credit" : "paid",
+          actorFrom(req),
+          subtotal,
+          discountTotal,
+          total,
+          isCredit ? 0 : total,
+          isCredit ? total : 0,
+          customerRow?.full_name || customerName || null,
+          customerRow?.phone || customerPhone || null,
+          emptyToNull(body.note),
+          idempotencyKey,
+          JSON.stringify({ source: "shop_sale_screen", paymentMethod, role: req.session?.role || null }),
+        ]
+      );
+      const sale = saleInsert.rows[0];
+
+      let lineNo = 1;
+      for (const line of saleLines) {
+        const before = Number(line.stock.qty || 0);
+        const after = before - line.quantity;
+        await client.query(
+          `INSERT INTO aif_shop_sale_lines (
+             sale_id, line_no, variant_id, quantity, list_price, unit_price,
+             discount_amount, discount_percent, line_total, buy_price_snapshot,
+             product_title, product_code, barcode, brand_name, category_name,
+             color_name, size, raw
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb
+           )`,
+          [
+            sale.id,
+            lineNo++,
+            line.variantId,
+            line.quantity,
+            line.listPrice,
+            line.unitPrice,
+            line.lineDiscount,
+            line.discountPercent,
+            line.lineTotal,
+            toMoney(line.stock.buy_price),
+            line.stock.title || null,
+            line.stock.supplier_product_code || line.stock.model_code || line.stock.internal_sku || null,
+            line.stock.barcode || null,
+            line.stock.brand_name || null,
+            line.stock.category_name || null,
+            line.stock.color_name || null,
+            line.stock.size || null,
+            JSON.stringify({ availableBefore: before - Number(line.stock.reserved_qty || 0), listPriceSource: "variant_sell_price" }),
+          ]
+        );
+        await client.query(
+          `UPDATE aif_stock SET qty=$3, updated_at=now() WHERE location_id=$1 AND variant_id=$2`,
+          [location.id, line.variantId, after]
+        );
+        const movementLogged = await insertStockMovementSafe(client, {
+          movementType: "outgoing",
+          sourceType: "shop_sale",
+          sourcePrefix: "shop_sale",
+          fallbackSourceType: "manual_stock_edit",
+          sourceId: String(sale.id),
+          locationId: location.id,
+          variantId: line.variantId,
+          qtyDelta: -line.quantity,
+          qtyBefore: before,
+          qtyAfter: after,
+          actor: actorFrom(req),
+          raw: {
+            reason: "shop_sale",
+            saleId: String(sale.id),
+            saleNumber,
+            paymentMethod,
+            listPrice: line.listPrice,
+            unitPrice: line.unitPrice,
+            discountPercent: line.discountPercent,
+            lineTotal: line.lineTotal,
+            locationCode: location.code,
+            locationName: location.name,
+          },
+        });
+        if (!movementLogged) {
+          const error = new Error("Az eladás készletmozgásának naplózása nem sikerült.");
+          error.statusCode = 500;
+          throw error;
+        }
+      }
+
+      if (total > 0) {
+        await client.query(
+          `INSERT INTO aif_shop_sale_payments (
+             sale_id, method, amount, paid_at, actor, note, raw
+           ) VALUES ($1,$2,$3,now(),$4,$5,$6::jsonb)`,
+          [
+            sale.id,
+            paymentMethod,
+            total,
+            actorFrom(req),
+            isCredit ? "Utólag fizetendő összeg" : null,
+            JSON.stringify({ isCredit, paidNow: !isCredit }),
+          ]
+        );
+      }
+
+      await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+         VALUES ($1,'completed',$2,$3,$4::jsonb)`,
+        [
+          sale.id,
+          actorFrom(req),
+          emptyToNull(body.note),
+          JSON.stringify({
+            paymentMethod,
+            subtotal,
+            discountTotal,
+            total,
+            itemCount,
+            lineCount: saleLines.length,
+            customerId: customerRow?.id || null,
+          }),
+        ]
+      );
+
+      const completed = await aifLoadShopSaleResult(client, sale.id);
+      await client.query("COMMIT");
+      res.json(aifShopSaleResponse(completed, location, false));
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      if (error?.code === "23505" && idempotencyKey) {
+        try {
+          const location = await aifResolveShopLocation(req, pool, body.location);
+          const duplicate = await pool.query(
+            `SELECT id FROM aif_shop_sales WHERE client_request_id=$1 LIMIT 1`,
+            [idempotencyKey]
+          );
+          if (duplicate.rowCount) {
+            const previous = await aifLoadShopSaleResult(pool, duplicate.rows[0].id);
+            return res.json(aifShopSaleResponse(previous, location, true));
+          }
+        } catch {}
+      }
+      console.error("AIF complete shop sale failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az eladás rögzítése nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
 
   router.get("/admin-shops/overview", requireAdminOrSecret, async (req, res) => {
     try {
