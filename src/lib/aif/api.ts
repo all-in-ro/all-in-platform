@@ -2309,3 +2309,148 @@ export function apiAifListShopifyOrderEvents(options?: {
 export const apiAifShopifyOrders = apiAifListShopifyOrders;
 export const apiAifShopifyOrder = apiAifGetShopifyOrder;
 export const apiAifShopifyOrderEvents = apiAifListShopifyOrderEvents;
+
+export type AifAdminShopOverviewSummary = {
+  revenue: number;
+  salesBeforeDiscount: number;
+  transactions: number;
+  itemsSold: number;
+  averageBasket: number;
+  discountTotal: number;
+  unpaidTotal: number;
+  unpaidSales: number;
+  creditSales: number;
+  paidTotal: number;
+  estimatedCost: number;
+  grossProfit: number;
+  grossMargin: number;
+  cancelledSales: number;
+  refundedSales: number;
+};
+
+export type AifAdminShopRankingItem = {
+  name: string;
+  revenue: number;
+  qty: number;
+  transactions?: number;
+  share?: number;
+  productCode?: string | null;
+};
+
+export type AifAdminShopTrendItem = {
+  date: string;
+  label: string;
+  revenue: number;
+  transactions: number;
+  itemsSold: number;
+  discountTotal: number;
+  unpaidTotal: number;
+};
+
+export type AifAdminShopPaymentItem = {
+  method: string;
+  label: string;
+  amount: number;
+  transactions: number;
+  share: number;
+};
+
+export type AifAdminShopEmployeeItem = {
+  actor: string;
+  revenue: number;
+  transactions: number;
+  itemsSold: number;
+  discountTotal: number;
+  unpaidTotal: number;
+  averageBasket: number;
+};
+
+export type AifAdminShopRecentSale = {
+  id: string;
+  saleNumber: string;
+  soldAt: string;
+  actor: string;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  status: string;
+  paymentStatus: string;
+  saleType: string;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  paidTotal: number;
+  balanceDue: number;
+  itemCount: number;
+  lineCount: number;
+};
+
+export type AifAdminShopOverviewResponse = {
+  ok: true;
+  generatedAt: string;
+  location: {
+    id: string;
+    code: string;
+    name: string;
+  };
+  period: {
+    from: string;
+    to: string;
+    previousFrom: string;
+    previousTo: string;
+    days: number;
+  };
+  summary: AifAdminShopOverviewSummary;
+  previousSummary: AifAdminShopOverviewSummary;
+  stockSnapshot: {
+    variantCount: number;
+    totalQty: number;
+    reservedQty: number;
+    availableQty: number;
+    retailValue: number;
+    lowStockVariants: number;
+  };
+  movementSummary: {
+    movementCount: number;
+    distinctVariants: number;
+    incomingQty: number;
+    outgoingQty: number;
+    netQty: number;
+  };
+  trend: AifAdminShopTrendItem[];
+  brands: AifAdminShopRankingItem[];
+  categories: AifAdminShopRankingItem[];
+  products: AifAdminShopRankingItem[];
+  payments: AifAdminShopPaymentItem[];
+  employees: AifAdminShopEmployeeItem[];
+  recentSales: AifAdminShopRecentSale[];
+  filterOptions: {
+    employees: string[];
+    brands: string[];
+    categories: string[];
+  };
+};
+
+export function apiAifAdminShopOverview(options: {
+  location: string;
+  from?: string;
+  to?: string;
+  employee?: string;
+  paymentStatus?: string;
+  saleType?: string;
+  brand?: string;
+  category?: string;
+  search?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.from) q.set("from", options.from);
+  if (options.to) q.set("to", options.to);
+  if (options.employee) q.set("employee", options.employee);
+  if (options.paymentStatus) q.set("paymentStatus", options.paymentStatus);
+  if (options.saleType) q.set("saleType", options.saleType);
+  if (options.brand) q.set("brand", options.brand);
+  if (options.category) q.set("category", options.category);
+  if (options.search?.trim()) q.set("search", options.search.trim());
+  return fetchAifJSON<AifAdminShopOverviewResponse>(`/admin-shops/overview?${q.toString()}`);
+}
+
