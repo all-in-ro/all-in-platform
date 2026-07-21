@@ -8,6 +8,9 @@ import AllInShopifyOrders from "./pages/AllInShopifyOrders";
 import AllInWarehouse from "./pages/AllInWarehouse";
 import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 
+import AllInMagazinCiuc from "./pages/AllInMagazinCiuc";
+import AllInMagazinTargu from "./pages/AllInMagazinTargu";
+
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
 import AllInInventory from "./pages/AllInInventory";
@@ -26,6 +29,8 @@ type ShopId = "csikszereda" | "kezdivasarhely";
 type ScreenName =
   | "login"
   | "home"
+  | "magazinciuc"
+  | "magazintargu"
   | "incoming"
   | "orders"
   | "shopifyorders"
@@ -67,6 +72,20 @@ function hashToScreen(rawHash: string): Screen {
   const key = normalizeHash(rawHash);
 
   if (key === "home") return { name: "home" };
+  if (
+    key === "magazinciuc" ||
+    key === "allinmagazinciuc" ||
+    key === "allin-magazin-ciuc" ||
+    key === "shop-ciuc" ||
+    key === "csikszereda"
+  ) return { name: "magazinciuc" };
+  if (
+    key === "magazintargu" ||
+    key === "allinmagazintargu" ||
+    key === "allin-magazin-targu" ||
+    key === "shop-targu" ||
+    key === "kezdivasarhely"
+  ) return { name: "magazintargu" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
   if (key === "shopifyorders" || key === "shopify-orders" || key === "webshoporders" || key === "webshop-orders") return { name: "shopifyorders" };
@@ -108,6 +127,10 @@ function hashToScreen(rawHash: string): Screen {
   if (key === "adminextras") return { name: "home" };
 
   return { name: "login" };
+}
+
+function shopHomeScreen(shopId: ShopId): ScreenName {
+  return shopId === "csikszereda" ? "magazinciuc" : "magazintargu";
 }
 
 function go(name: ScreenName) {
@@ -178,7 +201,10 @@ export default function App() {
           setSession(data.session);
 
           const current = hashToScreen(window.location.hash);
-          if (current.name === "login") {
+          if (data.session.role === "shop") {
+            const target = shopHomeScreen(data.session.shopId);
+            if (current.name !== target) go(target);
+          } else if (current.name === "login") {
             const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
             if (last && isNonLoginHash(last)) window.location.hash = last;
             else go("home");
@@ -187,6 +213,12 @@ export default function App() {
       })
       .catch(() => {});
   }, [api]);
+
+  useEffect(() => {
+    if (!session || session.role !== "shop") return;
+    const target = shopHomeScreen(session.shopId);
+    if (screen.name !== target) go(target);
+  }, [session, screen.name]);
 
   const logout = async () => {
     await fetch(`${api}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
@@ -201,6 +233,11 @@ export default function App() {
         api={api}
         onLoggedIn={(s) => {
           setSession(s);
+          if (s.role === "shop") {
+            sessionStorage.removeItem(LAST_HASH_KEY);
+            go(shopHomeScreen(s.shopId));
+            return;
+          }
           const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
           if (last && isNonLoginHash(last)) window.location.hash = last;
           else go("home");
@@ -220,6 +257,8 @@ export default function App() {
   return (
     <>
       {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
+      {screen.name === "magazinciuc" && <AllInMagazinCiuc {...(commonProps as any)} />}
+      {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
       {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
