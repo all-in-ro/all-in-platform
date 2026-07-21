@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   Banknote,
@@ -18,11 +19,22 @@ import {
   ShoppingCart,
   Store,
   Trash2,
+  UserPlus,
   UserRound,
+  Users,
+  X,
+  Percent,
+  Save,
+  Phone,
+  Mail,
+  MapPin,
 } from "lucide-react";
 import {
   apiAifCompleteShopSale,
+  apiAifCreateShopCustomer,
+  apiAifListShopCustomers,
   apiAifShopSaleCatalog,
+  type AifShopCustomer,
   type AifShopSaleCatalogItem,
   type AifShopSalePaymentMethod,
   type AifShopSaleResult,
@@ -50,6 +62,13 @@ type CustomerDraft = {
   address: string;
   note: string;
 };
+
+type DiscountEditor = {
+  variantId: string;
+  value: string;
+};
+
+type CustomerModalMode = "search" | "new";
 
 const EMPTY_CUSTOMER: CustomerDraft = {
   fullName: "",
@@ -129,7 +148,15 @@ export default function AllInMagazinSale({
     }
   });
   const [paymentMethod, setPaymentMethod] = useState<AifShopSalePaymentMethod>("cash");
-  const [customer, setCustomer] = useState<CustomerDraft>(EMPTY_CUSTOMER);
+  const [selectedCustomer, setSelectedCustomer] = useState<AifShopCustomer | null>(null);
+  const [customerModalOpen, setCustomerModalOpen] = useState(false);
+  const [customerModalMode, setCustomerModalMode] = useState<CustomerModalMode>("search");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerResults, setCustomerResults] = useState<AifShopCustomer[]>([]);
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [customerSaving, setCustomerSaving] = useState(false);
+  const [customerDraft, setCustomerDraft] = useState<CustomerDraft>(EMPTY_CUSTOMER);
+  const [discountEditor, setDiscountEditor] = useState<DiscountEditor | null>(null);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -149,6 +176,14 @@ export default function AllInMagazinSale({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (discountEditor) {
+          setDiscountEditor(null);
+          return;
+        }
+        if (customerModalOpen) {
+          setCustomerModalOpen(false);
+          return;
+        }
         if (success) {
           setSuccess(null);
           window.setTimeout(() => searchInputRef.current?.focus(), 0);
@@ -156,14 +191,23 @@ export default function AllInMagazinSale({
         }
         window.location.hash = homeHash;
       }
-      if (event.key === "F2") {
+      if (event.key === "F2" && !customerModalOpen && !discountEditor) {
         event.preventDefault();
         searchInputRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [homeHash, success]);
+  }, [customerModalOpen, discountEditor, homeHash, success]);
+
+  useEffect(() => {
+    if (!customerModalOpen && !discountEditor) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [customerModalOpen, discountEditor]);
 
   const subtotal = useMemo(
     () => cart.reduce((sum, line) => sum + numberValue(line.sellPrice) * line.quantity, 0),
@@ -179,6 +223,16 @@ export default function AllInMagazinSale({
   );
   const discountTotal = Math.max(0, subtotal - total);
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
+
+  const editingDiscountLine = useMemo(
+    () => discountEditor ? cart.find((line) => line.variantId === discountEditor.variantId) || null : null,
+    [cart, discountEditor],
+  );
+  const editingDiscountValue = Math.max(0, Math.min(100, numberValue(discountEditor?.value)));
+  const editingDiscountOriginal = editingDiscountLine
+    ? numberValue(editingDiscountLine.sellPrice) * editingDiscountLine.quantity
+    : 0;
+  const editingDiscountFinal = editingDiscountOriginal * (1 - editingDiscountValue / 100);
 
   function invalidateRequestKey() {
     requestKeyRef.current = "";
@@ -257,10 +311,92 @@ export default function AllInMagazinSale({
     setCart((current) => current.map((line) => ({ ...line, discountPercent: value })));
   }
 
+  function openDiscountEditor(line: CartLine) {
+    setDiscountEditor({
+      variantId: line.variantId,
+      value: String(line.discountPercent || 0),
+    });
+  }
+
+  function applyDiscountEditor() {
+    if (!discountEditor) return;
+    setDiscount(discountEditor.variantId, editingDiscountValue);
+    setDiscountEditor(null);
+  }
+
+  async function loadCustomers(value = customerQuery) {
+    setCustomerLoading(true);
+    setError("");
+    try {
+      const response = await apiAifListShopCustomers({
+        search: value.trim(),
+        limit: 60,
+      });
+      setCustomerResults(response.items || []);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A kliensek betöltése nem sikerült.");
+    } finally {
+      setCustomerLoading(false);
+    }
+  }
+
+  function openCustomerModal(mode: CustomerModalMode = "search") {
+    setCustomerModalMode(mode);
+    setCustomerModalOpen(true);
+    setError("");
+    if (mode === "search") {
+      setCustomerQuery("");
+      void loadCustomers("");
+    } else {
+      setCustomerDraft(EMPTY_CUSTOMER);
+    }
+  }
+
+  function chooseCustomer(customer: AifShopCustomer) {
+    invalidateRequestKey();
+    setSelectedCustomer(customer);
+    setCustomerModalOpen(false);
+    setCustomerModalMode("search");
+    setError("");
+  }
+
+  function clearSelectedCustomer() {
+    invalidateRequestKey();
+    setSelectedCustomer(null);
+    setError("");
+  }
+
+  async function saveNewCustomer() {
+    const fullName = customerDraft.fullName.trim();
+    const phone = customerDraft.phone.trim();
+    if (!fullName || !phone) {
+      setError("Új kliensnél a név és a telefonszám kötelező.");
+      return;
+    }
+
+    setCustomerSaving(true);
+    setError("");
+    try {
+      const response = await apiAifCreateShopCustomer({
+        fullName,
+        phone,
+        email: customerDraft.email.trim() || null,
+        address: customerDraft.address.trim() || null,
+        note: customerDraft.note.trim() || null,
+      });
+      chooseCustomer(response.item);
+      setCustomerDraft(EMPTY_CUSTOMER);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A kliens mentése nem sikerült.");
+    } finally {
+      setCustomerSaving(false);
+    }
+  }
+
   function clearCart() {
     invalidateRequestKey();
     setCart([]);
-    setCustomer(EMPTY_CUSTOMER);
+    setSelectedCustomer(null);
     setNote("");
     setError("");
   }
@@ -270,8 +406,9 @@ export default function AllInMagazinSale({
       setError("A kosár üres. A pénztárgép még gondolatolvasással nem működik.");
       return;
     }
-    if (paymentMethod === "credit" && (!customer.fullName.trim() || !customer.phone.trim())) {
-      setError("Utólagos fizetésnél a kliens neve és telefonszáma kötelező.");
+    if (paymentMethod === "credit" && !selectedCustomer) {
+      setError("Utólagos fizetésnél válassz ki egy klienst.");
+      openCustomerModal("search");
       return;
     }
 
@@ -285,13 +422,14 @@ export default function AllInMagazinSale({
         paymentMethod,
         idempotencyKey: requestKeyRef.current,
         note: note.trim() || null,
-        customer: paymentMethod === "credit"
+        customer: paymentMethod === "credit" && selectedCustomer
           ? {
-              fullName: customer.fullName.trim(),
-              phone: customer.phone.trim(),
-              email: customer.email.trim() || null,
-              address: customer.address.trim() || null,
-              note: customer.note.trim() || null,
+              id: selectedCustomer.id,
+              fullName: selectedCustomer.fullName,
+              phone: selectedCustomer.phone || "",
+              email: selectedCustomer.email || null,
+              address: selectedCustomer.address || null,
+              note: selectedCustomer.notes || null,
             }
           : undefined,
         lines: cart.map((line) => ({
@@ -302,7 +440,7 @@ export default function AllInMagazinSale({
       });
       setSuccess(result);
       setCart([]);
-      setCustomer(EMPTY_CUSTOMER);
+      setSelectedCustomer(null);
       setNote("");
       requestKeyRef.current = "";
       void runSearch(query, false);
@@ -514,22 +652,19 @@ export default function AllInMagazinSale({
                         <span className="inline-flex h-11 items-center justify-center border-x border-white/12 text-base">{line.quantity}</span>
                         <button type="button" onClick={() => setQuantity(line.variantId, line.quantity + 1)} className="inline-flex h-11 items-center justify-center hover:bg-white/[0.08]"><Plus size={17} /></button>
                       </div>
-                      <label className="grid grid-cols-[1fr_72px] items-center gap-2 rounded-xl border border-white/14 bg-[#273243] px-3">
-                        <span className="text-xs text-white/56">Kedvezmény</span>
-                        <span className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            max={100}
-                            step={1}
-                            value={line.discountPercent}
-                            onChange={(event) => setDiscount(line.variantId, Number(event.target.value))}
-                            className="h-9 w-12 bg-transparent text-right text-sm outline-none"
-                          />
-                          <span className="text-xs text-white/50">%</span>
+                      <button
+                        type="button"
+                        onClick={() => openDiscountEditor(line)}
+                        className={`flex h-11 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-left transition ${line.discountPercent > 0 ? "border-amber-200/35 bg-amber-400/12 text-amber-50" : "border-white/14 bg-[#273243] text-white/62 hover:border-[#72d8d4]/40"}`}
+                      >
+                        <span className="flex min-w-0 items-center gap-2 truncate text-xs">
+                          <Percent size={15} className={line.discountPercent > 0 ? "text-amber-200" : "text-[#8ee6e2]"} />
+                          Kedvezmény
                         </span>
-                      </label>
+                        <span className="shrink-0 rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-sm text-white">
+                          {line.discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%
+                        </span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -577,7 +712,7 @@ export default function AllInMagazinSale({
                         <button
                           key={option.method}
                           type="button"
-                          onClick={() => { invalidateRequestKey(); setPaymentMethod(option.method); setError(""); }}
+                          onClick={() => { invalidateRequestKey(); setPaymentMethod(option.method); setError(""); if (option.method === "credit" && !selectedCustomer) openCustomerModal("search"); }}
                           className={`min-h-[78px] touch-manipulation rounded-2xl border p-3 text-left transition active:scale-[0.98] ${active ? "border-[#93e5e1]/55 bg-[#2a8d8b]/36" : "border-white/13 bg-white/[0.05] hover:bg-white/[0.08]"}`}
                         >
                           <span className="flex items-center gap-2 text-sm"><Icon size={18} className={active ? "text-[#d7fffd]" : "text-white/58"} />{option.label}</span>
@@ -590,14 +725,45 @@ export default function AllInMagazinSale({
 
                 {paymentMethod === "credit" ? (
                   <div className="mt-3 rounded-[18px] border border-amber-200/25 bg-amber-500/10 p-3">
-                    <div className="flex items-center gap-2 text-sm text-amber-50"><UserRound size={18} /> Kliens adatai</div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <input value={customer.fullName} onChange={(event) => { invalidateRequestKey(); setCustomer((current) => ({ ...current, fullName: event.target.value })); }} placeholder="Név *" className="h-11 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm outline-none focus:border-[#72d8d4]" />
-                      <input value={customer.phone} onChange={(event) => { invalidateRequestKey(); setCustomer((current) => ({ ...current, phone: event.target.value })); }} placeholder="Telefonszám *" className="h-11 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm outline-none focus:border-[#72d8d4]" />
-                      <input value={customer.email} onChange={(event) => { invalidateRequestKey(); setCustomer((current) => ({ ...current, email: event.target.value })); }} placeholder="E-mail" className="h-11 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm outline-none focus:border-[#72d8d4]" />
-                      <input value={customer.address} onChange={(event) => { invalidateRequestKey(); setCustomer((current) => ({ ...current, address: event.target.value })); }} placeholder="Cím" className="h-11 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm outline-none focus:border-[#72d8d4]" />
-                    </div>
-                    <input value={customer.note} onChange={(event) => { invalidateRequestKey(); setCustomer((current) => ({ ...current, note: event.target.value })); }} placeholder="Kliens megjegyzés" className="mt-2 h-11 w-full rounded-xl border border-white/16 bg-[#273243] px-3 text-sm outline-none focus:border-[#72d8d4]" />
+                    {selectedCustomer ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-amber-200/25 bg-amber-300/10 text-amber-100">
+                          <UserRound size={20} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm text-amber-50">{selectedCustomer.fullName}</p>
+                          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/48">
+                            {selectedCustomer.phone ? <span>{selectedCustomer.phone}</span> : null}
+                            {selectedCustomer.email ? <span>{selectedCustomer.email}</span> : null}
+                            {numberValue(selectedCustomer.openBalance) > 0 ? <span className="text-rose-100">Hátralék: {formatMoney(numberValue(selectedCustomer.openBalance))}</span> : null}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openCustomerModal("search")}
+                          className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.06] px-3 text-xs text-white/72 hover:bg-white/[0.1]"
+                        >
+                          <Users size={15} /> Másik kliens
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearSelectedCustomer}
+                          aria-label="Kliens törlése az eladásból"
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-300/25 bg-rose-500/12 text-rose-50 hover:bg-rose-500/22"
+                        >
+                          <X size={17} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openCustomerModal("search")}
+                        className="flex min-h-14 w-full items-center justify-between gap-3 rounded-2xl border border-amber-200/30 bg-amber-300/10 px-4 text-left text-amber-50 transition hover:bg-amber-300/16"
+                      >
+                        <span className="flex items-center gap-3"><Users size={20} /> Kliens kiválasztása</span>
+                        <span className="text-xs text-white/45">Kötelező</span>
+                      </button>
+                    )}
                   </div>
                 ) : null}
 
@@ -622,6 +788,171 @@ export default function AllInMagazinSale({
           </aside>
         </div>
       </div>
+
+      {discountEditor && editingDiscountLine && typeof document !== "undefined" ? createPortal(
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-[#111827]/78 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-[620px] overflow-hidden rounded-[28px] border border-[#9be9e5]/40 bg-[#303a4c] shadow-[0_34px_100px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><Percent size={22} /></span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-white/42">Tételkedvezmény</p>
+                  <h2 className="mt-1 truncate text-xl text-white">{editingDiscountLine.title}</h2>
+                </div>
+              </div>
+              <button type="button" onClick={() => setDiscountEditor(null)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.06] hover:bg-white/[0.1]"><X size={18} /></button>
+            </div>
+
+            <div className="p-5">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-[#273243] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Eredeti egységár</p><p className="mt-2 text-lg text-white">{formatMoney(numberValue(editingDiscountLine.sellPrice))}</p></div>
+                <div className="rounded-2xl border border-white/10 bg-[#273243] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Darabszám</p><p className="mt-2 text-lg text-white">{editingDiscountLine.quantity} db</p></div>
+                <div className="rounded-2xl border border-white/10 bg-[#273243] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Eredeti összeg</p><p className="mt-2 text-lg text-white">{formatMoney(editingDiscountOriginal)}</p></div>
+              </div>
+
+              <label className="mt-4 block">
+                <span className="text-[10px] uppercase tracking-[0.12em] text-white/48">Kedvezmény százalékban</span>
+                <div className="mt-2 grid grid-cols-[1fr_auto] overflow-hidden rounded-2xl border border-[#7bd7d4]/40 bg-[#253144] focus-within:ring-4 focus-within:ring-[#2a8d8b]/18">
+                  <input
+                    autoFocus
+                    type="text"
+                    inputMode="decimal"
+                    value={discountEditor.value}
+                    onChange={(event) => setDiscountEditor((current) => current ? { ...current, value: event.target.value.replace(/[^0-9.,]/g, "").replace(",", ".") } : current)}
+                    onKeyDown={(event) => { if (event.key === "Enter") applyDiscountEditor(); }}
+                    className="h-16 min-w-0 bg-transparent px-5 text-right text-3xl text-white outline-none"
+                    placeholder="0"
+                  />
+                  <span className="inline-flex h-16 min-w-16 items-center justify-center border-l border-white/12 bg-white/[0.04] text-xl text-white/58">%</span>
+                </div>
+              </label>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[0, 5, 10, 15, 20, 25, 30].map((value) => (
+                  <button key={value} type="button" onClick={() => setDiscountEditor((current) => current ? { ...current, value: String(value) } : current)} className={`h-10 rounded-xl border px-4 text-sm transition ${editingDiscountValue === value ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-white/[0.05] text-white/65 hover:bg-white/[0.09]"}`}>{value}%</button>
+                ))}
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-amber-200/20 bg-amber-400/10 p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-amber-100/60">Kedvezmény</p><p className="mt-2 text-lg text-amber-50">-{formatMoney(editingDiscountOriginal - editingDiscountFinal)}</p></div>
+                <div className="rounded-2xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 p-3 sm:col-span-2"><p className="text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/55">Új tételösszeg</p><p className="mt-2 text-2xl text-[#d7fffd]">{formatMoney(editingDiscountFinal)}</p></div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button type="button" onClick={() => setDiscountEditor(null)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
+              <button type="button" onClick={applyDiscountEditor} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99]"><CheckCircle2 size={17} /> Alkalmazás</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {customerModalOpen && typeof document !== "undefined" ? createPortal(
+        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-[#111827]/80 p-3 backdrop-blur-sm sm:p-5">
+          <div className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/38 bg-[#303a4c] shadow-[0_36px_110px_rgba(0,0,0,0.55)]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><Users size={24} /></span>
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-white/42">Utólagos fizetés</p>
+                  <h2 className="mt-1 text-xl text-white">Kliens kiválasztása</h2>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => { setCustomerModalMode("search"); setCustomerQuery(""); void loadCustomers(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${customerModalMode === "search" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><Search size={15} /> Keresés</button>
+                <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft(EMPTY_CUSTOMER); setError(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs ${customerModalMode === "new" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><UserPlus size={15} /> Új kliens</button>
+                <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] hover:bg-white/[0.1]"><X size={18} /></button>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+              {customerModalMode === "search" ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                    <label className="relative block">
+                      <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={20} />
+                      <input
+                        autoFocus
+                        value={customerQuery}
+                        onChange={(event) => setCustomerQuery(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === "Enter") void loadCustomers(customerQuery); }}
+                        placeholder="Keresés név, telefonszám vagy e-mail alapján…"
+                        className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-base outline-none focus:border-[#72d8d4] focus:ring-4 focus:ring-[#2a8d8b]/16"
+                      />
+                    </label>
+                    <button type="button" onClick={() => void loadCustomers(customerQuery)} className="inline-flex h-14 min-w-[140px] items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99]">{customerLoading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />} Keresés</button>
+                  </div>
+
+                  <div className="mt-4 grid gap-2 lg:grid-cols-2">
+                    {customerLoading ? (
+                      <div className="col-span-full flex min-h-[260px] items-center justify-center gap-3 text-white/55"><Loader2 className="animate-spin" /> Kliensek betöltése…</div>
+                    ) : customerResults.length ? customerResults.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => chooseCustomer(item)}
+                        className={`group rounded-[20px] border p-4 text-left transition hover:border-[#72d8d4]/50 hover:bg-[#3c4a5f] ${selectedCustomer?.id === item.id ? "border-[#9be9e5]/55 bg-[#2a8d8b]/20" : "border-white/13 bg-[#374357]"}`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><UserRound size={20} /></span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="truncate text-base text-white">{item.fullName}</p>
+                              {selectedCustomer?.id === item.id ? <span className="rounded-full border border-[#9be9e5]/40 bg-[#2a8d8b] px-2 py-1 text-[10px]">Kijelölve</span> : null}
+                            </div>
+                            <div className="mt-2 space-y-1 text-xs text-white/52">
+                              {item.phone ? <p className="flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{item.phone}</p> : null}
+                              {item.email ? <p className="flex items-center gap-2 truncate"><Mail size={13} className="text-[#8ee6e2]" />{item.email}</p> : null}
+                              {item.address ? <p className="flex items-center gap-2 truncate"><MapPin size={13} className="text-[#8ee6e2]" />{item.address}</p> : null}
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                              <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1">{numberValue(item.saleCount)} vásárlás</span>
+                              <span className={`rounded-full border px-2 py-1 ${numberValue(item.openBalance) > 0 ? "border-rose-300/30 bg-rose-500/14 text-rose-50" : "border-emerald-300/22 bg-emerald-400/10 text-emerald-50"}`}>Hátralék: {formatMoney(numberValue(item.openBalance))}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    )) : (
+                      <div className="col-span-full flex min-h-[260px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-black/5 px-5 text-center">
+                        <Users size={38} className="text-white/28" />
+                        <p className="mt-3 text-base text-white/68">Nincs találat</p>
+                        <p className="mt-1 text-xs text-white/42">Keress másképp, vagy rögzíts új klienst.</p>
+                        <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft({ ...EMPTY_CUSTOMER, fullName: customerQuery }); }} className="mt-4 inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm"><UserPlus size={17} /> Új kliens</button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="mx-auto max-w-[760px]">
+                  <div className="rounded-[22px] border border-white/13 bg-[#374357] p-4 sm:p-5">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><UserPlus size={20} /></span>
+                      <div><p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Új kliens</p><h3 className="mt-1 text-lg text-white">Adatok rögzítése</h3></div>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Név *<input autoFocus value={customerDraft.fullName} onChange={(event) => setCustomerDraft((current) => ({ ...current, fullName: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Telefonszám *<input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">E-mail<input type="email" value={customerDraft.email} onChange={(event) => setCustomerDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Cím<input value={customerDraft.address} onChange={(event) => setCustomerDraft((current) => ({ ...current, address: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                    </div>
+                    <label className="mt-3 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megjegyzés<textarea value={customerDraft.note} onChange={(event) => setCustomerDraft((current) => ({ ...current, note: event.target.value }))} rows={3} className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal outline-none focus:border-[#72d8d4]" /></label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <p className="text-xs text-white/42">A kiválasztott kliens automatikusan visszakerül az eladáshoz.</p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
+                {customerModalMode === "new" ? <button type="button" onClick={() => void saveNewCustomer()} disabled={customerSaving} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm hover:bg-[#319c99] disabled:opacity-60">{customerSaving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Mentés és kiválasztás</button> : null}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
 
       {success ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#111827]/76 p-4 backdrop-blur-sm">
