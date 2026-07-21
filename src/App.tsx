@@ -10,6 +10,8 @@ import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 
 import AllInMagazinCiuc from "./pages/AllInMagazinCiuc";
 import AllInMagazinTargu from "./pages/AllInMagazinTargu";
+import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
+import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
@@ -31,6 +33,8 @@ type ScreenName =
   | "home"
   | "magazinciuc"
   | "magazintargu"
+  | "adminmagazinciuc"
+  | "adminmagazintargu"
   | "incoming"
   | "orders"
   | "shopifyorders"
@@ -86,6 +90,18 @@ function hashToScreen(rawHash: string): Screen {
     key === "shop-targu" ||
     key === "kezdivasarhely"
   ) return { name: "magazintargu" };
+  if (
+    key === "adminmagazinciuc" ||
+    key === "allinadminmagazinciuc" ||
+    key === "allin-admin-magazin-ciuc" ||
+    key === "admin-shop-ciuc"
+  ) return { name: "adminmagazinciuc" };
+  if (
+    key === "adminmagazintargu" ||
+    key === "allinadminmagazintargu" ||
+    key === "allin-admin-magazin-targu" ||
+    key === "admin-shop-targu"
+  ) return { name: "adminmagazintargu" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
   if (key === "shopifyorders" || key === "shopify-orders" || key === "webshoporders" || key === "webshop-orders") return { name: "shopifyorders" };
@@ -259,6 +275,8 @@ export default function App() {
       {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
       {screen.name === "magazinciuc" && <AllInMagazinCiuc {...(commonProps as any)} />}
       {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
+      {screen.name === "adminmagazinciuc" && <AllInAdminMagazinCiuc {...(commonProps as any)} />}
+      {screen.name === "adminmagazintargu" && <AllInAdminMagazinTargu {...(commonProps as any)} />}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
       {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
