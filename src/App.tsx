@@ -21,6 +21,7 @@ import AllInSuppliers from "./pages/AllInSuppliers";
 import AllInReceptions from "./pages/AllInReceptions";
 import AllInBarcodes from "./pages/AllInBarcodes";
 
+
 import AllInProductMoves from "./pages/AllInProductMoves";
 import AllInVacations from "./pages/AllInVacations";
 import AllInUsers from "./pages/AllInUsers";
