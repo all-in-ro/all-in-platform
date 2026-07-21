@@ -175,6 +175,55 @@ export default function AllInMagazinCiuc({
           </div>
         </section>
 
+        {notice ? (
+          <div className="rounded-2xl border border-amber-200/28 bg-amber-500/12 px-4 py-3 text-sm text-amber-50">
+            {notice}
+          </div>
+        ) : null}
+
+        <section>
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.16em] text-white/45">Gyors műveletek</p>
+              <h2 className="mt-1 text-xl">Értékesítési központ</h2>
+            </div>
+            <span className="rounded-full border border-white/14 bg-white/[0.06] px-3 py-1 text-[11px] text-white/55">Érintőképernyőre optimalizált</span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {actions.map((action) => {
+              const Icon = action.icon;
+              return (
+                <button
+                  key={action.key}
+                  type="button"
+                  onClick={() => openModule(action)}
+                  className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
+                    action.primary
+                      ? "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
+                      : "border-white/16 bg-[#3d485a] hover:border-[#7bd7d4]/38 hover:bg-[#465366]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl border ${
+                      action.primary
+                        ? "border-white/25 bg-white/14 text-white"
+                        : "border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#bdf8f5]"
+                    }`}>
+                      <Icon size={24} strokeWidth={1.8} />
+                    </span>
+                    <span className="rounded-full border border-white/14 bg-black/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-white/55">
+                      Következő lépés
+                    </span>
+                  </div>
+                  <h3 className="mt-4 text-lg text-white">{action.title}</h3>
+                  <p className="mt-1.5 text-sm leading-snug text-white/58">{action.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         <section className="rounded-[24px] border border-white/20 bg-[#eef4f5]/10 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.14)] backdrop-blur-sm sm:p-4">
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] lg:items-center">
             <div className="flex min-w-0 items-start gap-3">
@@ -224,54 +273,6 @@ export default function AllInMagazinCiuc({
           </div>
         </section>
 
-        {notice ? (
-          <div className="rounded-2xl border border-amber-200/28 bg-amber-500/12 px-4 py-3 text-sm text-amber-50">
-            {notice}
-          </div>
-        ) : null}
-
-        <section>
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.16em] text-white/45">Gyors műveletek</p>
-              <h2 className="mt-1 text-xl">Értékesítési központ</h2>
-            </div>
-            <span className="rounded-full border border-white/14 bg-white/[0.06] px-3 py-1 text-[11px] text-white/55">Érintőképernyőre optimalizált</span>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {actions.map((action) => {
-              const Icon = action.icon;
-              return (
-                <button
-                  key={action.key}
-                  type="button"
-                  onClick={() => openModule(action)}
-                  className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
-                    action.primary
-                      ? "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
-                      : "border-white/16 bg-[#3d485a] hover:border-[#7bd7d4]/38 hover:bg-[#465366]"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl border ${
-                      action.primary
-                        ? "border-white/25 bg-white/14 text-white"
-                        : "border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#bdf8f5]"
-                    }`}>
-                      <Icon size={24} strokeWidth={1.8} />
-                    </span>
-                    <span className="rounded-full border border-white/14 bg-black/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-white/55">
-                      Következő lépés
-                    </span>
-                  </div>
-                  <h3 className="mt-4 text-lg text-white">{action.title}</h3>
-                  <p className="mt-1.5 text-sm leading-snug text-white/58">{action.description}</p>
-                </button>
-              );
-            })}
-          </div>
-        </section>
       </div>
     </main>
   );
