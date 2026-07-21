@@ -4805,6 +4805,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             errors: nr.errors,
           });
         }
+        if (purchaseOrderContext) {
+          const matchedLine = await matchAifPurchaseOrderLineForIncomingRow(client, {
+            orderId: purchaseOrderContext.id,
+            explicitLineId: purchaseOrderLineIdFromNormalized(nr.normalized),
+            normalized: nr.normalized,
+            row: input || {},
+            qty: nr.normalized.qty,
+            rowNo: nr.rowNo,
+          });
+          nr.normalized.purchaseOrderId = String(purchaseOrderContext.id);
+          nr.normalized.purchase_order_id = String(purchaseOrderContext.id);
+          nr.normalized.purchaseOrderNumber = purchaseOrderContext.order_number;
+          nr.normalized.purchase_order_number = purchaseOrderContext.order_number;
+          nr.normalized.purchaseOrderLineId = String(matchedLine.id);
+          nr.normalized.purchase_order_line_id = String(matchedLine.id);
+          nr.normalized.orderedQty = Number(matchedLine.qty_ordered || 0);
+          nr.normalized.ordered_qty = Number(matchedLine.qty_ordered || 0);
+          nr.normalized.remainingQty = Number(matchedLine.qty_remaining || 0);
+          nr.normalized.remaining_qty = Number(matchedLine.qty_remaining || 0);
+        }
         normalizedRows.push(nr);
       }
 
@@ -5018,7 +5038,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (e && e.code === "23514") {
         return res.status(400).json({ error: "A mentés nem sikerült: egy terméksor mennyisége vagy ára hibás." });
       }
-      res.status(500).json({ error: "A mentés nem sikerült. Ellenőrizd a receptiót és a kijelölt terméksorokat." });
+      const statusCode = Number(e?.statusCode || 500);
+      res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
+        error: e?.message || "A mentés nem sikerült. Ellenőrizd a receptiót és a kijelölt terméksorokat.",
+        code: e?.code || null,
+      });
     } finally {
       client.release();
     }
@@ -5478,6 +5502,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       for (const input of rowsInput) {
         const nr = normalizeRowInput(input, rowNo++);
         await enrichNormalizedRow(client, nr);
+        if (batch.rows[0].purchase_order_id) {
+          const matchedLine = await matchAifPurchaseOrderLineForIncomingRow(client, {
+            orderId: batch.rows[0].purchase_order_id,
+            explicitLineId: purchaseOrderLineIdFromNormalized(nr.normalized),
+            normalized: nr.normalized,
+            row: input || {},
+            qty: nr.normalized.qty,
+            rowNo: nr.rowNo,
+          });
+          nr.normalized.purchaseOrderId = String(batch.rows[0].purchase_order_id);
+          nr.normalized.purchase_order_id = String(batch.rows[0].purchase_order_id);
+          nr.normalized.purchaseOrderLineId = String(matchedLine.id);
+          nr.normalized.purchase_order_line_id = String(matchedLine.id);
+          nr.normalized.orderedQty = Number(matchedLine.qty_ordered || 0);
+          nr.normalized.ordered_qty = Number(matchedLine.qty_ordered || 0);
+          nr.normalized.remainingQty = Number(matchedLine.qty_remaining || 0);
+          nr.normalized.remaining_qty = Number(matchedLine.qty_remaining || 0);
+        }
         applyReceptionSellPricePolicyToNormalized(nr.normalized, receptionPricing);
         applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
         if (nr.errors.length) chunkErrorCount++;
@@ -5550,7 +5592,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF replace import rows failed", e);
-      res.status(500).json({ error: "failed to save rows" });
+      const statusCode = Number(e?.statusCode || 500);
+      res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
+        error: e?.message || "A terméksorok mentése nem sikerült.",
+        code: e?.code || null,
+      });
     } finally {
       client.release();
     }
@@ -5654,6 +5700,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.sellPrice = Number(row.sell_price_ron);
         }
 
+        let matchedPurchaseOrderLine = null;
+        if (batch.purchase_order_id) {
+          matchedPurchaseOrderLine = await matchAifPurchaseOrderLineForIncomingRow(client, {
+            orderId: batch.purchase_order_id,
+            explicitLineId: row.purchase_order_line_id || purchaseOrderLineIdFromNormalized(normalized),
+            normalized,
+            row,
+            variantId: row.variant_id || normalized.variantId || normalized.variant_id || null,
+            qty: Math.floor(qty),
+            rowNo: row.row_no,
+          });
+          normalized.purchaseOrderId = String(batch.purchase_order_id);
+          normalized.purchase_order_id = String(batch.purchase_order_id);
+          normalized.purchaseOrderLineId = String(matchedPurchaseOrderLine.id);
+          normalized.purchase_order_line_id = String(matchedPurchaseOrderLine.id);
+          normalized.orderedQty = Number(matchedPurchaseOrderLine.qty_ordered || 0);
+          normalized.ordered_qty = Number(matchedPurchaseOrderLine.qty_ordered || 0);
+          normalized.remainingQty = Number(matchedPurchaseOrderLine.qty_remaining || 0);
+          normalized.remaining_qty = Number(matchedPurchaseOrderLine.qty_remaining || 0);
+        }
+
         const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized, createStatus: "draft", updateStatus: null });
         const variantId = await upsertVariant(client, { modelId, normalized, createStatus: "active", updateStatus: null });
         await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
@@ -5667,7 +5734,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           raw: row.raw,
         });
 
-        const purchaseOrderLineId = row.purchase_order_line_id || purchaseOrderLineIdFromNormalized(normalized);
+        const purchaseOrderLineId = matchedPurchaseOrderLine?.id || row.purchase_order_line_id || purchaseOrderLineIdFromNormalized(normalized);
         if (batch.purchase_order_id && purchaseOrderLineId) {
           await registerAifPurchaseOrderReceipt(client, {
             orderId: batch.purchase_order_id,
@@ -5688,8 +5755,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
 
         await client.query(
-          `UPDATE aif_import_rows SET status='committed', variant_id=$2, updated_at=now() WHERE id=$1`,
-          [row.id, variantId]
+          `UPDATE aif_import_rows
+           SET status='committed',
+               variant_id=$2,
+               purchase_order_id=$3,
+               purchase_order_line_id=$4,
+               normalized=$5::jsonb,
+               updated_at=now()
+           WHERE id=$1`,
+          [
+            row.id,
+            variantId,
+            batch.purchase_order_id || null,
+            purchaseOrderLineId || null,
+            JSON.stringify(normalized),
+          ]
         );
 
         committedRowResults.push({
@@ -12775,6 +12855,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_order_idx ON aif_purchase_order_lines (order_id, line_no)`);
       await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_variant_idx ON aif_purchase_order_lines (variant_id)`);
       await client.query(`CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_barcode_idx ON aif_purchase_order_lines (barcode)`);
+      await client.query(`UPDATE aif_purchase_order_lines SET sell_price=NULL WHERE sell_price IS NOT NULL`);
+      await client.query(`DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid='aif_purchase_order_lines'::regclass
+              AND conname='aif_purchase_order_lines_sell_price_null_check'
+          ) THEN
+            ALTER TABLE aif_purchase_order_lines
+              ADD CONSTRAINT aif_purchase_order_lines_sell_price_null_check
+              CHECK (sell_price IS NULL) NOT VALID;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid='aif_purchase_order_lines'::regclass
+              AND conname='aif_purchase_order_lines_received_lte_ordered_check'
+          ) THEN
+            ALTER TABLE aif_purchase_order_lines
+              ADD CONSTRAINT aif_purchase_order_lines_received_lte_ordered_check
+              CHECK (qty_received <= qty_ordered) NOT VALID;
+          END IF;
+        END $$`);
+      await client.query(`ALTER TABLE aif_purchase_order_lines
+        VALIDATE CONSTRAINT aif_purchase_order_lines_sell_price_null_check`);
       await client.query(`CREATE TABLE IF NOT EXISTS aif_purchase_order_status_history (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         order_id uuid NOT NULL REFERENCES aif_purchase_orders(id) ON DELETE CASCADE,
@@ -12803,7 +12907,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         order_line_id uuid NOT NULL REFERENCES aif_purchase_order_lines(id) ON DELETE CASCADE,
         reception_id uuid NULL REFERENCES aif_receptions(id) ON DELETE SET NULL,
         import_batch_id uuid NULL REFERENCES aif_import_batches(id) ON DELETE SET NULL,
-        import_row_id uuid NULL REFERENCES aif_import_rows(id) ON DELETE SET NULL,
+        import_row_id bigint NULL REFERENCES aif_import_rows(id) ON DELETE SET NULL,
         qty integer NOT NULL CHECK (qty > 0),
         actor text NULL,
         raw jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -12821,7 +12925,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(`CREATE INDEX IF NOT EXISTS aif_import_rows_purchase_order_idx ON aif_import_rows (purchase_order_id, purchase_order_line_id)`);
       return true;
     };
-    if (client !== pool) return run();
+    if (client !== pool) {
+      if (aifPurchaseOrderSchemaPromise) {
+        await aifPurchaseOrderSchemaPromise;
+        return true;
+      }
+      return run();
+    }
     if (!aifPurchaseOrderSchemaPromise) {
       aifPurchaseOrderSchemaPromise = run().catch((error) => {
         aifPurchaseOrderSchemaPromise = null;
@@ -12926,6 +13036,179 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     );
   }
 
+  function aifPurchaseOrderMatchKey(value) {
+    return text(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  function aifPurchaseOrderIncomingIdentity(normalized = {}, row = {}, variantId = null) {
+    return {
+      variantId: text(
+        variantId || row.variant_id || row.variantId ||
+        normalized.variantId || normalized.variant_id
+      ),
+      barcode: aifPurchaseOrderMatchKey(
+        normalized.barcode || normalized.supplierBarcode || normalized.supplier_barcode || row.barcode
+      ),
+      supplierVariantCode: aifPurchaseOrderMatchKey(
+        normalized.supplierVariantCode || normalized.supplier_variant_code || row.supplier_variant_code
+      ),
+      supplierProductCode: aifPurchaseOrderMatchKey(
+        normalized.supplierProductCode || normalized.supplier_product_code ||
+        normalized.productCode || normalized.product_code || row.supplier_product_code
+      ),
+      modelCode: aifPurchaseOrderMatchKey(
+        normalized.modelCode || normalized.model_code || row.model_code
+      ),
+      size: aifPurchaseOrderMatchKey(
+        normalized.size || normalized.supplierSize || normalized.supplier_size || row.supplier_size || row.size
+      ),
+      colorCode: aifPurchaseOrderMatchKey(
+        normalized.colorCode || normalized.color_code ||
+        normalized.supplierColorCode || normalized.supplier_color_code || row.supplier_color_code || row.color_code
+      ),
+      colorName: aifPurchaseOrderMatchKey(
+        normalized.colorName || normalized.color_name || row.color_name
+      ),
+    };
+  }
+
+  function scoreAifPurchaseOrderIncomingLine(line, identity) {
+    let score = 0;
+    let baseMatch = false;
+    const lineVariantId = text(line.variant_id);
+    const lineBarcode = aifPurchaseOrderMatchKey(line.barcode);
+    const lineSupplierVariant = aifPurchaseOrderMatchKey(line.supplier_variant_code);
+    const lineSupplierProduct = aifPurchaseOrderMatchKey(line.supplier_product_code);
+    const lineModel = aifPurchaseOrderMatchKey(line.model_code);
+    const lineSize = aifPurchaseOrderMatchKey(line.size);
+    const lineColorCode = aifPurchaseOrderMatchKey(line.color_code);
+    const lineColorName = aifPurchaseOrderMatchKey(line.color_name);
+
+    if (identity.variantId && lineVariantId && identity.variantId === lineVariantId) {
+      score += 1200;
+      baseMatch = true;
+    }
+    if (identity.barcode && lineBarcode && identity.barcode === lineBarcode) {
+      score += 1000;
+      baseMatch = true;
+    }
+    if (identity.supplierVariantCode && lineSupplierVariant && identity.supplierVariantCode === lineSupplierVariant) {
+      score += 900;
+      baseMatch = true;
+    }
+    if (identity.supplierProductCode && lineSupplierProduct && identity.supplierProductCode === lineSupplierProduct) {
+      score += 760;
+      baseMatch = true;
+    }
+    if (identity.modelCode && lineModel && identity.modelCode === lineModel) {
+      score += 700;
+      baseMatch = true;
+    }
+
+    if (identity.size) score += identity.size === lineSize ? 90 : -140;
+    if (identity.colorCode) score += identity.colorCode === lineColorCode ? 75 : -95;
+    else if (identity.colorName) score += identity.colorName === lineColorName ? 40 : -50;
+
+    return { score, baseMatch };
+  }
+
+  async function matchAifPurchaseOrderLineForIncomingRow(client, {
+    orderId,
+    explicitLineId = null,
+    normalized = {},
+    row = {},
+    variantId = null,
+    qty = 0,
+    rowNo = null,
+  }) {
+    const orderKey = text(orderId);
+    if (!orderKey) return null;
+    await ensureAifPurchaseOrderSchema(client);
+
+    const quantity = Math.max(0, toInt(qty) || 0);
+    const explicit = text(explicitLineId || purchaseOrderLineIdFromNormalized(normalized));
+    if (explicit) {
+      const selected = await client.query(
+        `SELECT pol.*, GREATEST(pol.qty_ordered-pol.qty_received,0)::int AS qty_remaining
+         FROM aif_purchase_order_lines pol
+         WHERE pol.order_id::text=$1 AND pol.id::text=$2
+         LIMIT 1`,
+        [orderKey, explicit]
+      );
+      if (!selected.rowCount) {
+        throw Object.assign(new Error(`A(z) ${rowNo || '?'}. sorhoz megadott rendelési sor nem tartozik a kiválasztott beszerzési rendeléshez.`), {
+          statusCode: 400,
+          code: 'purchase_order_line_invalid',
+        });
+      }
+      const line = selected.rows[0];
+      const identity = aifPurchaseOrderIncomingIdentity(normalized, row, variantId);
+      const hasIdentity = Boolean(identity.variantId || identity.barcode || identity.supplierVariantCode || identity.supplierProductCode || identity.modelCode);
+      if (hasIdentity && !scoreAifPurchaseOrderIncomingLine(line, identity).baseMatch) {
+        throw Object.assign(new Error(`A(z) ${rowNo || '?'}. terméksor azonosítói nem egyeznek a kapcsolt beszerzési rendelési sorral.`), {
+          statusCode: 400,
+          code: 'purchase_order_line_identity_mismatch',
+        });
+      }
+      const remaining = Number(line.qty_remaining || 0);
+      if (quantity > remaining) {
+        throw Object.assign(new Error(`A(z) ${rowNo || '?'}. sor mennyisége (${quantity} db) meghaladja a rendelési sor hátralévő mennyiségét (${remaining} db).`), {
+          statusCode: 400,
+          code: 'purchase_order_over_receipt',
+        });
+      }
+      return line;
+    }
+
+    const lines = await client.query(
+      `SELECT pol.*, GREATEST(pol.qty_ordered-pol.qty_received,0)::int AS qty_remaining
+       FROM aif_purchase_order_lines pol
+       WHERE pol.order_id::text=$1
+       ORDER BY pol.line_no ASC`,
+      [orderKey]
+    );
+    const identity = aifPurchaseOrderIncomingIdentity(normalized, row, variantId);
+    const candidates = lines.rows
+      .map((line) => ({ line, ...scoreAifPurchaseOrderIncomingLine(line, identity) }))
+      .filter((candidate) => candidate.baseMatch)
+      .sort((a, b) => b.score - a.score || Number(a.line.line_no || 0) - Number(b.line.line_no || 0));
+
+    if (!candidates.length) {
+      throw Object.assign(new Error(`A(z) ${rowNo || '?'}. terméksor nem párosítható a kiválasztott beszerzési rendelés egyik sorához sem. Ellenőrizd a termékkódot, variánskódot, vonalkódot, méretet és színt.`), {
+        statusCode: 400,
+        code: 'purchase_order_line_not_matched',
+      });
+    }
+
+    const best = candidates[0];
+    const tied = candidates.filter((candidate) => candidate.score === best.score);
+    if (tied.length > 1) {
+      throw Object.assign(new Error(`A(z) ${rowNo || '?'}. terméksor több rendelési sorra is illeszkedik. Válaszd ki a pontos méretet/színt, vagy indítsd a bevételezést közvetlenül a rendelésből.`), {
+        statusCode: 400,
+        code: 'purchase_order_line_ambiguous',
+      });
+    }
+
+    const remaining = Number(best.line.qty_remaining || 0);
+    if (remaining <= 0) {
+      throw Object.assign(new Error(`A(z) ${rowNo || '?'}. terméksorhoz tartozó rendelési sor már teljesen beérkezett.`), {
+        statusCode: 400,
+        code: 'purchase_order_line_fully_received',
+      });
+    }
+    if (quantity > remaining) {
+      throw Object.assign(new Error(`A(z) ${rowNo || '?'}. sor mennyisége (${quantity} db) meghaladja a rendelési sor hátralévő mennyiségét (${remaining} db).`), {
+        statusCode: 400,
+        code: 'purchase_order_over_receipt',
+      });
+    }
+    return best.line;
+  }
+
   async function resolvePurchaseOrderContext(client, body = {}) {
     const orderId = purchaseOrderIdFromBody(body);
     if (!orderId) return null;
@@ -13005,7 +13288,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!orderId || !orderLineId || !importRowId || quantity <= 0) return { inserted: false };
     await ensureAifPurchaseOrderSchema(client);
     const line = await client.query(
-      `SELECT pol.id, pol.order_id, pol.qty_ordered, pol.qty_received, po.status
+      `SELECT pol.id, pol.order_id, pol.qty_ordered, pol.qty_received, po.status,
+              COALESCE((SELECT sum(r.qty)::int FROM aif_purchase_order_receipts r WHERE r.order_line_id=pol.id),0)::int AS receipt_qty
        FROM aif_purchase_order_lines pol
        JOIN aif_purchase_orders po ON po.id=pol.order_id
        WHERE pol.id::text=$1 AND pol.order_id::text=$2
@@ -13017,7 +13301,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (item.status === 'cancelled') throw Object.assign(new Error('Törölt rendelésre nem könyvelhető bevételezés.'), { statusCode: 400 });
     const duplicate = await client.query(`SELECT id FROM aif_purchase_order_receipts WHERE import_row_id=$1 LIMIT 1`, [importRowId]);
     if (duplicate.rowCount) return { inserted: false, duplicate: true };
-    const currentReceived = Number(item.qty_received || 0);
+    const currentReceived = Number(item.receipt_qty || item.qty_received || 0);
     const orderedQty = Number(item.qty_ordered || 0);
     if (currentReceived + quantity > orderedQty) {
       throw Object.assign(new Error(`A bevételezett mennyiség meghaladná a rendelt darabszámot. Rendelt: ${orderedQty}, eddig bevételezett: ${currentReceived}, most: ${quantity}.`), { statusCode: 400 });
@@ -13316,10 +13600,76 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             GROUP BY po.id,s.name,l.name`;
   }
 
+  async function repairAifPurchaseOrderMissingPrices(client, orderId) {
+    const rows = await client.query(
+      `SELECT pol.id, pol.qty_ordered, pol.unit_price, pol.sell_price,
+              COALESCE((
+                SELECT COALESCE(rw.buy_price_ron, rw.buy_price)
+                FROM aif_import_rows rw
+                JOIN aif_import_batches ib ON ib.id=rw.batch_id
+                JOIN aif_purchase_orders po2 ON po2.id=pol.order_id
+                WHERE rw.variant_id=pol.variant_id
+                  AND rw.status='committed'
+                  AND COALESCE(rw.buy_price_ron, rw.buy_price) IS NOT NULL
+                  AND ib.supplier_id=po2.supplier_id
+                ORDER BY COALESCE(ib.committed_at, ib.updated_at, ib.created_at, rw.updated_at) DESC,
+                         rw.row_no DESC,
+                         rw.id DESC
+                LIMIT 1
+              ), v.buy_price) AS purchase_price
+       FROM aif_purchase_order_lines pol
+       LEFT JOIN aif_product_variants v ON v.id=pol.variant_id
+       WHERE pol.order_id=$1
+         AND (pol.unit_price IS NULL OR pol.sell_price IS NOT NULL)`,
+      [orderId]
+    );
+
+    let repaired = 0;
+    for (const row of rows.rows) {
+      const currentUnitPrice = toMoney(row.unit_price);
+      const purchasePrice = toMoney(row.purchase_price);
+      const nextUnitPrice = currentUnitPrice !== null ? currentUnitPrice : purchasePrice;
+      const mustClearSellPrice = row.sell_price !== null && row.sell_price !== undefined;
+      // Ha nincs visszakereshető vételár és eladási ár sincs a soron, nem írjuk
+      // újra ugyanazt a NULL állapotot minden lista-/részletbetöltéskor.
+      if (nextUnitPrice === null && !mustClearSellPrice) continue;
+      const lineTotal = nextUnitPrice === null
+        ? null
+        : Math.round((Number(row.qty_ordered || 0) * nextUnitPrice + Number.EPSILON) * 100) / 100;
+      await client.query(
+        `UPDATE aif_purchase_order_lines
+         SET unit_price=$2,
+             sell_price=NULL,
+             line_total=$3,
+             raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
+             updated_at=now()
+         WHERE id=$1`,
+        [
+          row.id,
+          nextUnitPrice,
+          lineTotal,
+          JSON.stringify({
+            priceBasis: 'purchase_price',
+            purchasePriceRepairAt: new Date().toISOString(),
+            purchasePriceRepairSource: currentUnitPrice !== null ? 'existing_unit_price' : purchasePrice !== null ? 'last_purchase_or_variant' : 'not_found',
+          }),
+        ]
+      );
+      repaired += 1;
+    }
+    return repaired;
+  }
+
   async function readAifPurchaseOrder(client, value) {
     const key = text(value);
     if (!key) return null;
     await ensureAifPurchaseOrderSchema(client);
+    const idResult = await client.query(
+      `SELECT id FROM aif_purchase_orders WHERE id::text=$1 OR order_number=$1 LIMIT 1`,
+      [key]
+    );
+    if (!idResult.rowCount) return null;
+    await repairAifPurchaseOrderMissingPrices(client, idResult.rows[0].id);
     const itemRes = await client.query(
       `${purchaseOrderSummarySql('WHERE po.id::text=$1 OR po.order_number=$1')} LIMIT 1`,
       [key]
@@ -13338,7 +13688,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        FROM aif_purchase_order_status_history WHERE order_id=$1 ORDER BY created_at DESC`,
       [item.id]
     );
-    return { item, lines: linesRes.rows, history: historyRes.rows };
+    const receiptsRes = await client.query(
+      `SELECT r.id, r.order_id, r.order_line_id, r.reception_id, r.import_batch_id,
+              r.import_row_id, r.qty, r.actor, r.raw, r.received_at,
+              pol.line_no, pol.product_title, pol.variant_id,
+              rec.invoice_number, rec.reception_date, rec.status AS reception_status,
+              b.source_file_name
+       FROM aif_purchase_order_receipts r
+       JOIN aif_purchase_order_lines pol ON pol.id=r.order_line_id
+       LEFT JOIN aif_receptions rec ON rec.id=r.reception_id
+       LEFT JOIN aif_import_batches b ON b.id=r.import_batch_id
+       WHERE r.order_id=$1
+       ORDER BY r.received_at DESC, pol.line_no ASC`,
+      [item.id]
+    );
+    return { item, lines: linesRes.rows, history: historyRes.rows, receipts: receiptsRes.rows };
   }
 
   router.get('/purchase-orders/settings', requireAuthed, async (_req, res) => {
@@ -13389,6 +13753,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get('/purchase-orders', requireAuthed, async (req, res) => {
     try {
       await ensureAifPurchaseOrderSchema(pool);
+      const repairCandidates = await pool.query(
+        `SELECT DISTINCT pol.order_id
+         FROM aif_purchase_order_lines pol
+         JOIN aif_purchase_orders po ON po.id=pol.order_id
+         WHERE (pol.unit_price IS NULL OR pol.sell_price IS NOT NULL)
+           AND po.status <> 'cancelled'
+         ORDER BY pol.order_id
+         LIMIT 200`
+      );
+      for (const candidate of repairCandidates.rows) {
+        await repairAifPurchaseOrderMissingPrices(pool, candidate.order_id);
+      }
       const args = [];
       const where = [];
       const add = (value) => { args.push(value); return `$${args.length}`; };
