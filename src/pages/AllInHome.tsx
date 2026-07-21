@@ -13,6 +13,8 @@ import {
   Package,
   Repeat,
   ShoppingBag,
+  Store,
+  BarChart3,
   Truck,
   Users,
 } from "lucide-react";
@@ -23,7 +25,7 @@ const LOGO_URL =
   "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
 
 type CarLevel = "ok" | "soon" | "expired";
-type GroupKey = "warehouse" | "incoming";
+type GroupKey = "shops" | "warehouse" | "incoming";
 
 type CarRow = {
   itp_date?: string;
@@ -41,6 +43,11 @@ type MenuItem = {
   hash: string;
   icon: React.ComponentType<{ className?: string }>;
 };
+
+const shopItems: MenuItem[] = [
+  { label: "Csíkszereda", hash: "#allinadminmagazinciuc", icon: BarChart3 },
+  { label: "Kézdivásárhely", hash: "#allinadminmagazintargu", icon: BarChart3 },
+];
 
 const warehouseItems: MenuItem[] = [
   { label: "Raktár", hash: "#allinwarehouse", icon: Package },
@@ -276,6 +283,15 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         </header>
 
         <div className="space-y-2.5">
+          <MenuGroup
+            title="Üzletek"
+            count={shopItems.length}
+            icon={Store}
+            open={openGroup === "shops"}
+            onToggle={() => toggleGroup("shops")}
+            items={shopItems}
+          />
+
           <MenuGroup
             title="Raktár / Termékek"
             count={warehouseItems.length}
