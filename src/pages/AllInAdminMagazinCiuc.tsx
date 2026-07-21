@@ -1,17 +1,17 @@
 import AllInAdminMagazinDashboard from "./AllInAdminMagazinDashboard";
 
-export default function AllInAdminMagazinCiuc(props: {
+export default function AllInAdminMagazinTargu(props: {
   actor?: string;
   role?: "admin" | "shop";
 }) {
   return (
     <AllInAdminMagazinDashboard
       {...props}
-      locationCode="main_warehouse"
-      locationName="Magazin - Miercurea Ciuc"
-      cityName="Csíkszereda üzleti vezérlőpult"
-      otherCityHash="#allinadminmagazintargu"
-      otherCityName="Kézdivásárhely"
+      locationCode="magazin_targu_secuiesc"
+      locationName="Magazin - Târgu Secuiesc"
+      cityName="Kézdivásárhely üzleti vezérlőpult"
+      otherCityHash="#allinadminmagazinciuc"
+      otherCityName="Csíkszereda"
     />
   );
 }
