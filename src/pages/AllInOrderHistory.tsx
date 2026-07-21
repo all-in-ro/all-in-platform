@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlertTriangle,
   ChevronDown,
   CheckCircle2,
   Barcode,
@@ -15,6 +16,7 @@ import {
   Minus,
   PackageCheck,
   Plus,
+  Receipt,
   RefreshCw,
   Save,
   Search,
@@ -55,6 +57,15 @@ type PurchaseOrderDraftLine = AifPurchaseOrderInputLine & {
   unitPrice: string;
 };
 
+type PurchaseOrderConfirmAction = {
+  kind: "ordered" | "cancel" | "delete";
+  orderId: string;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  danger?: boolean;
+} | null;
+
 type ScannerDetection = { rawValue?: string };
 type BarcodeDetectorInstance = { detect(source: CanvasImageSource): Promise<ScannerDetection[]> };
 type BarcodeDetectorConstructor = {
@@ -63,6 +74,8 @@ type BarcodeDetectorConstructor = {
 };
 
 const RECEIVE_HANDOFF_KEY = "allinfashion:purchase-order-receive:v1";
+const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
+const OPEN_RECEPTION_HANDOFF_KEY = "allinfashion:reception-open:v1";
 const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
 const wrap = "mx-auto max-w-[1400px] space-y-4";
 const topCard = "rounded-2xl border border-white/20 bg-[#303a4c] px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)]";
@@ -589,6 +602,7 @@ export default function AllInOrderHistory() {
 
   const [detail, setDetail] = useState<AifPurchaseOrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<PurchaseOrderConfirmAction>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState("");
   const [editingOrderNumber, setEditingOrderNumber] = useState("");
@@ -696,6 +710,13 @@ export default function AllInOrderHistory() {
         const response = await apiAifListPurchaseOrders({ limit: 1000 });
         setOrders(response.items || []);
         setSummary(response.summary || summary);
+
+        let openOrderId = "";
+        try {
+          openOrderId = window.sessionStorage.getItem(OPEN_ORDER_HANDOFF_KEY) || "";
+          if (openOrderId) window.sessionStorage.removeItem(OPEN_ORDER_HANDOFF_KEY);
+        } catch {}
+        if (openOrderId) await openDetail(openOrderId);
       } catch (error: any) {
         setMessage(error?.message || "A beszerzési rendelések nem tölthetők be.");
       } finally {
@@ -705,14 +726,15 @@ export default function AllInOrderHistory() {
   }, []);
 
   useEffect(() => {
-    const anyModal = editorOpen || Boolean(detail) || settingsOpen || scannerOpen;
+    const anyModal = editorOpen || Boolean(detail) || settingsOpen || scannerOpen || Boolean(confirmAction);
     if (!anyModal) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (scannerOpen) closeScanner();
+      if (confirmAction) setConfirmAction(null);
+      else if (scannerOpen) closeScanner();
       else if (settingsOpen) setSettingsOpen(false);
       else if (detail) setDetail(null);
       else if (editorOpen) setEditorOpen(false);
@@ -722,7 +744,7 @@ export default function AllInOrderHistory() {
       document.removeEventListener("keydown", onKey, true);
       document.body.style.overflow = previous;
     };
-  }, [editorOpen, detail, settingsOpen, scannerOpen]);
+  }, [editorOpen, detail, settingsOpen, scannerOpen, confirmAction]);
 
   async function ensureInventory() {
     if (inventory.length || inventoryLoading) return inventory;
@@ -957,7 +979,6 @@ export default function AllInOrderHistory() {
   }
 
   async function markOrdered(id: string) {
-    if (!window.confirm("Biztosan elküldöttnek jelölöd ezt a rendelést? Ezután a terméksorok nem szerkeszthetők.")) return;
     setBusy(true);
     try {
       await apiAifMarkPurchaseOrderOrdered(id);
@@ -972,7 +993,6 @@ export default function AllInOrderHistory() {
   }
 
   async function cancelOrder(id: string) {
-    if (!window.confirm("Biztosan törölt állapotba teszed ezt a rendelést?")) return;
     setBusy(true);
     try {
       await apiAifCancelPurchaseOrder(id);
@@ -987,7 +1007,6 @@ export default function AllInOrderHistory() {
   }
 
   async function deleteOrder(id: string) {
-    if (!window.confirm("A rendelést és a terméksorait véglegesen törlöd. Folytatod?")) return;
     setBusy(true);
     try {
       await apiAifDeletePurchaseOrder(id);
@@ -999,6 +1018,52 @@ export default function AllInOrderHistory() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function requestPurchaseOrderConfirmation(kind: "ordered" | "cancel" | "delete", orderId: string) {
+    if (kind === "ordered") {
+      setConfirmAction({
+        kind,
+        orderId,
+        title: "Rendelés elküldése",
+        description: "A rendelés Rendelve állapotba kerül. Ezután a terméksorok már nem szerkeszthetők, és elindítható hozzá a bevételezés.",
+        confirmLabel: "Rendelés elküldése",
+      });
+      return;
+    }
+    if (kind === "cancel") {
+      setConfirmAction({
+        kind,
+        orderId,
+        title: "Rendelés törölt állapotba helyezése",
+        description: "A rendelés megmarad az előzményekben, de több termék nem adható hozzá és bevételezés sem indítható belőle.",
+        confirmLabel: "Törölt állapot",
+        danger: true,
+      });
+      return;
+    }
+    setConfirmAction({
+      kind,
+      orderId,
+      title: "Rendelés végleges törlése",
+      description: "A rendelés és minden terméksora véglegesen törlődik. Ez a művelet nem vonható vissza.",
+      confirmLabel: "Végleges törlés",
+      danger: true,
+    });
+  }
+
+  async function confirmPurchaseOrderAction() {
+    const action = confirmAction;
+    if (!action) return;
+    setConfirmAction(null);
+    if (action.kind === "ordered") await markOrdered(action.orderId);
+    else if (action.kind === "cancel") await cancelOrder(action.orderId);
+    else await deleteOrder(action.orderId);
+  }
+
+  function openLinkedReception(receptionId: string) {
+    try { window.sessionStorage.setItem(OPEN_RECEPTION_HANDOFF_KEY, receptionId); } catch {}
+    window.location.hash = "#allinreceptions";
   }
 
   function startReception(detailValue: AifPurchaseOrderDetail) {
@@ -1268,12 +1333,44 @@ export default function AllInOrderHistory() {
       {detail && (
         <div className={modalBackdrop} role="dialog" aria-modal="true">
           <div className={`${modalCard} max-w-[1280px]`}>
-            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">Beszerzési rendelés</p><h2 className="mt-1 text-xl">{detail.item.order_number}</h2><p className="mt-1 text-xs text-white/55">{detail.item.supplier_name || "-"}</p></div><div className="flex flex-wrap gap-2"><button className={neutralBtn} onClick={() => printOrder(detail.item.id)} type="button"><FileText size={14} /> PDF</button>{detail.item.status === "draft" && <button className={neutralBtn} onClick={() => { setDetail(null); void openEditOrder(detail.item); }} type="button"><Edit3 size={14} /> Szerkesztés</button>}{detail.item.status === "draft" && <button className={primaryBtn} onClick={() => void markOrdered(detail.item.id)} type="button"><Send size={14} /> Rendelés elküldve</button>}{["ordered", "partially_received"].includes(detail.item.status) && <button className={primaryBtn} onClick={() => startReception(detail)} type="button"><Truck size={14} /> Bevételezés indítása</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={14} /> Bezárás</button></div></div>
+            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">Beszerzési rendelés</p><h2 className="mt-1 text-xl">{detail.item.order_number}</h2><p className="mt-1 text-xs text-white/55">{detail.item.supplier_name || "-"}</p></div><div className="flex flex-wrap gap-2"><button className={neutralBtn} onClick={() => printOrder(detail.item.id)} type="button"><FileText size={14} /> PDF</button>{detail.item.status === "draft" && <button className={neutralBtn} onClick={() => { setDetail(null); void openEditOrder(detail.item); }} type="button"><Edit3 size={14} /> Szerkesztés</button>}{detail.item.status === "draft" && <button className={primaryBtn} onClick={() => requestPurchaseOrderConfirmation("ordered", detail.item.id)} type="button"><Send size={14} /> Rendelés elküldve</button>}{["ordered", "partially_received"].includes(detail.item.status) && <button className={primaryBtn} onClick={() => startReception(detail)} type="button"><Truck size={14} /> Bevételezés indítása</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={14} /> Bezárás</button></div></div>
             <div className="space-y-4 p-4">
               <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">{[["Állapot", statusLabel(detail.item.status)], ["Rendelés dátuma", dateText(detail.item.order_date)], ["Várható", dateText(detail.item.expected_date)], ["Célhely", detail.item.location_name || "-"], ["Rendelt", `${detail.item.total_qty || 0} db`], ["Hátralévő", `${detail.item.remaining_qty || 0} db`]].map(([key, value]) => <div key={String(key)} className="rounded-2xl border border-white/16 bg-[#354153] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/45">{key}</p><p className="mt-1 text-sm">{value}</p></div>)}</section>
               <section className="overflow-hidden rounded-2xl border border-white/16"><div className="border-b border-white/14 bg-[#303b4e] px-4 py-3"><h3>Rendelt termékek</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead className="bg-[#26364c] text-[9px] uppercase tracking-[0.08em] text-white/65"><tr><th className="px-3 py-3 text-left">#</th><th className="px-3 py-3 text-left">Kép</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Azonosító</th><th className="px-3 py-3 text-center">Rendelt</th><th className="px-3 py-3 text-center">Beérkezett</th><th className="px-3 py-3 text-center">Hátra</th><th className="px-3 py-3 text-right">Vételár</th><th className="px-3 py-3 text-right">Érték</th></tr></thead><tbody>{detail.lines.map((line) => <tr key={line.id} className="border-t border-white/12"><td className="px-3 py-3">{line.line_no}</td><td className="px-3 py-3"><ProductImage src={line.image_url} title={line.product_title} size="sm" /></td><td className="px-3 py-3"><p>{line.product_title}</p><p className="mt-1 text-xs text-white/48">{[line.brand_name, line.color_name, line.size].filter(Boolean).join(" • ")}</p></td><td className="px-3 py-3"><p className="font-mono text-xs">{line.supplier_product_code || line.model_code || "-"}</p><p className="mt-1 font-mono text-[10px] text-white/45">{line.barcode || "-"}</p></td><td className="px-3 py-3 text-center">{line.qty_ordered}</td><td className="px-3 py-3 text-center text-emerald-100">{line.qty_received}</td><td className="px-3 py-3 text-center text-amber-100">{line.qty_remaining}</td><td className="px-3 py-3 text-right">{line.unit_price === null || line.unit_price === undefined ? "-" : money(line.unit_price, detail.item.currency_code)}</td><td className="px-3 py-3 text-right">{line.line_total === null || line.line_total === undefined ? "-" : money(line.line_total, detail.item.currency_code)}</td></tr>)}</tbody></table></div></section>
+              {Boolean(detail.receipts?.length) && (
+                <section className="overflow-hidden rounded-2xl border border-white/16">
+                  <div className="flex items-center justify-between gap-3 border-b border-white/14 bg-[#303b4e] px-4 py-3">
+                    <div className="flex items-center gap-2"><Receipt size={15} className="text-[#8ee6e2]" /><h3>Kapcsolódó bevételezések</h3></div>
+                    <span className="rounded-full border border-white/16 bg-white/[0.06] px-2 py-1 text-[10px] text-white/60">{detail.receipts?.reduce((sum, row) => sum + toNumber(row.qty), 0) || 0} db</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] border-collapse text-sm">
+                      <thead className="bg-[#26364c] text-[9px] uppercase tracking-[0.08em] text-white/65"><tr><th className="px-3 py-2 text-left">Dátum</th><th className="px-3 py-2 text-left">Számla / receptió</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-center">Darab</th><th className="px-3 py-2 text-left">Forrás</th><th className="px-3 py-2 text-right">Művelet</th></tr></thead>
+                      <tbody>{(detail.receipts || []).map((receipt) => <tr key={receipt.id} className="border-t border-white/12"><td className="px-3 py-2">{dateText(receipt.received_at)}</td><td className="px-3 py-2"><p>{receipt.invoice_number || "Számla nélkül"}</p><p className="mt-1 text-xs text-white/45">{dateText(receipt.reception_date)}</p></td><td className="px-3 py-2"><p>{receipt.product_title || `Rendelési sor ${receipt.line_no || "-"}`}</p><p className="mt-1 text-xs text-white/45">#{receipt.line_no || "-"}</p></td><td className="px-3 py-2 text-center text-emerald-100">{receipt.qty}</td><td className="px-3 py-2 text-white/60">{receipt.source_file_name || "Kézi bevételezés"}</td><td className="px-3 py-2 text-right">{receipt.reception_id ? <button className={neutralBtn} type="button" onClick={() => openLinkedReception(String(receipt.reception_id))}><FileText size={13} /> Receptió</button> : "-"}</td></tr>)}</tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
               {detail.item.note && <section className="rounded-2xl border border-white/16 bg-[#354153] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/45">Megjegyzés</p><p className="mt-2 text-sm text-white/85">{detail.item.note}</p></section>}
-              <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3"><div>{detail.item.status !== "received" && detail.item.status !== "partially_received" && detail.item.status !== "cancelled" && <button className={dangerBtn} onClick={() => void cancelOrder(detail.item.id)} type="button"><X size={14} /> Törölt állapot</button>}</div><div className="flex gap-2">{toNumber(detail.item.received_qty) <= 0 && <button className={dangerBtn} onClick={() => void deleteOrder(detail.item.id)} type="button"><Trash2 size={14} /> Végleges törlés</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button">Bezárás</button></div></div>
+              <div className="flex flex-wrap justify-between gap-2 border-t border-white/12 pt-3"><div>{detail.item.status !== "received" && detail.item.status !== "partially_received" && detail.item.status !== "cancelled" && <button className={dangerBtn} onClick={() => requestPurchaseOrderConfirmation("cancel", detail.item.id)} type="button"><X size={14} /> Törölt állapot</button>}</div><div className="flex gap-2">{toNumber(detail.item.received_qty) <= 0 && <button className={dangerBtn} onClick={() => requestPurchaseOrderConfirmation("delete", detail.item.id)} type="button"><Trash2 size={14} /> Végleges törlés</button>}<button className={neutralBtn} onClick={() => setDetail(null)} type="button">Bezárás</button></div></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmAction && (
+        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-slate-950/80 px-3 py-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/22 bg-[#4b5566] text-white shadow-2xl">
+            <div className={`flex items-center gap-3 border-b px-4 py-3 ${confirmAction.danger ? "border-red-300/25 bg-[#5a2730]" : "border-[#67d4d1]/25 bg-[#264750]"}`}>
+              <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${confirmAction.danger ? "border-red-200/35 bg-red-500/20 text-red-50" : "border-[#67d4d1]/40 bg-[#2a8d8b]/30 text-[#d7fffd]"}`}><AlertTriangle size={19} /></span>
+              <div><p className="text-[9px] uppercase tracking-[0.14em] text-white/50">Megerősítés</p><h2 className="mt-1 text-lg">{confirmAction.title}</h2></div>
+            </div>
+            <div className="p-4">
+              <p className="text-sm leading-relaxed text-white/78">{confirmAction.description}</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button className={neutralBtn} type="button" onClick={() => setConfirmAction(null)}>Mégse</button>
+                <button className={confirmAction.danger ? dangerBtn : primaryBtn} type="button" onClick={() => void confirmPurchaseOrderAction()} disabled={busy}>{confirmAction.confirmLabel}</button>
+              </div>
             </div>
           </div>
         </div>
