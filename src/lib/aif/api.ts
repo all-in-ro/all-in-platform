@@ -1692,9 +1692,30 @@ export type AifPurchaseOrderSummary = {
   total_value?: number | string | null;
 };
 
+export type AifPurchaseOrderReceipt = {
+  id: string;
+  order_id: string;
+  order_line_id: string;
+  reception_id?: string | null;
+  import_batch_id?: string | null;
+  import_row_id?: number | string | null;
+  qty: number | string;
+  actor?: string | null;
+  raw?: Record<string, unknown> | null;
+  received_at: string;
+  line_no?: number | string | null;
+  product_title?: string | null;
+  variant_id?: string | null;
+  invoice_number?: string | null;
+  reception_date?: string | null;
+  reception_status?: string | null;
+  source_file_name?: string | null;
+};
+
 export type AifPurchaseOrderDetail = {
   item: AifPurchaseOrderSummary;
   lines: AifPurchaseOrderLine[];
+  receipts?: AifPurchaseOrderReceipt[];
   history?: Array<{
     id: string;
     from_status?: string | null;
