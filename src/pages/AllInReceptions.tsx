@@ -51,11 +51,16 @@ const DEFAULT_SALES_TVA_SETTINGS: SalesTvaSettings = {
   updatedBy: null,
 };
 
+const OPEN_RECEPTION_HANDOFF_KEY = "allinfashion:reception-open:v1";
+const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
+
 async function fetchAifJsonLocal<T>(path: string, init?: RequestInit): Promise<T> {
+  const requestHeaders = new Headers(init?.headers || {});
+  if (!requestHeaders.has("Content-Type")) requestHeaders.set("Content-Type", "application/json");
   const res = await fetch(`/api/aif${path}`, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
+    credentials: "include",
+    headers: requestHeaders,
   });
   const text = await res.text();
   let data: any = null;
@@ -915,8 +920,15 @@ export default function AllInReceptions(_props: Props) {
   }
 
   useEffect(() => {
-    load();
-    loadSalesTvaSettings();
+    void (async () => {
+      await Promise.all([load(), loadSalesTvaSettings()]);
+      let receptionId = "";
+      try {
+        receptionId = window.sessionStorage.getItem(OPEN_RECEPTION_HANDOFF_KEY) || "";
+        if (receptionId) window.sessionStorage.removeItem(OPEN_RECEPTION_HANDOFF_KEY);
+      } catch {}
+      if (receptionId) await openDetail(receptionId);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -950,6 +962,13 @@ export default function AllInReceptions(_props: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function openLinkedPurchaseOrder(orderId?: string | null) {
+    const id = String(orderId || "").trim();
+    if (!id) return;
+    try { window.sessionStorage.setItem(OPEN_ORDER_HANDOFF_KEY, id); } catch {}
+    window.location.hash = "#allinorderhistory";
   }
 
   async function deleteReception() {
@@ -1385,6 +1404,7 @@ export default function AllInReceptions(_props: Props) {
                   <tr>
                     <th className="px-2 py-1.5">Számla</th>
                     <th className="px-2 py-1.5">Beszállító</th>
+                    <th className="px-2 py-1.5">Beszerzési rendelés</th>
                     <th className="px-2 py-1.5">Cél hely</th>
                     <th className="px-2 py-1.5">Dátum</th>
                     <th className="px-2 py-1.5">Pénznem</th>
@@ -1400,6 +1420,7 @@ export default function AllInReceptions(_props: Props) {
                     <tr key={r.id} className="hover:bg-white/5">
                       <td className="px-3 py-2 text-white">{cell(r.invoice_number)}</td>
                       <td className="px-2 py-1.5 text-white/82">{cell(r.supplier_name)}</td>
+                      <td className="px-2 py-1.5 text-white/82">{r.purchase_order_id ? <button className="rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(r.purchase_order_id)} type="button">{r.purchase_order_number || "Kapcsolt rendelés"}</button> : <span className="text-white/35">-</span>}</td>
                       <td className="px-2 py-1.5 text-white/82">{cell(r.location_name)}</td>
                       <td className="px-2 py-1.5 text-white/82">{dateText(r.reception_date)}</td>
                       <td className="px-2 py-1.5 text-white/82">{cell(r.currency_code)}</td>
@@ -1418,7 +1439,7 @@ export default function AllInReceptions(_props: Props) {
                       </td>
                     </tr>
                   ))}
-                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={10}>Nincs receptió a megadott szűrés szerint.</td></tr>}
+                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={11}>Nincs receptió a megadott szűrés szerint.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -1429,6 +1450,7 @@ export default function AllInReceptions(_props: Props) {
                     <div>
                       <p className="text-xs text-white">{cell(r.invoice_number)}</p>
                       <p className="mt-1 text-xs text-white/62">{cell(r.supplier_name)} • {cell(r.location_name)}</p>
+                      {r.purchase_order_id && <button className="mt-2 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50" onClick={() => openLinkedPurchaseOrder(r.purchase_order_id)} type="button">{r.purchase_order_number || "Kapcsolt rendelés"}</button>}
                     </div>
                     <span className="rounded-full border border-[#2a8d8b]/40 bg-[#2a8d8b]/10 px-2 py-1 text-xs text-white">{statusText(r.status)}</span>
                   </div>
@@ -1469,8 +1491,9 @@ export default function AllInReceptions(_props: Props) {
               </div>
             </div>
             <div className="space-y-3 px-3 pt-3 pb-6">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.supplier_name)}</p></div>
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszerzési rendelés</p>{detail.item.purchase_order_id ? <button className="mt-1 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(detail.item.purchase_order_id)} type="button">{detail.item.purchase_order_number || "Kapcsolt rendelés"}</button> : <p className="mt-0.5 text-xs text-white/40">-</p>}</div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Cél hely</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.location_name)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Pénznem</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.currency_code)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Árfolyam</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.exchange_rate_to_ron)}</p></div>
