@@ -12,6 +12,7 @@ import {
   ShoppingCart,
   Store,
   Truck,
+  UserPlus,
   UserRound,
 } from "lucide-react";
 
@@ -117,7 +118,7 @@ export default function AllInMagazinCiuc({
   }
 
   return (
-    <main className="min-h-screen bg-[#4b5362] p-3 text-white sm:p-4 lg:p-6">
+    <main className="min-h-screen bg-gradient-to-br from-[#626d7d] via-[#596373] to-[#505a69] p-3 text-white sm:p-4 lg:p-6">
       <div className="mx-auto max-w-[1480px] space-y-4">
         <header className="rounded-[24px] border border-white/18 bg-[#303a4c] px-4 py-4 shadow-[0_18px_48px_rgba(15,23,42,0.28)] sm:px-5">
           <div className="flex flex-wrap items-center gap-4">
@@ -171,6 +172,55 @@ export default function AllInMagazinCiuc({
               <p className="mt-1 text-sm text-white">{sessionLabel}</p>
             </div>
             <span className="h-3 w-3 rounded-full bg-[#37c7c2] shadow-[0_0_14px_rgba(55,199,194,0.85)]" />
+          </div>
+        </section>
+
+        <section className="rounded-[24px] border border-white/20 bg-[#eef4f5]/10 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.14)] backdrop-blur-sm sm:p-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] lg:items-center">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#a7ebe7]/40 bg-[#2a8d8b]/24 text-[#d7fffd]">
+                <UserPlus size={24} strokeWidth={1.8} />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/65">Vevői nyilvántartás</p>
+                <h2 className="mt-1 text-lg text-white">Kliensek</h2>
+                <p className="mt-1 text-sm leading-snug text-white/62">
+                  Név, telefonszám és kapcsolattartási adatok rögzítése a félretett termékekhez, hiteles vásárlásokhoz és későbbi fizetésekhez.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {["Név", "Telefonszám", "E-mail", "Cím", "Megjegyzés", "Félretett / hitel"].map((item) => (
+                <span key={item} className="rounded-full border border-white/16 bg-white/[0.08] px-2.5 py-1 text-[10px] text-white/68">
+                  {item}
+                </span>
+              ))}
+            </div>
+
+            <div className="grid min-w-[230px] grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setNotice("Új kliens: a kliensadatlap és az adatbázis-kapcsolat a következő fejlesztési lépésben készül el.")}
+                className="inline-flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-3 text-sm text-white transition hover:bg-[#319c99] active:scale-[0.98]"
+              >
+                <UserPlus size={18} />
+                Új kliens
+              </button>
+              <button
+                type="button"
+                onClick={() => setNotice("Kliens keresése: a klienslista és a gyorskereső a következő fejlesztési lépésben készül el.")}
+                className="inline-flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-3 text-sm text-white transition hover:bg-[#3e4d63] active:scale-[0.98]"
+              >
+                <Search size={18} />
+                Keresés
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-[11px] text-white/48">
+            <span>Üzlet: Magazin - Miercurea Ciuc</span>
+            <span>A kliensadatok később közvetlenül kapcsolódnak a félretett, hiteles és utólag fizetett eladásokhoz.</span>
           </div>
         </section>
 
