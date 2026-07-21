@@ -114,6 +114,10 @@ export default function AllInMagazinCiuc({
   );
 
   function openModule(action: ActionCard) {
+    if (action.key === "sale") {
+      window.location.hash = "magazinciucsale";
+      return;
+    }
     setNotice(`${action.title}: a modul a következő fejlesztési lépésben kerül bekötésre.`);
   }
 
@@ -213,7 +217,7 @@ export default function AllInMagazinCiuc({
                       <Icon size={24} strokeWidth={1.8} />
                     </span>
                     <span className="rounded-full border border-white/14 bg-black/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-white/55">
-                      Következő lépés
+                      {action.primary ? "Megnyitás" : "Következő lépés"}
                     </span>
                   </div>
                   <h3 className="mt-4 text-lg text-white">{action.title}</h3>
