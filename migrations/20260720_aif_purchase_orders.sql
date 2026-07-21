@@ -94,6 +94,41 @@ CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_variant_idx
 CREATE INDEX IF NOT EXISTS aif_purchase_order_lines_barcode_idx
   ON aif_purchase_order_lines (barcode);
 
+-- Beszerzési rendelésben eladási árnak nincs helye. A régi, esetleg
+-- félkész tesztsorokat is megtisztítjuk, az új/átírt sorokat pedig DB-szinten
+-- védjük, hogy később se tudjon visszaszivárogni.
+UPDATE aif_purchase_order_lines
+SET sell_price = NULL
+WHERE sell_price IS NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'aif_purchase_order_lines'::regclass
+      AND conname = 'aif_purchase_order_lines_sell_price_null_check'
+  ) THEN
+    ALTER TABLE aif_purchase_order_lines
+      ADD CONSTRAINT aif_purchase_order_lines_sell_price_null_check
+      CHECK (sell_price IS NULL) NOT VALID;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'aif_purchase_order_lines'::regclass
+      AND conname = 'aif_purchase_order_lines_received_lte_ordered_check'
+  ) THEN
+    ALTER TABLE aif_purchase_order_lines
+      ADD CONSTRAINT aif_purchase_order_lines_received_lte_ordered_check
+      CHECK (qty_received <= qty_ordered) NOT VALID;
+  END IF;
+END $$;
+
+ALTER TABLE aif_purchase_order_lines
+  VALIDATE CONSTRAINT aif_purchase_order_lines_sell_price_null_check;
+
 CREATE TABLE IF NOT EXISTS aif_purchase_order_status_history (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id uuid NOT NULL REFERENCES aif_purchase_orders(id) ON DELETE CASCADE,
@@ -106,6 +141,20 @@ CREATE TABLE IF NOT EXISTS aif_purchase_order_status_history (
 
 CREATE INDEX IF NOT EXISTS aif_purchase_order_status_history_order_idx
   ON aif_purchase_order_status_history (order_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS aif_purchase_order_worklist_requests (
+  owner_key text NOT NULL,
+  idempotency_key text NOT NULL,
+  request_hash text NOT NULL,
+  status text NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','completed')),
+  response jsonb NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner_key, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS aif_purchase_order_worklist_requests_updated_idx
+  ON aif_purchase_order_worklist_requests (updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS aif_purchase_order_receipts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
