@@ -2310,6 +2310,92 @@ export const apiAifShopifyOrders = apiAifListShopifyOrders;
 export const apiAifShopifyOrder = apiAifGetShopifyOrder;
 export const apiAifShopifyOrderEvents = apiAifListShopifyOrderEvents;
 
+
+export type AifShopSalePaymentMethod = "cash" | "card" | "bank_transfer" | "credit";
+
+export type AifShopSaleCatalogItem = {
+  variantId: string;
+  internalSku?: string | null;
+  barcode?: string | null;
+  productCode?: string | null;
+  modelCode?: string | null;
+  title: string;
+  brandName?: string | null;
+  categoryName?: string | null;
+  colorName?: string | null;
+  colorCode?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  sellPrice: number;
+  qty: number;
+  reservedQty: number;
+  availableQty: number;
+};
+
+export type AifShopSaleCatalogResponse = {
+  ok: true;
+  location: { id: string; code: string; name: string };
+  items: AifShopSaleCatalogItem[];
+  count: number;
+};
+
+export type AifShopSaleResult = {
+  ok: true;
+  duplicate?: boolean;
+  saleId: string;
+  saleNumber: string;
+  status: "completed";
+  paymentStatus: "paid" | "credit";
+  saleType: "sale" | "credit";
+  location: { id: string; code: string; name: string };
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  paidTotal: number;
+  balanceDue: number;
+  lineCount: number;
+  itemCount: number;
+  soldAt: string;
+};
+
+export function apiAifShopSaleCatalog(options: {
+  location: string;
+  search?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.search?.trim()) q.set("q", options.search.trim());
+  q.set("limit", String(options.limit || 60));
+  return fetchAifJSON<AifShopSaleCatalogResponse>(`/shop-sales/catalog?${q.toString()}`);
+}
+
+export function apiAifCompleteShopSale(input: {
+  location: string;
+  paymentMethod: AifShopSalePaymentMethod;
+  idempotencyKey: string;
+  note?: string | null;
+  customer?: {
+    id?: string | null;
+    fullName: string;
+    phone: string;
+    email?: string | null;
+    address?: string | null;
+    note?: string | null;
+  };
+  lines: Array<{
+    variantId: string;
+    quantity: number;
+    discountPercent?: number;
+  }>;
+}) {
+  return fetchAifJSON<AifShopSaleResult>("/shop-sales/complete", {
+    method: "POST",
+    headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+    body: JSON.stringify(input),
+  });
+}
+
 export type AifAdminShopOverviewSummary = {
   revenue: number;
   salesBeforeDiscount: number;
