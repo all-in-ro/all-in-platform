@@ -10,6 +10,8 @@ import AllInWarehouseMobile from "./pages/AllInWarehouseMobile";
 
 import AllInMagazinCiuc from "./pages/AllInMagazinCiuc";
 import AllInMagazinTargu from "./pages/AllInMagazinTargu";
+import AllInMagazinCiucSale from "./pages/AllInMagazinCiucSale";
+import AllInMagazinTarguSale from "./pages/AllInMagazinTarguSale";
 import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 
@@ -33,6 +35,8 @@ type ScreenName =
   | "home"
   | "magazinciuc"
   | "magazintargu"
+  | "magazinciucsale"
+  | "magazintargusale"
   | "adminmagazinciuc"
   | "adminmagazintargu"
   | "incoming"
@@ -91,6 +95,18 @@ function hashToScreen(rawHash: string): Screen {
     key === "kezdivasarhely"
   ) return { name: "magazintargu" };
   if (
+    key === "magazinciucsale" ||
+    key === "allinmagazinciucsale" ||
+    key === "allin-magazin-ciuc-sale" ||
+    key === "shop-ciuc-sale"
+  ) return { name: "magazinciucsale" };
+  if (
+    key === "magazintargusale" ||
+    key === "allinmagazintargusale" ||
+    key === "allin-magazin-targu-sale" ||
+    key === "shop-targu-sale"
+  ) return { name: "magazintargusale" };
+  if (
     key === "adminmagazinciuc" ||
     key === "allinadminmagazinciuc" ||
     key === "allin-admin-magazin-ciuc" ||
@@ -147,6 +163,13 @@ function hashToScreen(rawHash: string): Screen {
 
 function shopHomeScreen(shopId: ShopId): ScreenName {
   return shopId === "csikszereda" ? "magazinciuc" : "magazintargu";
+}
+
+function isShopScreenAllowed(shopId: ShopId, screenName: ScreenName) {
+  if (shopId === "csikszereda") {
+    return screenName === "magazinciuc" || screenName === "magazinciucsale";
+  }
+  return screenName === "magazintargu" || screenName === "magazintargusale";
 }
 
 function go(name: ScreenName) {
@@ -219,7 +242,7 @@ export default function App() {
           const current = hashToScreen(window.location.hash);
           if (data.session.role === "shop") {
             const target = shopHomeScreen(data.session.shopId);
-            if (current.name !== target) go(target);
+            if (!isShopScreenAllowed(data.session.shopId, current.name)) go(target);
           } else if (current.name === "login") {
             const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
             if (last && isNonLoginHash(last)) window.location.hash = last;
@@ -233,7 +256,7 @@ export default function App() {
   useEffect(() => {
     if (!session || session.role !== "shop") return;
     const target = shopHomeScreen(session.shopId);
-    if (screen.name !== target) go(target);
+    if (!isShopScreenAllowed(session.shopId, screen.name)) go(target);
   }, [session, screen.name]);
 
   const logout = async () => {
@@ -275,6 +298,8 @@ export default function App() {
       {screen.name === "home" && <AllInHome {...(commonProps as any)} />}
       {screen.name === "magazinciuc" && <AllInMagazinCiuc {...(commonProps as any)} />}
       {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
+      {screen.name === "magazinciucsale" && <AllInMagazinCiucSale {...(commonProps as any)} />}
+      {screen.name === "magazintargusale" && <AllInMagazinTarguSale {...(commonProps as any)} />}
       {screen.name === "adminmagazinciuc" && <AllInAdminMagazinCiuc {...(commonProps as any)} />}
       {screen.name === "adminmagazintargu" && <AllInAdminMagazinTargu {...(commonProps as any)} />}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
