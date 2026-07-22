@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  Barcode,
   Check,
   CheckCircle2,
   ChevronDown,
   Clipboard,
   Copy,
+  CreditCard,
   Home,
   KeyRound,
   MapPin,
   Plus,
   Power,
+  Printer,
   RefreshCw,
   ShieldCheck,
   Store,
@@ -90,6 +93,105 @@ function slugifyId(input: string) {
   return replaced.replace(/[^a-z0-9]+/g, "").slice(0, 32) || "helyseg";
 }
 
+
+const CODE39_PATTERNS: Record<string, string> = {
+  "0": "nnnwwnwnn",
+  "1": "wnnwnnnnw",
+  "2": "nnwwnnnnw",
+  "3": "wnwwnnnnn",
+  "4": "nnnwwnnnw",
+  "5": "wnnwwnnnn",
+  "6": "nnwwwnnnn",
+  "7": "nnnwnnwnw",
+  "8": "wnnwnnwnn",
+  "9": "nnwwnnwnn",
+  A: "wnnnnwnnw",
+  B: "nnwnnwnnw",
+  C: "wnwnnwnnn",
+  D: "nnnnwwnnw",
+  E: "wnnnwwnnn",
+  F: "nnwnwwnnn",
+  G: "nnnnnwwnw",
+  H: "wnnnnwwnn",
+  I: "nnwnnwwnn",
+  J: "nnnnwwwnn",
+  K: "wnnnnnnww",
+  L: "nnwnnnnww",
+  M: "wnwnnnnwn",
+  N: "nnnnwnnww",
+  O: "wnnnwnnwn",
+  P: "nnwnwnnwn",
+  Q: "nnnnnnwww",
+  R: "wnnnnnwwn",
+  S: "nnwnnnwwn",
+  T: "nnnnwnwwn",
+  U: "wwnnnnnnw",
+  V: "nwwnnnnnw",
+  W: "wwwnnnnnn",
+  X: "nwnnwnnnw",
+  Y: "wwnnwnnnn",
+  Z: "nwwnwnnnn",
+  "-": "nwnnnnwnw",
+  ".": "wwnnnnwnn",
+  " ": "nwwnnnwnn",
+  "$": "nwnwnwnnn",
+  "/": "nwnwnnnwn",
+  "+": "nwnnnwnwn",
+  "%": "nnnwnwnwn",
+  "*": "nwnnwnwnn",
+};
+
+function accessCardPayload(item: CodeItem) {
+  const rawCode = String(item.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!rawCode) return "";
+  const shopPrefix = item.shopId === "csikszereda"
+    ? "C"
+    : item.shopId === "kezdivasarhely"
+      ? "K"
+      : "";
+  return shopPrefix ? `AIF-${shopPrefix}-${rawCode}` : "";
+}
+
+function code39Svg(value: string, height = 64) {
+  const safe = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^0-9A-Z. $/+%-]/g, "");
+  const encoded = `*${safe}*`;
+  const narrow = 2;
+  const wide = 5;
+  const characterGap = 2;
+  const quiet = 12;
+  let x = quiet;
+  const rects: string[] = [];
+
+  for (const character of encoded) {
+    const pattern = CODE39_PATTERNS[character];
+    if (!pattern) continue;
+
+    pattern.split("").forEach((widthCode, index) => {
+      const width = widthCode === "w" ? wide : narrow;
+      if (index % 2 === 0) {
+        rects.push(`<rect x="${x}" y="0" width="${width}" height="${height}" fill="#000"/>`);
+      }
+      x += width;
+    });
+    x += characterGap;
+  }
+
+  const totalWidth = x + quiet;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${height}" role="img" aria-label="${safe}" preserveAspectRatio="none">${rects.join("")}</svg>`;
+}
+
+function escapeHtml(value: string) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export default function AllInUsers({ api, actor }: { api?: string; actor?: string }) {
   const apiBase = useMemo(() => {
     const fromProp = typeof api === "string" && api.trim() ? api.trim() : "";
@@ -147,6 +249,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [pageNotice, setPageNotice] = useState("");
   const [rowBusyId, setRowBusyId] = useState<string | null>(null);
+  const [cardItem, setCardItem] = useState<CodeItem | null>(null);
 
   const shopName = (id: string) => shops.find((shop) => shop.id === id)?.name || id;
   const shopLabel = shopName(shopId);
@@ -168,6 +271,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       setOpenStatus(false);
       setConfirmOpen(false);
       setPlaceOpen(false);
+      setCardItem(null);
     };
     window.addEventListener("mousedown", onMouseDown);
     window.addEventListener("keydown", onKeyDown);
@@ -421,6 +525,144 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     } finally {
       setPlaceBusy(false);
     }
+  };
+
+  const printAccessCard = (item: CodeItem) => {
+    const payload = accessCardPayload(item);
+    if (!payload || !item.code) {
+      setListErr("Ehhez a felhasználóhoz nem készíthető kártya, mert a teljes belépési kód nem érhető el.");
+      return;
+    }
+
+    const popup = window.open("", "_blank", "width=900,height=650");
+    if (!popup) {
+      setListErr("A böngésző letiltotta a nyomtatási ablakot.");
+      return;
+    }
+
+    const nameText = escapeHtml(item.name || "Név nélküli felhasználó");
+    const shopText = escapeHtml(shopName(item.shopId));
+    const codeText = escapeHtml(item.code);
+    const barcode = code39Svg(payload, 64);
+
+    popup.document.open();
+    popup.document.write(`<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <title>AllIn belépőkártya</title>
+  <style>
+    @page { size: 85.6mm 54mm; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 85.6mm;
+      height: 54mm;
+      margin: 0;
+      background: #fff;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #182233;
+    }
+    body { display: grid; place-items: center; }
+    .card {
+      position: relative;
+      width: 85.6mm;
+      height: 54mm;
+      overflow: hidden;
+      padding: 5mm 5.5mm 4.5mm;
+      border: .35mm solid #2a8d8b;
+      border-radius: 4mm;
+      background:
+        radial-gradient(circle at 92% 10%, rgba(42,141,139,.18), transparent 28%),
+        linear-gradient(145deg, #f7fbfb, #ffffff);
+    }
+    .stripe {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2.2mm;
+      background: #2a8d8b;
+    }
+    .top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 3mm;
+    }
+    .brand {
+      font-size: 4.1mm;
+      letter-spacing: .7mm;
+      font-weight: 400;
+    }
+    .tag {
+      border: .25mm solid rgba(42,141,139,.45);
+      border-radius: 3mm;
+      padding: 1.1mm 2.4mm;
+      font-size: 2.4mm;
+      color: #206f6d;
+      white-space: nowrap;
+    }
+    .name {
+      margin-top: 2.5mm;
+      font-size: 4mm;
+      font-weight: 400;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .shop {
+      margin-top: 1mm;
+      font-size: 2.6mm;
+      color: #607083;
+    }
+    .barcode {
+      margin-top: 3.1mm;
+      width: 74mm;
+      height: 14mm;
+      background: #fff;
+    }
+    .barcode svg { width: 100%; height: 100%; display: block; }
+    .code {
+      margin-top: 1.2mm;
+      text-align: center;
+      font-family: "Courier New", monospace;
+      font-size: 2.9mm;
+      letter-spacing: .45mm;
+      color: #223044;
+    }
+    .note {
+      position: absolute;
+      right: 5.5mm;
+      bottom: 2.6mm;
+      font-size: 2mm;
+      color: #8a96a5;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="stripe"></div>
+    <div class="top">
+      <div class="brand">ALL IN</div>
+      <div class="tag">BELÉPŐKÁRTYA</div>
+    </div>
+    <div class="name">${nameText}</div>
+    <div class="shop">${shopText}</div>
+    <div class="barcode">${barcode}</div>
+    <div class="code">${codeText}</div>
+    <div class="note">PVC 85,6 × 54 mm</div>
+  </div>
+  <script>
+    window.addEventListener("load", function () {
+      window.setTimeout(function () {
+        window.focus();
+        window.print();
+      }, 120);
+    });
+  </script>
+</body>
+</html>`);
+    popup.document.close();
   };
 
   const CopyButton = ({ value, copyKey, compact = false }: { value: string; copyKey: string; compact?: boolean }) => {
@@ -716,7 +958,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           {item.code ? <CopyButton value={item.code} copyKey={item.id} compact /> : null}
                         </div>
 
-                        <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                        <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
                           <button
                             type="button"
                             className={`inline-flex h-9 items-center justify-center gap-2 rounded-xl border px-3 text-xs transition disabled:opacity-45 ${inactive ? "border-[#7bd7d4]/35 bg-[#2a8d8b] text-white hover:bg-[#319c99]" : "border-white/16 bg-[#354153] text-white hover:bg-[#3e4d63]"}`}
@@ -725,6 +967,16 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                           >
                             <Power className="h-4 w-4" />
                             {inactive ? "Aktiválás" : "Inaktiválás"}
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-3 text-xs text-white transition hover:bg-[#319c99] disabled:opacity-45"
+                            disabled={!item.code || rowBusyId === item.id}
+                            onClick={() => setCardItem(item)}
+                            title="PVC belépőkártya"
+                          >
+                            <CreditCard className="h-4 w-4" />
+                            Kártya
                           </button>
                           <button
                             type="button"
@@ -743,7 +995,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 </div>
 
                 <div className="hidden overflow-hidden rounded-2xl border border-white/12 md:block">
-                  <div className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_240px] items-center bg-[#303a4c] px-3 py-2.5 text-[10px] uppercase tracking-[0.08em] text-white/48">
+                  <div className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_330px] items-center bg-[#303a4c] px-3 py-2.5 text-[10px] uppercase tracking-[0.08em] text-white/48">
                     <div>Felhasználó</div>
                     <div>Helység</div>
                     <div>Belépési kód</div>
@@ -757,7 +1009,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                     return (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_240px] items-center border-t border-white/10 px-3 py-3"
+                        className="grid grid-cols-[minmax(160px,1.1fr)_minmax(150px,0.9fr)_minmax(230px,1.25fr)_150px_330px] items-center border-t border-white/10 px-3 py-3"
                       >
                         <div className="flex min-w-0 items-center gap-2.5">
                           <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/13 text-[11px] text-[#d7fffd]">
@@ -777,6 +1029,16 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                         </div>
                         <div className="text-xs text-white/52">{fmt(item.createdAt)}</div>
                         <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#7bd7d4]/35 bg-[#2a8d8b] px-2.5 text-xs text-white transition hover:bg-[#319c99] disabled:opacity-45"
+                            disabled={!item.code || rowBusyId === item.id}
+                            onClick={() => setCardItem(item)}
+                            title="PVC belépőkártya nyomtatása"
+                          >
+                            <Printer className="h-4 w-4" />
+                            Kártya
+                          </button>
                           <button
                             type="button"
                             className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border px-2.5 text-xs transition disabled:opacity-45 ${inactive ? "border-[#7bd7d4]/35 bg-[#2a8d8b] text-white hover:bg-[#319c99]" : "border-white/16 bg-[#354153] text-white hover:bg-[#3e4d63]"}`}
@@ -806,6 +1068,71 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
           </div>
         </section>
       </div>
+
+      {cardItem ? (
+        <div
+          className="fixed inset-0 z-[170] grid place-items-center bg-slate-950/80 px-3 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setCardItem(null);
+          }}
+        >
+          <section className="w-full max-w-[720px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#4b5362] text-white shadow-[0_34px_110px_rgba(0,0,0,0.55)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/22 text-[#d7fffd]">
+                  <CreditCard className="h-5 w-5" />
+                </span>
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-white/45">PVC belépőkártya</div>
+                  <div className="mt-1 text-lg font-normal text-white">{cardItem.name || "Név nélküli felhasználó"}</div>
+                </div>
+              </div>
+              <button type="button" className={iconBtn} onClick={() => setCardItem(null)} aria-label="Bezárás">
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+
+            <div className="grid place-items-center p-5 sm:p-7">
+              <div className="relative aspect-[85.6/54] w-full max-w-[560px] overflow-hidden rounded-[22px] border-2 border-[#2a8d8b] bg-gradient-to-br from-[#f7fbfb] to-white p-6 text-[#182233] shadow-[0_24px_60px_rgba(15,23,42,0.3)]">
+                <span className="absolute inset-y-0 left-0 w-3 bg-[#2a8d8b]" />
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-2xl font-normal tracking-[0.14em]">ALL IN</div>
+                  <span className="rounded-full border border-[#2a8d8b]/35 bg-[#2a8d8b]/8 px-3 py-1 text-[10px] tracking-[0.12em] text-[#206f6d]">
+                    BELÉPŐKÁRTYA
+                  </span>
+                </div>
+                <div className="mt-4 truncate text-xl font-normal">{cardItem.name || "Név nélküli felhasználó"}</div>
+                <div className="mt-1 text-sm text-slate-500">{shopName(cardItem.shopId)}</div>
+                <div
+                  className="mt-4 h-[92px] w-full bg-white"
+                  dangerouslySetInnerHTML={{ __html: code39Svg(accessCardPayload(cardItem), 64) }}
+                />
+                <div className="mt-2 text-center font-mono text-sm tracking-[0.16em] text-slate-700">
+                  {cardItem.code}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  className={btnSoft}
+                  onClick={() => setCardItem(null)}
+                >
+                  Mégse
+                </button>
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  onClick={() => printAccessCard(cardItem)}
+                >
+                  <Printer className="h-4 w-4" />
+                  PVC-kártya nyomtatása
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {confirmOpen ? (
         <div
