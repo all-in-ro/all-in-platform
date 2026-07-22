@@ -660,13 +660,17 @@ export default function AllInMagazinSale({
                       <button
                         type="button"
                         onClick={() => openDiscountEditor(line)}
-                        className={`flex h-11 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-left transition ${line.discountPercent > 0 ? "border-emerald-200/55 bg-emerald-500/24 text-emerald-50 shadow-[0_8px_18px_rgba(16,185,129,0.12)]" : "border-white/14 bg-[#273243] text-white/62 hover:border-[#72d8d4]/40"}`}
+                        className={`flex h-11 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-left transition ${line.discountPercent > 0 ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.18)]" : "border-white/14 bg-[#273243] text-white/62 hover:border-[#72d8d4]/40"}`}
                       >
                         <span className="flex min-w-0 items-center gap-2 truncate text-xs">
-                          <Percent size={15} className={line.discountPercent > 0 ? "text-emerald-200" : "text-[#8ee6e2]"} />
+                          <Percent size={15} className={line.discountPercent > 0 ? "text-[#d7fffd]" : "text-[#8ee6e2]"} />
                           Kedvezmény
                         </span>
-                        <span className="shrink-0 rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-sm text-white">
+                        <span className={`shrink-0 rounded-lg border px-2 py-1 text-sm text-white ${
+                          line.discountPercent > 0
+                            ? "border-white/24 bg-white/12"
+                            : "border-white/12 bg-black/10"
+                        }`}>
                           {line.discountPercent.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%
                         </span>
                       </button>
@@ -695,7 +699,7 @@ export default function AllInMagazinSale({
                           onClick={() => applyDiscountToAll(value)}
                           className={`min-h-9 rounded-xl border px-3 text-xs transition ${
                             selectedQuickDiscount === value
-                              ? "border-emerald-200/60 bg-emerald-500/28 text-emerald-50 shadow-[0_6px_16px_rgba(16,185,129,0.16)]"
+                              ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.18)]"
                               : "border-white/13 bg-white/[0.05] text-white/72 hover:border-[#72d8d4]/45 hover:bg-[#2a8d8b]/16"
                           }`}
                         >
@@ -722,9 +726,9 @@ export default function AllInMagazinSale({
                           key={option.method}
                           type="button"
                           onClick={() => { invalidateRequestKey(); setPaymentMethod(option.method); setError(""); if (option.method === "credit" && !selectedCustomer) openCustomerModal("search"); }}
-                          className={`min-h-[78px] touch-manipulation rounded-2xl border p-3 text-left transition active:scale-[0.98] ${active ? "border-emerald-200/70 bg-emerald-500/30 text-emerald-50 shadow-[0_10px_22px_rgba(16,185,129,0.16)] ring-1 ring-emerald-300/30" : "border-white/13 bg-white/[0.05] hover:bg-white/[0.08]"}`}
+                          className={`min-h-[78px] touch-manipulation rounded-2xl border p-3 text-left transition active:scale-[0.98] ${active ? "border-[#9be9e5]/60 bg-[#2a8d8b] text-white shadow-[0_10px_22px_rgba(42,141,139,0.20)] ring-1 ring-[#7bd7d4]/25" : "border-white/13 bg-white/[0.05] hover:bg-white/[0.08]"}`}
                         >
-                          <span className="flex items-center gap-2 text-sm"><Icon size={18} className={active ? "text-emerald-100" : "text-white/58"} />{option.label}</span>
+                          <span className="flex items-center gap-2 text-sm"><Icon size={18} className={active ? "text-[#d7fffd]" : "text-white/58"} />{option.label}</span>
                           <span className="mt-1 block text-[10px] leading-snug text-white/42">{option.description}</span>
                         </button>
                       );
