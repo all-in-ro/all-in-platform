@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { LogOut, UserRound, X } from "lucide-react";
 import Login from "./pages/Login";
 
 import AllInHome from "./pages/AllInHome";
@@ -61,19 +62,12 @@ type Session =
   | { role: "admin"; actor: string }
   | { role: "shop"; shopId: ShopId; actor: string };
 
-const LAST_HASH_KEY = "allin:last_hash";
-
 function normalizeHash(raw: string): string {
   const h = (raw || "").trim();
   const noHash = h.startsWith("#") ? h.slice(1) : h;
   const pathOnly = noHash.split("?")[0];
   const noLeading = pathOnly.replace(/^\/+/, "");
   return noLeading.toLowerCase();
-}
-
-function isNonLoginHash(hash: string) {
-  const key = normalizeHash(hash);
-  return key.length > 0;
 }
 
 function hashToScreen(rawHash: string): Screen {
@@ -172,9 +166,29 @@ function isShopScreenAllowed(shopId: ShopId, screenName: ScreenName) {
   return screenName === "magazintargu" || screenName === "magazintargusale";
 }
 
+function isShopFacingScreen(screenName: ScreenName) {
+  return (
+    screenName === "magazinciuc" ||
+    screenName === "magazintargu" ||
+    screenName === "magazinciucsale" ||
+    screenName === "magazintargusale"
+  );
+}
+
 function go(name: ScreenName) {
   if (name === "login") window.location.hash = "";
   else window.location.hash = name;
+}
+
+function clearShopBrowserState() {
+  const keys: string[] = [];
+  for (let index = 0; index < sessionStorage.length; index += 1) {
+    const key = sessionStorage.key(index);
+    if (key && (key.startsWith("allin:shop-sale-cart:") || key === "allin:last_hash")) {
+      keys.push(key);
+    }
+  }
+  keys.forEach((key) => sessionStorage.removeItem(key));
 }
 
 function useIsWarehouseMobile() {
@@ -202,55 +216,58 @@ function useIsWarehouseMobile() {
 export default function App() {
   const [screen, setScreen] = useState<Screen>(() => hashToScreen(window.location.hash));
   const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
   const api = useMemo(() => "/api", []);
   const warehouseMobile = useIsWarehouseMobile();
   const inventoryMobile = warehouseMobile;
-  const restoredRef = useRef(false);
 
   useEffect(() => {
-    if (restoredRef.current) return;
-    restoredRef.current = true;
-
-    const current = window.location.hash || "";
-    if (!isNonLoginHash(current)) {
-      const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
-      if (last && isNonLoginHash(last)) {
-        window.location.hash = last;
-        setScreen(hashToScreen(last));
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    const onHash = () => {
-      const h = window.location.hash || "";
-      if (isNonLoginHash(h)) sessionStorage.setItem(LAST_HASH_KEY, h);
-      setScreen(hashToScreen(h));
-    };
+    const onHash = () => setScreen(hashToScreen(window.location.hash || ""));
     window.addEventListener("hashchange", onHash);
     onHash();
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
   useEffect(() => {
-    fetch(`${api}/auth/me`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.session) {
-          setSession(data.session);
+    let cancelled = false;
 
-          const current = hashToScreen(window.location.hash);
-          if (data.session.role === "shop") {
-            const target = shopHomeScreen(data.session.shopId);
-            if (!isShopScreenAllowed(data.session.shopId, current.name)) go(target);
-          } else if (current.name === "login") {
-            const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
-            if (last && isNonLoginHash(last)) window.location.hash = last;
-            else go("home");
-          }
+    fetch(`${api}/auth/me`, { credentials: "include", cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+
+        if (!data?.session) {
+          setSession(null);
+          return;
+        }
+
+        const nextSession = data.session as Session;
+        setSession(nextSession);
+        const current = hashToScreen(window.location.hash);
+
+        if (nextSession.role === "shop") {
+          const target = shopHomeScreen(nextSession.shopId);
+          if (!isShopScreenAllowed(nextSession.shopId, current.name)) go(target);
+          return;
+        }
+
+        if (current.name === "login" || isShopFacingScreen(current.name)) {
+          go("home");
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setSession(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [api]);
 
   useEffect(() => {
@@ -259,27 +276,65 @@ export default function App() {
     if (!isShopScreenAllowed(session.shopId, screen.name)) go(target);
   }, [session, screen.name]);
 
-  const logout = async () => {
-    await fetch(`${api}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
-    setSession(null);
-    sessionStorage.removeItem(LAST_HASH_KEY);
-    go("login");
+  const requestLogout = () => {
+    setLogoutError("");
+    setLogoutOpen(true);
   };
+
+  const performLogout = async () => {
+    setLogoutBusy(true);
+    setLogoutError("");
+
+    try {
+      const response = await fetch(`${api}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      }
+
+      clearShopBrowserState();
+      setSession(null);
+      setScreen({ name: "login" });
+      setLogoutOpen(false);
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    } catch (error: any) {
+      setLogoutError(String(error?.message || error || "A kijelentkezés nem sikerült."));
+    } finally {
+      setLogoutBusy(false);
+    }
+  };
+
+  if (!authReady) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#4b5362] px-4 text-white">
+        <div className="rounded-2xl border border-white/14 bg-[#303a4c] px-5 py-4 text-sm text-white/70 shadow-2xl">
+          Munkamenet ellenőrzése…
+        </div>
+      </div>
+    );
+  }
 
   if (!session || screen.name === "login") {
     return (
       <Login
         api={api}
-        onLoggedIn={(s) => {
-          setSession(s);
-          if (s.role === "shop") {
-            sessionStorage.removeItem(LAST_HASH_KEY);
-            go(shopHomeScreen(s.shopId));
+        onLoggedIn={(nextSession) => {
+          clearShopBrowserState();
+          setSession(nextSession);
+
+          if (nextSession.role === "shop") {
+            go(shopHomeScreen(nextSession.shopId));
             return;
           }
-          const last = sessionStorage.getItem(LAST_HASH_KEY) || "";
-          if (last && isNonLoginHash(last)) window.location.hash = last;
-          else go("home");
+
+          const current = hashToScreen(window.location.hash);
+          if (current.name === "login" || isShopFacingScreen(current.name)) {
+            go("home");
+          }
         }}
       />
     );
@@ -290,7 +345,7 @@ export default function App() {
     actor: session.actor,
     role: session.role,
     shopId: session.role === "shop" ? session.shopId : undefined,
-    onLogout: logout,
+    onLogout: requestLogout,
   };
 
   return (
@@ -319,6 +374,71 @@ export default function App() {
       {screen.name === "users" && <AllInUsers {...(commonProps as any)} />}
       {screen.name === "carexpenses" && <AllInCarExpenses {...(commonProps as any)} />}
       {screen.name === "cars" && <AllInCars {...(commonProps as any)} />}
+
+      {logoutOpen ? (
+        <div
+          className="fixed inset-0 z-[600] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !logoutBusy) setLogoutOpen(false);
+          }}
+        >
+          <section className="w-full max-w-[470px] overflow-hidden rounded-[26px] border border-[#9be9e5]/36 bg-[#303a4c] text-white shadow-[0_32px_100px_rgba(0,0,0,0.52)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/22 text-[#d7fffd]">
+                  <UserRound size={21} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-white/45">Kijelentkezés</p>
+                  <h2 className="mt-1 truncate text-xl font-normal text-white">{session.actor}</h2>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={logoutBusy}
+                onClick={() => setLogoutOpen(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white transition hover:bg-white/[0.1] disabled:opacity-50"
+                aria-label="Bezárás"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="px-5 py-5">
+              <p className="text-lg font-normal text-white">Biztosan kijelentkezel?</p>
+              <p className="mt-2 text-sm leading-relaxed text-white/55">
+                A jelenlegi munkamenet bezárul, és a következő belépés tiszta kezdőoldalról indul.
+              </p>
+
+              {logoutError ? (
+                <div className="mt-4 rounded-xl border border-rose-300/28 bg-rose-500/14 px-3 py-2.5 text-sm text-rose-50">
+                  {logoutError}
+                </div>
+              ) : null}
+            </div>
+
+            <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button
+                type="button"
+                disabled={logoutBusy}
+                onClick={() => setLogoutOpen(false)}
+                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm font-normal text-white transition hover:bg-white/[0.1] disabled:opacity-50"
+              >
+                Mégse
+              </button>
+              <button
+                type="button"
+                disabled={logoutBusy}
+                onClick={() => void performLogout()}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#9be9e5]/48 bg-[#2a8d8b] px-5 text-sm font-normal text-white shadow-[0_10px_22px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:opacity-55"
+              >
+                <LogOut size={17} />
+                {logoutBusy ? "Kijelentkezés…" : "Kijelentkezés"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </>
   );
 }
