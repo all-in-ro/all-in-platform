@@ -245,6 +245,9 @@ export default function App() {
         }
 
         const nextSession = data.session as Session;
+        setLogoutOpen(false);
+        setLogoutBusy(false);
+        setLogoutError("");
         setSession(nextSession);
         const current = hashToScreen(window.location.hash);
 
@@ -276,7 +279,15 @@ export default function App() {
     if (!isShopScreenAllowed(session.shopId, screen.name)) go(target);
   }, [session, screen.name]);
 
+  useEffect(() => {
+    if (session) return;
+    setLogoutOpen(false);
+    setLogoutBusy(false);
+    setLogoutError("");
+  }, [session]);
+
   const requestLogout = () => {
+    if (!session) return;
     setLogoutError("");
     setLogoutOpen(true);
   };
@@ -324,6 +335,9 @@ export default function App() {
         api={api}
         onLoggedIn={(nextSession) => {
           clearShopBrowserState();
+          setLogoutOpen(false);
+          setLogoutBusy(false);
+          setLogoutError("");
           setSession(nextSession);
 
           if (nextSession.role === "shop") {
@@ -404,11 +418,8 @@ export default function App() {
               </button>
             </header>
 
-            <div className="px-5 py-5">
+            <div className="px-5 py-4">
               <p className="text-lg font-normal text-white">Biztosan kijelentkezel?</p>
-              <p className="mt-2 text-sm leading-relaxed text-white/55">
-                A jelenlegi munkamenet bezárul, és a következő belépés tiszta kezdőoldalról indul.
-              </p>
 
               {logoutError ? (
                 <div className="mt-4 rounded-xl border border-rose-300/28 bg-rose-500/14 px-3 py-2.5 text-sm text-rose-50">
