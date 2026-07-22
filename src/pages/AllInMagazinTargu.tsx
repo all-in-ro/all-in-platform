@@ -14,7 +14,9 @@ import {
   Truck,
   UserPlus,
   UserRound,
+  Users,
 } from "lucide-react";
+import AllInMagazinClients from "./AllInMagazinClients";
 
 type Props = {
   apiBase?: string;
@@ -102,6 +104,8 @@ export default function AllInMagazinTargu({
 }: Props) {
   const [now, setNow] = useState(() => new Date());
   const [notice, setNotice] = useState("");
+  const [clientsOpen, setClientsOpen] = useState(false);
+  const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30000);
@@ -112,6 +116,12 @@ export default function AllInMagazinTargu({
     () => role === "admin" ? "Admin előnézet" : "Üzleti munkamenet",
     [role],
   );
+
+  function openClients(mode: "search" | "new") {
+    setClientsInitialMode(mode);
+    setClientsOpen(true);
+    setNotice("");
+  }
 
   function openModule(action: ActionCard) {
     if (action.key === "sale") {
@@ -228,56 +238,49 @@ export default function AllInMagazinTargu({
           </div>
         </section>
 
-        <section className="rounded-[24px] border border-white/20 bg-[#eef4f5]/10 p-3 shadow-[0_14px_32px_rgba(15,23,42,0.14)] backdrop-blur-sm sm:p-4">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] lg:items-center">
-            <div className="flex min-w-0 items-start gap-3">
-              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#a7ebe7]/40 bg-[#2a8d8b]/24 text-[#d7fffd]">
-                <UserPlus size={24} strokeWidth={1.8} />
+        <section className="rounded-[22px] border border-white/18 bg-[#3b4759] p-3 shadow-[0_12px_28px_rgba(15,23,42,0.14)]">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => openClients("search")}
+              className="flex min-h-14 min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-2xl px-2 text-left text-white transition hover:bg-white/[0.05] active:scale-[0.995]"
+            >
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+                <Users size={21} />
               </span>
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.16em] text-[#d7fffd]/65">Vevői nyilvántartás</p>
-                <h2 className="mt-1 text-lg text-white">Kliensek</h2>
-                <p className="mt-1 text-sm leading-snug text-white/62">
-                  Név, telefonszám és kapcsolattartási adatok rögzítése a félretett termékekhez, hiteles vásárlásokhoz és későbbi fizetésekhez.
-                </p>
-              </div>
-            </div>
+              <span className="min-w-0">
+                <span className="block text-[10px] uppercase tracking-[0.14em] text-white/42">Vevői nyilvántartás</span>
+                <span className="mt-1 block text-lg text-white">Kliensek</span>
+              </span>
+            </button>
 
-            <div className="flex flex-wrap gap-1.5">
-              {["Név", "Telefonszám", "E-mail", "Cím", "Megjegyzés", "Félretett / hitel"].map((item) => (
-                <span key={item} className="rounded-full border border-white/16 bg-white/[0.08] px-2.5 py-1 text-[10px] text-white/68">
-                  {item}
-                </span>
-              ))}
-            </div>
-
-            <div className="grid min-w-[230px] grid-cols-2 gap-2">
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setNotice("Új kliens: a kliensadatlap és az adatbázis-kapcsolat a következő fejlesztési lépésben készül el.")}
-                className="inline-flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-3 text-sm text-white transition hover:bg-[#319c99] active:scale-[0.98]"
+                onClick={() => openClients("search")}
+                className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-4 text-sm text-white transition hover:bg-[#465366] active:scale-[0.98]"
               >
-                <UserPlus size={18} />
-                Új kliens
+                <Search size={17} /> Lista
               </button>
               <button
                 type="button"
-                onClick={() => setNotice("Kliens keresése: a klienslista és a gyorskereső a következő fejlesztési lépésben készül el.")}
-                className="inline-flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-3 text-sm text-white transition hover:bg-[#3e4d63] active:scale-[0.98]"
+                onClick={() => openClients("new")}
+                className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-sm text-white transition hover:bg-[#319c99] active:scale-[0.98]"
               >
-                <Search size={18} />
-                Keresés
+                <UserPlus size={17} /> Új kliens
               </button>
             </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-[11px] text-white/48">
-            <span>Üzlet: Magazin - Târgu Secuiesc</span>
-            <span>A kliensadatok később közvetlenül kapcsolódnak a félretett, hiteles és utólag fizetett eladásokhoz.</span>
           </div>
         </section>
 
       </div>
+
+      <AllInMagazinClients
+        open={clientsOpen}
+        initialMode={clientsInitialMode}
+        locationName="Magazin - Târgu Secuiesc"
+        onClose={() => setClientsOpen(false)}
+      />
     </main>
   );
 }
