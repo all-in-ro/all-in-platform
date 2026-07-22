@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
+  Barcode,
   KeyRound,
+  Loader2,
   LogIn,
   Shield,
   ShieldCheck,
@@ -16,11 +18,32 @@ type Session =
   | { role: "shop"; shopId: ShopId; actor: string };
 
 type Mode = "admin" | "csik" | "kezdi" | null;
+type LoginMode = Exclude<Mode, null>;
+
+type ParsedAccessCard = {
+  mode: "csik" | "kezdi";
+  code: string;
+};
 
 function inferInitialModeFromHash(): Mode {
   const h = (typeof window !== "undefined" ? window.location.hash : "") || "";
   if (h === "#allinusers" || h === "#admin" || h === "#users") return "admin";
   return null;
+}
+
+function parseAccessCard(value: string): ParsedAccessCard | null {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+
+  const match = normalized.match(/^AIF-(C|K)-([A-Z0-9]{4,64})$/);
+  if (!match) return null;
+
+  return {
+    mode: match[1] === "C" ? "csik" : "kezdi",
+    code: match[2],
+  };
 }
 
 const LOGO_URL =
@@ -37,14 +60,14 @@ const modeMeta = {
   csik: {
     title: "ÜZLET – Csíkszereda",
     subtitle: "Értékesítési munkamenet",
-    inputLabel: "Belépőkód",
+    inputLabel: "Belépőkód vagy kártya",
     placeholder: "Belépőkód…",
     icon: Store,
   },
   kezdi: {
     title: "ÜZLET – Kézdivásárhely",
     subtitle: "Értékesítési munkamenet",
-    inputLabel: "Belépőkód",
+    inputLabel: "Belépőkód vagy kártya",
     placeholder: "Belépőkód…",
     icon: Store,
   },
@@ -55,12 +78,15 @@ export default function Login({
   onLoggedIn,
 }: {
   api: string;
-  onLoggedIn: (s: Session) => void;
+  onLoggedIn: (session: Session) => void;
 }) {
   const [mode, setMode] = useState<Mode>(() => inferInitialModeFromHash());
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [scannerActive, setScannerActive] = useState(false);
+  const scanBufferRef = useRef("");
+  const scanTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const onHash = () => {
@@ -71,16 +97,22 @@ export default function Login({
     return () => window.removeEventListener("hashchange", onHash);
   }, [mode]);
 
-  const cancelToChooser = () => {
+  const cancelToChooser = useCallback(() => {
     setMode(null);
     setSecret("");
     setErr("");
     setBusy(false);
+    scanBufferRef.current = "";
+
+    if (scanTimerRef.current !== null) {
+      window.clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
 
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!mode) return;
@@ -91,25 +123,19 @@ export default function Login({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode]);
+  }, [cancelToChooser, mode]);
 
   const selectedMeta = useMemo(() => (mode ? modeMeta[mode] : null), [mode]);
   const SelectedIcon = selectedMeta?.icon || Store;
 
-  const chooseMode = (nextMode: Exclude<Mode, null>) => {
-    setMode(nextMode);
-    setSecret("");
+  const loginWithMode = useCallback(async (targetMode: LoginMode, rawValue: string) => {
     setErr("");
-  };
-
-  const submit = async () => {
-    if (!mode) return;
-
-    setErr("");
-    const value = secret.trim();
+    const parsedCard = parseAccessCard(rawValue);
+    const effectiveMode: LoginMode = parsedCard?.mode || targetMode;
+    const value = (parsedCard?.code || rawValue).trim();
 
     if (!value) {
-      setErr(mode === "admin" ? "Írd be az admin jelszót." : "Írd be a belépőkódot.");
+      setErr(effectiveMode === "admin" ? "Írd be az admin jelszót." : "Olvasd be a kártyát vagy írd be a belépőkódot.");
       return;
     }
 
@@ -117,11 +143,11 @@ export default function Login({
 
     try {
       const body =
-        mode === "admin"
+        effectiveMode === "admin"
           ? { kind: "admin", password: value }
           : {
               kind: "shop",
-              shopId: mode === "csik" ? "csikszereda" : "kezdivasarhely",
+              shopId: effectiveMode === "csik" ? "csikszereda" : "kezdivasarhely",
               code: value,
             };
 
@@ -133,6 +159,7 @@ export default function Login({
         },
         body: JSON.stringify(body),
         credentials: "include",
+        cache: "no-store",
       });
 
       const data = await response.json().catch(() => null);
@@ -146,7 +173,78 @@ export default function Login({
       setErr(String(error?.message || error || "A belépés nem sikerült."));
     } finally {
       setBusy(false);
+      setScannerActive(false);
+      scanBufferRef.current = "";
     }
+  }, [api, onLoggedIn]);
+
+  useEffect(() => {
+    if (mode !== null || busy) return;
+
+    const resetBufferSoon = () => {
+      if (scanTimerRef.current !== null) {
+        window.clearTimeout(scanTimerRef.current);
+      }
+      scanTimerRef.current = window.setTimeout(() => {
+        scanBufferRef.current = "";
+        setScannerActive(false);
+        scanTimerRef.current = null;
+      }, 260);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+
+      if (event.key === "Enter" || event.key === "Tab") {
+        const scanned = scanBufferRef.current;
+        scanBufferRef.current = "";
+        setScannerActive(false);
+        if (scanTimerRef.current !== null) {
+          window.clearTimeout(scanTimerRef.current);
+          scanTimerRef.current = null;
+        }
+
+        if (!scanned) return;
+
+        const parsed = parseAccessCard(scanned);
+        if (!parsed) {
+          setErr("A beolvasott kártya formátuma nem felismerhető.");
+          return;
+        }
+
+        event.preventDefault();
+        void loginWithMode(parsed.mode, parsed.code);
+        return;
+      }
+
+      if (event.key.length !== 1) return;
+
+      scanBufferRef.current += event.key;
+      setScannerActive(true);
+      setErr("");
+      resetBufferSoon();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (scanTimerRef.current !== null) {
+        window.clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = null;
+      }
+    };
+  }, [busy, loginWithMode, mode]);
+
+  const chooseMode = (nextMode: LoginMode) => {
+    setMode(nextMode);
+    setSecret("");
+    setErr("");
+    scanBufferRef.current = "";
+  };
+
+  const submit = async () => {
+    if (!mode) return;
+    await loginWithMode(mode, secret);
   };
 
   const chooserButton =
@@ -183,7 +281,7 @@ export default function Login({
 
             <div className="mt-5">
               <p className="text-sm text-slate-500">
-                {selectedMeta ? selectedMeta.subtitle : "Válaszd ki, hová szeretnél belépni."}
+                {selectedMeta ? selectedMeta.subtitle : "Válassz belépést, vagy olvasd be közvetlenül a PVC-kártyát."}
               </p>
               <h1 className="mt-1 text-[1.45rem] font-normal tracking-tight text-slate-800">
                 {selectedMeta?.title || "Belépés"}
@@ -194,6 +292,29 @@ export default function Login({
           <div className="px-6 py-6 sm:px-7">
             {!mode ? (
               <div className="space-y-3">
+                <div className={`rounded-2xl border px-4 py-3 transition ${
+                  scannerActive
+                    ? "border-[#2a8d8b]/55 bg-[#dff4f2] shadow-[0_0_0_4px_rgba(42,141,139,0.09)]"
+                    : "border-[#2a8d8b]/20 bg-[#edf8f7]"
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#2a8d8b]/22 bg-white text-[#2a8d8b]">
+                      {busy ? <Loader2 size={20} className="animate-spin" /> : <Barcode size={22} strokeWidth={1.8} />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-normal text-slate-800">
+                        {busy ? "Kártya ellenőrzése…" : scannerActive ? "Kártya beolvasása…" : "PVC belépőkártya"}
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                        Olvasd be a kártyát. A rendszer automatikusan a megfelelő üzletbe léptet.
+                      </p>
+                    </div>
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                      scannerActive ? "bg-[#2a8d8b] shadow-[0_0_12px_rgba(42,141,139,0.7)]" : "bg-slate-300"
+                    }`} />
+                  </div>
+                </div>
+
                 <button type="button" className={chooserButton} onClick={() => chooseMode("admin")}>
                   <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#2a8d8b]">
                     <Shield size={20} strokeWidth={1.8} />
@@ -227,11 +348,17 @@ export default function Login({
                   <LogIn size={18} className="text-white/45 transition group-hover:translate-x-0.5 group-hover:text-[#a8f0ec]" />
                 </button>
 
+                {err ? (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-normal text-rose-700">
+                    {err}
+                  </div>
+                ) : null}
+
                 <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <div className="flex items-start gap-2.5">
                     <ShieldCheck className="mt-0.5 shrink-0 text-[#2a8d8b]" size={17} />
                     <p className="text-xs leading-relaxed text-slate-500">
-                      Az üzleti belépőkódokat az admin adja ki műszak vagy felhasználó szerint.
+                      A kézi kódbevitel továbbra is használható. A kártya az üzletet és a belépőkódot együtt tartalmazza.
                     </p>
                   </div>
                 </div>
@@ -262,11 +389,18 @@ export default function Login({
                       onKeyDown={(event) => {
                         if (event.key === "Enter") void submit();
                       }}
-                      autoComplete={mode === "admin" ? "current-password" : "one-time-code"}
+                      autoComplete={mode === "admin" ? "current-password" : "off"}
                       autoFocus
                     />
                   </div>
                 </label>
+
+                {mode !== "admin" ? (
+                  <div className="mt-3 flex items-center gap-2 rounded-xl border border-[#2a8d8b]/18 bg-[#edf8f7] px-3 py-2.5 text-xs text-slate-600">
+                    <Barcode size={17} className="shrink-0 text-[#2a8d8b]" />
+                    A mező aktív. A vonalkódolvasó beolvassa a kártyát és Enterrel beléptet.
+                  </div>
+                ) : null}
 
                 {err ? (
                   <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-normal text-rose-700">
@@ -292,7 +426,7 @@ export default function Login({
                     className="h-12 rounded-2xl border border-[#2a8d8b] bg-[#2a8d8b] px-4 text-sm font-normal text-white shadow-[0_10px_24px_rgba(42,141,139,0.24)] hover:bg-[#319c99]"
                     onClick={() => void submit()}
                   >
-                    <LogIn className="mr-2 h-4 w-4" />
+                    {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogIn className="mr-2 h-4 w-4" />}
                     {busy ? "Belépés…" : "Belépés"}
                   </Button>
                 </div>
