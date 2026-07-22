@@ -223,6 +223,11 @@ export default function AllInMagazinSale({
   );
   const discountTotal = Math.max(0, subtotal - total);
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
+  const selectedQuickDiscount = useMemo(() => {
+    if (!cart.length) return null;
+    const first = Number(cart[0]?.discountPercent || 0);
+    return cart.every((line) => Number(line.discountPercent || 0) === first) ? first : null;
+  }, [cart]);
 
   const editingDiscountLine = useMemo(
     () => discountEditor ? cart.find((line) => line.variantId === discountEditor.variantId) || null : null,
@@ -611,7 +616,7 @@ export default function AllInMagazinSale({
                 <button
                   type="button"
                   onClick={clearCart}
-                  className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-300/25 bg-red-500/12 px-3 text-xs text-red-50 hover:bg-red-500/20"
+                  className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-300/70 bg-red-600 px-3 text-xs text-white shadow-[0_8px_18px_rgba(220,38,38,0.28)] hover:bg-red-500"
                 >
                   <Trash2 size={15} /> Ürítés
                 </button>
@@ -640,7 +645,7 @@ export default function AllInMagazinSale({
                         type="button"
                         aria-label="Tétel törlése"
                         onClick={() => setQuantity(line.variantId, 0)}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-white/60 hover:bg-red-500/15 hover:text-red-100"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-red-300/70 bg-red-600 text-white shadow-[0_8px_18px_rgba(220,38,38,0.24)] hover:bg-red-500"
                       >
                         <Trash2 size={16} />
                       </button>
@@ -655,10 +660,10 @@ export default function AllInMagazinSale({
                       <button
                         type="button"
                         onClick={() => openDiscountEditor(line)}
-                        className={`flex h-11 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-left transition ${line.discountPercent > 0 ? "border-amber-200/35 bg-amber-400/12 text-amber-50" : "border-white/14 bg-[#273243] text-white/62 hover:border-[#72d8d4]/40"}`}
+                        className={`flex h-11 min-w-0 items-center justify-between gap-2 rounded-xl border px-3 text-left transition ${line.discountPercent > 0 ? "border-emerald-200/55 bg-emerald-500/24 text-emerald-50 shadow-[0_8px_18px_rgba(16,185,129,0.12)]" : "border-white/14 bg-[#273243] text-white/62 hover:border-[#72d8d4]/40"}`}
                       >
                         <span className="flex min-w-0 items-center gap-2 truncate text-xs">
-                          <Percent size={15} className={line.discountPercent > 0 ? "text-amber-200" : "text-[#8ee6e2]"} />
+                          <Percent size={15} className={line.discountPercent > 0 ? "text-emerald-200" : "text-[#8ee6e2]"} />
                           Kedvezmény
                         </span>
                         <span className="shrink-0 rounded-lg border border-white/12 bg-black/10 px-2 py-1 text-sm text-white">
@@ -688,7 +693,11 @@ export default function AllInMagazinSale({
                           key={value}
                           type="button"
                           onClick={() => applyDiscountToAll(value)}
-                          className="min-h-9 rounded-xl border border-white/13 bg-white/[0.05] px-3 text-xs hover:border-[#72d8d4]/45 hover:bg-[#2a8d8b]/16"
+                          className={`min-h-9 rounded-xl border px-3 text-xs transition ${
+                            selectedQuickDiscount === value
+                              ? "border-emerald-200/60 bg-emerald-500/28 text-emerald-50 shadow-[0_6px_16px_rgba(16,185,129,0.16)]"
+                              : "border-white/13 bg-white/[0.05] text-white/72 hover:border-[#72d8d4]/45 hover:bg-[#2a8d8b]/16"
+                          }`}
                         >
                           {value}%
                         </button>
@@ -713,9 +722,9 @@ export default function AllInMagazinSale({
                           key={option.method}
                           type="button"
                           onClick={() => { invalidateRequestKey(); setPaymentMethod(option.method); setError(""); if (option.method === "credit" && !selectedCustomer) openCustomerModal("search"); }}
-                          className={`min-h-[78px] touch-manipulation rounded-2xl border p-3 text-left transition active:scale-[0.98] ${active ? "border-[#93e5e1]/55 bg-[#2a8d8b]/36" : "border-white/13 bg-white/[0.05] hover:bg-white/[0.08]"}`}
+                          className={`min-h-[78px] touch-manipulation rounded-2xl border p-3 text-left transition active:scale-[0.98] ${active ? "border-emerald-200/70 bg-emerald-500/30 text-emerald-50 shadow-[0_10px_22px_rgba(16,185,129,0.16)] ring-1 ring-emerald-300/30" : "border-white/13 bg-white/[0.05] hover:bg-white/[0.08]"}`}
                         >
-                          <span className="flex items-center gap-2 text-sm"><Icon size={18} className={active ? "text-[#d7fffd]" : "text-white/58"} />{option.label}</span>
+                          <span className="flex items-center gap-2 text-sm"><Icon size={18} className={active ? "text-emerald-100" : "text-white/58"} />{option.label}</span>
                           <span className="mt-1 block text-[10px] leading-snug text-white/42">{option.description}</span>
                         </button>
                       );
