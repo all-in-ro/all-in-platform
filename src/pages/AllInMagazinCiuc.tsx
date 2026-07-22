@@ -26,7 +26,6 @@ type Props = {
   onLogout?: () => void | Promise<void>;
 };
 
-
 type ActionCard = {
   key: string;
   title: string;
@@ -160,7 +159,7 @@ export default function AllInMagazinCiuc({
               <button
                 type="button"
                 onClick={() => void onLogout?.()}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm text-white transition hover:bg-[#3e4d63] active:scale-[0.98]"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/48 bg-[#2a8d8b] px-4 text-sm font-normal text-white shadow-[0_10px_22px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98]"
               >
                 <LogOut size={18} />
                 Kilépés
