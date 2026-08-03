@@ -8648,13 +8648,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          svm.shopify_product_status,
          svm.created_at AS shopify_mapped_at,
          svm.updated_at AS shopify_mapping_updated_at,
-         NULLIF(
-           GREATEST(
-             COALESCE(sxp.reconciled_at, 'epoch'::timestamptz),
-             COALESCE(svm.created_at, 'epoch'::timestamptz)
-           ),
-           'epoch'::timestamptz
-         ) AS shopify_connected_at,
+         -- A kapcsolat dátuma kizárólag a tényleges, élő mapping létrejötte.
+         -- Egy exportcsomag reconciled_at ideje akkor is kitöltődhet, ha az adott
+         -- variáns párosítása hibás volt, ezért az nem jelent Shopify-kapcsolatot.
+         svm.created_at AS shopify_connected_at,
          svm.last_synced_at AS shopify_last_synced_at,
          svm.last_error AS shopify_last_error,
          sso.last_error AS shopify_outbox_error,
