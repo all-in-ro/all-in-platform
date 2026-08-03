@@ -38,6 +38,16 @@ type MappingRow = {
   desired_kezdi_qty?: number | string | null;
   attempts?: number | string | null;
   updated_at?: string | null;
+  model_id?: string | null;
+  variant_status?: string | null;
+  model_status?: string | null;
+  total_stock?: number | string | null;
+  available_stock?: number | string | null;
+  stock_location_count?: number | string | null;
+  allin_product_key?: string | null;
+  safe_cleanup?: boolean | null;
+  cleanup_reason?: "archived" | "zero_stock_broken" | string | null;
+  reexport_ready?: boolean | null;
 };
 
 type ExportHistoryRow = {
@@ -62,8 +72,19 @@ type RefreshResult = {
   repaired: number;
   broken: number;
   queued: number;
+  cleanup?: {
+    deleted?: number;
+    archived?: number;
+    zeroStockBroken?: number;
+    productCount?: number;
+  } | null;
   processed?: { processed?: number; done?: number; errors?: number } | null;
   items?: Array<{ variantId?: string; state?: string; error?: string }>;
+};
+
+type MaintenanceConfirm = {
+  kind: "cleanup" | "reexport";
+  ids: string[];
 };
 
 const softButton = "inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-700 shadow-sm transition hover:border-[#95BF47]/55 hover:bg-[#F7FAF1] focus:outline-none focus:ring-2 focus:ring-[#95BF47]/30 disabled:cursor-not-allowed disabled:opacity-45";
@@ -159,6 +180,9 @@ export default function ShopifySyncCenterModal({
   const [historyPage, setHistoryPage] = useState(1);
   const [selectedExportIds, setSelectedExportIds] = useState<Record<string, boolean>>({});
   const [deleteConfirmIds, setDeleteConfirmIds] = useState<string[]>([]);
+  const [selectedMappingIds, setSelectedMappingIds] = useState<Record<string, boolean>>({});
+  const [maintenanceConfirm, setMaintenanceConfirm] = useState<MaintenanceConfirm | null>(null);
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const pageSize = 50;
 
   async function loadMappings() {
@@ -202,11 +226,12 @@ export default function ShopifySyncCenterModal({
       });
       const parts = [
         `${result.checked} kapcsolat ellenőrizve`,
+        result.cleanup?.deleted ? `${result.cleanup.deleted} archivált régi kapcsolat automatikusan törölve` : "",
         result.repaired ? `${result.repaired} új Shopify azonosítóra javítva` : "",
-        result.broken ? `${result.broken} megszakadt kapcsolat` : "",
-        result.queued ? `${result.queued} készletszinkron sorba állítva` : "",
+        result.broken ? `${result.broken} megszakadt variáns` : "",
+        result.queued ? `${result.queued} érvényes készletszinkron sorba állítva` : "",
       ].filter(Boolean);
-      if (!options.automatic || result.repaired || result.broken) setMessage(parts.join(" • "));
+      if (!options.automatic || result.repaired || result.broken || result.cleanup?.deleted) setMessage(parts.join(" • "));
       await Promise.all([loadMappings(), loadExports()]);
       await onChanged?.();
     } catch (requestError) {
@@ -239,6 +264,75 @@ export default function ShopifySyncCenterModal({
     }
   }
 
+
+  async function cleanupMappings(ids: string[] = []) {
+    const cleanIds = Array.from(new Set(ids.map(clean).filter(Boolean)));
+    setMaintenanceBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await requestJSON<{
+        deleted: number;
+        archived: number;
+        zeroStockBroken: number;
+        productCount: number;
+      }>("/api/aif/shopify/mappings/cleanup", {
+        method: "POST",
+        body: JSON.stringify({
+          variantIds: cleanIds,
+          includeArchived: true,
+          includeZeroStockBroken: true,
+        }),
+      });
+      setMessage(
+        result.deleted
+          ? `${result.deleted} régi kapcsolat törölve (${result.productCount} termék): ${result.archived} archivált, ${result.zeroStockBroken} nulla készletű hibás variáns. A termékek és a készlet érintetlen maradt.`
+          : "Nem találtam biztonságosan takarítható kapcsolatot."
+      );
+      setSelectedMappingIds({});
+      setMaintenanceConfirm(null);
+      await Promise.all([loadMappings(), loadExports()]);
+      await onChanged?.();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "A régi Shopify kapcsolatok takarítása nem sikerült.");
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function detachMappingsForReexport(ids: string[]) {
+    const cleanIds = Array.from(new Set(ids.map(clean).filter(Boolean)));
+    if (!cleanIds.length) return;
+    setMaintenanceBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await requestJSON<{
+        detached: number;
+        productCount: number;
+        addedToWorklist: number;
+        skipped: number;
+        message?: string;
+      }>("/api/aif/shopify/mappings/reexport", {
+        method: "POST",
+        body: JSON.stringify({ variantIds: cleanIds }),
+      });
+      setMessage(
+        result.detached
+          ? `${result.detached} készletes hibás variáns leválasztva (${result.productCount} termék), és a Shopify exportlistára került. Zárd be ezt az ablakot, majd a kijelölt munkalistában készítsd el az exportot.${result.skipped ? ` ${result.skipped} sor kimaradt, mert nem volt leválasztható.` : ""}`
+          : result.message || "A kijelölt sorok között nem volt leválasztható, készletes hibás kapcsolat."
+      );
+      setSelectedMappingIds({});
+      setMaintenanceConfirm(null);
+      await Promise.all([loadMappings(), loadExports()]);
+      await onChanged?.();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "A hibás kapcsolatok exportlistára helyezése nem sikerült.");
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     setTab("connections");
@@ -247,6 +341,9 @@ export default function ShopifySyncCenterModal({
     setSearch("");
     setMappingPage(1);
     setHistoryPage(1);
+    setSelectedMappingIds({});
+    setSelectedExportIds({});
+    setMaintenanceConfirm(null);
     void loadAll().then(() => refreshMappings({ automatic: true }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -255,6 +352,10 @@ export default function ShopifySyncCenterModal({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (maintenanceConfirm) {
+        setMaintenanceConfirm(null);
+        return;
+      }
       if (deleteConfirmIds.length) {
         setDeleteConfirmIds([]);
         return;
@@ -263,17 +364,34 @@ export default function ShopifySyncCenterModal({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, deleteConfirmIds.length]);
+  }, [open, onClose, deleteConfirmIds.length, maintenanceConfirm]);
 
   const mappingSummary = useMemo(() => {
+    const errorProducts = new Set<string>();
     return mappings.reduce(
       (acc, row) => {
-        acc[mappingState(row)] += 1;
+        const state = mappingState(row);
+        acc[state] += 1;
+        if (state === "error") {
+          errorProducts.add(clean(row.allin_product_key || row.model_id || row.shopify_product_id || row.variant_id));
+          if (row.safe_cleanup) acc.safeCleanup += 1;
+          if (row.reexport_ready) acc.reexportReady += 1;
+        }
         return acc;
       },
-      { synced: 0, mapped: 0, pending: 0, error: 0 }
-    );
+      { synced: 0, mapped: 0, pending: 0, error: 0, safeCleanup: 0, reexportReady: 0 }
+    ) as { synced: number; mapped: number; pending: number; error: number; safeCleanup: number; reexportReady: number; errorProducts?: number };
   }, [mappings]);
+
+  const errorProductCount = useMemo(
+    () => new Set(
+      mappings
+        .filter((row) => mappingState(row) === "error")
+        .map((row) => clean(row.allin_product_key || row.model_id || row.shopify_product_id || row.variant_id))
+        .filter(Boolean)
+    ).size,
+    [mappings]
+  );
 
   const filteredMappings = useMemo(() => {
     const q = normalized(search);
@@ -300,11 +418,22 @@ export default function ShopifySyncCenterModal({
   const mappingPages = Math.max(1, Math.ceil(filteredMappings.length / pageSize));
   const safeMappingPage = Math.min(mappingPage, mappingPages);
   const visibleMappings = filteredMappings.slice((safeMappingPage - 1) * pageSize, safeMappingPage * pageSize);
+  const selectableVisibleMappings = visibleMappings.filter((row) => mappingState(row) === "error");
+  const selectedMappingRows = mappings.filter((row) => selectedMappingIds[row.variant_id]);
+  const selectedReexportRows = selectedMappingRows.filter((row) => row.reexport_ready);
+  const allSelectableVisibleMappingsSelected = selectableVisibleMappings.length > 0
+    && selectableVisibleMappings.every((row) => selectedMappingIds[row.variant_id]);
   const historyPages = Math.max(1, Math.ceil(exports.length / pageSize));
   const safeHistoryPage = Math.min(historyPage, historyPages);
   const visibleExports = exports.slice((safeHistoryPage - 1) * pageSize, safeHistoryPage * pageSize);
   const selectedIds = Object.keys(selectedExportIds).filter((id) => selectedExportIds[id]);
   const allVisibleExportsSelected = visibleExports.length > 0 && visibleExports.every((row) => selectedExportIds[row.id]);
+  const oldClosedExportIds = useMemo(() => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    return exports
+      .filter((row) => normalized(row.status) === "mapped" && new Date(String(row.created_at || 0)).getTime() < cutoff)
+      .map((row) => row.id);
+  }, [exports]);
 
   if (!open) return null;
 
@@ -340,17 +469,23 @@ export default function ShopifySyncCenterModal({
           {tab === "connections" ? (
             <>
               <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                {[
-                  ["Szinkronban", mappingSummary.synced, "border-[#CFE3A6] bg-[#F5FAEC] text-[#365A25]"],
-                  ["Összekötve", mappingSummary.mapped, "border-sky-200 bg-sky-50 text-sky-800"],
-                  ["Folyamatban", mappingSummary.pending, "border-amber-200 bg-amber-50 text-amber-800"],
-                  ["Hibás / megszakadt", mappingSummary.error, "border-rose-200 bg-rose-50 text-rose-800"],
-                ].map(([label, value, cls]) => (
-                  <div key={String(label)} className={`rounded-2xl border px-3 py-2.5 ${cls}`}>
-                    <p className="text-[10px] uppercase tracking-[0.1em] opacity-70">{label}</p>
-                    <p className="mt-1 text-2xl">{value}</p>
-                  </div>
-                ))}
+                <button type="button" className="rounded-2xl border border-[#CFE3A6] bg-[#F5FAEC] px-3 py-2.5 text-left text-[#365A25]" onClick={() => { setMappingFilter("synced"); setMappingPage(1); }}>
+                  <p className="text-[10px] uppercase tracking-[0.1em] opacity-70">Szinkronban</p>
+                  <p className="mt-1 text-2xl">{mappingSummary.synced}</p>
+                </button>
+                <button type="button" className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-left text-sky-800" onClick={() => { setMappingFilter("mapped"); setMappingPage(1); }}>
+                  <p className="text-[10px] uppercase tracking-[0.1em] opacity-70">Összekötve</p>
+                  <p className="mt-1 text-2xl">{mappingSummary.mapped}</p>
+                </button>
+                <button type="button" className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-left text-amber-800" onClick={() => { setMappingFilter("pending"); setMappingPage(1); }}>
+                  <p className="text-[10px] uppercase tracking-[0.1em] opacity-70">Folyamatban</p>
+                  <p className="mt-1 text-2xl">{mappingSummary.pending}</p>
+                </button>
+                <button type="button" className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-left text-rose-800" onClick={() => { setMappingFilter("error"); setMappingPage(1); }}>
+                  <p className="text-[10px] uppercase tracking-[0.1em] opacity-70">Hibás / megszakadt</p>
+                  <p className="mt-1 text-2xl">{mappingSummary.error} <span className="text-sm">variáns</span></p>
+                  <p className="mt-0.5 text-[11px] opacity-75">{errorProductCount} termék • {mappingSummary.safeCleanup} takarítható • {mappingSummary.reexportReady} exportálható újra</p>
+                </button>
               </section>
 
               <div className="mt-3 flex flex-wrap items-end justify-between gap-2 rounded-2xl border border-slate-200 bg-white p-3">
@@ -368,21 +503,65 @@ export default function ShopifySyncCenterModal({
                   </select>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" className={softButton} onClick={() => void refreshMappings({ sync: false })} disabled={auditBusy}><RefreshCw size={14} className={auditBusy ? "animate-spin" : ""} /> Kapcsolatok ellenőrzése</button>
-                  <button type="button" className={primaryButton} onClick={() => void refreshMappings({ sync: true })} disabled={auditBusy}><UploadCloud size={14} /> Minden készlet újraszinkronizálása</button>
+                  {mappingSummary.safeCleanup > 0 ? (
+                    <button type="button" className={dangerButton} onClick={() => setMaintenanceConfirm({ kind: "cleanup", ids: [] })} disabled={maintenanceBusy}>
+                      <Trash2 size={14} /> Biztonságos takarítás ({mappingSummary.safeCleanup})
+                    </button>
+                  ) : null}
+                  {selectedReexportRows.length ? (
+                    <button type="button" className={primaryButton} onClick={() => setMaintenanceConfirm({ kind: "reexport", ids: selectedReexportRows.map((row) => row.variant_id) })} disabled={maintenanceBusy}>
+                      <UploadCloud size={14} /> Leválasztás + exportlistára ({selectedReexportRows.length})
+                    </button>
+                  ) : null}
+                  <button type="button" className={softButton} onClick={() => void refreshMappings({ sync: false })} disabled={auditBusy || maintenanceBusy}><RefreshCw size={14} className={auditBusy ? "animate-spin" : ""} /> Kapcsolatok ellenőrzése</button>
+                  <button type="button" className={primaryButton} onClick={() => void refreshMappings({ sync: true })} disabled={auditBusy || maintenanceBusy}><UploadCloud size={14} /> Minden érvényes készlet szinkronizálása</button>
                 </div>
               </div>
 
               <section className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="grid grid-cols-[1fr,145px,145px,auto] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] uppercase tracking-[0.08em] text-slate-500">
-                  <span>AllIn / Shopify termék</span><span>Állapot</span><span>Utolsó szinkron</span><span className="text-right">Művelet</span>
+                <div className="grid grid-cols-[36px,1fr,155px,145px,auto] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                  <label className="flex items-center justify-center">
+                    <input
+                      className="accent-[#5E8E3E]"
+                      type="checkbox"
+                      disabled={!selectableVisibleMappings.length}
+                      checked={allSelectableVisibleMappingsSelected}
+                      onChange={(event) => setSelectedMappingIds((current) => {
+                        const next = { ...current };
+                        selectableVisibleMappings.forEach((row) => {
+                          if (event.target.checked) next[row.variant_id] = true;
+                          else delete next[row.variant_id];
+                        });
+                        return next;
+                      })}
+                      title="A látható hibás variánsok kijelölése"
+                    />
+                  </label>
+                  <span>AllIn / Shopify termék</span><span>Állapot / készlet</span><span>Utolsó szinkron</span><span className="text-right">Művelet</span>
                 </div>
                 <div className="divide-y divide-slate-100">
                   {visibleMappings.map((row) => {
                     const state = mappingState(row);
                     const errorText = clean(row.outbox_error || row.last_error);
+                    const totalStock = numberValue(row.total_stock);
                     return (
-                      <div key={row.variant_id} className="grid gap-2 px-3 py-2.5 lg:grid-cols-[1fr,145px,145px,auto] lg:items-center">
+                      <div key={row.variant_id} className="grid gap-2 px-3 py-2.5 lg:grid-cols-[36px,1fr,155px,145px,auto] lg:items-center">
+                        <label className="flex items-center justify-center">
+                          {state === "error" ? (
+                            <input
+                              className="accent-[#5E8E3E]"
+                              type="checkbox"
+                              checked={Boolean(selectedMappingIds[row.variant_id])}
+                              onChange={(event) => setSelectedMappingIds((current) => {
+                                const next = { ...current };
+                                if (event.target.checked) next[row.variant_id] = true;
+                                else delete next[row.variant_id];
+                                return next;
+                              })}
+                              aria-label="Hibás Shopify variáns kijelölése"
+                            />
+                          ) : null}
+                        </label>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="truncate text-sm text-slate-900">{row.title_ro || row.shopify_product_title || "Névtelen termék"}</p>
@@ -390,18 +569,30 @@ export default function ShopifySyncCenterModal({
                           </div>
                           <p className="mt-0.5 truncate text-xs text-slate-500">Shopify: {row.shopify_product_title || "-"} • {row.shopify_variant_title || row.size || "-"}</p>
                           <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500">SKU: {row.barcode || row.sku || "-"} • {row.color_name || row.color_code || "-"} • {row.size || "-"}</p>
-                          {errorText ? <p className="mt-1 text-xs text-rose-600">{errorText}</p> : null}
+                          {errorText ? <p className="mt-1 break-words text-xs text-rose-600">{errorText}</p> : null}
                         </div>
                         <div>
                           <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] ${state === "error" ? "border-rose-200 bg-rose-50 text-rose-700" : state === "pending" ? "border-amber-200 bg-amber-50 text-amber-700" : state === "synced" ? "border-[#BCD98B] bg-[#F3F8E9] text-[#365A25]" : "border-sky-200 bg-sky-50 text-sky-700"}`}>{mappingStateLabel(row)}</span>
-                          <p className="mt-1 text-[10px] text-slate-400">Csík {numberValue(row.desired_csikszereda_qty)} • Kézdi {numberValue(row.desired_kezdi_qty)}</p>
+                          <p className="mt-1 text-[10px] text-slate-500">AllIn készlet: {totalStock} db • {numberValue(row.stock_location_count)} hely</p>
+                          <p className="mt-0.5 text-[10px] text-slate-400">Csík {numberValue(row.desired_csikszereda_qty)} • Kézdi {numberValue(row.desired_kezdi_qty)}</p>
+                          {row.safe_cleanup ? <p className="mt-1 text-[10px] text-rose-600">{row.cleanup_reason === "archived" ? "Archivált kapcsolat" : "0 készlet, biztonságosan takarítható"}</p> : null}
                         </div>
                         <div className="text-xs text-slate-500">{dateTime(row.last_synced_at)}</div>
-                        <div className="flex justify-end">
-                          <button type="button" className={primaryButton} onClick={() => void refreshMappings({ variantIds: [row.variant_id], sync: true })} disabled={auditBusy || syncingVariantId === row.variant_id}>
-                            <RefreshCw size={14} className={syncingVariantId === row.variant_id ? "animate-spin" : ""} />
-                            {syncingVariantId === row.variant_id ? "Szinkron..." : "Ellenőrzés + szinkron"}
-                          </button>
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {state === "error" && row.safe_cleanup ? (
+                            <button type="button" className={dangerButton} onClick={() => setMaintenanceConfirm({ kind: "cleanup", ids: [row.variant_id] })} disabled={maintenanceBusy}>
+                              <Trash2 size={14} /> Takarítás
+                            </button>
+                          ) : state === "error" && row.reexport_ready ? (
+                            <button type="button" className={primaryButton} onClick={() => setMaintenanceConfirm({ kind: "reexport", ids: [row.variant_id] })} disabled={maintenanceBusy}>
+                              <UploadCloud size={14} /> Exportlistára
+                            </button>
+                          ) : (
+                            <button type="button" className={primaryButton} onClick={() => void refreshMappings({ variantIds: [row.variant_id], sync: true })} disabled={auditBusy || maintenanceBusy || syncingVariantId === row.variant_id}>
+                              <RefreshCw size={14} className={syncingVariantId === row.variant_id ? "animate-spin" : ""} />
+                              {syncingVariantId === row.variant_id ? "Szinkron..." : "Ellenőrzés + szinkron"}
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -423,6 +614,15 @@ export default function ShopifySyncCenterModal({
                   <p className="mt-0.5 text-xs text-slate-500">Az előzmény törlése nem bontja a Shopify mappinget és nem módosít készletet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  {oldClosedExportIds.length ? (
+                    <button type="button" className={softButton} onClick={() => setSelectedExportIds((current) => {
+                      const next = { ...current };
+                      oldClosedExportIds.forEach((id) => { next[id] = true; });
+                      return next;
+                    })}>
+                      <CheckCircle2 size={14} /> 30 napnál régebbi lezártak kijelölése ({oldClosedExportIds.length})
+                    </button>
+                  ) : null}
                   {selectedIds.length ? <button type="button" className={dangerButton} onClick={() => setDeleteConfirmIds(selectedIds)}><Trash2 size={14} /> Kijelöltek törlése ({selectedIds.length})</button> : null}
                   <button type="button" className={softButton} onClick={() => void loadExports()}><RefreshCw size={14} /> Frissítés</button>
                 </div>
@@ -463,10 +663,45 @@ export default function ShopifySyncCenterModal({
         </div>
 
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3">
-          <p className="text-xs text-slate-500">A Shopify termék törlése nem törli automatikusan az AllIn mappinget. Ez a központ ezt ellenőrzi, javítja vagy hibásnak jelöli.</p>
+          <p className="text-xs text-slate-500">A takarítás csak a Shopify mappinget és a blokkolt szinkronsort törli. AllIn terméket vagy készletet nem módosít.</p>
           <button type="button" className={softButton} onClick={onClose}><X size={14} /> Bezárás</button>
         </footer>
       </div>
+
+      {maintenanceConfirm ? (
+        <div className="fixed inset-0 z-[112] flex items-center justify-center bg-slate-950/60 px-4">
+          <div className={`w-full max-w-lg rounded-2xl border bg-white p-4 text-slate-900 shadow-2xl ${maintenanceConfirm.kind === "cleanup" ? "border-rose-200" : "border-[#CFE3A6]"}`}>
+            <div className="flex items-start gap-3">
+              <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${maintenanceConfirm.kind === "cleanup" ? "bg-rose-50 text-rose-700" : "bg-[#F3F8E9] text-[#365A25]"}`}>
+                {maintenanceConfirm.kind === "cleanup" ? <Trash2 size={19} /> : <UploadCloud size={19} />}
+              </span>
+              <div>
+                <h3 className="text-lg">{maintenanceConfirm.kind === "cleanup" ? "Régi Shopify kapcsolatok takarítása" : "Hibás kapcsolatok exportlistára tétele"}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                  {maintenanceConfirm.kind === "cleanup"
+                    ? maintenanceConfirm.ids.length
+                      ? "A kijelölt nulla készletű vagy archivált hibás kapcsolat törlődik. AllIn termék és készlet nem változik."
+                      : `${mappingSummary.safeCleanup} biztonságosan takarítható kapcsolat törlődik. AllIn termék és készlet nem változik.`
+                    : `${maintenanceConfirm.ids.length} készletes hibás variáns Shopify kapcsolata leválik, majd bekerül a közös Shopify export munkalistába. A készlet nem változik.`}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className={softButton} onClick={() => setMaintenanceConfirm(null)} disabled={maintenanceBusy}>Mégse</button>
+              <button
+                className={maintenanceConfirm.kind === "cleanup" ? dangerButton : primaryButton}
+                onClick={() => maintenanceConfirm.kind === "cleanup"
+                  ? void cleanupMappings(maintenanceConfirm.ids)
+                  : void detachMappingsForReexport(maintenanceConfirm.ids)}
+                disabled={maintenanceBusy}
+              >
+                {maintenanceBusy ? <RefreshCw size={14} className="animate-spin" /> : maintenanceConfirm.kind === "cleanup" ? <Trash2 size={14} /> : <UploadCloud size={14} />}
+                {maintenanceConfirm.kind === "cleanup" ? "Takarítás" : "Leválasztás + exportlistára"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {deleteConfirmIds.length ? (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/55 px-4">
