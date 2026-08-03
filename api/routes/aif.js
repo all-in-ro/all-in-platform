@@ -1504,9 +1504,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   async function upsertVariant(client, { modelId, normalized, createStatus = "active", updateStatus = "active" }) {
-    const colorCode = normalized.colorCode || "";
-    const colorName = normalized.colorName || "";
-    const size = normalized.size;
+    const colorCode = text(normalized.colorCode || normalized.supplierColorCode || "");
+    const colorName = text(normalized.colorName || "");
+    const size = text(normalized.size);
     const barcode = emptyToNull(normalized.barcode);
     const snCod = emptyToNull(normalized.snCod ?? normalized.sn_cod);
     const variantAttributesJson = variantAttributesJsonFromNormalized(normalized);
@@ -1515,28 +1515,76 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       ? null
       : cleanVariantLifecycleStatus(normalized.variantStatus || normalized.variant_status || normalized.status || updateStatus, "active");
 
-    const barcodeUsableForVariant = async (candidateBarcode, variantId = null) => {
+    if (!size) {
+      const error = new Error("A variáns mérete hiányzik, ezért nem azonosítható biztonságosan.");
+      error.statusCode = 400;
+      error.code = "variant_size_required";
+      throw error;
+    }
+
+    const normalizedIdentityPart = (value) => normCode(value || "") || "_";
+    const identityColorKind = colorCode ? "code" : "name";
+    const identityColorValue = colorCode || colorName || "_";
+
+    // Ugyanazt a modell + szín + méret kulcsot párhuzamos importok sem hozhatják létre kétszer.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+      [`aif_variant:${modelId}:${identityColorKind}:${normalizedIdentityPart(identityColorValue)}:${normalizedIdentityPart(size)}`]
+    );
+
+    const findBarcodeOwner = async (candidateBarcode, excludeVariantId = null) => {
       const candidate = emptyToNull(candidateBarcode);
       if (!candidate) return null;
-      const conflict = await client.query(
-        `SELECT id, model_id, color_code, color_name, size
+      const result = await client.query(
+        `SELECT id, model_id, barcode, color_code, color_name, size, status, created_at
          FROM aif_product_variants
-         WHERE barcode=$1
-           AND ($2::text = '' OR id::text <> $2)
+         WHERE lower(btrim(COALESCE(barcode,'')))=lower(btrim($1))
+           AND ($2::text='' OR id::text<>$2)
+         ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
+                  created_at ASC,
+                  id::text ASC
          LIMIT 1`,
-        [candidate, variantId ? String(variantId) : ""]
+        [candidate, excludeVariantId ? String(excludeVariantId) : ""]
       );
-      return conflict.rowCount ? null : candidate;
+      return result.rows[0] || null;
+    };
+
+    const barcodeOwnerMatchesIncomingVariant = (owner) => {
+      if (!owner) return false;
+      if (String(owner.model_id) !== String(modelId)) return false;
+      if (normCode(owner.size || "") !== normCode(size)) return false;
+
+      const ownerColorCode = normCode(owner.color_code || "");
+      const ownerColorName = normCode(owner.color_name || "");
+      const incomingColorCode = normCode(colorCode);
+      const incomingColorName = normCode(colorName);
+
+      if (incomingColorCode && ownerColorCode && incomingColorCode !== ownerColorCode) return false;
+      if (!incomingColorCode && incomingColorName && ownerColorName && incomingColorName !== ownerColorName) return false;
+      if (incomingColorCode && !ownerColorCode && incomingColorName && ownerColorName && incomingColorName !== ownerColorName) return false;
+      return true;
+    };
+
+    const throwBarcodeConflict = (owner) => {
+      const error = new Error(
+        `A(z) ${barcode} vonalkód már egy másik variánshoz tartozik. Nem hozok létre belőle néma, vonalkód nélküli duplikációt.`
+      );
+      error.statusCode = 409;
+      error.code = "barcode_conflict";
+      error.conflictVariantId = owner?.id ? String(owner.id) : null;
+      throw error;
     };
 
     const updateVariantById = async (id) => {
-      const safeBarcode = await barcodeUsableForVariant(barcode, id);
+      const barcodeConflict = barcode ? await findBarcodeOwner(barcode, id) : null;
+      if (barcodeConflict) throwBarcodeConflict(barcodeConflict);
+
       await client.query(
         `UPDATE aif_product_variants SET
            barcode = COALESCE($2, barcode),
            sn_cod = COALESCE($11, sn_cod),
-           color_code = NULLIF($3, ''),
-           color_name = NULLIF($4, ''),
+           color_code = COALESCE(NULLIF($3, ''), color_code),
+           color_name = COALESCE(NULLIF($4, ''), color_name),
            color_hex = COALESCE($5, color_hex),
            buy_price = COALESCE($6, buy_price),
            sell_price = COALESCE($7, sell_price),
@@ -1553,7 +1601,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE id=$1`,
         [
           id,
-          safeBarcode,
+          barcode,
           colorCode,
           colorName,
           normalized.colorHex,
@@ -1570,40 +1618,81 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return id;
     };
 
-    // A ruházati importnál a variáns alapja: modell + szín + méret.
-    // A vonalkód sok beszállítói Excelben modell-szintű vagy csonkolt kód lehet,
-    // ezért nem olvaszthat össze külön méreteket.
-    const existing = await client.query(
-      `SELECT id
-       FROM aif_product_variants
-       WHERE model_id=$1
-         AND lower(COALESCE(color_code,'')) = lower($2)
-         AND lower(COALESCE(color_name,'')) = lower($3)
-         AND lower(size) = lower($4)
-       LIMIT 1`,
-      [modelId, colorCode, colorName, size]
-    );
+    const findIdentityCandidate = async () => {
+      let result;
+      if (colorCode) {
+        result = await client.query(
+          `SELECT id, barcode, status, created_at
+           FROM aif_product_variants
+           WHERE model_id=$1
+             AND lower(btrim(COALESCE(color_code,'')))=lower(btrim($2))
+             AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
+           ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
+                    CASE
+                      WHEN NULLIF(btrim(barcode),'') IS NOT NULL AND barcode !~* '^AIF' THEN 0
+                      WHEN NULLIF(btrim(barcode),'') IS NOT NULL THEN 1
+                      ELSE 2
+                    END,
+                    created_at ASC,
+                    id::text ASC
+           LIMIT 1`,
+          [modelId, colorCode, size]
+        );
+        if (result.rowCount) return result.rows[0];
 
-    if (existing.rowCount) return updateVariantById(existing.rows[0].id);
+        // Régi adatoknál előfordulhat, hogy a színkód még üres, de a normalizált színnév már megvan.
+        if (colorName) {
+          result = await client.query(
+            `SELECT id, barcode, status, created_at
+             FROM aif_product_variants
+             WHERE model_id=$1
+               AND NULLIF(btrim(COALESCE(color_code,'')),'') IS NULL
+               AND lower(btrim(COALESCE(color_name,'')))=lower(btrim($2))
+               AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
+             ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
+                      created_at ASC,
+                      id::text ASC
+             LIMIT 1`,
+            [modelId, colorName, size]
+          );
+          if (result.rowCount) return result.rows[0];
+        }
+        return null;
+      }
 
-    // Ha ugyanaz a vonalkód, modell, szín és méret, akkor frissíthetjük a meglévő sort.
-    // Más méretre vagy színre nem állunk rá csak vonalkód alapján.
-    if (barcode && size) {
-      const byBarcodeSameSize = await client.query(
-        `SELECT id
+      result = await client.query(
+        `SELECT id, barcode, status, created_at
          FROM aif_product_variants
          WHERE model_id=$1
-           AND barcode=$2
-           AND lower(size)=lower($3)
-           AND lower(COALESCE(color_code,'')) = lower($4)
-           AND lower(COALESCE(color_name,'')) = lower($5)
+           AND NULLIF(btrim(COALESCE(color_code,'')),'') IS NULL
+           AND lower(btrim(COALESCE(color_name,'')))=lower(btrim($2))
+           AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
+         ORDER BY CASE WHEN COALESCE(status,'active')='archived' THEN 1 ELSE 0 END,
+                  CASE
+                    WHEN NULLIF(btrim(barcode),'') IS NOT NULL AND barcode !~* '^AIF' THEN 0
+                    WHEN NULLIF(btrim(barcode),'') IS NOT NULL THEN 1
+                    ELSE 2
+                  END,
+                  created_at ASC,
+                  id::text ASC
          LIMIT 1`,
-        [modelId, barcode, size, colorCode, colorName]
+        [modelId, colorName, size]
       );
-      if (byBarcodeSameSize.rowCount) return updateVariantById(byBarcodeSameSize.rows[0].id);
+      return result.rows[0] || null;
+    };
+
+    // A valódi, egyedi vonalkód a legerősebb variánsazonosító. Ha ugyanahhoz a
+    // modellhez és mérethez tartozik, ugyanazt a sort frissítjük; ellentmondásnál hibázunk.
+    if (barcode) {
+      const barcodeOwner = await findBarcodeOwner(barcode, null);
+      if (barcodeOwner) {
+        if (!barcodeOwnerMatchesIncomingVariant(barcodeOwner)) throwBarcodeConflict(barcodeOwner);
+        return updateVariantById(barcodeOwner.id);
+      }
     }
 
-    const safeInsertBarcode = await barcodeUsableForVariant(barcode, null);
+    const existing = await findIdentityCandidate();
+    if (existing) return updateVariantById(existing.id);
 
     try {
       const inserted = await client.query(
@@ -1615,7 +1704,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          RETURNING id`,
         [
           modelId,
-          safeInsertBarcode,
+          barcode,
           colorCode,
           colorName,
           normalized.colorHex,
@@ -1631,75 +1720,85 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ]
       );
       return inserted.rows[0].id;
-    } catch (e) {
-      if (e?.code === "23505" && barcode) {
-        // Ha a barcode egyedi constraint miatt ütközik, akkor is létrehozzuk a méret szerinti variánst.
-        // Az eredeti beszállítói kód a supplier-code táblában megmarad.
-        const insertedWithoutBarcode = await client.query(
-          `INSERT INTO aif_product_variants (
-             model_id, barcode, color_code, color_name, color_hex, size,
-             buy_price, sell_price, compare_at_price, weight_grams, image_url, sn_cod, attributes, status
-           )
-           VALUES ($1,NULL,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13)
-           RETURNING id`,
-          [
-            modelId,
-            colorCode,
-            colorName,
-            normalized.colorHex,
-            size,
-            normalized.buyPrice,
-            normalized.sellPrice,
-            normalized.compareAtPrice,
-            normalized.weightGrams,
-            normalized.imageUrl,
-            snCod,
-            variantAttributesJson,
-            variantCreateStatus,
-          ]
-        );
-        return insertedWithoutBarcode.rows[0].id;
+    } catch (error) {
+      if (error?.code !== "23505") throw error;
+
+      // A DB egyedi indexe a párhuzamos kérésnél gyorsabb lehetett. Újra lekérjük
+      // a nyertes sort, és arra vezetjük rá az importot. Vonalkód nélkül nem gyártunk másolatot.
+      const concurrentExisting = await findIdentityCandidate();
+      if (concurrentExisting) return updateVariantById(concurrentExisting.id);
+
+      if (barcode) {
+        const barcodeOwner = await findBarcodeOwner(barcode, null);
+        if (barcodeOwner && barcodeOwnerMatchesIncomingVariant(barcodeOwner)) {
+          return updateVariantById(barcodeOwner.id);
+        }
+        if (barcodeOwner) throwBarcodeConflict(barcodeOwner);
       }
-      throw e;
+      throw error;
     }
   }
 
   async function upsertSupplierCode(client, { variantId, supplierId, normalized }) {
-    const keys = [
-      normalized.supplierProductCode || "",
-      normalized.supplierVariantCode || "",
-      normalized.supplierColorCode || "",
-      normalized.supplierSize || "",
-    ];
+    const supplierProductCode = text(normalized.supplierProductCode || "");
+    const supplierVariantCode = text(normalized.supplierVariantCode || "");
+    const supplierColorCode = text(normalized.supplierColorCode || normalized.colorCode || "");
+    const supplierSize = text(normalized.supplierSize || normalized.size || "");
 
+    // A beszállítói kapcsolat üzleti kulcsa a beszállító + termékkód + szín + méret.
+    // A supplierVariantCode gyakran hiányzik vagy formátumot vált, ezért nem engedjük,
+    // hogy emiatt ugyanaz a fizikai variáns több kapcsolatsorban és később több termékben éljen.
     const existing = await client.query(
-      `SELECT id FROM aif_variant_supplier_codes
+      `SELECT id
+       FROM aif_variant_supplier_codes
        WHERE supplier_id=$1
-         AND COALESCE(supplier_product_code,'')=$2
-         AND COALESCE(supplier_variant_code,'')=$3
-         AND COALESCE(supplier_color_code,'')=$4
-         AND COALESCE(supplier_size,'')=$5
+         AND (
+           (
+             NULLIF(btrim($2),'') IS NOT NULL
+             AND lower(btrim(COALESCE(supplier_product_code,'')))=lower(btrim($2))
+             AND lower(btrim(COALESCE(supplier_color_code,'')))=lower(btrim($3))
+             AND lower(btrim(COALESCE(supplier_size,'')))=lower(btrim($4))
+           )
+           OR (
+             NULLIF(btrim($2),'') IS NULL
+             AND variant_id=$6
+           )
+         )
+       ORDER BY CASE
+                  WHEN lower(btrim(COALESCE(supplier_variant_code,'')))=lower(btrim($5)) THEN 0
+                  ELSE 1
+                END,
+                COALESCE(is_active,true) DESC,
+                updated_at DESC NULLS LAST,
+                created_at DESC NULLS LAST
        LIMIT 1`,
-      [supplierId, ...keys]
+      [supplierId, supplierProductCode, supplierColorCode, supplierSize, supplierVariantCode, variantId]
     );
 
     if (existing.rowCount) {
       await client.query(
         `UPDATE aif_variant_supplier_codes SET
            variant_id=$2,
-           supplier_color_name=$3,
-           supplier_barcode=$4,
-           supplier_sku=$5,
-           raw=$6::jsonb,
+           supplier_product_code=COALESCE(NULLIF($3,''), supplier_product_code),
+           supplier_variant_code=COALESCE(NULLIF($4,''), supplier_variant_code),
+           supplier_color_code=COALESCE(NULLIF($5,''), supplier_color_code),
+           supplier_color_name=COALESCE($6, supplier_color_name),
+           supplier_size=COALESCE(NULLIF($7,''), supplier_size),
+           supplier_barcode=COALESCE($8, supplier_barcode),
+           supplier_sku=COALESCE(NULLIF($4,''), supplier_sku),
+           raw=$9::jsonb,
            is_active=true,
            updated_at=now()
          WHERE id=$1`,
         [
           existing.rows[0].id,
           variantId,
+          supplierProductCode,
+          supplierVariantCode,
+          supplierColorCode,
           normalized.colorName,
-          normalized.barcode,
-          normalized.supplierVariantCode || null,
+          supplierSize,
+          emptyToNull(normalized.barcode),
           JSON.stringify(normalized),
         ]
       );
@@ -1716,13 +1815,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [
         variantId,
         supplierId,
-        normalized.supplierProductCode,
-        normalized.supplierVariantCode,
-        normalized.supplierColorCode,
+        supplierProductCode || null,
+        supplierVariantCode || null,
+        supplierColorCode || null,
         normalized.colorName,
-        normalized.supplierSize,
-        normalized.barcode,
-        normalized.supplierVariantCode || null,
+        supplierSize || null,
+        emptyToNull(normalized.barcode),
+        supplierVariantCode || null,
         JSON.stringify(normalized),
       ]
     );
