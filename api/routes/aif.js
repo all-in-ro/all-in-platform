@@ -28,9 +28,12 @@ import {
   processAifShopifyOutboxBatch,
 } from "../lib/aifShopify.js";
 import {
+  cleanupAifShopifyMappings,
   createAifShopifyProductExport,
+  decorateAifShopifyMappings,
   deleteAifShopifyProductExport,
   deleteAifShopifyProductExports,
+  detachAifShopifyMappingsForReexport,
   ensureAifShopifyExportSchema,
   getAifShopifyProductExportCsv,
   listAifShopifyProductExports,
@@ -12794,11 +12797,116 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shopify/mappings", requireAdminOrSecret, async (req, res) => {
     const client = await pool.connect();
     try {
-      const items = await listAifShopifyMappings(client, { limit: Number(req.query.limit || 200) });
+      const rawItems = await listAifShopifyMappings(client, { limit: Number(req.query.limit || 200) });
+      const items = await decorateAifShopifyMappings(client, rawItems);
       res.json({ ok: true, items });
     } catch (e) {
       console.error("AIF Shopify mappings list failed", e);
       res.status(500).json({ error: e?.message || "A Shopify kapcsolatok betöltése nem sikerült.", code: e?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
+  router.post("/shopify/mappings/cleanup", requireAdminOrSecret, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await cleanupAifShopifyMappings(client, {
+        variantIds: Array.isArray(req.body?.variantIds)
+          ? req.body.variantIds
+          : Array.isArray(req.body?.variant_ids)
+            ? req.body.variant_ids
+            : [],
+        includeArchived: req.body?.includeArchived !== false && req.body?.include_archived !== false,
+        includeZeroStockBroken: req.body?.includeZeroStockBroken !== false && req.body?.include_zero_stock_broken !== false,
+      });
+      await client.query("COMMIT");
+      res.json(result);
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF Shopify mapping cleanup failed", e);
+      res.status(Number(e?.statusCode || 500)).json({
+        error: e?.message || "A régi Shopify kapcsolatok takarítása nem sikerült.",
+        code: e?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+
+  router.post("/shopify/mappings/reexport", requireAdminOrSecret, async (req, res) => {
+    const variantIds = Array.isArray(req.body?.variantIds)
+      ? req.body.variantIds
+      : Array.isArray(req.body?.variant_ids)
+        ? req.body.variant_ids
+        : [];
+    if (!variantIds.length) return res.status(400).json({ error: "Nincs kijelölt hibás Shopify kapcsolat." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await detachAifShopifyMappingsForReexport(client, variantIds);
+
+      let addedToWorklist = 0;
+      if (result.variantIds.length) {
+        const ownerKey = selectionOwnerKey(req);
+        await ensureSelectedVariantsTable(client);
+        await lockSelectedVariantsOwner(client, ownerKey);
+        const sortResult = await client.query(
+          `SELECT COALESCE(max(sort_order),0)::int AS max_sort
+           FROM aif_user_selected_variants
+           WHERE owner_key=$1`,
+          [ownerKey]
+        );
+        let sortOrder = Number(sortResult.rows[0]?.max_sort || 0);
+
+        for (const variantId of result.variantIds) {
+          sortOrder += 1;
+          await client.query(
+            `INSERT INTO aif_user_selected_variants (
+               owner_key, variant_id, action, sort_order, raw, created_at, updated_at
+             ) VALUES ($1,$2,'shopify',$3,$4::jsonb,now(),now())
+             ON CONFLICT (owner_key, variant_id) DO UPDATE SET
+               action='shopify',
+               sort_order=CASE
+                 WHEN aif_user_selected_variants.sort_order > 0 THEN aif_user_selected_variants.sort_order
+                 ELSE EXCLUDED.sort_order
+               END,
+               raw=COALESCE(aif_user_selected_variants.raw,'{}'::jsonb) || EXCLUDED.raw,
+               updated_at=now()`,
+            [
+              ownerKey,
+              variantId,
+              sortOrder,
+              JSON.stringify({
+                source: "shopify_mapping_reexport",
+                detachedAt: new Date().toISOString(),
+              }),
+            ]
+          );
+          addedToWorklist += 1;
+        }
+      }
+
+      await client.query("COMMIT");
+      res.json({
+        ...result,
+        addedToWorklist,
+        workAction: "shopify",
+        message: result.detached
+          ? `${result.detached} hibás variáns leválasztva és a Shopify exportlistára téve.`
+          : "A kijelölt sorok között nem volt leválasztható, készletes hibás kapcsolat.",
+      });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF Shopify mapping reexport preparation failed", e);
+      res.status(Number(e?.statusCode || 500)).json({
+        error: e?.message || "A hibás Shopify kapcsolatok exportlistára helyezése nem sikerült.",
+        code: e?.code || null,
+      });
     } finally {
       client.release();
     }
