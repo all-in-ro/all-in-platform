@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
 import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
-import { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem } from "../components/ShopifyStatusIcon";
 import {
   apiAifAddItemsToOpenPurchaseOrders,
   apiAifGetPurchaseOrder,
@@ -326,6 +326,37 @@ function warehouseShopifyMessageList(value: unknown) {
   return [raw];
 }
 
+const WAREHOUSE_SHOPIFY_ERROR_STATES = new Set(["error", "failed", "failure", "blocked"]);
+
+function warehouseShopifyStateKey(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function warehouseHasLiveShopifyMapping(item: Partial<InventoryItem> | Record<string, any>) {
+  return Boolean(
+    isShopifyMappedItem(item) ||
+    String((item as any).shopify_product_id || "").trim() ||
+    String((item as any).shopify_variant_id || "").trim() ||
+    String((item as any).shopify_inventory_item_id || "").trim()
+  );
+}
+
+function warehouseShopifyConnectionHasError(item: Partial<InventoryItem> | Record<string, any>) {
+  const syncState = warehouseShopifyStateKey((item as any).shopify_sync_status);
+  const outboxState = warehouseShopifyStateKey((item as any).shopify_outbox_status);
+  return WAREHOUSE_SHOPIFY_ERROR_STATES.has(syncState) || WAREHOUSE_SHOPIFY_ERROR_STATES.has(outboxState);
+}
+
+function warehouseShopifyExportHasError(item: Partial<InventoryItem> | Record<string, any>) {
+  const itemState = warehouseShopifyStateKey((item as any).shopify_export_item_status);
+  const exportErrors = warehouseShopifyMessageList((item as any).shopify_export_errors);
+  return WAREHOUSE_SHOPIFY_ERROR_STATES.has(itemState) || (exportErrors.length > 0 && itemState !== "mapped");
+}
+
+function warehouseShopifyHasAnyIssue(item: Partial<InventoryItem> | Record<string, any>) {
+  return warehouseShopifyConnectionHasError(item) || warehouseShopifyExportHasError(item);
+}
+
 // A közös ShopifyStatusIcon eredeti lebegő ablaka magasabb lehetett a böngészőnél,
 // ezért az alsó hibaüzenetek egyszerűen lelógtak a képernyőről. A raktárban saját,
 // viewporthoz igazított, görgethető kapcsolatpanelt használunk. Így az egész lista
@@ -344,19 +375,21 @@ function WarehouseShopifyStatusIcon({
   const [pinned, setPinned] = useState(false);
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
 
-  const mapped = isShopifyMappedItem(item);
+  const mapped = warehouseHasLiveShopifyMapping(item);
   const pending = isShopifyExportPending(item);
-  const hasError = shopifyMappingHasError(item);
-  const visible = mapped || pending || hasError;
+  const hasConnectionError = warehouseShopifyConnectionHasError(item);
+  const hasExportError = warehouseShopifyExportHasError(item);
+  const visible = mapped || pending || hasConnectionError || hasExportError;
   const open = visible && (hovered || pinned);
 
-  const errors = Array.from(new Set([
+  const connectionErrors = Array.from(new Set([
     ...warehouseShopifyMessageList(item.shopify_last_error),
     ...warehouseShopifyMessageList(item.shopify_outbox_error),
-    ...warehouseShopifyMessageList(item.shopify_export_errors),
   ]));
+  const exportErrors = Array.from(new Set(warehouseShopifyMessageList(item.shopify_export_errors)));
   const warnings = Array.from(new Set(warehouseShopifyMessageList(item.shopify_export_warnings)));
-  const primaryError = errors[0] || "";
+  const primaryError = hasConnectionError ? (connectionErrors[0] || "A jelenlegi Shopify kapcsolat vagy készletszinkron hibás.") : "";
+  const primaryExportError = hasExportError ? (exportErrors[0] || "A legutóbbi Shopify export vagy párosítás hibával zárult.") : "";
   const productTitle = String(item.shopify_product_title || item.shopify_title || item.title_ro || "Shopify termék").trim();
   const statusRows = [
     { label: "Shopify termék", value: item.shopify_product_title || item.shopify_title || "-" },
@@ -366,7 +399,8 @@ function WarehouseShopifyStatusIcon({
     { label: "Feldolgozás", value: warehouseShopifyStatusLabel(item.shopify_outbox_status) },
     { label: "Export", value: warehouseShopifyStatusLabel(item.shopify_export_item_status || item.shopify_export_status) },
     { label: "Exportálva", value: warehouseShopifyDateTime(item.shopify_exported_at) },
-    { label: "Párosítva", value: warehouseShopifyDateTime(item.shopify_export_reconciled_at || item.shopify_mapped_at || item.shopify_connected_at) },
+    { label: "Export ellenőrizve", value: warehouseShopifyDateTime(item.shopify_export_reconciled_at) },
+    { label: "Kapcsolva", value: mapped ? warehouseShopifyDateTime(item.shopify_mapped_at || item.shopify_connected_at) : "-" },
     { label: "Utolsó szinkron", value: warehouseShopifyDateTime(item.shopify_last_synced_at) },
   ];
 
@@ -453,10 +487,10 @@ function WarehouseShopifyStatusIcon({
 
   const buttonSize = size === "xs" ? "h-6 w-6" : size === "md" ? "h-9 w-9" : "h-8 w-8";
   const brandSize = size === "xs" ? "xs" : size === "md" ? "md" : "sm";
-  const badgeText = hasError ? "Hiba" : pending ? "Folyamatban" : "Kapcsolva";
-  const badgeClass = hasError
+  const badgeText = hasConnectionError ? "Hiba" : hasExportError ? "Exporthiba" : pending ? "Folyamatban" : "Kapcsolva";
+  const badgeClass = hasConnectionError
     ? "border-rose-200/55 bg-rose-100 text-rose-700"
-    : pending
+    : hasExportError || pending
       ? "border-amber-200/55 bg-amber-100 text-amber-800"
       : "border-emerald-200/55 bg-emerald-100 text-emerald-700";
 
@@ -481,8 +515,8 @@ function WarehouseShopifyStatusIcon({
         title="Shopify kapcsolat részletei"
       >
         <ShopifyBrandMark size={brandSize} fill />
-        {hasError ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-rose-500" /> : null}
-        {!hasError && pending ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-400" /> : null}
+        {hasConnectionError ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-rose-500" /> : null}
+        {!hasConnectionError && (hasExportError || pending) ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-400" /> : null}
       </button>
 
       {open && typeof document !== "undefined" ? createPortal(
@@ -511,18 +545,24 @@ function WarehouseShopifyStatusIcon({
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable]">
               {primaryError ? (
                 <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] leading-relaxed text-rose-800">
-                  <div className="mb-1 flex items-center gap-1.5 text-rose-700"><AlertTriangle size={14} /> Shopify szinkronhiba</div>
+                  <div className="mb-1 flex items-center gap-1.5 text-rose-700"><AlertTriangle size={14} /> Jelenlegi Shopify kapcsolati hiba</div>
                   <div className="break-words">{primaryError}</div>
+                </div>
+              ) : primaryExportError ? (
+                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] leading-relaxed text-amber-900">
+                  <div className="mb-1 flex items-center gap-1.5 text-amber-800"><AlertTriangle size={14} /> Shopify exporthiba</div>
+                  <div className="break-words">{primaryExportError}</div>
+                  <div className="mt-1.5 border-t border-amber-200/70 pt-1.5 text-[10px] text-amber-700">Ez az export vagy párosítás eredménye, nem megszakadt élő mapping. A Shopify központ ezért mutathat 0 hibás kapcsolatot.</div>
                 </div>
               ) : pending ? (
                 <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                   <Clock3 size={14} className="mr-1.5 inline" /> A Shopify export vagy párosítás még feldolgozás alatt van.
                 </div>
-              ) : (
+              ) : mapped ? (
                 <div className="mb-3 rounded-xl border border-[#d6e9ba] bg-[#f4f9ec] px-3 py-2 text-[11px] text-[#42651c]">
-                  <CheckCircle2 size={14} className="mr-1.5 inline" /> Shopify kapcsolat rendben.
+                  <CheckCircle2 size={14} className="mr-1.5 inline" /> A jelenlegi Shopify kapcsolat rendben.
                 </div>
-              )}
+              ) : null}
 
               <div className="space-y-1.5">
                 {statusRows.map((row) => (
@@ -533,11 +573,20 @@ function WarehouseShopifyStatusIcon({
                 ))}
               </div>
 
-              {errors.length > 1 ? (
+              {connectionErrors.length > 1 ? (
                 <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-2.5 text-[11px] text-rose-800">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-rose-700"><AlertTriangle size={14} /> További hibák</div>
+                  <div className="mb-1.5 flex items-center gap-1.5 text-rose-700"><AlertTriangle size={14} /> További kapcsolati hibák</div>
                   <div className="space-y-1.5">
-                    {errors.slice(1).map((errorText, index) => <div key={`${errorText}-${index}`} className="break-words rounded-lg bg-white/70 px-2 py-1.5">{errorText}</div>)}
+                    {connectionErrors.slice(1).map((errorText, index) => <div key={`${errorText}-${index}`} className="break-words rounded-lg bg-white/70 px-2 py-1.5">{errorText}</div>)}
+                  </div>
+                </div>
+              ) : null}
+
+              {exportErrors.length > 1 ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-amber-800"><AlertTriangle size={14} /> További exporthibák</div>
+                  <div className="space-y-1.5">
+                    {exportErrors.slice(1).map((errorText, index) => <div key={`${errorText}-${index}`} className="break-words rounded-lg bg-white/70 px-2 py-1.5">{errorText}</div>)}
                   </div>
                 </div>
               ) : null}
@@ -1770,10 +1819,10 @@ function firstWarehouseIncomingMs(item: Partial<InventoryItem> | Record<string, 
 }
 
 function shopifyConnectionMs(item: Partial<InventoryItem> | Record<string, unknown>) {
+  if (!warehouseHasLiveShopifyMapping(item)) return 0;
   return Math.max(
-    dateTimeMs((item as any).shopify_connected_at),
-    dateTimeMs((item as any).shopify_export_reconciled_at),
     dateTimeMs((item as any).shopify_mapped_at),
+    dateTimeMs((item as any).shopify_connected_at),
   );
 }
 
@@ -6794,7 +6843,7 @@ export default function AllInWarehouse() {
     if (shopifyFilter === "recent_mapped") out = out.filter((x) => isShopifyMappedItem(x) && shopifyConnectionMs(x) > 0);
     if (shopifyFilter === "exported") out = out.filter((x) => isShopifyExportPending(x));
     if (shopifyFilter === "unmapped") out = out.filter((x) => !isShopifyMappedItem(x) && !isShopifyExportPending(x));
-    if (shopifyFilter === "error") out = out.filter((x) => shopifyMappingHasError(x));
+    if (shopifyFilter === "error") out = out.filter((x) => warehouseShopifyHasAnyIssue(x));
     if (location !== "all") {
       out = out.filter((x) => (stockMap.get(x.variant_id) || []).some((s) => (s.location_code === location || s.location_name === location) && n(s.qty) > 0));
     }
@@ -6923,7 +6972,7 @@ export default function AllInWarehouse() {
         recent_mapped: "Legutóbb összekapcsolt",
         exported: "Exportálva, párosításra vár",
         unmapped: "Nincs Shopifyon",
-        error: "Shopify hiba",
+        error: "Shopify / export hiba",
       };
       labels.push(`Shopify: ${shopifyLabels[shopifyFilter]}`);
     }
@@ -10327,7 +10376,7 @@ export default function AllInWarehouse() {
                   <option value="recent_mapped">Legutóbb összekapcsolt</option>
                   <option value="exported">Exportálva, párosításra vár</option>
                   <option value="unmapped">Nincs Shopifyon</option>
-                  <option value="error">Szinkronhiba</option>
+                  <option value="error">Kapcsolati / exporthiba</option>
                 </select>
               </label>
               <label className={label}>Bevételezés
