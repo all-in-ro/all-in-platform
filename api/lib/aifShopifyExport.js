@@ -1122,6 +1122,52 @@ export async function getAifShopifyProductExportCsv(client, exportId) {
   return { fileName, csv, itemCount: productRows.length, export: exportRow };
 }
 
+function shopifyVariantIdentity(variant) {
+  const variantId = text(variant?.id);
+  if (variantId) return `variant:${variantId}`;
+  const inventoryItemId = text(variant?.inventoryItem?.id);
+  if (inventoryItemId) return `inventory:${inventoryItemId}`;
+  const productId = text(variant?.product?.id);
+  const sku = normalizeKey(variant?.sku);
+  const title = normalizeKey(variant?.title);
+  return productId || sku || title ? `fallback:${productId}:${sku}:${title}` : "";
+}
+
+function dedupeShopifyVariants(variants = []) {
+  const uniqueByIdentity = new Map();
+  for (const variant of variants || []) {
+    const identity = shopifyVariantIdentity(variant);
+    if (!identity) continue;
+    const previous = uniqueByIdentity.get(identity);
+    uniqueByIdentity.set(identity, previous ? {
+      ...previous,
+      ...variant,
+      inventoryItem: variant?.inventoryItem || previous?.inventoryItem || null,
+      product: {
+        ...(previous?.product || {}),
+        ...(variant?.product || {}),
+      },
+    } : variant);
+  }
+  return Array.from(uniqueByIdentity.values());
+}
+
+function indexShopifyVariantsBySku(variants = []) {
+  const bucketBySku = new Map();
+  for (const variant of dedupeShopifyVariants(variants)) {
+    const sku = normalizeKey(variant?.sku);
+    if (!sku) continue;
+    const identity = shopifyVariantIdentity(variant);
+    if (!identity) continue;
+    const bucket = bucketBySku.get(sku) || new Map();
+    bucket.set(identity, variant);
+    bucketBySku.set(sku, bucket);
+  }
+  return new Map(
+    Array.from(bucketBySku.entries()).map(([sku, bucket]) => [sku, Array.from(bucket.values())])
+  );
+}
+
 async function loadAllShopifyVariants() {
   const query = `query AifProductExportVariants($first: Int!, $after: String) {
     productVariants(first: $first, after: $after) {
@@ -1137,16 +1183,19 @@ async function loadAllShopifyVariants() {
     }
   }`;
   const variants = [];
+  const seenCursors = new Set();
   let after = null;
   for (let page = 0; page < 200; page += 1) {
     const response = await shopifyGraphql(query, { first: 250, after });
     const connection = response.data?.productVariants;
     variants.push(...(connection?.nodes || []));
     if (!connection?.pageInfo?.hasNextPage) break;
-    after = connection.pageInfo.endCursor;
-    if (!after) break;
+    const nextCursor = text(connection?.pageInfo?.endCursor);
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    after = nextCursor;
   }
-  return variants;
+  return dedupeShopifyVariants(variants);
 }
 
 
@@ -1466,14 +1515,9 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     [exportRow.id]
   );
   const shopifyVariants = await loadAllShopifyVariants();
-  const bySku = new Map();
-  for (const variant of shopifyVariants) {
-    const sku = normalizeKey(variant.sku);
-    if (!sku) continue;
-    const list = bySku.get(sku) || [];
-    list.push(variant);
-    bySku.set(sku, list);
-  }
+  // A Shopify lapozott listája ritkán ugyanazt a variáns-ID-t több oldalon is
+  // visszaadhatja. SKU-hibát csak különböző Shopify variánsazonosítók alapján jelzünk.
+  const bySku = indexShopifyVariantsBySku(shopifyVariants);
 
   let mapped = 0;
   let errors = 0;
@@ -1483,10 +1527,14 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     const sku = normalizeKey(item.sku);
     const matches = bySku.get(sku) || [];
     if (matches.length !== 1) {
-      const message = matches.length ? `A Shopifyban ${matches.length} variáns használja ezt az SKU-t.` : "Az SKU még nem található a Shopifyban.";
+      const message = !sku
+        ? "Hiányzik a Shopify SKU."
+        : matches.length
+          ? `A Shopifyban ${matches.length} különböző variáns használja ezt az SKU-t.`
+          : "Az SKU még nem található a Shopifyban.";
       await client.query(
         `UPDATE aif_shopify_product_export_items
-         SET item_status='error', validation_errors=array_append(COALESCE(validation_errors,'{}'::text[]),$3), updated_at=now()
+         SET item_status='error', mapped_at=NULL, validation_errors=ARRAY[$3]::text[], updated_at=now()
          WHERE export_id=$1 AND variant_id=$2`,
         [exportRow.id, item.variant_id, message]
       );
@@ -1501,6 +1549,12 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     const variantId = text(variant.id);
     if (!inventoryItemId || !productId || !variantId) {
       const message = "A Shopify variánsazonosítók hiányosak.";
+      await client.query(
+        `UPDATE aif_shopify_product_export_items
+         SET item_status='error', mapped_at=NULL, validation_errors=ARRAY[$3]::text[], updated_at=now()
+         WHERE export_id=$1 AND variant_id=$2`,
+        [exportRow.id, item.variant_id, message]
+      );
       errors += 1;
       errorItems.push({ variantId: item.variant_id, sku: item.sku, error: message });
       continue;
@@ -1570,7 +1624,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       const message = error?.message || String(error);
       await client.query(
         `UPDATE aif_shopify_product_export_items
-         SET item_status='error', validation_errors=array_append(COALESCE(validation_errors,'{}'::text[]),$3), updated_at=now()
+         SET item_status='error', mapped_at=NULL, validation_errors=ARRAY[$3]::text[], updated_at=now()
          WHERE export_id=$1 AND variant_id=$2`,
         [exportRow.id, item.variant_id, message.slice(0, 1000)]
       );
@@ -1662,6 +1716,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const reconciliation = {
     mapped,
     errors,
+    remoteVariantCount: shopifyVariants.length,
+    indexedSkuCount: bySku.size,
     totals,
     activatedProducts,
     publishedProducts,
@@ -1690,6 +1746,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
     exportId: exportRow.id,
     status: finalStatus,
     mapped,
+    remoteVariantCount: shopifyVariants.length,
+    indexedSkuCount: bySku.size,
     errors: errors + productErrorCount,
     mappingErrors: errors,
     productErrorCount,
@@ -2142,16 +2200,11 @@ export async function refreshAifShopifyMappings(client, options = {}) {
   const shopifyVariants = await loadAllShopifyVariants();
 
   const byId = new Map();
-  const bySku = new Map();
   for (const variant of shopifyVariants) {
     const id = text(variant?.id);
     if (id) byId.set(id, variant);
-    const sku = normalizeKey(variant?.sku);
-    if (!sku) continue;
-    const list = bySku.get(sku) || [];
-    list.push(variant);
-    bySku.set(sku, list);
   }
+  const bySku = indexShopifyVariantsBySku(shopifyVariants);
 
   let valid = 0;
   let repaired = 0;
