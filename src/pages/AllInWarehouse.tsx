@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import ShopifyProductExportModal from "../components/ShopifyProductExportModal";
 import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
-import ShopifyStatusIcon, { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import { AIF_SHOPIFY_ICON_URL, isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
 import {
   apiAifAddItemsToOpenPurchaseOrders,
   apiAifGetPurchaseOrder,
@@ -288,12 +288,48 @@ type PersistedSelectedWorkItem = InventoryItem & {
   selected_updated_at?: string | null;
 };
 
-// A ShopifyStatusIcon komponens a nem látható állapotnál a saját useEffect hookja
-// előtt tér vissza. Ha egy sor export után láthatóvá válik, vagy egy régi export
-// törlése után eltűnik a Shopify-jelzés, ugyanaz a komponenspéldány eltérő számú
-// hookot futtatna, amitől a React production build üres képernyővel elszáll.
-// A szülőben ezért csak akkor mountoljuk, amikor valóban van megjelenítendő
-// Shopify-állapot. Állapotváltáskor így szabályos mount/unmount történik.
+function warehouseShopifyStatusLabel(value: unknown) {
+  const raw = String(value || "").trim();
+  const key = raw.toLowerCase();
+  if (!raw) return "-";
+  if (["active", "ready", "done", "completed", "success", "synced", "mapped", "reconciled"].includes(key)) return key === "active" ? "Aktív" : "Kész";
+  if (["error", "failed", "failure"].includes(key)) return "Hiba";
+  if (["pending", "queued", "processing", "running", "draft"].includes(key)) return key === "queued" ? "Sorban" : "Folyamatban";
+  if (["inactive", "disabled"].includes(key)) return "Inaktív";
+  return raw;
+}
+
+function warehouseShopifyDateTime(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleString("hu-HU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function warehouseShopifyMessageList(value: unknown) {
+  if (Array.isArray(value)) return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  const raw = String(value || "").trim();
+  if (!raw) return [] as string[];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map((entry) => String(entry || "").trim()).filter(Boolean);
+  } catch {
+    // A sima szöveges hibaüzenet maradjon egyben, ne daraboljuk értelmetlenül.
+  }
+  return [raw];
+}
+
+// A közös ShopifyStatusIcon eredeti lebegő ablaka magasabb lehetett a böngészőnél,
+// ezért az alsó hibaüzenetek egyszerűen lelógtak a képernyőről. A raktárban saját,
+// viewporthoz igazított, görgethető kapcsolatpanelt használunk. Így az egész lista
+// elérhető marad, akár a felső, akár az alsó terméksoron nyitják meg.
 function WarehouseShopifyStatusIcon({
   item,
   size = "sm",
@@ -301,9 +337,237 @@ function WarehouseShopifyStatusIcon({
   item: InventoryItem;
   size?: "xs" | "sm" | "md";
 }) {
-  const visible = isShopifyMappedItem(item) || isShopifyExportPending(item) || shopifyMappingHasError(item);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+
+  const mapped = isShopifyMappedItem(item);
+  const pending = isShopifyExportPending(item);
+  const hasError = shopifyMappingHasError(item);
+  const visible = mapped || pending || hasError;
+  const open = visible && (hovered || pinned);
+
+  const errors = Array.from(new Set([
+    ...warehouseShopifyMessageList(item.shopify_last_error),
+    ...warehouseShopifyMessageList(item.shopify_outbox_error),
+    ...warehouseShopifyMessageList(item.shopify_export_errors),
+  ]));
+  const warnings = Array.from(new Set(warehouseShopifyMessageList(item.shopify_export_warnings)));
+  const primaryError = errors[0] || "";
+  const productTitle = String(item.shopify_product_title || item.shopify_title || item.title_ro || "Shopify termék").trim();
+  const statusRows = [
+    { label: "Shopify termék", value: item.shopify_product_title || item.shopify_title || "-" },
+    { label: "Variáns", value: item.shopify_variant_title || item.size || "-" },
+    { label: "Termékállapot", value: warehouseShopifyStatusLabel(item.shopify_product_status) },
+    { label: "Szinkron", value: warehouseShopifyStatusLabel(item.shopify_sync_status) },
+    { label: "Feldolgozás", value: warehouseShopifyStatusLabel(item.shopify_outbox_status) },
+    { label: "Export", value: warehouseShopifyStatusLabel(item.shopify_export_item_status || item.shopify_export_status) },
+    { label: "Exportálva", value: warehouseShopifyDateTime(item.shopify_exported_at) },
+    { label: "Párosítva", value: warehouseShopifyDateTime(item.shopify_export_reconciled_at || item.shopify_mapped_at || item.shopify_connected_at) },
+    { label: "Utolsó szinkron", value: warehouseShopifyDateTime(item.shopify_last_synced_at) },
+  ];
+
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleClose = useCallback(() => {
+    if (pinned) return;
+    cancelClose();
+    closeTimerRef.current = window.setTimeout(() => setHovered(false), 140);
+  }, [pinned, cancelClose]);
+
+  const updatePopupPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current;
+    if (!button) return;
+    const padding = 12;
+    const gap = 8;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(410, Math.max(292, viewportWidth - padding * 2));
+    const maxHeight = Math.max(240, viewportHeight - padding * 2);
+    const buttonRect = button.getBoundingClientRect();
+    const measuredHeight = Math.min(
+      maxHeight,
+      Math.max(260, popupRef.current?.scrollHeight || popupRef.current?.getBoundingClientRect().height || 520),
+    );
+
+    let left = buttonRect.left + buttonRect.width / 2 - width / 2;
+    left = Math.min(Math.max(padding, left), Math.max(padding, viewportWidth - width - padding));
+
+    let top = buttonRect.bottom + gap;
+    if (top + measuredHeight > viewportHeight - padding) top = buttonRect.top - measuredHeight - gap;
+    if (top < padding) top = padding;
+    if (top + measuredHeight > viewportHeight - padding) top = Math.max(padding, viewportHeight - measuredHeight - padding);
+
+    setPopupStyle({
+      position: "fixed",
+      left,
+      top,
+      width,
+      maxHeight,
+      zIndex: 2147483000,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePopupPosition();
+    const frame = window.requestAnimationFrame(updatePopupPosition);
+    const onMove = () => updatePopupPosition();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setPinned(false);
+      setHovered(false);
+    };
+    const onPointerDown = (event: MouseEvent) => {
+      if (!pinned) return;
+      const target = event.target as Node | null;
+      if (!target || buttonRef.current?.contains(target) || popupRef.current?.contains(target)) return;
+      setPinned(false);
+      setHovered(false);
+    };
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [open, pinned, updatePopupPosition]);
+
+  useEffect(() => () => cancelClose(), [cancelClose]);
+
   if (!visible) return null;
-  return <ShopifyStatusIcon item={item} size={size} />;
+
+  const buttonSize = size === "xs" ? "h-6 w-6" : size === "md" ? "h-9 w-9" : "h-8 w-8";
+  const brandSize = size === "xs" ? "xs" : size === "md" ? "md" : "sm";
+  const badgeText = hasError ? "Hiba" : pending ? "Folyamatban" : "Kapcsolva";
+  const badgeClass = hasError
+    ? "border-rose-200/55 bg-rose-100 text-rose-700"
+    : pending
+      ? "border-amber-200/55 bg-amber-100 text-amber-800"
+      : "border-emerald-200/55 bg-emerald-100 text-emerald-700";
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`${buttonSize} relative inline-flex shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.08] transition hover:border-[#95bf47]/70 hover:bg-white/[0.13] focus:outline-none focus:ring-2 focus:ring-[#95bf47]/45`}
+        onMouseEnter={() => { cancelClose(); setHovered(true); }}
+        onMouseLeave={scheduleClose}
+        onFocus={() => { cancelClose(); setHovered(true); }}
+        onBlur={scheduleClose}
+        onClick={(event) => {
+          event.stopPropagation();
+          cancelClose();
+          setPinned((current) => !current);
+          setHovered(true);
+        }}
+        aria-label={`Shopify kapcsolat: ${badgeText}`}
+        aria-expanded={open}
+        title="Shopify kapcsolat részletei"
+      >
+        <ShopifyBrandMark size={brandSize} fill />
+        {hasError ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-rose-500" /> : null}
+        {!hasError && pending ? <span className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-400" /> : null}
+      </button>
+
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={popupRef}
+          className="flex overflow-hidden rounded-2xl border border-[#95bf47]/70 bg-[#f7f8f8] text-slate-800 shadow-[0_28px_75px_rgba(0,0,0,.58)]"
+          style={popupStyle}
+          role="dialog"
+          aria-label="Shopify kapcsolat részletei"
+          onMouseEnter={() => { cancelClose(); setHovered(true); }}
+          onMouseLeave={scheduleClose}
+          onWheel={(event) => event.stopPropagation()}
+        >
+          <div className="flex min-h-0 w-full flex-col">
+            <div className="flex shrink-0 items-start justify-between gap-3 bg-[#008060] px-3 py-3 text-white">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <ShopifyBrandMark size="md" />
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-white/78">Shopify kapcsolat</p>
+                  <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-white" title={productTitle}>{productTitle}</p>
+                </div>
+              </div>
+              <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${badgeClass}`}>{badgeText}</span>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable]">
+              {primaryError ? (
+                <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] leading-relaxed text-rose-800">
+                  <div className="mb-1 flex items-center gap-1.5 text-rose-700"><AlertTriangle size={14} /> Shopify szinkronhiba</div>
+                  <div className="break-words">{primaryError}</div>
+                </div>
+              ) : pending ? (
+                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                  <Clock3 size={14} className="mr-1.5 inline" /> A Shopify export vagy párosítás még feldolgozás alatt van.
+                </div>
+              ) : (
+                <div className="mb-3 rounded-xl border border-[#d6e9ba] bg-[#f4f9ec] px-3 py-2 text-[11px] text-[#42651c]">
+                  <CheckCircle2 size={14} className="mr-1.5 inline" /> Shopify kapcsolat rendben.
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                {statusRows.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[112px,minmax(0,1fr)] overflow-hidden rounded-xl border border-slate-200 bg-white text-[11px]">
+                    <div className="bg-[#eef3e8] px-2.5 py-2 text-slate-500">{row.label}</div>
+                    <div className="min-w-0 break-words px-2.5 py-2 text-right text-slate-800" title={String(row.value || "-")}>{String(row.value || "-")}</div>
+                  </div>
+                ))}
+              </div>
+
+              {errors.length > 1 ? (
+                <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-2.5 text-[11px] text-rose-800">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-rose-700"><AlertTriangle size={14} /> További hibák</div>
+                  <div className="space-y-1.5">
+                    {errors.slice(1).map((errorText, index) => <div key={`${errorText}-${index}`} className="break-words rounded-lg bg-white/70 px-2 py-1.5">{errorText}</div>)}
+                  </div>
+                </div>
+              ) : null}
+
+              {warnings.length ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-800">
+                  <div className="mb-1.5">Figyelmeztetések</div>
+                  <div className="space-y-1.5">
+                    {warnings.map((warning, index) => <div key={`${warning}-${index}`} className="break-words rounded-lg bg-white/70 px-2 py-1.5">{warning}</div>)}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-500">
+              <span>Az ablak görgethető • ESC: bezárás</span>
+              <button
+                type="button"
+                className="inline-flex h-7 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[10px] text-slate-700 hover:bg-slate-100"
+                onClick={() => { setPinned(false); setHovered(false); }}
+              >
+                <X size={12} /> Bezárás
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
 }
 
 
