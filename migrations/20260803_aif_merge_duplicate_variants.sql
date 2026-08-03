@@ -4,6 +4,41 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 LOCK TABLE aif_product_variants IN SHARE ROW EXCLUSIVE MODE;
 
+-- Biztonsági kompatibilitás: ha a régi név mégis táblakényszerként élne,
+-- előbb azt bontjuk le, majd az alábbi blokk az expression indexet is eltávolítja.
+ALTER TABLE aif_product_variants
+  DROP CONSTRAINT IF EXISTS aif_variants_model_color_size_unique;
+
+-- A régi adatbázisban volt egy globális egyedi index, amely a
+-- modell + színkód + színnév + méret négyest védte. Ez az összevonás közben
+-- megakadályozná, hogy a kanonikus sor megkapja a csoport legjobb színnevét,
+-- miközben a régi duplikátum még létezik. Az új, helyes részleges indexeket
+-- a migráció végén hozzuk létre: színkód esetén modell + színkód + méret,
+-- színkód nélkül pedig modell + színnév + méret.
+DO $drop_legacy_variant_identity$
+DECLARE
+  legacy_index record;
+BEGIN
+  FOR legacy_index IN
+    SELECT schemaname, indexname
+    FROM pg_indexes
+    WHERE tablename='aif_product_variants'
+      AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
+      AND indexdef ILIKE '%model_id%'
+      AND indexdef ILIKE '%color_code%'
+      AND indexdef ILIKE '%color_name%'
+      AND indexdef ILIKE '%size%'
+  LOOP
+    RAISE NOTICE 'Régi variáns-egyediség eltávolítása: %.%', legacy_index.schemaname, legacy_index.indexname;
+    EXECUTE format('DROP INDEX IF EXISTS %I.%I', legacy_index.schemaname, legacy_index.indexname);
+  END LOOP;
+END
+$drop_legacy_variant_identity$;
+
+-- Ismert régi név külön is kezelve, ha az indexdef valamilyen régi PostgreSQL
+-- formázás miatt nem került volna be a fenti listába.
+DROP INDEX IF EXISTS aif_variants_model_color_size_unique;
+
 CREATE TABLE IF NOT EXISTS aif_variant_merge_audit (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   migration_tag text NOT NULL,
@@ -132,20 +167,35 @@ FROM _aif_variant_merge_map mm
 JOIN aif_product_variants v ON v.id=mm.merged_id
 ON CONFLICT (migration_tag, merged_variant_id) DO NOTHING;
 
+-- Ha a kanonikus sor a duplikátum valódi vonalkódját kapja meg, a régi globális
+-- barcode-egyediség addig ütközne, amíg ugyanaz a kód a duplikátumon is rajta van.
+-- Az eredeti érték már bekerült az audit táblába, ezért itt biztonságosan felszabadítjuk.
+UPDATE aif_product_variants duplicate
+SET barcode=NULL,
+    updated_at=now()
+FROM _aif_variant_merge_map mm
+WHERE duplicate.id=mm.merged_id
+  AND duplicate.barcode IS NOT NULL;
+
 -- A kanonikus variáns megkapja a csoport legjobb azonosítóit és a legfrissebb termékadatait.
 WITH patch AS (
   SELECT
     members.canonical_id,
-    (array_agg(NULLIF(btrim(v.barcode),'') ORDER BY
-      CASE
-        WHEN NULLIF(btrim(v.barcode),'') IS NOT NULL AND v.barcode !~* '^AIF' THEN 0
-        WHEN NULLIF(btrim(v.barcode),'') IS NOT NULL THEN 1
-        ELSE 2
-      END,
-      (v.id=members.canonical_id) DESC,
-      v.updated_at DESC NULLS LAST,
-      v.created_at ASC NULLS LAST
-    ) FILTER (WHERE NULLIF(btrim(v.barcode),'') IS NOT NULL))[1] AS barcode,
+    (array_agg(
+      NULLIF(btrim(COALESCE(v.barcode, audit.variant_before->>'barcode')),'')
+      ORDER BY
+        CASE
+          WHEN NULLIF(btrim(COALESCE(v.barcode, audit.variant_before->>'barcode')),'') IS NOT NULL
+               AND COALESCE(v.barcode, audit.variant_before->>'barcode') !~* '^AIF' THEN 0
+          WHEN NULLIF(btrim(COALESCE(v.barcode, audit.variant_before->>'barcode')),'') IS NOT NULL THEN 1
+          ELSE 2
+        END,
+        (v.id=members.canonical_id) DESC,
+        v.updated_at DESC NULLS LAST,
+        v.created_at ASC NULLS LAST
+    ) FILTER (
+      WHERE NULLIF(btrim(COALESCE(v.barcode, audit.variant_before->>'barcode')),'') IS NOT NULL
+    ))[1] AS barcode,
     (array_agg(NULLIF(btrim(v.sn_cod),'') ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC NULLS LAST)
       FILTER (WHERE NULLIF(btrim(v.sn_cod),'') IS NOT NULL))[1] AS sn_cod,
     (array_agg(NULLIF(btrim(v.color_code),'') ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC NULLS LAST)
@@ -173,10 +223,16 @@ WITH patch AS (
     END AS status,
     jsonb_agg(v.id::text ORDER BY v.created_at ASC NULLS LAST, v.id::text)
       FILTER (WHERE v.id<>members.canonical_id) AS merged_variant_ids,
-    jsonb_agg(v.barcode ORDER BY v.created_at ASC NULLS LAST, v.id::text)
-      FILTER (WHERE v.id<>members.canonical_id AND NULLIF(btrim(v.barcode),'') IS NOT NULL) AS merged_barcodes
+    jsonb_agg(COALESCE(v.barcode, audit.variant_before->>'barcode') ORDER BY v.created_at ASC NULLS LAST, v.id::text)
+      FILTER (
+        WHERE v.id<>members.canonical_id
+          AND NULLIF(btrim(COALESCE(v.barcode, audit.variant_before->>'barcode')),'') IS NOT NULL
+      ) AS merged_barcodes
   FROM _aif_variant_members members
   JOIN aif_product_variants v ON v.id=members.variant_id
+  LEFT JOIN aif_variant_merge_audit audit
+    ON audit.migration_tag='20260803_aif_merge_duplicate_variants'
+   AND audit.merged_variant_id=v.id
   GROUP BY members.canonical_id
 )
 UPDATE aif_product_variants canonical
@@ -476,10 +532,13 @@ SET status='archived',
       'mergedIntoVariantId',mm.canonical_id::text,
       'mergedAt',now()::text,
       'variantMergeMigration','20260803_aif_merge_duplicate_variants',
-      'mergedBarcode',duplicate.barcode
+      'mergedBarcode',NULLIF(audit.variant_before->>'barcode','')
     ),
     updated_at=now()
 FROM _aif_variant_merge_map mm
+LEFT JOIN aif_variant_merge_audit audit
+  ON audit.migration_tag='20260803_aif_merge_duplicate_variants'
+ AND audit.merged_variant_id=mm.merged_id
 WHERE duplicate.id=mm.merged_id;
 
 -- Adatbázis-szintű védelem: ugyanaz az aktív modell + színkód + méret nem jöhet létre kétszer.
