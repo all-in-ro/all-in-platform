@@ -440,28 +440,42 @@ function warehouseMovementRowToInventoryItem(row: Record<string, any>): Inventor
   };
 }
 
+function warehouseImportMovementBatchId(row: Record<string, any> | null | undefined) {
+  if (!row || typeof row !== "object") return "";
+  const sourceType = normalizeSearch(row.source_type || "");
+  // A raw.importBatchId az elsődleges. A source_id csak valódi import_batch
+  // mozgásnál használható, mert más bejövő műveletek is kaphatnak UUID-t.
+  return firstWarehouseText(
+    row.raw?.importBatchId,
+    row.raw?.import_batch_id,
+    sourceType.includes("import_batch") ? row.source_id : "",
+  );
+}
+
 function latestWarehouseImportMovementFocus(rows: Array<Record<string, any>>): WarehouseIncomingMovementFocus | null {
   const incomingRows = (rows || [])
     .filter((row) => n(row?.qty_delta) > 0)
     .filter((row) => {
       const sourceType = normalizeSearch(row?.source_type || "");
-      const movementType = normalizeSearch(row?.movement_type || "");
       const rawReason = normalizeSearch(row?.raw?.reason || "");
-      const rowSourceId = firstWarehouseText(row?.source_id, row?.raw?.importBatchId, row?.raw?.import_batch_id);
-      const sourceKey = normalizeSearch(rowSourceId);
+      const importBatchId = warehouseImportMovementBatchId(row);
+      const sourceKey = normalizeSearch(firstWarehouseText(row?.source_id, importBatchId));
       if (sourceType.includes("stock_table_audit") || sourceKey.startsWith("stock_audit") || rawReason.includes("stock_audit")) return false;
-      return sourceType.includes("import_batch") || rawReason.includes("import_batch") || (movementType === "incoming" && isUuidLike(rowSourceId));
+      // Nem elég, hogy egy mozgás bejövő és a source_id UUID. Az lehet kézi
+      // termékfelvétel vagy más művelet is, amitől a „Legutóbbi bevételezés”
+      // egy régi, teljesen idegen termékre ugrott.
+      return sourceType.includes("import_batch") || rawReason.includes("import_batch") || Boolean(importBatchId);
     })
     .slice()
     .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
   if (!incomingRows.length) return null;
 
   const latest = incomingRows[0];
-  const latestSourceId = firstWarehouseText(latest.source_id, latest.raw?.importBatchId, latest.raw?.import_batch_id);
+  const latestSourceId = warehouseImportMovementBatchId(latest);
   const latestMs = dateTimeMs(latest.created_at);
   const latestMinute = latestMs ? Math.floor(latestMs / 60000) : 0;
   const group = incomingRows.filter((row) => {
-    const rowSourceId = firstWarehouseText(row.source_id, row.raw?.importBatchId, row.raw?.import_batch_id);
+    const rowSourceId = warehouseImportMovementBatchId(row);
     if (latestSourceId && rowSourceId) return rowSourceId === latestSourceId;
     const rowMinute = dateTimeMs(row.created_at) ? Math.floor(dateTimeMs(row.created_at) / 60000) : 0;
     return rowMinute === latestMinute;
@@ -4987,7 +5001,12 @@ export default function AllInWarehouse() {
     ) || null;
   }
 
-  async function loadIncomingFocusBatch(batchId: string, showMessage = true, mode: "import" | "activation" = "import") {
+  async function loadIncomingFocusBatch(
+    batchId: string,
+    showMessage = true,
+    mode: "import" | "activation" = "import",
+    options: { silentFailure?: boolean } = {},
+  ) {
     const cleanBatchId = String(batchId || "").trim();
     if (!cleanBatchId || !isUuidLike(cleanBatchId)) return null;
     try {
@@ -5068,9 +5087,11 @@ export default function AllInWarehouse() {
       }
       return { rows: visibleRows, variantIds, batch: detail.batch || null, totalQty };
     } catch (error: any) {
-      setIncomingFocus(null);
-      setIncomingFocusItems([]);
-      setMessage(error?.message || "Az utolsó bevételezés terméksorait nem sikerült betölteni.");
+      if (!options.silentFailure) {
+        setIncomingFocus(null);
+        setIncomingFocusItems([]);
+        setMessage(error?.message || "Az utolsó bevételezés terméksorait nem sikerült betölteni.");
+      }
       return null;
     }
   }
@@ -5166,37 +5187,42 @@ export default function AllInWarehouse() {
       setListOpen(true);
       await load();
 
-      const movementFocus = await latestIncomingMovementFocus().catch(() => null);
-      const movementVariantCount = movementFocus?.variantIds?.length || 0;
-      const movementRowCount = movementFocus?.rows?.length || 0;
-      const movementSourceId = firstWarehouseText(movementFocus?.sourceId);
+      // A legutóbbi bevételezést az importcsomagok committed_at dátuma dönti el.
+      // A mozgásnapló csak tartalék forrás. Korábban ez fordítva volt, ezért egy
+      // törölt/összevont régi variáns mozgása vagy egy idegen UUID-s bejövő sor
+      // képes volt elrabolni a „Legutóbb bevételezett” szűrőt.
+      const batches = await apiImportBatches(60).catch(() => ({ items: [] as Array<Record<string, any>> }));
+      const committedBatches = (batches.items || [])
+        .filter((batch) => String(batch.status || "").trim().toLowerCase() === "committed")
+        .slice()
+        .sort((a, b) => {
+          const aTime = dateTimeMs(a.committed_at) || dateTimeMs(a.created_at);
+          const bTime = dateTimeMs(b.committed_at) || dateTimeMs(b.created_at);
+          return bTime - aTime;
+        });
 
-      let loadedFromBatch: { rows: Array<Record<string, any>>; variantIds: string[]; batch?: Record<string, any> | null; totalQty?: number } | null = null;
-      if (movementSourceId && isUuidLike(movementSourceId)) {
-        loadedFromBatch = await loadIncomingFocusBatch(movementSourceId, false, focusMode);
+      for (const batch of committedBatches) {
+        const batchId = String(batch?.id || "").trim();
+        if (!batchId || !isUuidLike(batchId)) continue;
+        const loaded = await loadIncomingFocusBatch(batchId, false, focusMode, { silentFailure: true });
+        if (!loaded || (!loaded.variantIds.length && !loaded.rows.length)) continue;
+        const totalQty = Number(loaded.totalQty || 0);
+        const batchDate = warehouseDateLabel(batch.committed_at || batch.created_at);
+        setMessage(`Utolsó bevételezés aktív${batchDate ? ` (${batchDate})` : ""}: ${loaded.rows.length || loaded.variantIds.length} import sor, ${loaded.variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. A lista kizárólag a legutóbb készletre vett import termékeit mutatja.`);
+        return;
       }
 
-      if (movementFocus && (!loadedFromBatch || (loadedFromBatch.variantIds?.length || 0) < movementVariantCount || (loadedFromBatch.rows?.length || 0) < movementRowCount)) {
+      // Csak akkor nyúlunk a mozgásnaplóhoz, ha nincs elérhető committed importcsomag
+      // vagy a hozzá tartozó előzményt már ténylegesen törölték.
+      const movementFocus = await latestIncomingMovementFocus().catch(() => null);
+      if (movementFocus) {
         applyIncomingMovementFocus(movementFocus, true, focusMode);
         return;
       }
 
-      if (loadedFromBatch) {
-        const totalQty = Number(loadedFromBatch.totalQty || 0);
-        setMessage(`Utolsó bevételezés aktív: ${loadedFromBatch.rows.length || loadedFromBatch.variantIds.length} import sor, ${loadedFromBatch.variantIds.length} raktári variáns${totalQty ? `, ${totalQty} db` : ""}. A lista most kizárólag ennek az importnak a termékeit mutatja.`);
-        return;
-      }
-
-      const batches = await apiImportBatches(25);
-      const latest = (batches.items || []).find((batch) => String(batch.status || "").toLowerCase() === "committed") || (batches.items || [])[0];
-      const latestId = String(latest?.id || "").trim();
-      if (!latestId) {
-        setIncomingFocus(null);
-        setIncomingFocusItems([]);
-        setMessage("Nincs készletre vett import vagy bejövő készletmozgás, amit meg tudnék mutatni.");
-        return;
-      }
-      await loadIncomingFocusBatch(latestId, true, focusMode);
+      setIncomingFocus(null);
+      setIncomingFocusItems([]);
+      setMessage("Nincs készletre vett import vagy importhoz tartozó bejövő készletmozgás, amit meg tudnék mutatni.");
     } catch (error: any) {
       setMessage(error?.message || "A legutóbbi bevételezés betöltése nem sikerült.");
     } finally {
