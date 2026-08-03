@@ -5112,7 +5112,11 @@ export default function AllInWarehouse() {
   }
 
 
-  function applyIncomingMovementFocus(focus: WarehouseIncomingMovementFocus, showMessage = true) {
+  function applyIncomingMovementFocus(
+    focus: WarehouseIncomingMovementFocus,
+    showMessage = true,
+    mode: "import" | "activation" = "import",
+  ) {
     const rows = focus.rows || [];
     const variantIds = focus.variantIds || [];
     const sourceLabel = focus.sourceFileName || focus.sourceId || "legutóbbi készletmozgás";
@@ -5124,6 +5128,7 @@ export default function AllInWarehouse() {
       batch: { id: focus.sourceId, source_file_name: sourceLabel, committed_at: focus.createdAt || null, source: "stock_movements" },
       totalQty: focus.totalQty,
       sourceFileName: sourceLabel,
+      mode,
     });
     setProductPage(1);
     setListOpen(true);
@@ -5139,6 +5144,7 @@ export default function AllInWarehouse() {
   }
 
   async function focusLatestCommittedImportBatch(options: { preserveCurrentFilters?: boolean } = {}) {
+    const focusMode: "import" | "activation" = options.preserveCurrentFilters ? "import" : "activation";
     setBusy(true);
     setRecentImportFocusBusy(true);
     setMessage("");
@@ -5167,11 +5173,11 @@ export default function AllInWarehouse() {
 
       let loadedFromBatch: { rows: Array<Record<string, any>>; variantIds: string[]; batch?: Record<string, any> | null; totalQty?: number } | null = null;
       if (movementSourceId && isUuidLike(movementSourceId)) {
-        loadedFromBatch = await loadIncomingFocusBatch(movementSourceId, false);
+        loadedFromBatch = await loadIncomingFocusBatch(movementSourceId, false, focusMode);
       }
 
       if (movementFocus && (!loadedFromBatch || (loadedFromBatch.variantIds?.length || 0) < movementVariantCount || (loadedFromBatch.rows?.length || 0) < movementRowCount)) {
-        applyIncomingMovementFocus(movementFocus, true);
+        applyIncomingMovementFocus(movementFocus, true, focusMode);
         return;
       }
 
@@ -5190,7 +5196,7 @@ export default function AllInWarehouse() {
         setMessage("Nincs készletre vett import vagy bejövő készletmozgás, amit meg tudnék mutatni.");
         return;
       }
-      await loadIncomingFocusBatch(latestId, true);
+      await loadIncomingFocusBatch(latestId, true, focusMode);
     } catch (error: any) {
       setMessage(error?.message || "A legutóbbi bevételezés betöltése nem sikerült.");
     } finally {
@@ -6463,8 +6469,13 @@ export default function AllInWarehouse() {
     let out = [...inventoryDisplayItems];
     const reviewMode = stockFilter === "watch";
     if (incomingFocus?.batchId) {
-      // Az utolsó bevezetés itt munkalista: ami már aktív, eltűnik innen.
-      out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")) && needsWarehouseActivation(x));
+      // A szűrőből megnyitott „Legutóbb bevételezett” nézet történeti lista:
+      // minden, az adott bevételezéshez tartozó variáns látható marad, az aktív is.
+      // Csak a külön aktiválási munkanézet tünteti el a már elkészült sorokat.
+      out = out.filter((x) => incomingFocusVariantSet.has(String(x.variant_id || "")));
+      if (incomingFocus.mode === "activation") {
+        out = out.filter(needsWarehouseActivation);
+      }
     } else if (!reviewMode && stockFilter !== "missing") {
       // A fő raktárlista csak az aktív termékeket mutassa. A draft/inaktív importok az aktiválandó listában élnek, nem a kész raktárban.
       out = out.filter(isWarehouseVisibleInMainList);
@@ -6506,7 +6517,7 @@ export default function AllInWarehouse() {
     out.sort((a, b) => {
       const effectiveSortMode = shopifyFilter === "recent_mapped" ? "shopify_connected_desc" : sortMode;
       if (effectiveSortMode === "incoming_desc") {
-        if (incomingFocus?.batchId) {
+        if (incomingFocus?.mode === "activation") {
           const byActivation = Number(needsWarehouseActivation(b)) - Number(needsWarehouseActivation(a));
           if (byActivation !== 0) return byActivation;
         }
@@ -9373,7 +9384,7 @@ export default function AllInWarehouse() {
     });
     // Az árváltozást a backend naplózza a Termék History-ba.
     // Nem írjuk még egyszer localStorage-ba / attributes-be, mert attól ugyanaz az egy módosítás több sorban jelent meg.
-    const wasActivationWorkView = stockFilter === "watch" || Boolean(incomingFocus?.batchId);
+    const wasActivationWorkView = stockFilter === "watch" || incomingFocus?.mode === "activation";
     const previousModelStatus = String(editBaseline.modelStatus || "").trim().toLowerCase();
     const previousVariantStatus = String(editBaseline.variantStatus || "").trim().toLowerCase();
     const nextModelStatus = String(edit.modelStatus || "").trim().toLowerCase();
@@ -9478,7 +9489,7 @@ export default function AllInWarehouse() {
       const resolvedActivation = nextModelStatus === "active" && nextVariantStatus === "active";
       let detailClosedDuringSave = false;
       let preferNextAfterClose = false;
-      if (incomingFocus?.batchId && resolvedActivation) {
+      if (incomingFocus?.batchId && incomingFocus.mode === "activation" && resolvedActivation) {
         setIncomingFocusItems((current) => current.filter((item) => selectedVariantIdFromItem(item) !== detailId));
         setIncomingFocus((current) => current ? {
           ...current,
@@ -9506,7 +9517,9 @@ export default function AllInWarehouse() {
         setEditBaseline({ ...savedForm });
       }
       await load();
-      if (incomingFocus?.batchId && !resolvedActivation && isUuidLike(incomingFocus.batchId)) await loadIncomingFocusBatch(incomingFocus.batchId, false);
+      if (incomingFocus?.batchId && !resolvedActivation && isUuidLike(incomingFocus.batchId)) {
+        await loadIncomingFocusBatch(incomingFocus.batchId, false, incomingFocus.mode || "import");
+      }
       if (detailClosedDuringSave) {
         window.requestAnimationFrame(() => restoreDetailReturnPosition({ preferNext: preferNextAfterClose }));
       }
@@ -9541,6 +9554,7 @@ export default function AllInWarehouse() {
     setMessage("");
     const deletedVariantId = String(productDeleteTarget.variant_id || "");
     const activeIncomingBatchId = String(incomingFocus?.batchId || "").trim();
+    const activeIncomingMode = incomingFocus?.mode || "import";
     try {
       const result = await apiVariantDelete(deletedVariantId);
       notifyStockMovesChanged({ variantId: deletedVariantId, source: "warehouse_variant_permanent_delete", mode: result?.mode || "deleted" });
@@ -9549,7 +9563,9 @@ export default function AllInWarehouse() {
       setProductDeleteTarget(null);
       if (detail?.item?.id && String(detail.item.id) === deletedVariantId) setDetail(null);
       await load();
-      if (activeIncomingBatchId && isUuidLike(activeIncomingBatchId)) await loadIncomingFocusBatch(activeIncomingBatchId, false);
+      if (activeIncomingBatchId && isUuidLike(activeIncomingBatchId)) {
+        await loadIncomingFocusBatch(activeIncomingBatchId, false, activeIncomingMode);
+      }
       setMessage(result?.mode === "archived" || result?.mode === "archived_after_delete_fallback"
         ? "Termék archiválva és eltávolítva a raktárlistából."
         : "Termék véglegesen törölve: készlet, import-kapcsolat, mozgásnapló és beszállítói kapcsolat kitakarítva.");
@@ -9580,6 +9596,7 @@ export default function AllInWarehouse() {
     setSaving(true);
     setMessage("");
     const activeIncomingBatchId = String(incomingFocus?.batchId || "").trim();
+    const activeIncomingMode = incomingFocus?.mode || "import";
     const failures: string[] = [];
     const successfullyDeletedIds: string[] = [];
     let archivedCount = 0;
@@ -9619,7 +9636,9 @@ export default function AllInWarehouse() {
       }
 
       await load();
-      if (activeIncomingBatchId && isUuidLike(activeIncomingBatchId)) await loadIncomingFocusBatch(activeIncomingBatchId, false);
+      if (activeIncomingBatchId && isUuidLike(activeIncomingBatchId)) {
+        await loadIncomingFocusBatch(activeIncomingBatchId, false, activeIncomingMode);
+      }
 
       const successCount = ids.length - failures.length;
       const modeText = [
@@ -9692,7 +9711,7 @@ export default function AllInWarehouse() {
 
       const batchId = String(incomingPayload?.importBatchId || incomingPayload?.batchId || "").trim();
       if (batchId && isUuidLike(batchId)) {
-        await loadIncomingFocusBatch(batchId, true);
+        await loadIncomingFocusBatch(batchId, true, "activation");
       } else if (incomingPayload) {
         setMessage("Készletre vétel után töröltem a raktárszűrőket és betöltöttem az utolsó bevételezés sorait. Ha egy import sor már meglévő variánsra ment, a fő raktári termékszám nem nő, csak a készlet badge változik.");
       }
@@ -9703,7 +9722,7 @@ export default function AllInWarehouse() {
       load().then(async () => {
         const batchId = String(payload?.importBatchId || payload?.batchId || "").trim();
         if (batchId && isUuidLike(batchId)) {
-          await loadIncomingFocusBatch(batchId, true);
+          await loadIncomingFocusBatch(batchId, true, "activation");
         } else if (payload) {
           setMessage("Készletre vétel után töröltem a raktárszűrőket és a legfrissebb készletmozgásokat tettem felülre.");
         }
@@ -10033,7 +10052,7 @@ export default function AllInWarehouse() {
                       clearLatestIncomingFilter();
                     }
                   }}
-                  title="A legutóbb készletre vett bevételezés termékeit mutatja, a többi szűrő megtartásával"
+                  title="A legutóbb készletre vett bevételezés összes termékét tartósan mutatja, a többi szűrő megtartásával"
                 >
                   <option value="all">Összes</option>
                   <option value="latest">{recentImportFocusBusy ? "Betöltés..." : "Legutóbb bevételezett"}</option>
