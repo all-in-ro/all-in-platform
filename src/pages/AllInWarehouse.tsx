@@ -5138,15 +5138,25 @@ export default function AllInWarehouse() {
     return latestWarehouseImportMovementFocus(movementData.items || []);
   }
 
-  async function focusLatestCommittedImportBatch() {
+  async function focusLatestCommittedImportBatch(options: { preserveCurrentFilters?: boolean } = {}) {
     setBusy(true);
     setRecentImportFocusBusy(true);
     setMessage("");
     try {
-      resetWarehouseFilters(false);
+      if (options.preserveCurrentFilters) {
+        // A szűrőmezőből indítva a már beállított beszállító / márka / kategória
+        // szűrések megmaradnak, és ezekkel együtt szűkíthető a legutóbbi bevételezés.
+        setIncomingFocus(null);
+        setIncomingFocusItems([]);
+        setIncomingSelectedVariants({});
+        setProductPage(1);
+      } else {
+        // A fejléc és a terméklista gyorsgombja továbbra is önálló munkanézetet nyit.
+        resetWarehouseFilters(false);
+        setFiltersOpen(false);
+        setSummaryOpen(false);
+      }
       setSortMode("incoming_desc");
-      setFiltersOpen(false);
-      setSummaryOpen(false);
       setListOpen(true);
       await load();
 
@@ -5186,6 +5196,17 @@ export default function AllInWarehouse() {
     } finally {
       setRecentImportFocusBusy(false);
       setBusy(false);
+    }
+  }
+
+  function clearLatestIncomingFilter(showMessage = true) {
+    setIncomingFocus(null);
+    setIncomingFocusItems([]);
+    setIncomingSelectedVariants({});
+    setProductPage(1);
+    setListOpen(true);
+    if (showMessage) {
+      setMessage("Legutóbb bevételezett szűrő törölve. A többi beállított szűrő megmaradt.");
     }
   }
 
@@ -9805,7 +9826,7 @@ export default function AllInWarehouse() {
                 <ShopifyBrandMark size="md" fill className="!h-7 !w-7" />
               </button>
               {hasActiveWarehouseFilters && <button className={headerPrimaryBtn} onClick={() => resetWarehouseFilters()} type="button"><Eye size={14} /> Minden termék</button>}
-              <button className={headerBtnSoft} onClick={focusLatestCommittedImportBatch} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
+              <button className={headerBtnSoft} onClick={() => void focusLatestCommittedImportBatch()} disabled={busy || recentImportFocusBusy} type="button" title="A legutóbb készletre vett import konkrét terméksorait mutatja">
                 <PackageCheck size={15} /> {recentImportFocusBusy ? "Import betöltése..." : "Utolsó import"}
               </button>
               <button className={headerBtnSoft} onClick={load} disabled={busy}><RefreshCw size={15} /> Frissítés</button>
@@ -10000,6 +10021,24 @@ export default function AllInWarehouse() {
                   <option value="error">Szinkronhiba</option>
                 </select>
               </label>
+              <label className={label}>Bevételezés
+                <select
+                  className={`${select} ${(incomingFocus?.batchId || recentImportFocusBusy) ? "border-[#7bd7d4]/60 bg-[#31565d]" : ""}`}
+                  value={(incomingFocus?.batchId || recentImportFocusBusy) ? "latest" : "all"}
+                  disabled={busy || recentImportFocusBusy}
+                  onChange={(e) => {
+                    if (e.target.value === "latest") {
+                      void focusLatestCommittedImportBatch({ preserveCurrentFilters: true });
+                    } else {
+                      clearLatestIncomingFilter();
+                    }
+                  }}
+                  title="A legutóbb készletre vett bevételezés termékeit mutatja, a többi szűrő megtartásával"
+                >
+                  <option value="all">Összes</option>
+                  <option value="latest">{recentImportFocusBusy ? "Betöltés..." : "Legutóbb bevételezett"}</option>
+                </select>
+              </label>
               <label className={label}>Sorrend
                 <select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
                   <option value="incoming_desc">Legújabb bevételezés elöl</option>
@@ -10093,7 +10132,7 @@ export default function AllInWarehouse() {
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 className={sortMode === "incoming_desc" ? primaryBtn : btnSoft}
-                onClick={focusLatestCommittedImportBatch}
+                onClick={() => void focusLatestCommittedImportBatch()}
                 type="button"
                 title="A legutóbbi készletre vett import összes raktári variánsát mutatja"
               >
@@ -10102,7 +10141,7 @@ export default function AllInWarehouse() {
               {incomingFocus && (
                 <button
                   className={btnSoft}
-                  onClick={() => { setIncomingFocus(null); setIncomingFocusItems([]); setIncomingSelectedVariants({}); setProductPage(1); setMessage("Utolsó bevételezés szűrő törölve. Most újra az összes raktári variáns látszik."); }}
+                  onClick={() => clearLatestIncomingFilter()}
                   type="button"
                   title="Csak az utolsó import sorainak mutatását kikapcsolja"
                 >
