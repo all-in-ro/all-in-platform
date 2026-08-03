@@ -1168,6 +1168,44 @@ function indexShopifyVariantsBySku(variants = []) {
   );
 }
 
+function shopifyExactSkuSearchQuery(value) {
+  const clean = text(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return clean ? `sku:"${clean}"` : "";
+}
+
+async function loadShopifyVariantsByExactSku(skuValue) {
+  const sku = text(skuValue);
+  if (!sku) return [];
+  const query = `query AifProductExportVariantsBySku($query: String!) {
+    productVariants(first: 50, query: $query) {
+      nodes {
+        id
+        sku
+        barcode
+        title
+        inventoryItem { id }
+        product { id title status handle category { id name fullName } }
+      }
+    }
+  }`;
+  const response = await shopifyGraphql(query, { query: shopifyExactSkuSearchQuery(sku) });
+  const wanted = normalizeKey(sku);
+  return dedupeShopifyVariants(response.data?.productVariants?.nodes || [])
+    .filter((variant) => normalizeKey(variant?.sku) === wanted);
+}
+
+async function resolveShopifySkuMatches(bySku, skuValue, exactSkuCache) {
+  const sku = text(skuValue);
+  const key = normalizeKey(sku);
+  if (!key) return [];
+  const bulkMatches = bySku.get(key) || [];
+  if (bulkMatches.length === 1) return bulkMatches;
+  if (exactSkuCache?.has(key)) return exactSkuCache.get(key);
+  const exactMatches = await loadShopifyVariantsByExactSku(sku);
+  exactSkuCache?.set(key, exactMatches);
+  return exactMatches;
+}
+
 async function loadAllShopifyVariants() {
   const query = `query AifProductExportVariants($first: Int!, $after: String) {
     productVariants(first: $first, after: $after) {
@@ -1518,6 +1556,7 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   // A Shopify lapozott listája ritkán ugyanazt a variáns-ID-t több oldalon is
   // visszaadhatja. SKU-hibát csak különböző Shopify variánsazonosítók alapján jelzünk.
   const bySku = indexShopifyVariantsBySku(shopifyVariants);
+  const exactSkuCache = new Map();
 
   let mapped = 0;
   let errors = 0;
@@ -1525,7 +1564,9 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const productTasks = new Map();
   for (const item of itemsResult.rows) {
     const sku = normalizeKey(item.sku);
-    const matches = bySku.get(sku) || [];
+    // A teljes katalógus lapozott listája időnként régi vagy átmeneti találatot adhat.
+    // Ha ott nem pontosan egy variáns van, az SKU-t külön, friss Shopify kereséssel ellenőrizzük.
+    const matches = await resolveShopifySkuMatches(bySku, item.sku, exactSkuCache);
     if (matches.length !== 1) {
       const message = !sku
         ? "Hiányzik a Shopify SKU."
@@ -1712,7 +1753,9 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   );
   const totals = state.rows[0] || {};
   const productErrorCount = productErrors.length;
-  const finalStatus = Number(totals.pending || 0) === 0 && Number(totals.errors || 0) === 0 && productErrorCount === 0 ? "mapped" : "partially_mapped";
+  // A párosítási állapot a variánsmappinget jelenti. A közzétételi vagy metaadat-hibák
+  // külön a reconciliation összegzésben maradnak, és nem tartják hamisan részlegesnek az exportot.
+  const finalStatus = Number(totals.pending || 0) === 0 && Number(totals.errors || 0) === 0 ? "mapped" : "partially_mapped";
   const reconciliation = {
     mapped,
     errors,
@@ -2205,6 +2248,7 @@ export async function refreshAifShopifyMappings(client, options = {}) {
     if (id) byId.set(id, variant);
   }
   const bySku = indexShopifyVariantsBySku(shopifyVariants);
+  const exactSkuCache = new Map();
 
   let valid = 0;
   let repaired = 0;
@@ -2224,7 +2268,7 @@ export async function refreshAifShopifyMappings(client, options = {}) {
     }
 
     if (!remote && expectedSku) {
-      const matches = bySku.get(normalizeKey(expectedSku)) || [];
+      const matches = await resolveShopifySkuMatches(bySku, expectedSku, exactSkuCache);
       if (matches.length === 1) {
         remote = matches[0];
         matchedBy = "sku";
