@@ -1781,6 +1781,267 @@ async function loadMappingsForRefresh(client, options = {}) {
   return result.rows;
 }
 
+
+export async function decorateAifShopifyMappings(client, mappings = []) {
+  await ensureAifShopifyExportSchema(client);
+  const rows = Array.isArray(mappings) ? mappings : [];
+  const variantIds = unique(rows.map((row) => text(row?.variant_id)).filter(Boolean));
+  if (!variantIds.length) return rows;
+
+  const details = await client.query(
+    `SELECT
+       v.id::text AS variant_id,
+       v.model_id::text AS model_id,
+       v.status AS variant_status,
+       pm.status AS model_status,
+       pm.title_ro,
+       pm.model_code,
+       b.name AS brand_name,
+       NULLIF(trim(v.barcode),'') AS current_sku,
+       COALESCE(st.total_stock,0)::int AS total_stock,
+       COALESCE(st.available_stock,0)::int AS available_stock,
+       COALESCE(st.stock_location_count,0)::int AS stock_location_count
+     FROM aif_product_variants v
+     JOIN aif_product_models pm ON pm.id=v.model_id
+     LEFT JOIN aif_brands b ON b.id=pm.brand_id
+     LEFT JOIN LATERAL (
+       SELECT
+         COALESCE(sum(COALESCE(s.qty,0)),0)::int AS total_stock,
+         COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)),0)::int AS available_stock,
+         count(DISTINCT s.location_id) FILTER (WHERE COALESCE(s.qty,0) > 0)::int AS stock_location_count
+       FROM aif_stock s
+       WHERE s.variant_id=v.id
+     ) st ON true
+     WHERE v.id::text = ANY($1::text[])`,
+    [variantIds]
+  );
+  const byVariant = new Map(details.rows.map((row) => [text(row.variant_id), row]));
+
+  return rows.map((row) => {
+    const extra = byVariant.get(text(row?.variant_id)) || {};
+    const syncStatus = normalizeKey(row?.sync_status);
+    const outboxStatus = normalizeKey(row?.outbox_status);
+    const isBroken = Boolean(text(row?.last_error) || text(row?.outbox_error))
+      || ["error", "failed", "blocked"].includes(syncStatus)
+      || ["error", "failed", "blocked"].includes(outboxStatus);
+    const isArchived = normalizeKey(extra.variant_status) === "archived"
+      || normalizeKey(extra.model_status) === "archived";
+    const totalStock = integer(extra.total_stock, 0);
+    const safeCleanup = isArchived || (isBroken && totalStock <= 0);
+    const cleanupReason = isArchived
+      ? "archived"
+      : isBroken && totalStock <= 0
+        ? "zero_stock_broken"
+        : null;
+
+    return {
+      ...row,
+      ...extra,
+      barcode: text(extra.current_sku) || row?.barcode || row?.sku || null,
+      total_stock: totalStock,
+      available_stock: integer(extra.available_stock, 0),
+      stock_location_count: integer(extra.stock_location_count, 0),
+      allin_product_key: text(extra.model_id) || text(row?.shopify_product_id) || text(row?.variant_id),
+      safe_cleanup: safeCleanup,
+      cleanup_reason: cleanupReason,
+      reexport_ready: Boolean(isBroken && !isArchived && totalStock > 0),
+    };
+  });
+}
+
+export async function cleanupAifShopifyMappings(client, options = {}) {
+  await ensureAifShopifyExportSchema(client);
+  const variantIds = unique((options.variantIds || []).map(text)).filter(Boolean);
+  const includeArchived = options.includeArchived !== false;
+  const includeZeroStockBroken = options.includeZeroStockBroken !== false;
+  const predicates = [];
+
+  if (includeArchived) {
+    predicates.push(`(
+      COALESCE(v.status,'active')='archived'
+      OR COALESCE(pm.status,'active')='archived'
+    )`);
+  }
+  if (includeZeroStockBroken) {
+    predicates.push(`(
+      COALESCE(st.total_stock,0) <= 0
+      AND (
+        COALESCE(m.sync_status,'') IN ('error','failed','blocked')
+        OR NULLIF(trim(COALESCE(m.last_error,'')),'') IS NOT NULL
+        OR EXISTS (
+          SELECT 1
+          FROM aif_shopify_sync_outbox o
+          WHERE o.variant_id=m.variant_id
+            AND (
+              COALESCE(o.status,'') IN ('error','failed','blocked')
+              OR NULLIF(trim(COALESCE(o.last_error,'')),'') IS NOT NULL
+            )
+        )
+      )
+    )`);
+  }
+  if (!predicates.length) {
+    return {
+      ok: true,
+      deleted: 0,
+      archived: 0,
+      zeroStockBroken: 0,
+      productCount: 0,
+      variantIds: [],
+      stockUntouched: true,
+      productsUntouched: true,
+    };
+  }
+
+  const args = [];
+  let idFilter = "";
+  if (variantIds.length) {
+    args.push(variantIds);
+    idFilter = `AND m.variant_id::text = ANY($${args.length}::text[])`;
+  }
+
+  const candidates = await client.query(
+    `SELECT
+       m.variant_id::text AS variant_id,
+       v.model_id::text AS model_id,
+       COALESCE(v.status,'active') AS variant_status,
+       COALESCE(pm.status,'active') AS model_status,
+       COALESCE(st.total_stock,0)::int AS total_stock
+     FROM aif_shopify_variant_map m
+     JOIN aif_product_variants v ON v.id=m.variant_id
+     JOIN aif_product_models pm ON pm.id=v.model_id
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(sum(COALESCE(s.qty,0)),0)::int AS total_stock
+       FROM aif_stock s
+       WHERE s.variant_id=m.variant_id
+     ) st ON true
+     WHERE (${predicates.join(" OR ")})
+       ${idFilter}
+     ORDER BY m.updated_at DESC
+     FOR UPDATE OF m`,
+    args
+  );
+
+  const ids = unique(candidates.rows.map((row) => text(row.variant_id)).filter(Boolean));
+  if (!ids.length) {
+    return {
+      ok: true,
+      deleted: 0,
+      archived: 0,
+      zeroStockBroken: 0,
+      productCount: 0,
+      variantIds: [],
+      stockUntouched: true,
+      productsUntouched: true,
+    };
+  }
+
+  await client.query(
+    `DELETE FROM aif_shopify_sync_outbox
+     WHERE variant_id::text = ANY($1::text[])`,
+    [ids]
+  );
+  const deleted = await client.query(
+    `DELETE FROM aif_shopify_variant_map
+     WHERE variant_id::text = ANY($1::text[])
+     RETURNING variant_id::text`,
+    [ids]
+  );
+
+  const archived = candidates.rows.filter((row) =>
+    normalizeKey(row.variant_status) === "archived" || normalizeKey(row.model_status) === "archived"
+  ).length;
+  const zeroStockBroken = candidates.rows.length - archived;
+  const productCount = new Set(candidates.rows.map((row) => text(row.model_id)).filter(Boolean)).size;
+
+  return {
+    ok: true,
+    deleted: deleted.rowCount,
+    archived,
+    zeroStockBroken,
+    productCount,
+    variantIds: deleted.rows.map((row) => text(row.variant_id)),
+    stockUntouched: true,
+    productsUntouched: true,
+  };
+}
+
+export async function detachAifShopifyMappingsForReexport(client, variantIds = []) {
+  await ensureAifShopifyExportSchema(client);
+  const ids = unique((variantIds || []).map(text)).filter(Boolean).slice(0, 1000);
+  if (!ids.length) {
+    return {
+      ok: true,
+      detached: 0,
+      productCount: 0,
+      variantIds: [],
+      items: [],
+      skipped: 0,
+      stockUntouched: true,
+      productsUntouched: true,
+    };
+  }
+
+  const candidates = await client.query(
+    `SELECT
+       m.variant_id::text AS variant_id,
+       v.model_id::text AS model_id,
+       pm.title_ro,
+       pm.model_code,
+       b.name AS brand_name,
+       NULLIF(trim(v.barcode),'') AS sku,
+       COALESCE(st.total_stock,0)::int AS total_stock
+     FROM aif_shopify_variant_map m
+     JOIN aif_product_variants v ON v.id=m.variant_id
+     JOIN aif_product_models pm ON pm.id=v.model_id
+     LEFT JOIN aif_brands b ON b.id=pm.brand_id
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(sum(COALESCE(s.qty,0)),0)::int AS total_stock
+       FROM aif_stock s
+       WHERE s.variant_id=m.variant_id
+     ) st ON true
+     LEFT JOIN aif_shopify_sync_outbox o ON o.variant_id=m.variant_id
+     WHERE m.variant_id::text = ANY($1::text[])
+       AND COALESCE(v.status,'active') <> 'archived'
+       AND COALESCE(pm.status,'active') <> 'archived'
+       AND COALESCE(st.total_stock,0) > 0
+       AND (
+         COALESCE(m.sync_status,'') IN ('error','failed','blocked')
+         OR NULLIF(trim(COALESCE(m.last_error,'')),'') IS NOT NULL
+         OR COALESCE(o.status,'') IN ('error','failed','blocked')
+         OR NULLIF(trim(COALESCE(o.last_error,'')),'') IS NOT NULL
+       )
+     ORDER BY pm.title_ro, v.color_code, v.size
+     FOR UPDATE OF m`,
+    [ids]
+  );
+
+  const detachedIds = unique(candidates.rows.map((row) => text(row.variant_id)).filter(Boolean));
+  if (detachedIds.length) {
+    await client.query(
+      `DELETE FROM aif_shopify_sync_outbox
+       WHERE variant_id::text = ANY($1::text[])`,
+      [detachedIds]
+    );
+    await client.query(
+      `DELETE FROM aif_shopify_variant_map
+       WHERE variant_id::text = ANY($1::text[])`,
+      [detachedIds]
+    );
+  }
+
+  return {
+    ok: true,
+    detached: detachedIds.length,
+    productCount: new Set(candidates.rows.map((row) => text(row.model_id)).filter(Boolean)).size,
+    variantIds: detachedIds,
+    items: candidates.rows,
+    skipped: Math.max(0, ids.length - detachedIds.length),
+    stockUntouched: true,
+    productsUntouched: true,
+  };
+}
+
 async function markMappingBroken(client, mapping, message, details = {}) {
   const cleanMessage = text(message).slice(0, 1000) || "A Shopify kapcsolat megszakadt.";
   await client.query(
@@ -1869,6 +2130,12 @@ async function upsertMappingFromRemote(client, mapping, remote) {
 
 export async function refreshAifShopifyMappings(client, options = {}) {
   await ensureAifShopifyExportSchema(client);
+  // Archivált AllIn variánsokhoz nincs értelme élő Shopify kapcsolatot őrizni.
+  // Ezeket minden ellenőrzés elején automatikusan takarítjuk; készlethez és termékhez nem nyúlunk.
+  const cleanup = await cleanupAifShopifyMappings(client, {
+    includeArchived: true,
+    includeZeroStockBroken: false,
+  });
   const syncAll = bool(options.sync, false);
   const syncRepaired = options.syncRepaired !== false;
   const mappings = await loadMappingsForRefresh(client, options);
@@ -1987,6 +2254,7 @@ export async function refreshAifShopifyMappings(client, options = {}) {
     repaired,
     broken,
     queued,
+    cleanup,
     syncRequested: syncAll,
     syncRepaired,
     items,
