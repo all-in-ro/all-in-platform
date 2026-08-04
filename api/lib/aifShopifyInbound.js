@@ -213,7 +213,7 @@ async function insertInboundMovement(client, {
        qty_delta, qty_before, qty_after, actor, raw
      )
      VALUES ($1,'shopify_inventory_webhook',$2,$3,$4,$5,$6,$7,'shopify',$8::jsonb)`,
-    [qtyDelta < 0 ? "outgoing" : "incoming", text(webhookId).slice(0, 64), locationId, variantId, qtyDelta, qtyBefore, qtyAfter, JSON.stringify(raw || {})]
+    ["shopify_adjustment", text(webhookId).slice(0, 64), locationId, variantId, qtyDelta, qtyBefore, qtyAfter, JSON.stringify(raw || {})]
   );
 }
 
