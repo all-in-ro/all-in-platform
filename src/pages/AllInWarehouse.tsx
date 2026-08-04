@@ -8204,6 +8204,33 @@ export default function AllInWarehouse() {
     setSelectedPanelOpen(true);
   }
 
+  function openIncomingSelectedProductsPanel() {
+    const targets = incomingSelectedItems
+      .map((item) => ({ ...item, variant_id: selectedVariantIdFromItem(item) }))
+      .filter((item) => Boolean(item.variant_id));
+    const ids = Array.from(new Set(targets.map((item) => String(item.variant_id || "").trim()).filter(Boolean)));
+    if (!ids.length) return;
+
+    const lastTargetId = ids[ids.length - 1];
+    if (lastTargetId) rememberSelectionReturnAnchor(lastTargetId);
+
+    // A Legutóbbi bevételezés kijelölése továbbra is külön állapot marad.
+    // Csak a zöld gomb kifejezett megnyomásakor kerülnek át ezek a sorok a közös,
+    // több gépen is folytatható kijelölt munkalistába.
+    setSelectedVariants((current) => {
+      const next = { ...current };
+      for (const id of ids) next[id] = true;
+      return next;
+    });
+    setPersistedSelectedItems((current) => mergeInventoryItems(current, targets));
+    setSelectedPanelOpen(true);
+
+    void runSelectedVariantMutation(
+      () => apiAddSelectedVariantSelection(ids.map((variantId) => ({ variantId }))),
+      "A legutóbbi bevételezés kijelölt termékeinek megnyitása nem sikerült.",
+    ).catch(() => undefined);
+  }
+
   function openSelectedItemsActionPicker(targetItems: InventoryItem[]) {
     const unique = new Map<string, InventoryItem>();
     for (const item of targetItems || []) {
@@ -10509,6 +10536,14 @@ export default function AllInWarehouse() {
               {incomingFocus ? (
                 incomingSelectedCount > 0 ? (
                   <>
+                    <button
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal"
+                      onClick={openIncomingSelectedProductsPanel}
+                      type="button"
+                      title="Az utolsó bevételezés kijelölt termékeit megnyitja a közös munkalistában"
+                    >
+                      <Eye size={15} /> Kijelöltek megnyitása
+                    </button>
                     <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("incoming")} disabled={saving} type="button" title="Csak az utolsó bevételezésben kijelölt sorokat törli">
                       <Trash2 size={15} /> Kijelölt termékek törlése
                     </button>
