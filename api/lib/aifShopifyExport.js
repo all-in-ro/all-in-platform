@@ -1358,8 +1358,8 @@ function metafieldDefinitionScore(definition, aliases, preferredNamespaces = [])
   for (const alias of normalizedAliases) {
     if (name === alias) score = Math.max(score, 100);
     if (key === alias) score = Math.max(score, 95);
-    if (name.includes(alias) || alias.includes(name)) score = Math.max(score, 55);
-    if (key.includes(alias) || alias.includes(key)) score = Math.max(score, 50);
+    if (name && (name.includes(alias) || alias.includes(name))) score = Math.max(score, 55);
+    if (key && (key.includes(alias) || alias.includes(key))) score = Math.max(score, 50);
   }
   if (preferred.has(namespace)) score += 20;
   return score;
@@ -1410,6 +1410,173 @@ function metafieldTextValue(definition, candidates) {
   return null;
 }
 
+function validationValues(definition, names = []) {
+  const wanted = new Set(
+    (names || [])
+      .map((value) => normalizeKey(value).replace(/[^a-z0-9]+/g, "_"))
+      .filter(Boolean)
+  );
+  const values = [];
+  for (const validation of definition?.validations || []) {
+    const key = normalizeKey(validation?.name).replace(/[^a-z0-9]+/g, "_");
+    if (!wanted.has(key)) continue;
+    const raw = text(validation?.value);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) values.push(...parsed.map(text).filter(Boolean));
+      else if (parsed !== null && parsed !== undefined) values.push(text(parsed));
+    } catch {
+      values.push(raw);
+    }
+  }
+  return unique(values);
+}
+
+function isMetaobjectReferenceType(typeName) {
+  return ["metaobject_reference", "list.metaobject_reference"].includes(text(typeName));
+}
+
+function metaobjectMatchKey(value) {
+  return normalizeKey(value).replace(/[^a-z0-9]+/g, "");
+}
+
+async function metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache) {
+  const directTypes = validationValues(definition, [
+    "metaobject_definition_type",
+    "metaobject_definition_types",
+  ]);
+  if (directTypes.length) return directTypes[0];
+
+  const definitionIds = validationValues(definition, [
+    "metaobject_definition_id",
+    "metaobject_definition_ids",
+  ]);
+  const definitionId = definitionIds[0] || "";
+  if (!definitionId) return "";
+  if (definitionTypeCache?.has(definitionId)) return definitionTypeCache.get(definitionId);
+
+  const query = `query AifMetaobjectDefinitionType($id: ID!) {
+    metaobjectDefinition(id: $id) {
+      id
+      name
+      type
+      displayNameKey
+    }
+  }`;
+  const response = await shopifyGraphql(query, { id: definitionId });
+  const definitionType = text(response.data?.metaobjectDefinition?.type);
+  definitionTypeCache?.set(definitionId, definitionType);
+  return definitionType;
+}
+
+async function loadMetaobjectsByType(type, metaobjectEntriesCache) {
+  const cleanType = text(type);
+  if (!cleanType) return [];
+  if (metaobjectEntriesCache?.has(cleanType)) return metaobjectEntriesCache.get(cleanType);
+
+  const query = `query AifMetaobjectsByType($type: String!, $first: Int!, $after: String) {
+    metaobjects(type: $type, first: $first, after: $after, sortKey: "display_name") {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        type
+        handle
+        displayName
+        fields { key value }
+      }
+    }
+  }`;
+  const entries = [];
+  const seenCursors = new Set();
+  let after = null;
+  for (let page = 0; page < 20; page += 1) {
+    const response = await shopifyGraphql(query, { type: cleanType, first: 250, after });
+    const connection = response.data?.metaobjects;
+    entries.push(...(connection?.nodes || []));
+    if (!connection?.pageInfo?.hasNextPage) break;
+    const nextCursor = text(connection?.pageInfo?.endCursor);
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    after = nextCursor;
+  }
+
+  metaobjectEntriesCache?.set(cleanType, entries);
+  return entries;
+}
+
+function metaobjectMatchScore(entry, candidateKeys) {
+  let score = 0;
+  const displayNameKey = metaobjectMatchKey(entry?.displayName);
+  const handleKey = metaobjectMatchKey(entry?.handle);
+  if (displayNameKey && candidateKeys.has(displayNameKey)) score = Math.max(score, 120);
+  if (handleKey && candidateKeys.has(handleKey)) score = Math.max(score, 110);
+  for (const field of entry?.fields || []) {
+    const valueKey = metaobjectMatchKey(field?.value);
+    if (valueKey && candidateKeys.has(valueKey)) score = Math.max(score, 100);
+  }
+  return score;
+}
+
+async function metafieldValueForDefinition({
+  definition,
+  candidates,
+  definitionTypeCache,
+  metaobjectEntriesCache,
+}) {
+  const typeName = text(definition?.type?.name);
+  const textValue = metafieldTextValue(definition, candidates);
+  if (textValue !== null) return { value: textValue, reason: null };
+
+  if (!isMetaobjectReferenceType(typeName)) {
+    return { value: null, reason: "definition_type_unsupported" };
+  }
+
+  const metaobjectType = await metaobjectDefinitionTypeForMetafield(definition, definitionTypeCache);
+  if (!metaobjectType) {
+    return { value: null, reason: "metaobject_definition_missing" };
+  }
+
+  const candidateKeys = new Set(
+    unique((candidates || []).map(text).filter(Boolean))
+      .map(metaobjectMatchKey)
+      .filter(Boolean)
+  );
+  if (!candidateKeys.size) return { value: null, reason: "missing_value", metaobjectType };
+
+  const entries = await loadMetaobjectsByType(metaobjectType, metaobjectEntriesCache);
+  const match = entries
+    .map((entry) => ({ entry, score: metaobjectMatchScore(entry, candidateKeys) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.entry || null;
+
+  if (!match?.id) {
+    return {
+      value: null,
+      reason: "metaobject_entry_missing",
+      metaobjectType,
+      availableEntries: entries.slice(0, 50).map((entry) => ({
+        id: text(entry?.id),
+        handle: text(entry?.handle),
+        displayName: text(entry?.displayName),
+      })),
+    };
+  }
+
+  return {
+    value: typeName === "list.metaobject_reference"
+      ? JSON.stringify([text(match.id)])
+      : text(match.id),
+    reason: null,
+    metaobjectType,
+    metaobject: {
+      id: text(match.id),
+      handle: text(match.handle),
+      displayName: text(match.displayName),
+    },
+  };
+}
+
 function audienceCandidates(value) {
   const audience = text(value);
   if (normalizeKey(audience) === "femei") return ["Femei", "Feminin", "Women", "Female"];
@@ -1424,7 +1591,16 @@ function styleCandidates(value) {
     : ["Fashion", "Lifestyle"];
 }
 
-async function setShopifyProductMetadata({ productId, categoryId, brand, audience, style, definitionCache }) {
+async function setShopifyProductMetadata({
+  productId,
+  categoryId,
+  brand,
+  audience,
+  style,
+  definitionCache,
+  metaobjectDefinitionTypeCache,
+  metaobjectEntriesCache,
+}) {
   const product = text(productId);
   if (!product) return { updatedFields: [], skippedFields: [{ field: "all", reason: "missing_product" }] };
 
@@ -1462,6 +1638,7 @@ async function setShopifyProductMetadata({ productId, categoryId, brand, audienc
   const inputs = [];
   const inputFields = [];
   const skippedFields = [];
+  const resolvedFields = [];
   for (const field of fields) {
     if (!field.value) {
       skippedFields.push({ field: field.field, reason: "missing_value" });
@@ -1472,26 +1649,68 @@ async function setShopifyProductMetadata({ productId, categoryId, brand, audienc
       skippedFields.push({ field: field.field, reason: "definition_missing" });
       continue;
     }
-    const value = metafieldTextValue(definition, field.candidates);
-    if (value === null) {
+
+    let resolved;
+    try {
+      resolved = await metafieldValueForDefinition({
+        definition,
+        candidates: field.candidates,
+        definitionTypeCache: metaobjectDefinitionTypeCache,
+        metaobjectEntriesCache,
+      });
+    } catch (error) {
       skippedFields.push({
         field: field.field,
-        reason: definitionChoiceValues(definition).length ? "choice_not_allowed" : "definition_type_unsupported",
-        definition: { name: definition.name, namespace: definition.namespace, key: definition.key, type: text(definition.type?.name) },
+        reason: "reference_lookup_failed",
+        error: error?.message || String(error),
+        code: error?.code || null,
+        definition: {
+          name: definition.name,
+          namespace: definition.namespace,
+          key: definition.key,
+          type: text(definition.type?.name),
+        },
       });
       continue;
     }
+
+    if (resolved.value === null) {
+      skippedFields.push({
+        field: field.field,
+        reason: resolved.reason || (definitionChoiceValues(definition).length ? "choice_not_allowed" : "definition_type_unsupported"),
+        definition: {
+          name: definition.name,
+          namespace: definition.namespace,
+          key: definition.key,
+          type: text(definition.type?.name),
+        },
+        metaobjectType: resolved.metaobjectType || null,
+        availableEntries: resolved.availableEntries || undefined,
+      });
+      continue;
+    }
+
     inputs.push({
       ownerId: product,
       namespace: text(definition.namespace),
       key: text(definition.key),
       type: text(definition.type?.name),
-      value,
+      value: resolved.value,
     });
     inputFields.push(field.field);
+    resolvedFields.push({
+      field: field.field,
+      definition: {
+        namespace: text(definition.namespace),
+        key: text(definition.key),
+        type: text(definition.type?.name),
+      },
+      metaobjectType: resolved.metaobjectType || null,
+      metaobject: resolved.metaobject || null,
+    });
   }
 
-  if (!inputs.length) return { updatedFields: [], skippedFields };
+  if (!inputs.length) return { updatedFields: [], skippedFields, resolvedFields };
 
   const mutation = `mutation AifSetImportedProductMetadata($metafields: [MetafieldsSetInput!]!) {
     metafieldsSet(metafields: $metafields) {
@@ -1512,6 +1731,7 @@ async function setShopifyProductMetadata({ productId, categoryId, brand, audienc
   return {
     updatedFields: inputFields,
     skippedFields,
+    resolvedFields,
     metafields: payload?.metafields || [],
   };
 }
@@ -1686,6 +1906,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
   const productErrors = [];
   const productWarnings = [];
   const metadataDefinitionCache = new Map();
+  const metaobjectDefinitionTypeCache = new Map();
+  const metaobjectEntriesCache = new Map();
   let onlinePublicationId = "";
 
   if (exportRow.product_status === "active" && productTasks.size) {
@@ -1714,6 +1936,8 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
       const metadataResult = await setShopifyProductMetadata({
         ...task,
         definitionCache: metadataDefinitionCache,
+        metaobjectDefinitionTypeCache,
+        metaobjectEntriesCache,
       });
       if (metadataResult.updatedFields.length) metadataUpdatedProducts += 1;
       if (metadataResult.updatedFields.includes("brand")) brandUpdatedProducts += 1;
@@ -1730,6 +1954,10 @@ export async function reconcileAifShopifyProductExport(client, exportId, options
           category: task.categoryName || task.categoryId || null,
           reason: skipped.reason,
           definition: skipped.definition || null,
+          metaobjectType: skipped.metaobjectType || null,
+          availableEntries: skipped.availableEntries || null,
+          error: skipped.error || null,
+          code: skipped.code || null,
         });
       }
     } catch (error) {
