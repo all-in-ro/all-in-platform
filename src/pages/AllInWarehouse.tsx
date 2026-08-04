@@ -7417,8 +7417,14 @@ export default function AllInWarehouse() {
   const incomingSelectedItems = useMemo(() => {
     if (!incomingFocus?.batchId) return [] as InventoryItem[];
     const selected = new Set(Object.keys(incomingSelectedVariants).filter((id) => incomingSelectedVariants[id]));
-    return filtered.filter((x) => selected.has(selectedVariantIdFromItem(x)));
-  }, [filtered, incomingFocus?.batchId, incomingSelectedVariants]);
+    // Az importkijelölés nem a pillanatnyi szűrt listából él. Ha közben egy további
+    // szűrő elrejti valamelyik kijelölt sort, a kijelölés és a zöld munkagomb akkor
+    // is stabilan megmarad. Csak az aktuális bevételezés valódi variánsai számítanak.
+    return inventoryDisplayItems.filter((item) => {
+      const id = selectedVariantIdFromItem(item);
+      return Boolean(id && incomingFocusVariantSet.has(id) && selected.has(id));
+    });
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocusVariantIdsKey, incomingSelectedVariants]);
 
   const selectedCount = selectedItems.length;
   const incomingSelectedCount = incomingSelectedItems.length;
@@ -8135,9 +8141,45 @@ export default function AllInWarehouse() {
       nextItems.push({ ...row, variant_id: id });
     }
 
-    setPersistedSelectedItems(nextItems);
-    setSelectedVariants(nextSelected);
-    setSelectedWorkActions(nextActions);
+    const sameKeyValueMap = <T extends string | boolean>(
+      current: Record<string, T>,
+      next: Record<string, T>,
+    ) => {
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(next);
+      if (currentKeys.length !== nextKeys.length) return false;
+      return nextKeys.every((key) => current[key] === next[key]);
+    };
+
+    const selectedItemFingerprint = (item: Partial<PersistedSelectedWorkItem> & Record<string, any>) => [
+      selectedVariantIdFromItem(item),
+      normalizeSelectedWorkAction(item.action || item.selected_action) || "",
+      String(item.sort_order ?? ""),
+      String(item.selected_updated_at || item.updated_at || ""),
+      String(item.title_ro || item.shopify_title || ""),
+      String(item.brand_name || ""),
+      String(item.category_code || item.category_name_ro || ""),
+      String(item.subcategory_code || item.subcategory_name_ro || item.product_type || ""),
+      String(item.color_code || item.color_name || ""),
+      String(item.size || ""),
+      String(item.barcode || ""),
+      String(item.image_url || ""),
+      String(item.total_qty ?? ""),
+      String(item.available_qty ?? ""),
+      String(item.buy_price ?? ""),
+      String(item.sell_price ?? ""),
+      String(item.model_status || ""),
+      String(item.variant_status || ""),
+    ].join("\u001f");
+
+    setPersistedSelectedItems((current) => {
+      if (current.length !== nextItems.length) return nextItems;
+      const currentFingerprint = current.map((item) => selectedItemFingerprint(item as any)).join("\u001e");
+      const nextFingerprint = nextItems.map((item) => selectedItemFingerprint(item as any)).join("\u001e");
+      return currentFingerprint === nextFingerprint ? current : nextItems;
+    });
+    setSelectedVariants((current) => sameKeyValueMap(current, nextSelected) ? current : nextSelected);
+    setSelectedWorkActions((current) => sameKeyValueMap(current, nextActions) ? current : nextActions);
   }
 
   async function refreshSelectedVariantSelection(options: { force?: boolean; quiet?: boolean } = {}) {
@@ -10491,86 +10533,135 @@ export default function AllInWarehouse() {
         </section>
 
         <section ref={productListRef} className="overflow-hidden rounded-2xl border border-white/20 bg-[#515d6e] shadow-xl">
-          <div className={`flex flex-wrap items-center justify-between gap-3 bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/16" : ""}`}>
-            <div className="flex flex-wrap items-center gap-2 text-white/95">
-              <Eye size={17} />
-              <span>Terméklista</span>
-              <span className={chip}>{filtered.length} variáns</span>
-              {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
-              {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
-              {!incomingFocus && selectedCount > 0 && (
-                <span className="rounded-full border border-[#2a8d8b]/45 bg-[#2a8d8b]/18 px-2.5 py-1 text-xs text-white">
-                  {selectedCount} kijelölve
-                </span>
-              )}
-              {incomingFocus && incomingSelectedCount > 0 && (
-                <span className="rounded-full border border-red-200/45 bg-[#d31126]/18 px-2.5 py-1 text-xs text-white">
-                  {incomingSelectedCount} kijelölve ebben az importban
-                </span>
-              )}
-              {incomingFocus && (
-                <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/12 px-2.5 py-1 text-xs text-[#d7fffd]">
-                  Utolsó bevételezés: {incomingFocus.rows.length || incomingFocus.variantIds.length} sor / {incomingFocus.variantIds.length} variáns{incomingFocus.totalQty ? ` / ${incomingFocus.totalQty} db` : ""}
-                </span>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                className={sortMode === "incoming_desc" ? primaryBtn : btnSoft}
-                onClick={() => void focusLatestCommittedImportBatch()}
-                type="button"
-                title="A legutóbbi készletre vett import összes raktári variánsát mutatja"
-              >
-                <RefreshCw size={15} /> Legutóbbi bevételezés
-              </button>
-              {incomingFocus && (
+          <div className={`bg-[#303a4c] px-4 py-3 ${listOpen ? "border-b border-white/16" : ""}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 text-white/95">
+                <Eye size={17} />
+                <span>Terméklista</span>
+                <span className={chip}>{filtered.length} variáns</span>
+                {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
+                {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
+                {incomingFocus && (
+                  <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/12 px-2.5 py-1 text-xs text-[#d7fffd]">
+                    Utolsó bevételezés: {incomingFocus.rows.length || incomingFocus.variantIds.length} sor / {incomingFocus.variantIds.length} variáns{incomingFocus.totalQty ? ` / ${incomingFocus.totalQty} db` : ""}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
-                  className={btnSoft}
-                  onClick={() => clearLatestIncomingFilter()}
+                  className={sortMode === "incoming_desc" ? primaryBtn : btnSoft}
+                  onClick={() => void focusLatestCommittedImportBatch()}
                   type="button"
-                  title="Csak az utolsó import sorainak mutatását kikapcsolja"
+                  title="A legutóbbi készletre vett import összes raktári variánsát mutatja"
                 >
-                  <X size={15} /> Import szűrő törlése
+                  <RefreshCw size={15} /> Legutóbbi bevételezés
                 </button>
-              )}
-              {incomingFocus ? (
-                incomingSelectedCount > 0 ? (
+                {incomingFocus && (
+                  <button
+                    className={btnSoft}
+                    onClick={() => clearLatestIncomingFilter()}
+                    type="button"
+                    title="Csak az utolsó import sorainak mutatását kikapcsolja"
+                  >
+                    <X size={15} /> Import szűrő törlése
+                  </button>
+                )}
+                {hasActiveWarehouseFilters && (
+                  <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button" title="Minden szűrő törlése">
+                    <X size={15} /> Szűrők törlése
+                  </button>
+                )}
+                <button className={btnSoft} onClick={() => setListOpen((x) => !x)}>{listOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {listOpen ? "Bezárás" : "Megnyitás"}</button>
+              </div>
+            </div>
+
+            <div className="mt-3 grid min-h-[48px] gap-2 rounded-xl border border-white/12 bg-white/[0.045] p-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-white/72">
+                <PackageCheck size={15} className="shrink-0 text-[#9cf4f0]" />
+                <span className="shrink-0 text-white">{incomingFocus ? "Import-kijelölés" : "Közös munkalista"}</span>
+                <span className={`inline-flex min-w-[156px] items-center justify-center rounded-full border px-2.5 py-1 text-[11px] ${
+                  activeListSelectedCount > 0
+                    ? incomingFocus
+                      ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/22 text-[#d7fffd]"
+                      : "border-[#7bd7d4]/45 bg-[#2a8d8b]/18 text-white"
+                    : "border-white/12 bg-white/[0.04] text-white/42"
+                }`}>
+                  {activeListSelectedCount > 0
+                    ? incomingFocus
+                      ? `${activeListSelectedCount} kijelölve ebben az importban`
+                      : `${activeListSelectedCount} kijelölve`
+                    : "Nincs kijelölt termék"}
+                </span>
+                {incomingFocus && incomingSelectedCount > selectedVisibleCount ? (
+                  <span className="text-[10px] text-white/45">
+                    {selectedVisibleCount} látható, {incomingSelectedCount - selectedVisibleCount} további kijelölés most szűrve van
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="flex min-h-8 flex-wrap items-center justify-end gap-2">
+                {incomingFocus ? (
                   <>
                     <button
-                      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal"
+                      className={`${headerPrimaryBtn} min-w-[164px]`}
                       onClick={openIncomingSelectedProductsPanel}
+                      disabled={incomingSelectedCount <= 0}
                       type="button"
                       title="Az utolsó bevételezés kijelölt termékeit megnyitja a közös munkalistában"
                     >
-                      <Eye size={15} /> Kijelöltek megnyitása
+                      <Eye size={14} /> Kijelöltek megnyitása
                     </button>
-                    <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("incoming")} disabled={saving} type="button" title="Csak az utolsó bevételezésben kijelölt sorokat törli">
-                      <Trash2 size={15} /> Kijelölt termékek törlése
+                    <button
+                      className="inline-flex h-8 min-w-[174px] items-center justify-center gap-1.5 rounded-xl border border-red-200/70 bg-[#d31126] px-2.5 text-[11px] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-45 font-normal"
+                      onClick={() => openSelectedProductsDeleteConfirm("incoming")}
+                      disabled={incomingSelectedCount <= 0 || saving}
+                      type="button"
+                      title="Csak az utolsó bevételezésben kijelölt sorokat törli"
+                    >
+                      <Trash2 size={14} /> Kijelölt termékek törlése
                     </button>
-                    <button className={btnSoft} onClick={clearIncomingSelection} type="button" title="Csak az importnézet kijelölését törli">
-                      <X size={15} /> Import kijelölés törlése
+                    <button
+                      className={`${headerBtnSoft} min-w-[156px]`}
+                      onClick={clearIncomingSelection}
+                      disabled={incomingSelectedCount <= 0}
+                      type="button"
+                      title="Csak az importnézet kijelölését törli"
+                    >
+                      <X size={14} /> Import kijelölés törlése
                     </button>
                   </>
-                ) : null
-              ) : selectedCount > 0 && (
-                <>
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] font-normal" onClick={openSelectedProductsPanel} type="button">
-                    <Eye size={15} /> Kijelöltek megnyitása
-                  </button>
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("warehouse")} disabled={saving} type="button" title="Az összes raktári munkalistán kijelölt terméket törli">
-                    <Trash2 size={15} /> Kijelölt termékek törlése
-                  </button>
-                  <button className={btnSoft} onClick={clearSelectedVariants} type="button" title="A mentett kijelölési listát is törli">
-                    <X size={15} /> Kijelölés törlése
-                  </button>
-                </>
-              )}
-              {hasActiveWarehouseFilters && (
-                <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button" title="Minden szűrő törlése">
-                  <X size={15} /> Szűrők törlése
-                </button>
-              )}
-              <button className={btnSoft} onClick={() => setListOpen((x) => !x)}>{listOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {listOpen ? "Bezárás" : "Megnyitás"}</button>
+                ) : (
+                  <>
+                    <button
+                      className={`${headerPrimaryBtn} min-w-[164px]`}
+                      onClick={openSelectedProductsPanel}
+                      disabled={selectedCount <= 0}
+                      type="button"
+                    >
+                      <Eye size={14} /> Kijelöltek megnyitása
+                    </button>
+                    <button
+                      className="inline-flex h-8 min-w-[174px] items-center justify-center gap-1.5 rounded-xl border border-red-200/70 bg-[#d31126] px-2.5 text-[11px] text-white shadow-[0_8px_18px_rgba(211,17,38,0.18)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-45 font-normal"
+                      onClick={() => openSelectedProductsDeleteConfirm("warehouse")}
+                      disabled={selectedCount <= 0 || saving}
+                      type="button"
+                      title="Az összes raktári munkalistán kijelölt terméket törli"
+                    >
+                      <Trash2 size={14} /> Kijelölt termékek törlése
+                    </button>
+                    <button
+                      className={`${headerBtnSoft} min-w-[156px]`}
+                      onClick={clearSelectedVariants}
+                      disabled={selectedCount <= 0}
+                      type="button"
+                      title="A mentett kijelölési listát is törli"
+                    >
+                      <X size={14} /> Kijelölés törlése
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
           {listOpen && (
@@ -10585,18 +10676,24 @@ export default function AllInWarehouse() {
                       <p className="mt-1 text-[#bdf5f2]">Csak az a konkrét méret/szín kerül át a Raktárba, amelynél a Variáns állapotot külön Aktívra teszed. A közös Modell állapot nem aktiválja automatikusan a többi variánst.</p>
                       <p className="mt-1 text-[#bdf5f2]">Az itteni kijelölés külön importlista: nem keveredik a normál raktári kijelölésekkel, címkékkel vagy készletmozgatási teendőkkel.</p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {filteredVariantIds.length > 0 && incomingSelectedCount < filteredVariantIds.length ? (
-                        <button className={btnSoft} onClick={() => toggleAllFilteredSelection(true)} type="button" title="Csak az utolsó bevételezés látható sorait jelöli ki, a normál raktári munkalistát nem bántja.">
-                          <PackageCheck size={14} /> Összes import sor kijelölése
-                        </button>
-                      ) : null}
-                      {incomingSelectedCount > 0 ? (
-                        <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-200/80 bg-[#d31126] px-3 text-xs text-white shadow-[0_10px_22px_rgba(211,17,38,0.24)] hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-55 font-normal" onClick={() => openSelectedProductsDeleteConfirm("incoming")} disabled={saving} type="button">
-                          <Trash2 size={15} /> Kijelölt termékek törlése
-                        </button>
-                      ) : null}
-                      {incomingSelectedCount > 0 ? <button className={btnSoft} onClick={clearIncomingSelection} type="button"><X size={14} /> Import kijelölés törlése</button> : null}
+                    <div className="flex min-h-9 flex-wrap items-center gap-2">
+                      <button
+                        className={btnSoft}
+                        onClick={() => toggleAllFilteredSelection(true)}
+                        disabled={!filteredVariantIds.length || allFilteredSelected}
+                        type="button"
+                        title="Csak az utolsó bevételezés jelenleg látható sorait jelöli ki, a normál raktári munkalistát nem bántja."
+                      >
+                        <PackageCheck size={14} /> {allFilteredSelected ? "Minden látható sor kijelölve" : "Összes látható import sor kijelölése"}
+                      </button>
+                      <button
+                        className={btnSoft}
+                        onClick={clearIncomingSelection}
+                        disabled={incomingSelectedCount <= 0}
+                        type="button"
+                      >
+                        <X size={14} /> Import kijelölés törlése
+                      </button>
                       <button className={btnSoft} onClick={() => resetWarehouseFilters()} type="button"><X size={14} /> Minden raktári variáns</button>
                     </div>
                   </div>
