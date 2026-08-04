@@ -727,11 +727,13 @@ function openMovementDocument(item: Pick<AifStockMoveItem, "raw">) {
   window.location.hash = `#allinproductmoves?document=${encodeURIComponent(id)}`;
 }
 
-function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type" | "raw">) {
+function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type" | "raw" | "qty_delta" | "direction">) {
   const source = String(item.source_type || "").toLowerCase();
   const movement = String(item.movement_type || "").toLowerCase();
   const rawReason = String((item.raw as any)?.reason || "").toLowerCase();
   const rawDirection = String((item.raw as any)?.direction || "").toLowerCase();
+  const effectiveDirection = String(item.direction || rawDirection || "").toLowerCase();
+  const delta = n(item.qty_delta);
   const documentType = stockDocumentTypeFromMove(item);
   if (documentType !== "all") return stockDocumentTypeLabel(documentType);
   if (
@@ -741,6 +743,15 @@ function sourceLabel(item: Pick<AifStockMoveItem, "source_type" | "movement_type
     rawReason.includes("archive") ||
     rawReason.includes("stock_clear")
   ) return "Készletről kivétel";
+  if (
+    source.includes("shopify") ||
+    movement === "shopify_adjustment" ||
+    rawReason.includes("shopify_inventory")
+  ) {
+    if (effectiveDirection === "out" || delta < 0) return "Shopify eladás";
+    if (effectiveDirection === "in" || delta > 0) return "Shopify készlet-visszaállítás";
+    return "Shopify készletkorrekció";
+  }
   if (source.includes("import_batch") || movement === "incoming") return "Bevételezés";
   if (source.includes("sale") || movement === "sale") return "Eladás";
   if (source.includes("transfer") || movement === "transfer") return "Áthelyezés";
