@@ -872,7 +872,7 @@ function DocumentFlowOverview({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
         <div>
           <p className="text-[9px] uppercase tracking-[0.16em] text-white/38">Mozgási áttekintés</p>
-          <p className="mt-1 text-sm text-white/82">Egyetlen pillantással látszik, mi érkezik és mi indul tovább.</p>
+         
         </div>
         <div className="flex items-center gap-2 text-[10px] text-white/55">
           <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1">{quantity(totalQty)} db</span>
@@ -1130,9 +1130,9 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
       <td><div class="product">${image}<div><strong>${escapeHtml(line.product_title || "Produs")}</strong>${variant ? `<small>${escapeHtml(variant)}</small>` : ""}</div></div></td>
       <td class="code">${escapeHtml(line.product_code || "-")}</td>
       <td class="code">${escapeHtml(line.barcode || "-")}</td>
-      <td class="checkCell"><span class="checkBox" aria-hidden="true"></span></td>
       <td class="center">buc.</td>
       <td class="qty">${escapeHtml(quantity(line.qty))}</td>
+      <td class="checkCell"><span class="checkBox" aria-hidden="true"></span></td>
       <td class="money">${escapeHtml(moneyRon(lineUnitPrice(line), false))}</td>
       <td class="money value">${escapeHtml(moneyRon(lineTotalValue(line), false))}</td>
     </tr>`;
@@ -1152,7 +1152,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
         <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></div>
         <b>${escapeHtml(quantity(sectionQty))} buc. · ${escapeHtml(moneyRon(sectionValue))}</b>
       </div>
-      <table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>Verificat</th><th>U.M.</th><th>Cant.</th><th>P.U. RON</th><th>Valoare RON</th></tr></thead><tbody>${renderRows(rows)}</tbody><tfoot><tr><td colspan="6" class="totalLabel">SUBTOTAL</td><td class="qty">${escapeHtml(quantity(sectionQty))}</td><td></td><td class="money totalValue">${escapeHtml(moneyRon(sectionValue, false))}</td></tr></tfoot></table>
+      <table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>U.M.</th><th>Cant.</th><th>Verificat</th><th>P.U. RON</th><th>Valoare RON</th></tr></thead><tbody>${renderRows(rows)}</tbody><tfoot><tr><td colspan="5" class="totalLabel">SUBTOTAL</td><td class="qty">${escapeHtml(quantity(sectionQty))}</td><td></td><td></td><td class="money totalValue">${escapeHtml(moneyRon(sectionValue, false))}</td></tr></tfoot></table>
     </section>`;
   };
 
@@ -1197,7 +1197,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   .uitWarning{margin-bottom:3.5mm;border:2px solid #f59e0b;border-radius:2.5mm;background:#fff7ed;padding:2.8mm 3mm;color:#92400e;font-weight:700;line-height:1.45}.uitCode{display:inline-block;min-width:52mm;margin-left:2mm;border-bottom:1px solid #92400e;color:#92400e}
   .flowSection{margin-top:3.5mm;break-inside:auto;border:1px solid #d8e1e5;border-radius:2.5mm;overflow:hidden}.flowHeader{display:flex;align-items:center;justify-content:space-between;gap:5mm;padding:2.4mm 3mm;background:#f8fafc;border-top:3px solid #64748b;border-bottom:1px solid #d8e1e5;color:#172033}.flowHeader div{display:grid;gap:.7mm}.flowHeader strong{font-size:10px;letter-spacing:.09em}.flowHeader span{font-size:7.5px;color:#64748b}.flowHeader b{font-size:9px;white-space:nowrap}.flowSection.incoming .flowHeader{background:#ecfdf9;border-top-color:#14b8a6;color:#0f5f59}.flowSection.outgoing .flowHeader{background:#fff1f2;border-top-color:#ef4444;color:#991b1b}.flowSection.neutral .flowHeader{background:#f1f5f9;border-top-color:#64748b;color:#334155}
   table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}th{background:#26384b;color:#fff;border:1px solid #26384b;padding:2.2mm 1.4mm;font-size:7.7px;line-height:1.2;text-transform:uppercase;text-align:left}td{border:1px solid #d4dcdf;padding:1.7mm 1.4mm;font-size:8.5px;line-height:1.25;vertical-align:middle;overflow-wrap:anywhere}tbody tr:nth-child(even) td{background:#f8fafb}
-  th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:58mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:19mm}th:nth-child(6),td:nth-child(6){width:9mm}th:nth-child(7),td:nth-child(7){width:10mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
+  th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:58mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:9mm}th:nth-child(6),td:nth-child(6){width:10mm}th:nth-child(7),td:nth-child(7){width:19mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
   .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.checkCell{text-align:center}.checkBox{display:inline-block;width:6.2mm;height:6.2mm;border:1.4px solid #334155;border-radius:1.2mm;background:#fff;vertical-align:middle}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}.product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}.img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
   tfoot td{background:#eef4f2;border-color:#b9c7c4;font-weight:700}tfoot .totalLabel{text-align:right;color:#183d36;letter-spacing:.08em}tfoot .totalValue{background:#255f54;color:#fff;font-size:11px}.total{display:grid;grid-template-columns:minmax(0,1fr) auto;margin-top:3mm;border:1px solid #b9c7c4;border-radius:2.5mm;overflow:hidden}.total span{padding:2.4mm 3mm;color:#536171;background:#f5f8f7}.total strong{min-width:44mm;padding:2.4mm 3mm;text-align:center;color:#fff;background:#255f54;font-size:13px}.valuationNote{margin-top:1.5mm;color:#8a5b00;font-size:7.5px;text-align:right}
   .signatures{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4mm;margin-top:13mm;break-inside:avoid}.signature{min-height:27mm;border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm}.signatureTitle{color:#255f54;font-size:8px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.signatureLine{margin-top:9mm;border-top:1px solid #667382;padding-top:1.3mm;color:#667382;font-size:7.2px;text-align:center}.signatureDate{margin-top:2.5mm;color:#7b8793;font-size:7.2px;text-align:center}.footer{display:flex;justify-content:space-between;gap:8mm;margin-top:5mm;padding-top:2.5mm;border-top:1px solid #d7dfdd;color:#7b8793;font-size:7.2px}
