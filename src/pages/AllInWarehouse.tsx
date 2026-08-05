@@ -12612,61 +12612,71 @@ export default function AllInWarehouse() {
         </div>
       )}
 
-      {warehouseMoveValuePreview && (
-        <div className="pointer-events-none fixed right-5 top-[96px] z-[76] w-[330px] overflow-hidden rounded-[22px] border border-slate-300 bg-[#f8fafc]/98 text-slate-900 shadow-[0_24px_70px_rgba(15,23,42,0.30)] backdrop-blur-xl">
-          <div className={`h-1.5 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2a8d8b]"}`} />
-          <div className="p-3.5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 items-start gap-2.5">
-                <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-red-50 text-red-600" : "border-teal-200 bg-teal-50 text-[#187876]"}`}>
-                  {warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? <AlertTriangle size={18} /> : warehouseMoveValuePreview.uitRecorded ? <CheckCircle2 size={18} /> : <Receipt size={18} />}
-                </span>
-                <div className="min-w-0">
-                  <p className="text-[9px] uppercase tracking-[0.16em] text-slate-500">PV-előkészítés élő értéke</p>
-                  <p className="mt-1 truncate text-sm text-slate-900" title={`${warehouseMoveValuePreview.fromLocationName} → ${warehouseMoveValuePreview.toLocationName}`}>
-                    {warehouseMoveValuePreview.preparation?.document_number || "Új előkészítés"}
-                  </p>
-                  <p className="mt-0.5 truncate text-[10px] text-slate-600">{warehouseMoveValuePreview.fromLocationName} → {warehouseMoveValuePreview.toLocationName}</p>
-                </div>
+      {warehouseMoveValuePreview && typeof document !== "undefined" ? createPortal(
+        <div
+          className={`pointer-events-none fixed right-5 top-[96px] z-[125] w-[360px] max-w-[calc(100vw-24px)] overflow-hidden rounded-[22px] border text-slate-900 shadow-[0_28px_90px_rgba(15,23,42,0.48)] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300" : "border-teal-300"}`}
+          style={{ backgroundColor: "#ffffff", color: "#0f172a", opacity: 1 }}
+          role="status"
+          aria-live="polite"
+        >
+          <div className={`flex items-start gap-3 px-3.5 py-3 text-white ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-[#b4233d]" : "bg-[#176f6c]"}`}>
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/35 bg-white/15 text-white shadow-sm">
+              {warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? <AlertTriangle size={19} /> : warehouseMoveValuePreview.uitRecorded ? <CheckCircle2 size={19} /> : <Receipt size={19} />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/80">PV-előkészítés élő értéke</p>
+              <p className="mt-1 truncate text-[15px] leading-tight text-white" title={warehouseMoveValuePreview.preparation?.document_number || "Új előkészítés"}>
+                {warehouseMoveValuePreview.preparation?.document_number || "Új előkészítés"}
+              </p>
+              <p className="mt-1 truncate text-[10px] text-white/82" title={`${warehouseMoveValuePreview.fromLocationName} → ${warehouseMoveValuePreview.toLocationName}`}>
+                {warehouseMoveValuePreview.fromLocationName} → {warehouseMoveValuePreview.toLocationName}
+              </p>
+            </div>
+            {openTransferPreparationsBusy ? <RefreshCw size={15} className="mt-1 shrink-0 animate-spin text-white/85" /> : null}
+          </div>
+
+          <div className="bg-white p-3.5">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 shadow-sm">
+                <p className="text-[9px] uppercase tracking-[0.11em] text-slate-500">Már ebben az irányban</p>
+                <p className="mt-1 text-[17px] leading-none text-slate-900">
+                  {openTransferPreparationsLoaded ? money(warehouseMoveValuePreview.currentValue) : "Betöltés..."}
+                  {openTransferPreparationsLoaded ? <span className="ml-1 text-[9px] text-slate-500">RON</span> : null}
+                </p>
               </div>
-              {openTransferPreparationsBusy ? <RefreshCw size={14} className="mt-1 shrink-0 animate-spin text-slate-500" /> : null}
+              <div className="rounded-2xl border border-teal-200 bg-teal-50 px-3 py-2.5 shadow-sm">
+                <p className="text-[9px] uppercase tracking-[0.11em] text-[#176f6c]">Most hozzáadod</p>
+                <p className="mt-1 text-[17px] leading-none text-[#0f5f59]">+{money(warehouseMoveValuePreview.addedValue)} <span className="text-[9px] text-[#176f6c]">RON</span></p>
+                <p className="mt-1 text-[10px] text-slate-600">{warehouseMoveValuePreview.qty} db</p>
+              </div>
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-              <div className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 shadow-sm">
-                <span className="block text-slate-500">Már ebben az irányban</span>
-                <strong className="mt-1 block text-[13px] font-normal text-slate-900">{openTransferPreparationsLoaded ? `${money(warehouseMoveValuePreview.currentValue)} RON` : "Betöltés..."}</strong>
-              </div>
-              <div className="rounded-xl border border-teal-200 bg-teal-50 px-2.5 py-2 shadow-sm">
-                <span className="block text-[#187876]">Most hozzáadod</span>
-                <strong className="mt-1 block text-[13px] font-normal text-[#0f5f59]">+ {money(warehouseMoveValuePreview.addedValue)} RON</strong>
-                <span className="mt-0.5 block text-[9px] text-slate-500">{warehouseMoveValuePreview.qty} db</span>
-              </div>
-            </div>
-
-            <div className={`mt-2 rounded-2xl border px-3 py-2.5 shadow-sm ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-red-50" : "border-teal-200 bg-[#effbf9]"}`}>
+            <div className={`mt-3 rounded-2xl border px-3 py-3 shadow-sm ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-red-50" : "border-teal-200 bg-[#effbf9]"}`}>
               <div className="flex items-center justify-between gap-3">
-                <span className={`text-[10px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "text-red-700" : "text-[#187876]"}`}>Mentés után, ezen a PV-n</span>
-                <span className={`rounded-full border px-2 py-0.5 text-[9px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-white text-red-700" : "border-teal-200 bg-white text-[#187876]"}`}>
+                <span className={`text-[10px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "text-red-800" : "text-[#176f6c]"}`}>Mentés után, ezen a PV-n</span>
+                <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300 bg-white text-red-700" : "border-teal-300 bg-white text-[#176f6c]"}`}>
                   {warehouseMoveValuePreview.uitRecorded ? "UIT rögzítve" : warehouseMoveValuePreview.thresholdReached ? "UIT szükséges" : `${money(Math.max(0, warehouseMoveValuePreview.remainingValue))} RON maradt`}
                 </span>
               </div>
-              <p className="mt-1.5 text-[24px] leading-none text-slate-900">{money(warehouseMoveValuePreview.projectedValue)} <span className="text-[10px] text-slate-500">RON</span></p>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+              <p className={`mt-2 text-[25px] leading-none ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "text-red-900" : "text-slate-900"}`}>
+                {money(warehouseMoveValuePreview.projectedValue)} <span className="text-[10px] text-slate-500">RON</span>
+              </p>
+              <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-200">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2a8d8b]"}`}
                   style={{ width: `${Math.min(100, Math.max(2, (warehouseMoveValuePreview.projectedValue / WAREHOUSE_UIT_WARNING_THRESHOLD_RON) * 100))}%` }}
                 />
               </div>
-              <p className="mt-2 text-[9px] leading-relaxed text-slate-500">A darabszám vagy egy terméksor módosításakor az összeg azonnal újraszámolódik.</p>
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-600">A darabszám vagy egy terméksor módosításakor az összeg azonnal újraszámolódik.</p>
             </div>
 
-            <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-[10px] leading-relaxed text-sky-800">
+            <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[10px] leading-relaxed text-sky-900">
               Az ellenkező irány külön PV-előkészítést kap, ezért a két útvonal értéke nem adódik össze.
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body,
+      ) : null}
 
       <ShopifyProductExportModal
         open={shopifyExportModalOpen}
