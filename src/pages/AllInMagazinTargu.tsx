@@ -97,6 +97,33 @@ function formatDateTime(value: Date) {
   });
 }
 
+const SHOP_ADMIN_UNLOCK_KEY = "allin:shop-administration-unlock:kezdivasarhely";
+
+function shopAdministrationUnlockExpiresAt() {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = window.sessionStorage.getItem(SHOP_ADMIN_UNLOCK_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const expiresAt = Number(parsed?.expiresAt || 0);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      window.sessionStorage.removeItem(SHOP_ADMIN_UNLOCK_KEY);
+      return 0;
+    }
+    return expiresAt;
+  } catch {
+    return 0;
+  }
+}
+
+function clearShopAdministrationUnlock() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(SHOP_ADMIN_UNLOCK_KEY);
+  } catch {
+    // A navigáció ettől még működjön.
+  }
+}
+
 export default function AllInMagazinTargu({
   actor = "Üzleti felhasználó",
   role = "shop",
@@ -106,14 +133,32 @@ export default function AllInMagazinTargu({
   const [notice, setNotice] = useState("");
   const [clientsOpen, setClientsOpen] = useState(false);
   const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
+  const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
+  const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30000);
     return () => window.clearInterval(timer);
   }, []);
 
+
+  useEffect(() => {
+    if (role !== "shop") return;
+    if (!administrationUnlocked) {
+      window.location.hash = "magazintargusale";
+      return;
+    }
+
+    const remaining = Math.max(0, administrationExpiresAt - Date.now());
+    const timer = window.setTimeout(() => {
+      clearShopAdministrationUnlock();
+      window.location.hash = "magazintargusale";
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [administrationExpiresAt, administrationUnlocked, role]);
+
   const sessionLabel = useMemo(
-    () => role === "admin" ? "Admin előnézet" : "Üzleti munkamenet",
+    () => role === "admin" ? "Admin előnézet" : "Védett adminisztráció",
     [role],
   );
 
@@ -123,12 +168,27 @@ export default function AllInMagazinTargu({
     setNotice("");
   }
 
+  function returnToSale() {
+    clearShopAdministrationUnlock();
+    window.location.hash = "magazintargusale";
+  }
+
   function openModule(action: ActionCard) {
     if (action.key === "sale") {
       window.location.hash = "magazintargusale";
       return;
     }
     setNotice(`${action.title}: a modul a következő fejlesztési lépésben kerül bekötésre.`);
+  }
+
+  if (role === "shop" && !administrationUnlocked) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-gradient-to-br from-[#626d7d] via-[#596373] to-[#505a69] px-4 text-white">
+        <div className="rounded-2xl border border-white/16 bg-[#303a4c] px-5 py-4 text-sm text-white/72 shadow-2xl">
+          Értékesítési felület megnyitása…
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -158,6 +218,14 @@ export default function AllInMagazinTargu({
               </div>
               <button
                 type="button"
+                onClick={returnToSale}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm font-normal text-white transition hover:bg-[#3e4d63] active:scale-[0.98]"
+              >
+                <ShoppingCart size={18} />
+                Eladáshoz
+              </button>
+              <button
+                type="button"
                 onClick={() => void onLogout?.()}
                 className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/48 bg-[#2a8d8b] px-4 text-sm font-normal text-white shadow-[0_10px_22px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98]"
               >
@@ -175,7 +243,7 @@ export default function AllInMagazinTargu({
               <div>
                 <p className="text-sm text-white">Kézdivásárhelyi értékesítési felület</p>
                 <p className="mt-1 text-xs leading-relaxed text-white/58">
-                  A főoldal külön üzleti munkakörnyezetként működik. Az eladási, készlet- és napi zárási modulok innen fognak megnyílni.
+                  Ez a védett kezelőfelület csak ismételt kódellenőrzés után nyílik meg. Az eladó alapból közvetlenül az Új eladás oldalon dolgozik.
                 </p>
               </div>
             </div>
