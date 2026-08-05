@@ -217,6 +217,7 @@ function MainMenuButton({
 export default function AllInHome(props: { onLogout?: () => void }) {
   const [openGroup, setOpenGroup] = useState<GroupKey | null>(null);
   const [carsLevel, setCarsLevel] = useState<CarLevel>("ok");
+  const [vacationPendingCount, setVacationPendingCount] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -249,6 +250,27 @@ export default function AllInHome(props: { onLogout?: () => void }) {
 
     return () => {
       alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let timer = 0;
+
+    const loadPendingVacations = async () => {
+      try {
+        const data = await fetchJson(`${API}/admin/vacations/requests/pending-count`);
+        if (alive) setVacationPendingCount(Math.max(0, Number(data?.count || 0)));
+      } catch {
+        if (alive) setVacationPendingCount(0);
+      }
+    };
+
+    void loadPendingVacations();
+    timer = window.setInterval(() => void loadPendingVacations(), 30000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -317,7 +339,13 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             hash="#allinshopifyorders"
             icon={ShoppingBag}
           />
-          <MainMenuButton label="Szabadságok" hash="#allinvacations" icon={Calendar} />
+          <MainMenuButton
+            label="Szabadságok"
+            hash="#allinvacations"
+            icon={Calendar}
+            tone={vacationPendingCount > 0 ? "danger" : "normal"}
+            badge={vacationPendingCount > 0 ? `${vacationPendingCount} kérés` : undefined}
+          />
           <MainMenuButton label="Felhasználók" hash="#allinusers" icon={Users} />
           <MainMenuButton
             label="Autók"
