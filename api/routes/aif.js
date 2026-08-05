@@ -152,6 +152,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           barcode text NULL,
           brand_name text NULL,
           category_name text NULL,
+          subcategory_name text NULL,
           color_name text NULL,
           size text NULL,
           raw jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -162,6 +163,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_variant_idx ON aif_shop_sale_lines (variant_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_brand_idx ON aif_shop_sale_lines (lower(brand_name)) WHERE brand_name IS NOT NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_category_idx ON aif_shop_sale_lines (lower(category_name)) WHERE category_name IS NOT NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_sale_lines ADD COLUMN IF NOT EXISTS subcategory_name text NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_subcategory_idx
+          ON aif_shop_sale_lines (lower(subcategory_name)) WHERE subcategory_name IS NOT NULL`);
+        await pool.query(`UPDATE aif_shop_sale_lines sl
+          SET subcategory_name=COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,''))
+          FROM aif_product_variants v
+          JOIN aif_product_models m ON m.id=v.model_id
+          LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+          WHERE sl.variant_id=v.id
+            AND NULLIF(btrim(COALESCE(sl.subcategory_name,'')),'') IS NULL
+            AND subc.id IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_sale_payments (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -15943,6 +15955,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
            b.name AS brand_name,
            c.name_ro AS category_name,
+           COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
            sc.supplier_product_code,
            s.qty,
            s.reserved_qty,
@@ -15952,6 +15965,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          JOIN aif_product_models m ON m.id=v.model_id
          LEFT JOIN aif_brands b ON b.id=m.brand_id
          LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
          LEFT JOIN LATERAL (
            SELECT supplier_product_code, supplier_variant_code
            FROM aif_variant_supplier_codes
@@ -15976,6 +15990,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         title: row.title || "Ismeretlen termék",
         brandName: row.brand_name || null,
         categoryName: row.category_name || null,
+        subcategoryName: row.subcategory_name || null,
         colorName: row.color_name || null,
         colorCode: row.color_code || null,
         size: row.size || null,
@@ -16064,12 +16079,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            m.model_code, COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
            b.name AS brand_name,
            c.name_ro AS category_name,
+           COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
            sc.supplier_product_code
          FROM aif_stock s
          JOIN aif_product_variants v ON v.id=s.variant_id
          JOIN aif_product_models m ON m.id=v.model_id
          LEFT JOIN aif_brands b ON b.id=m.brand_id
          LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
          LEFT JOIN LATERAL (
            SELECT supplier_product_code
            FROM aif_variant_supplier_codes
@@ -16237,9 +16254,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              sale_id, line_no, variant_id, quantity, list_price, unit_price,
              discount_amount, discount_percent, line_total, buy_price_snapshot,
              product_title, product_code, barcode, brand_name, category_name,
-             color_name, size, raw
+             subcategory_name, color_name, size, raw
            ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb
            )`,
           [
             sale.id,
@@ -16257,6 +16274,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             line.stock.barcode || null,
             line.stock.brand_name || null,
             line.stock.category_name || null,
+            line.stock.subcategory_name || null,
             line.stock.color_name || null,
             line.stock.size || null,
             JSON.stringify({ availableBefore: before - Number(line.stock.reserved_qty || 0), listPriceSource: "variant_sell_price" }),
@@ -16435,8 +16453,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (category) {
           const p = push(category);
           where.push(`EXISTS (
-            SELECT 1 FROM aif_shop_sale_lines slf
-            WHERE slf.sale_id=s.id AND lower(COALESCE(slf.category_name,''))=lower(${p})
+            SELECT 1
+            FROM aif_shop_sale_lines slf
+            LEFT JOIN aif_product_variants vf ON vf.id=slf.variant_id
+            LEFT JOIN aif_product_models mf ON mf.id=vf.model_id
+            LEFT JOIN aif_categories subcf ON subcf.id=mf.subcategory_id
+            WHERE slf.sale_id=s.id
+              AND lower(COALESCE(
+                NULLIF(slf.subcategory_name,''),
+                NULLIF(subcf.name_hu,''),
+                NULLIF(subcf.name_ro,''),
+                'Nincs alkategória'
+              ))=lower(${p})
           )`);
         }
         if (search) {
@@ -16597,14 +16625,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              SELECT s.* FROM aif_shop_sales s WHERE ${currentFilters.where}
            )
            SELECT
-             COALESCE(NULLIF(sl.category_name,''),'Nincs kategória') AS name,
+             COALESCE(
+               NULLIF(sl.subcategory_name,''),
+               NULLIF(subc.name_hu,''),
+               NULLIF(subc.name_ro,''),
+               'Nincs alkategória'
+             ) AS name,
              COALESCE(sum(sl.line_total),0)::numeric AS revenue,
              COALESCE(sum(sl.quantity),0)::numeric AS qty,
              count(DISTINCT fs.id)::int AS transactions
            FROM filtered_sales fs
            JOIN aif_shop_sale_lines sl ON sl.sale_id=fs.id
+           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
            WHERE fs.status='completed'
-           GROUP BY COALESCE(NULLIF(sl.category_name,''),'Nincs kategória')
+           GROUP BY COALESCE(
+             NULLIF(sl.subcategory_name,''),
+             NULLIF(subc.name_hu,''),
+             NULLIF(subc.name_ro,''),
+             'Nincs alkategória'
+           )
            ORDER BY qty DESC, revenue DESC
            LIMIT 12`,
           currentFilters.args
@@ -16703,11 +16744,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           [location.id]
         ),
         pool.query(
-          `SELECT DISTINCT sl.category_name AS value
+          `SELECT DISTINCT
+             COALESCE(
+               NULLIF(sl.subcategory_name,''),
+               NULLIF(subc.name_hu,''),
+               NULLIF(subc.name_ro,'')
+             ) AS value
            FROM aif_shop_sale_lines sl
            JOIN aif_shop_sales s ON s.id=sl.sale_id
-           WHERE s.location_id=$1 AND NULLIF(sl.category_name,'') IS NOT NULL
-           ORDER BY sl.category_name ASC`,
+           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           WHERE s.location_id=$1
+             AND COALESCE(
+               NULLIF(sl.subcategory_name,''),
+               NULLIF(subc.name_hu,''),
+               NULLIF(subc.name_ro,'')
+             ) IS NOT NULL
+           ORDER BY value ASC`,
           [location.id]
         ),
       ]);
