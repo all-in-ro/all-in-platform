@@ -2418,9 +2418,9 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "title", label: "Terméknév", hint: "A fő terméknév, lehet 1-2 sor." },
   { key: "barcode", label: "Vonalkód", hint: "Code128 belső AllIn / Shopify SKU azonosító." },
   { key: "description", label: "Anyag / összetétel", hint: "Csak az anyagösszetétel kerül a címkére. Ha nincs megadva, üres marad." },
-  { key: "category", label: "Főkategória", hint: "Nagy gyűjtőcsoport, pl. Accesorii / Îmbrăcăminte." },
-  { key: "sizeColor", label: "Méret / szín", hint: "A variáns gyors azonosításához." },
-  { key: "code", label: "Termékkód", hint: "Beszállítói / belső cikkszám." },
+  { key: "category", label: "Alkategória", hint: "A termék alkategóriája / terméktípusa kerül a címkére." },
+  { key: "sizeColor", label: "Méret", hint: "A variáns mérete kerül a címkére." },
+  { key: "code", label: "Termékkód / színkód", hint: "A termékkód után a gyártói színkód jelenik meg." },
   { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
 ];
 
@@ -2503,11 +2503,11 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 .aifWarehousePrintLabel.noBorder { border-color:transparent; }
 .aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
 .aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
-.aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; }
+.aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 0 auto; }
 .aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
 .aifWhLabelDescription { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; font-size:9.5px; line-height:1.08; color:#222; }
-.aifWhBarcodeSvgWrap { width:100%; overflow:hidden; }
-.aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:54px; }
+.aifWhBarcodeSvgWrap { width:100%; overflow:visible; flex:0 0 auto; }
+.aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:none; }
 .aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
 .aifWhLabelCode { margin-top:3px; font-size:8.5px; color:#444; text-align:center; }
 .aifWhLabelPrice { margin-top:3px; text-align:center; line-height:1; color:#111; white-space:nowrap; }
@@ -2686,6 +2686,11 @@ type WarehouseLabelPrintDocumentLayout = {
 
 function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: WarehouseLabelPrintDocumentOptions) {
   const priceParts = labelPriceParts(label.price);
+  const productCodeWithColor = [label.productCode, label.color]
+    .map((value) => String(value || "").trim())
+    .filter((value) => value && value !== "-")
+    .filter((value, index, all) => all.findIndex((entry) => normalizeSearch(entry) === normalizeSearch(value)) === index)
+    .join(" - ");
   const html: string[] = [];
 
   if (options.labelContent.company && options.labelCompanyName) {
@@ -2697,11 +2702,8 @@ function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: Ware
   if (options.labelContent.title) {
     html.push(`<div class="aifWhLabelTitle">${labelEscapeHtml(labelCleanText(label.title || "Produs", 72))}</div>`);
   }
-  if (options.labelContent.sizeColor && (label.size || label.color)) {
-    const meta: string[] = [];
-    if (label.size && label.size !== "-") meta.push(`<span>${labelEscapeHtml(labelCleanText(label.size, 16))}</span>`);
-    if (label.color && label.color !== "-") meta.push(`<span>${labelEscapeHtml(labelCleanText(label.color, 24))}</span>`);
-    if (meta.length) html.push(`<div class="aifWhLabelMeta">${meta.join("")}</div>`);
+  if (options.labelContent.sizeColor && label.size && label.size !== "-") {
+    html.push(`<div class="aifWhLabelMeta"><span>${labelEscapeHtml(labelCleanText(label.size, 16))}</span></div>`);
   }
   if (options.labelContent.barcode) {
     html.push(`<div class="aifWhBarcodeSvgWrap">${label.render.ok ? label.render.svg : ""}</div>`);
@@ -2712,8 +2714,8 @@ function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: Ware
   if (options.labelContent.category && label.category && label.category !== "-") {
     html.push(`<div class="aifWhLabelCategory">${labelEscapeHtml(labelCleanText(label.category, 34))}</div>`);
   }
-  if (options.labelContent.code && (label.productCode || label.barcode)) {
-    html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(label.productCode || label.barcode, 44))}</div>`);
+  if (options.labelContent.code && (productCodeWithColor || label.barcode)) {
+    html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(productCodeWithColor || label.barcode, 56))}</div>`);
   }
   if (options.labelContent.price && priceParts.major) {
     html.push(
@@ -3026,7 +3028,7 @@ function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
   }
 
   const safeText = code.replace(/[<&>]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m] || m));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 18}" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 18}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 13}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5">${safeText}</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 18}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 18}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 13}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5">${safeText}</text></svg>`;
   return { ok: true, svg, width };
 }
 
@@ -5205,7 +5207,7 @@ export default function AllInWarehouse() {
   const [labelRows, setLabelRows] = useState("6");
   const [labelMarginX, setLabelMarginX] = useState("5");
   const [labelMarginY, setLabelMarginY] = useState("5");
-  const [labelShowBorder, setLabelShowBorder] = useState(true);
+  const [labelShowBorder, setLabelShowBorder] = useState(false);
   const [labelCompanyName, setLabelCompanyName] = useState(WAREHOUSE_LABEL_COMPANY);
   const [labelCurrency, setLabelCurrency] = useState("RON");
   const [labelUnitText, setLabelUnitText] = useState("RON");
@@ -8414,8 +8416,24 @@ export default function AllInWarehouse() {
   }
 
   function labelProductCodeForItem(item: InventoryItem) {
-    const raw = String(item.model_code || item.internal_sku || item.barcode || "").trim();
-    const clean = raw.includes(":") ? raw.split(":").pop() || raw : raw;
+    const rawProductCode = String(itemProductCode(item) || "").trim();
+    const rawModelCode = String(item.model_code || "").trim();
+    const modelCode = rawModelCode.includes(":") ? rawModelCode.split(":").pop() || rawModelCode : rawModelCode;
+    const colorCode = firstWarehouseText(
+      item.color_code,
+      (item as any).supplier_color_code,
+      (item as any).supplierColorCode,
+    );
+    const removeColorSuffix = (value: string) => {
+      const cleanValue = String(value || "").trim();
+      if (!cleanValue || !colorCode) return cleanValue;
+      const escapedColor = colorCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return cleanValue
+        .replace(new RegExp(`(?:[-_./:\\s]+)?${escapedColor}$`, "i"), "")
+        .replace(/[-_./:\\s]+$/g, "")
+        .trim() || cleanValue;
+    };
+    const clean = removeColorSuffix(rawProductCode || modelCode) || String(item.internal_sku || item.barcode || "").trim();
     return labelCleanText(clean, 48);
   }
 
@@ -8490,7 +8508,7 @@ export default function AllInWarehouse() {
     setLabelCompanyName(template.labelCompanyName || WAREHOUSE_LABEL_COMPANY);
     setLabelCurrency(template.labelCurrency || "RON");
     setLabelUnitText(template.labelUnitText || template.labelCurrency || "RON");
-    setLabelShowBorder(template.labelShowBorder !== false);
+    setLabelShowBorder(template.labelShowBorder === true);
     setLabelContent({ ...WAREHOUSE_LABEL_DEFAULT_CONTENT, ...(template.labelContent || {}) });
   }
 
@@ -8507,6 +8525,9 @@ export default function AllInWarehouse() {
   }
 
   async function openLabelComposer() {
+    // Minden megnyitáskor keret nélkül induljon, hogy egy korábbi nyomtatásból
+    // véletlenül se maradjon bekapcsolva. Sablon betöltése továbbra is felülírhatja.
+    setLabelShowBorder(false);
     if (!selectedLabelItems.length) {
       setMessage("Nincs termék a Vonalkód / címke listában.");
       return;
@@ -8588,7 +8609,15 @@ export default function AllInWarehouse() {
       const detailItem = labelDetailMap[id]?.item || {};
       const barcode = barcodeForLabelItem(item, detailItem);
       const copies = labelInt(labelCopies[id], labelInt(defaultLabelCopiesForItem(item), 1, 1, 999), 0, 999);
-      const color = colorDisplay(item.color_name || detailItem.color_name, item.color_code || detailItem.color_code);
+      const mergedLabelItem = { ...item, ...detailItem } as InventoryItem;
+      const colorCode = firstWarehouseText(
+        detailItem.color_code,
+        detailItem.supplier_color_code,
+        detailItem.supplierColorCode,
+        item.color_code,
+        (item as any).supplier_color_code,
+        (item as any).supplierColorCode,
+      );
       const price = item.sell_price == null ? "" : String(item.sell_price);
       return {
         item,
@@ -8598,17 +8627,17 @@ export default function AllInWarehouse() {
         imageUrl: labelComposerImageUrl(item, detailItem),
         title: detailItem.title_ro || item.title_ro || "-",
         brand: detailItem.brand_name || item.brand_name || "-",
-        category: detailItem.category_name_ro || item.category_name_ro || detailItem.category_name_hu || item.category_name_hu || "-",
+        category: detailItem.subcategory_name_ro || item.subcategory_name_ro || detailItem.subcategory_name_hu || item.subcategory_name_hu || detailItem.product_type || item.product_type || "-",
         size: detailItem.size || item.size || "-",
-        color,
+        color: colorCode || "-",
         description: detailItem.material || item.material || "",
-        productCode: labelProductCodeForItem(item),
+        productCode: labelProductCodeForItem(mergedLabelItem),
         price,
         stockQty: Math.floor(n(item.total_qty)),
         render: labelCode128Svg(barcode, 58),
       };
     });
-  }, [selectedLabelItems, labelCopies, colorTypes, labelDetailMap]);
+  }, [selectedLabelItems, labelCopies, labelDetailMap]);
 
   const labelInvalidRows = useMemo(
     () => labelRowsForPrint.filter((row) => row.copies > 0 && !row.render.ok),
@@ -8731,21 +8760,25 @@ export default function AllInWarehouse() {
 
   function WarehouseLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
     const priceParts = labelPriceParts(label.price);
+    const productCodeWithColor = [label.productCode, label.color]
+      .map((value) => String(value || "").trim())
+      .filter((value) => value && value !== "-")
+      .filter((value, index, all) => all.findIndex((entry) => normalizeSearch(entry) === normalizeSearch(value)) === index)
+      .join(" - ");
     return (
       <>
         {labelContent.company && labelCompanyName && <div className="aifWhLabelCompany">{labelCleanText(labelCompanyName, 48)}</div>}
         {labelContent.brand && label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
         {labelContent.title && <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>}
-        {labelContent.sizeColor && (label.size || label.color) && (
+        {labelContent.sizeColor && label.size && label.size !== "-" && (
           <div className="aifWhLabelMeta">
-            {label.size && label.size !== "-" && <span>{labelCleanText(label.size, 16)}</span>}
-            {label.color && label.color !== "-" && <span>{labelCleanText(label.color, 24)}</span>}
+            <span>{labelCleanText(label.size, 16)}</span>
           </div>
         )}
         {labelContent.barcode && <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: label.render.ok ? label.render.svg : "" }} />}
         {labelContent.description && label.description && <div className="aifWhLabelDescription">{labelCleanText(label.description, 90)}</div>}
         {labelContent.category && label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
-        {labelContent.code && (label.productCode || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(label.productCode || label.barcode, 44)}</div>}
+        {labelContent.code && (productCodeWithColor || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(productCodeWithColor || label.barcode, 56)}</div>}
         {labelContent.price && priceParts.major && (
           <div className="aifWhLabelPrice">
             <span className="aifWhPriceMajor">{priceParts.major}</span>
@@ -11174,7 +11207,7 @@ export default function AllInWarehouse() {
                         </div>
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{row.title}</p>
-                          <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • {row.color} • {row.size}</p>
+                          <p className="mt-1 text-xs text-white/55">{row.brand} • {row.category} • Színkód: {row.color || "-"} • {row.size}</p>
                           <p className="mt-1 text-xs text-white/45">Készlet: {row.stockQty} • Vonalkód: {row.barcode || "nincs mentve"}</p>
                           {!row.render.ok && (
                             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-rose-300/25 bg-rose-500/10 px-2 py-1.5">
