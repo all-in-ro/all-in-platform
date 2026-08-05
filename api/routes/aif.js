@@ -15762,6 +15762,224 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.patch("/shop-customers/:id", requireAuthed, async (req, res) => {
+    const customerId = text(req.params.id);
+    if (!customerId) return res.status(400).json({ error: "Hiányzik a kliens azonosítója." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+
+      const current = await client.query(
+        `SELECT *
+         FROM aif_shop_customers
+         WHERE id::text=$1 AND is_active=true
+         FOR UPDATE`,
+        [customerId]
+      );
+      if (!current.rowCount) {
+        const error = new Error("A kliens nem található vagy már törölve lett.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const body = req.body || {};
+      const fullName = text(body.fullName || body.full_name || body.name);
+      const phone = text(body.phone);
+      const email = emptyToNull(body.email);
+      const address = emptyToNull(body.address || body.addressLine || body.address_line);
+      const notes = emptyToNull(body.note || body.notes);
+      if (!fullName) {
+        const error = new Error("A kliens neve kötelező.");
+        error.statusCode = 400;
+        throw error;
+      }
+      if (!phone) {
+        const error = new Error("A kliens telefonszáma kötelező.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const geo = await aifResolveRomaniaCustomerGeo(client, body, { required: true });
+      const phoneConflict = await client.query(
+        `SELECT id, full_name
+         FROM aif_shop_customers
+         WHERE id<>$1
+           AND is_active=true
+           AND lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) =
+               lower(regexp_replace($2,'[^0-9+]','','g'))
+         LIMIT 1`,
+        [current.rows[0].id, phone]
+      );
+      if (phoneConflict.rowCount) {
+        const error = new Error(`Ez a telefonszám már egy másik aktív klienshez tartozik: ${phoneConflict.rows[0].full_name || "ismeretlen kliens"}.`);
+        error.statusCode = 409;
+        error.code = "shop_customer_phone_conflict";
+        throw error;
+      }
+
+      const actor = actorFrom(req);
+      const updated = await client.query(
+        `UPDATE aif_shop_customers
+         SET full_name=$2,
+             phone=$3,
+             email=$4,
+             address=$5,
+             city=$6,
+             country_code=$7,
+             county_code=$8,
+             county_name=$9,
+             locality_code=$10,
+             locality_name=$11,
+             postal_code=$12,
+             notes=$13,
+             updated_by=$14,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [
+          current.rows[0].id,
+          fullName,
+          phone,
+          email,
+          address,
+          geo.localityName,
+          geo.countryCode,
+          geo.countyCode,
+          geo.countyName,
+          geo.localityCode,
+          geo.localityName,
+          geo.postalCode,
+          notes,
+          actor,
+        ]
+      );
+
+      // A klienshez kötött régi bizonylatok fejlécében is a friss név és telefonszám
+      // jelenjen meg. A pénzügyi és készletadatokhoz ez természetesen nem nyúl.
+      await client.query(
+        `UPDATE aif_shop_sales
+         SET customer_name=$2,
+             customer_phone=$3,
+             updated_at=now()
+         WHERE customer_id=$1`,
+        [current.rows[0].id, fullName, phone]
+      );
+
+      const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+      const snapshot = await aifLoadShopCustomerSnapshot(client, current.rows[0].id, currentYear);
+      await client.query("COMMIT");
+      res.json({ ok: true, item: aifShopCustomerResponse(snapshot || updated.rows[0]) });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF shop customer update failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kliens módosítása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.delete("/shop-customers/:id", requireAuthed, async (req, res) => {
+    const customerId = text(req.params.id);
+    if (!customerId) return res.status(400).json({ error: "Hiányzik a kliens azonosítója." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+
+      const result = await client.query(
+        `SELECT
+           c.*,
+           (SELECT count(*)::int FROM aif_shop_sales s WHERE s.customer_id=c.id) AS sales_count,
+           (SELECT count(*)::int FROM aif_shop_customer_payments p WHERE p.customer_id=c.id) AS payments_count,
+           COALESCE((
+             SELECT sum(s.balance_due)
+             FROM aif_shop_sales s
+             WHERE s.customer_id=c.id
+               AND s.status='completed'
+               AND s.balance_due > 0
+           ),0)::numeric AS open_balance
+         FROM aif_shop_customers c
+         WHERE c.id::text=$1 AND c.is_active=true
+         FOR UPDATE`,
+        [customerId]
+      );
+      if (!result.rowCount) {
+        const error = new Error("A kliens nem található vagy már törölve lett.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const customer = result.rows[0];
+      const sales = Number(customer.sales_count || 0);
+      const payments = Number(customer.payments_count || 0);
+      const openBalance = aifNumber(customer.open_balance);
+      if (openBalance > 0.005) {
+        const error = new Error(`A kliens nem törölhető, mert még ${openBalance.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} RON nyitott tartozása van.`);
+        error.statusCode = 409;
+        error.code = "shop_customer_has_open_balance";
+        throw error;
+      }
+
+      const actor = actorFrom(req);
+      let mode = "deleted";
+      if (sales > 0 || payments > 0) {
+        mode = "archived";
+        await client.query(
+          `UPDATE aif_shop_customers
+           SET is_active=false,
+               updated_by=$2,
+               updated_at=now()
+           WHERE id=$1`,
+          [customer.id, actor]
+        );
+      } else {
+        try {
+          await client.query("SAVEPOINT aif_delete_shop_customer");
+          await client.query(`DELETE FROM aif_shop_customers WHERE id=$1`, [customer.id]);
+          await client.query("RELEASE SAVEPOINT aif_delete_shop_customer");
+        } catch (deleteError) {
+          try { await client.query("ROLLBACK TO SAVEPOINT aif_delete_shop_customer"); } catch {}
+          try { await client.query("RELEASE SAVEPOINT aif_delete_shop_customer"); } catch {}
+          if (deleteError?.code !== "23503") throw deleteError;
+          mode = "archived";
+          await client.query(
+            `UPDATE aif_shop_customers
+             SET is_active=false,
+                 updated_by=$2,
+                 updated_at=now()
+             WHERE id=$1`,
+            [customer.id, actor]
+          );
+        }
+      }
+
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        mode,
+        id: String(customer.id),
+        usage: { sales, payments, openBalance },
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF shop customer delete failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kliens törlése nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/shop-customers/:id", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
