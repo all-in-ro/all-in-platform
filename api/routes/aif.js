@@ -103,6 +103,49 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_name_idx ON aif_shop_customers (lower(full_name))`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_phone_idx ON aif_shop_customers (lower(phone)) WHERE phone IS NOT NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS country_code text NOT NULL DEFAULT 'RO'`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS county_code text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS county_name text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS locality_code text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS locality_name text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS postal_code text NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_county_idx ON aif_shop_customers (county_code) WHERE county_code IS NOT NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_locality_idx ON aif_shop_customers (locality_code) WHERE locality_code IS NOT NULL`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_ro_counties (
+          code text PRIMARY KEY,
+          name text NOT NULL,
+          siruta_code text NULL,
+          siruta_jud integer NULL,
+          priority integer NOT NULL DEFAULT 100,
+          source_version text NULL,
+          is_active boolean NOT NULL DEFAULT true,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_ro_counties_siruta_jud_uq
+          ON aif_ro_counties (siruta_jud) WHERE siruta_jud IS NOT NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_ro_counties_active_sort_idx
+          ON aif_ro_counties (is_active, priority, name)`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_ro_localities (
+          siruta_code text PRIMARY KEY,
+          name text NOT NULL,
+          official_name text NULL,
+          county_code text NOT NULL REFERENCES aif_ro_counties(code),
+          parent_siruta_code text NULL,
+          postal_code text NULL,
+          locality_type integer NULL,
+          admin_level integer NULL,
+          urban_rural integer NULL,
+          source_version text NULL,
+          is_active boolean NOT NULL DEFAULT true,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_ro_localities_county_name_idx
+          ON aif_ro_localities (county_code, lower(name)) WHERE is_active=true`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_ro_localities_postal_idx
+          ON aif_ro_localities (postal_code) WHERE postal_code IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_sales (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -15307,7 +15350,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       phone: row.phone || null,
       email: row.email || null,
       address: row.address || null,
-      city: row.city || null,
+      city: row.city || row.locality_name || null,
+      countryCode: row.country_code || "RO",
+      countyCode: row.county_code || null,
+      countyName: row.county_name || null,
+      localityCode: row.locality_code || null,
+      localityName: row.locality_name || row.city || null,
+      postalCode: row.postal_code || null,
+      formattedAddress: [
+        row.locality_name || row.city,
+        row.county_name,
+        row.address,
+        row.postal_code,
+      ].filter(Boolean).join(" • ") || null,
       notes: row.notes || null,
       creditLimit: aifNumber(row.credit_limit),
       isActive: row.is_active !== false,
@@ -15441,6 +15496,131 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return result.rows[0] ? aifShopCustomerPaymentResponse(result.rows[0]) : null;
   }
 
+  function aifCleanCountyCode(value) {
+    return text(value).toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
+  }
+
+  async function aifResolveRomaniaCustomerGeo(client, input = {}, options = {}) {
+    const required = options.required !== false;
+    const countryCode = text(input.countryCode || input.country_code || "RO").toUpperCase() || "RO";
+    if (countryCode !== "RO") {
+      const error = new Error("Jelenleg a klienscímeknél Románia választható.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const countyCode = aifCleanCountyCode(input.countyCode || input.county_code);
+    const localityCode = text(input.localityCode || input.locality_code || input.sirutaCode || input.siruta_code);
+    if (!countyCode || !localityCode) {
+      if (!required) return null;
+      const error = new Error("A megye és a helység kiválasztása kötelező.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const result = await client.query(
+      `SELECT
+         c.code AS county_code,
+         c.name AS county_name,
+         l.siruta_code AS locality_code,
+         l.name AS locality_name,
+         l.postal_code
+       FROM aif_ro_counties c
+       JOIN aif_ro_localities l ON l.county_code=c.code
+       WHERE c.code=$1
+         AND l.siruta_code=$2
+         AND c.is_active=true
+         AND l.is_active=true
+       LIMIT 1`,
+      [countyCode, localityCode]
+    );
+    if (!result.rowCount) {
+      const error = new Error("A kiválasztott megye és helység nem tartozik össze, vagy nincs betöltve a SIRUTA törzsadat.");
+      error.statusCode = 400;
+      error.code = "invalid_customer_locality";
+      throw error;
+    }
+    return {
+      countryCode: "RO",
+      countyCode: result.rows[0].county_code,
+      countyName: result.rows[0].county_name,
+      localityCode: result.rows[0].locality_code,
+      localityName: result.rows[0].locality_name,
+      postalCode: emptyToNull(input.postalCode || input.postal_code) || result.rows[0].postal_code || null,
+    };
+  }
+
+  router.get("/romania/counties", requireAuthed, async (_req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const result = await pool.query(
+        `SELECT code, name, siruta_code, siruta_jud, priority
+         FROM aif_ro_counties
+         WHERE is_active=true
+         ORDER BY priority ASC, name ASC`
+      );
+      res.json({
+        ok: true,
+        items: result.rows.map((row) => ({
+          code: row.code,
+          name: row.name,
+          sirutaCode: row.siruta_code || null,
+          sirutaJud: row.siruta_jud === null ? null : Number(row.siruta_jud),
+          priority: Number(row.priority || 100),
+        })),
+      });
+    } catch (error) {
+      console.error("AIF Romania counties load failed", error);
+      res.status(500).json({ error: error?.message || "A megyék nem tölthetők be." });
+    }
+  });
+
+  router.get("/romania/localities", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const countyCode = aifCleanCountyCode(req.query.county || req.query.countyCode || req.query.county_code);
+      const search = text(req.query.q || req.query.search);
+      const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 1000)));
+      if (!countyCode) return res.status(400).json({ error: "A megye kiválasztása kötelező." });
+      const args = [countyCode];
+      const where = ["l.county_code=$1", "l.is_active=true", "c.is_active=true"];
+      if (search) {
+        args.push(`%${search}%`);
+        where.push(`(l.name ILIKE $2 OR COALESCE(l.postal_code,'') ILIKE $2 OR l.siruta_code ILIKE $2)`);
+      }
+      args.push(limit);
+      const result = await pool.query(
+        `SELECT
+           l.siruta_code, l.name, l.official_name, l.county_code, c.name AS county_name,
+           l.parent_siruta_code, l.postal_code, l.locality_type, l.admin_level, l.urban_rural
+         FROM aif_ro_localities l
+         JOIN aif_ro_counties c ON c.code=l.county_code
+         WHERE ${where.join(" AND ")}
+         ORDER BY lower(l.name) ASC, l.siruta_code ASC
+         LIMIT $${args.length}`,
+        args
+      );
+      res.json({
+        ok: true,
+        items: result.rows.map((row) => ({
+          code: row.siruta_code,
+          name: row.name,
+          officialName: row.official_name || row.name,
+          countyCode: row.county_code,
+          countyName: row.county_name,
+          parentCode: row.parent_siruta_code || null,
+          postalCode: row.postal_code || null,
+          localityType: row.locality_type === null ? null : Number(row.locality_type),
+          adminLevel: row.admin_level === null ? null : Number(row.admin_level),
+          urbanRural: row.urban_rural === null ? null : Number(row.urban_rural),
+        })),
+      });
+    } catch (error) {
+      console.error("AIF Romania localities load failed", error);
+      res.status(500).json({ error: error?.message || "A helységek nem tölthetők be." });
+    }
+  });
+
   router.get("/shop-customers", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
@@ -15456,6 +15636,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(c.email,'') ILIKE $1
           OR COALESCE(c.address,'') ILIKE $1
           OR COALESCE(c.city,'') ILIKE $1
+          OR COALESCE(c.county_name,'') ILIKE $1
+          OR COALESCE(c.locality_name,'') ILIKE $1
+          OR COALESCE(c.postal_code,'') ILIKE $1
         )`);
       }
       args.push(limit);
@@ -15498,8 +15681,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const fullName = text(body.fullName || body.full_name || body.name);
       const phone = text(body.phone);
       const email = emptyToNull(body.email);
-      const address = emptyToNull(body.address);
-      const city = emptyToNull(body.city);
+      const address = emptyToNull(body.address || body.addressLine || body.address_line);
       const notes = emptyToNull(body.note || body.notes);
       if (!fullName) return res.status(400).json({ error: "A kliens neve kötelező." });
       if (!phone) return res.status(400).json({ error: "A kliens telefonszáma kötelező." });
@@ -15507,6 +15689,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        const geo = await aifResolveRomaniaCustomerGeo(client, body, { required: true });
         const existing = await client.query(
           `SELECT id FROM aif_shop_customers
            WHERE lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) = lower(regexp_replace($1,'[^0-9+]','','g'))
@@ -15525,23 +15708,39 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  phone=$3,
                  email=COALESCE($4,email),
                  address=COALESCE($5,address),
-                 city=COALESCE($6,city),
-                 notes=COALESCE($7,notes),
+                 city=$6,
+                 country_code=$7,
+                 county_code=$8,
+                 county_name=$9,
+                 locality_code=$10,
+                 locality_name=$11,
+                 postal_code=COALESCE($12,postal_code),
+                 notes=COALESCE($13,notes),
                  is_active=true,
-                 updated_by=$8,
+                 updated_by=$14,
                  updated_at=now()
              WHERE id=$1
              RETURNING *`,
-            [existing.rows[0].id, fullName, phone, email, address, city, notes, actorFrom(req)]
+            [
+              existing.rows[0].id, fullName, phone, email, address,
+              geo.localityName, geo.countryCode, geo.countyCode, geo.countyName,
+              geo.localityCode, geo.localityName, geo.postalCode, notes, actorFrom(req),
+            ]
           );
           row = updated.rows[0];
         } else {
           const created = await client.query(
             `INSERT INTO aif_shop_customers (
-               full_name, phone, email, address, city, notes, created_by, updated_by
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+               full_name, phone, email, address, city,
+               country_code, county_code, county_name, locality_code, locality_name, postal_code,
+               notes, created_by, updated_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
              RETURNING *`,
-            [fullName, phone, email, address, city, notes, actorFrom(req)]
+            [
+              fullName, phone, email, address, geo.localityName,
+              geo.countryCode, geo.countyCode, geo.countyName, geo.localityCode, geo.localityName,
+              geo.postalCode, notes, actorFrom(req),
+            ]
           );
           row = created.rows[0];
         }
@@ -15555,7 +15754,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
     } catch (error) {
       console.error("AIF shop customer save failed", error);
-      res.status(500).json({ error: error?.message || "A kliens mentése nem sikerült." });
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kliens mentése nem sikerült.",
+        code: error?.code || null,
+      });
     }
   });
 
@@ -16231,8 +16434,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const customerName = text(customerInput.fullName || customerInput.full_name || customerInput.name);
       const customerPhone = text(customerInput.phone);
       const customerEmail = emptyToNull(customerInput.email);
-      const customerAddress = emptyToNull(customerInput.address);
+      const customerAddress = emptyToNull(customerInput.address || customerInput.addressLine || customerInput.address_line);
       const customerNote = emptyToNull(customerInput.note);
+      const customerGeo = requestedCustomerId
+        ? null
+        : (customerName || customerPhone)
+          ? await aifResolveRomaniaCustomerGeo(client, customerInput, { required: true })
+          : null;
 
       if (paymentMethod === "credit" && (!customerName || !customerPhone)) {
         const error = new Error("Utólagos fizetésnél a kliens neve és telefonszáma kötelező.");
@@ -16267,13 +16475,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                SET full_name=COALESCE(NULLIF($2,''),full_name),
                    email=COALESCE($3,email),
                    address=COALESCE($4,address),
-                   notes=COALESCE($5,notes),
+                   city=$5,
+                   country_code=$6,
+                   county_code=$7,
+                   county_name=$8,
+                   locality_code=$9,
+                   locality_name=$10,
+                   postal_code=COALESCE($11,postal_code),
+                   notes=COALESCE($12,notes),
                    is_active=true,
-                   updated_by=$6,
+                   updated_by=$13,
                    updated_at=now()
                WHERE id=$1
                RETURNING *`,
-              [existingCustomer.rows[0].id, customerName, customerEmail, customerAddress, customerNote, actorFrom(req)]
+              [
+                existingCustomer.rows[0].id, customerName, customerEmail, customerAddress,
+                customerGeo.localityName, customerGeo.countryCode, customerGeo.countyCode,
+                customerGeo.countyName, customerGeo.localityCode, customerGeo.localityName,
+                customerGeo.postalCode, customerNote, actorFrom(req),
+              ]
             );
             customerRow = updatedCustomer.rows[0];
           }
@@ -16281,10 +16501,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         if (!customerRow && customerName) {
           const createdCustomer = await client.query(
             `INSERT INTO aif_shop_customers (
-               full_name, phone, email, address, notes, created_by, updated_by
-             ) VALUES ($1,$2,$3,$4,$5,$6,$6)
+               full_name, phone, email, address, city,
+               country_code, county_code, county_name, locality_code, locality_name, postal_code,
+               notes, created_by, updated_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
              RETURNING *`,
-            [customerName, customerPhone || null, customerEmail, customerAddress, customerNote, actorFrom(req)]
+            [
+              customerName, customerPhone || null, customerEmail, customerAddress,
+              customerGeo.localityName, customerGeo.countryCode, customerGeo.countyCode,
+              customerGeo.countyName, customerGeo.localityCode, customerGeo.localityName,
+              customerGeo.postalCode, customerNote, actorFrom(req),
+            ]
           );
           customerRow = createdCustomer.rows[0];
         }
