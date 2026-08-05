@@ -58,6 +58,7 @@ const label = "grid min-w-0 gap-1.5 text-xs text-white/65";
 const API_BASE = "/api/aif";
 const stockMovesChangedStorageKey = "allinfashion:stockMoves:changed:v1";
 const stockMovesChangedEventName = "aif:stock-moves-changed";
+const UIT_WARNING_THRESHOLD_RON = 10000;
 
 function notifyStockMovesChanged() {
   if (typeof window === "undefined") return;
@@ -93,6 +94,10 @@ type InventoryItem = {
   shopify_title?: string | null;
   brand_name?: string | null;
   category_name_ro?: string | null;
+  subcategory_name_ro?: string | null;
+  subcategory_name_hu?: string | null;
+  subcategory_code?: string | null;
+  product_type?: string | null;
   color_name?: string | null;
   color_code?: string | null;
   size?: string | null;
@@ -175,6 +180,9 @@ type DocumentLine = {
   product_title?: string | null;
   brand_name?: string | null;
   category_name?: string | null;
+  subcategory_name?: string | null;
+  subcategory_name_ro?: string | null;
+  product_type?: string | null;
   product_code?: string | null;
   barcode?: string | null;
   color_name?: string | null;
@@ -1017,6 +1025,36 @@ function DocumentFlowSection({
   );
 }
 
+function inventoryVariantMap(items: InventoryItem[] = []) {
+  return new Map((items || []).map((item) => [String(item.variant_id || ""), item] as const).filter(([id]) => Boolean(id)));
+}
+
+function documentLineSubcategory(line: DocumentLine, variants: Map<string, InventoryItem>) {
+  const raw = line.raw && typeof line.raw === "object" ? line.raw as Record<string, unknown> : {};
+  const inventoryItem = line.variant_id ? variants.get(String(line.variant_id)) : null;
+  return firstText(
+    line.subcategory_name,
+    line.subcategory_name_ro,
+    line.product_type,
+    raw.subcategoryName,
+    raw.subcategory_name,
+    raw.subcategoryNameRo,
+    raw.subcategory_name_ro,
+    raw.subCategoryName,
+    raw.sub_category_name,
+    raw.productType,
+    raw.product_type,
+    inventoryItem?.subcategory_name_ro,
+    inventoryItem?.subcategory_name_hu,
+    inventoryItem?.product_type,
+    inventoryItem?.subcategory_code,
+  );
+}
+
+function internalTransferNeedsUit(type: DocumentType, totalValue: unknown) {
+  return type === "internal_transfer" && n(totalValue) > UIT_WARNING_THRESHOLD_RON;
+}
+
 function documentPrintMeta(type: DocumentType, doc: DocumentListItem) {
   const source = doc.from_location_summary || "-";
   if (type === "internal_transfer") {
@@ -1063,7 +1101,7 @@ function documentPrintMeta(type: DocumentType, doc: DocumentListItem) {
   };
 }
 
-function makePrintHtml(detail: DocumentDetail) {
+function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] = []) {
   const doc = detail.document;
   const lines = detail.lines || [];
   const type = documentTypeOf(doc);
@@ -1075,23 +1113,24 @@ function makePrintHtml(detail: DocumentDetail) {
     ? `<div class="legacy">ARHIVĂ TEHNICĂ · document reconstruit din jurnalul de stoc</div>`
     : "";
   const flow = documentFlowGroups(detail);
+  const variants = inventoryVariantMap(inventoryItems);
+  const uitRequired = internalTransferNeedsUit(type, totalValue);
 
   const renderRows = (rows: IndexedDocumentLine[]) => rows.map(({ line, index }) => {
     const image = line.image_url
       ? `<img class="img" src="${escapeHtml(line.image_url)}" alt="" />`
       : `<div class="img empty">Fără foto</div>`;
-    const variant = [line.brand_name, line.category_name, line.color_name, line.size]
+    const subcategory = documentLineSubcategory(line, variants);
+    const variant = [line.brand_name, subcategory, line.color_name, line.size]
       .map((value) => String(value || "").trim())
       .filter(Boolean)
       .join(" • ");
-    const routeFrom = lineLocationName(line, "from");
-    const routeTo = lineLocationName(line, "to");
     return `<tr>
       <td class="center">${index + 1}</td>
       <td><div class="product">${image}<div><strong>${escapeHtml(line.product_title || "Produs")}</strong>${variant ? `<small>${escapeHtml(variant)}</small>` : ""}</div></div></td>
       <td class="code">${escapeHtml(line.product_code || "-")}</td>
       <td class="code">${escapeHtml(line.barcode || "-")}</td>
-      <td class="routeCell"><span class="routeOut">↗ IEȘIRE: ${escapeHtml(routeFrom)}</span><span class="routeIn">↙ INTRARE: ${escapeHtml(routeTo)}</span></td>
+      <td class="checkCell"><span class="checkBox" aria-hidden="true"></span></td>
       <td class="center">buc.</td>
       <td class="qty">${escapeHtml(quantity(line.qty))}</td>
       <td class="money">${escapeHtml(moneyRon(lineUnitPrice(line), false))}</td>
@@ -1113,7 +1152,7 @@ function makePrintHtml(detail: DocumentDetail) {
         <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></div>
         <b>${escapeHtml(quantity(sectionQty))} buc. · ${escapeHtml(moneyRon(sectionValue))}</b>
       </div>
-      <table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>Mișcare</th><th>U.M.</th><th>Cant.</th><th>P.U. RON</th><th>Valoare RON</th></tr></thead><tbody>${renderRows(rows)}</tbody><tfoot><tr><td colspan="6" class="totalLabel">SUBTOTAL</td><td class="qty">${escapeHtml(quantity(sectionQty))}</td><td></td><td class="money totalValue">${escapeHtml(moneyRon(sectionValue, false))}</td></tr></tfoot></table>
+      <table><thead><tr><th>Nr. crt.</th><th>Denumirea produsului / varianta</th><th>Cod produs</th><th>Cod de bare</th><th>Verificat</th><th>U.M.</th><th>Cant.</th><th>P.U. RON</th><th>Valoare RON</th></tr></thead><tbody>${renderRows(rows)}</tbody><tfoot><tr><td colspan="6" class="totalLabel">SUBTOTAL</td><td class="qty">${escapeHtml(quantity(sectionQty))}</td><td></td><td class="money totalValue">${escapeHtml(moneyRon(sectionValue, false))}</td></tr></tfoot></table>
     </section>`;
   };
 
@@ -1155,10 +1194,11 @@ function makePrintHtml(detail: DocumentDetail) {
   .route{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3mm;margin-bottom:3.5mm}.routeCard{border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm 3mm;background:#f7faf9}.routeCard span{display:block;color:#6a7683;font-size:8px;letter-spacing:.08em;text-transform:uppercase}.routeCard strong{display:block;margin-top:1mm;font-size:11px}
   .routeOutgoing{border-color:#ef4444;background:#fff1f2}.routeOutgoing span,.routeOutgoing strong{color:#991b1b}.routeIncoming{border-color:#0f9f8f;background:#ecfdf9}.routeIncoming span,.routeIncoming strong{color:#0f5f59}
   .declaration{margin-bottom:3.5mm;border-left:3px solid #255f54;background:#f5f8f7;padding:2.5mm 3mm;color:#354353;line-height:1.45}.note{margin-bottom:3.5mm;border:1px solid #d3dcda;border-radius:2.5mm;padding:2.5mm 3mm}
+  .uitWarning{margin-bottom:3.5mm;border:2px solid #f59e0b;border-radius:2.5mm;background:#fff7ed;padding:2.8mm 3mm;color:#92400e;font-weight:700;line-height:1.45}.uitCode{display:inline-block;min-width:52mm;margin-left:2mm;border-bottom:1px solid #92400e;color:#92400e}
   .flowSection{margin-top:3.5mm;break-inside:auto;border:1px solid #d8e1e5;border-radius:2.5mm;overflow:hidden}.flowHeader{display:flex;align-items:center;justify-content:space-between;gap:5mm;padding:2.4mm 3mm;background:#f8fafc;border-top:3px solid #64748b;border-bottom:1px solid #d8e1e5;color:#172033}.flowHeader div{display:grid;gap:.7mm}.flowHeader strong{font-size:10px;letter-spacing:.09em}.flowHeader span{font-size:7.5px;color:#64748b}.flowHeader b{font-size:9px;white-space:nowrap}.flowSection.incoming .flowHeader{background:#ecfdf9;border-top-color:#14b8a6;color:#0f5f59}.flowSection.outgoing .flowHeader{background:#fff1f2;border-top-color:#ef4444;color:#991b1b}.flowSection.neutral .flowHeader{background:#f1f5f9;border-top-color:#64748b;color:#334155}
   table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}th{background:#26384b;color:#fff;border:1px solid #26384b;padding:2.2mm 1.4mm;font-size:7.7px;line-height:1.2;text-transform:uppercase;text-align:left}td{border:1px solid #d4dcdf;padding:1.7mm 1.4mm;font-size:8.5px;line-height:1.25;vertical-align:middle;overflow-wrap:anywhere}tbody tr:nth-child(even) td{background:#f8fafb}
-  th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:43mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:34mm}th:nth-child(6),td:nth-child(6){width:9mm}th:nth-child(7),td:nth-child(7){width:10mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
-  .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.routeCell{font-size:7.3px;line-height:1.4;color:#354353}.routeCell span{display:block}.routeOut{color:#dc2626;font-weight:700}.routeIn{color:#0f766e;font-weight:700;margin-top:.5mm}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}.product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}.img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
+  th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:58mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:19mm}th:nth-child(6),td:nth-child(6){width:9mm}th:nth-child(7),td:nth-child(7){width:10mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
+  .center{text-align:center}.qty{text-align:center;font-size:11px;font-weight:700;color:#255f54}.code{font-family:"Courier New",monospace;font-size:8px}.checkCell{text-align:center}.checkBox{display:inline-block;width:6.2mm;height:6.2mm;border:1.4px solid #334155;border-radius:1.2mm;background:#fff;vertical-align:middle}.money{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.value{font-weight:700;color:#183d36}.product{display:flex;align-items:center;gap:2mm;min-width:0}.product strong{display:block;font-size:9px}.product small{display:block;margin-top:.7mm;color:#667382;font-size:7.5px}.img{width:9mm;height:11mm;flex:0 0 auto;object-fit:contain;border:1px solid #d4dcdf;border-radius:1.5mm;background:#fff}.img.empty{display:flex;align-items:center;justify-content:center;padding:1mm;color:#9aa4ae;font-size:5.5px;text-align:center}
   tfoot td{background:#eef4f2;border-color:#b9c7c4;font-weight:700}tfoot .totalLabel{text-align:right;color:#183d36;letter-spacing:.08em}tfoot .totalValue{background:#255f54;color:#fff;font-size:11px}.total{display:grid;grid-template-columns:minmax(0,1fr) auto;margin-top:3mm;border:1px solid #b9c7c4;border-radius:2.5mm;overflow:hidden}.total span{padding:2.4mm 3mm;color:#536171;background:#f5f8f7}.total strong{min-width:44mm;padding:2.4mm 3mm;text-align:center;color:#fff;background:#255f54;font-size:13px}.valuationNote{margin-top:1.5mm;color:#8a5b00;font-size:7.5px;text-align:right}
   .signatures{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4mm;margin-top:13mm;break-inside:avoid}.signature{min-height:27mm;border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm}.signatureTitle{color:#255f54;font-size:8px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.signatureLine{margin-top:9mm;border-top:1px solid #667382;padding-top:1.3mm;color:#667382;font-size:7.2px;text-align:center}.signatureDate{margin-top:2.5mm;color:#7b8793;font-size:7.2px;text-align:center}.footer{display:flex;justify-content:space-between;gap:8mm;margin-top:5mm;padding-top:2.5mm;border-top:1px solid #d7dfdd;color:#7b8793;font-size:7.2px}
 </style>
@@ -1171,6 +1211,7 @@ function makePrintHtml(detail: DocumentDetail) {
 <div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(doc.title || documentMeta(type).label)}</h1><div class="subtitle">${escapeHtml(doc.subtitle || meta.operation)}</div>${legacyMark}</div>
 <div class="route"><div class="${routeLeftClass}"><span>${escapeHtml(type === "internal_transfer" ? "Ieșire / gestiune sursă" : meta.leftLabel)}</span><strong>${escapeHtml(meta.leftValue)}</strong></div><div class="${routeRightClass}"><span>${escapeHtml(type === "internal_transfer" ? "Intrare / gestiune destinație" : meta.rightLabel)}</span><strong>${escapeHtml(meta.rightValue)}</strong></div></div>
 <div class="declaration">${escapeHtml(meta.declaration)}</div>
+${uitRequired ? `<div class="uitWarning">ATENȚIE: valoarea transferului depășește 10.000 RON. Pentru expediere este necesar cod UIT. Cod UIT:<span class="uitCode">&nbsp;</span></div>` : ""}
 ${reason && type !== "internal_transfer" ? `<div class="note"><strong>Motiv:</strong> ${escapeHtml(reason)}</div>` : ""}
 ${doc.note ? `<div class="note"><strong>Observații interne relevante documentului:</strong> ${escapeHtml(doc.note)}</div>` : ""}
 ${sectionsHtml}
@@ -1181,7 +1222,7 @@ ${missingPrices ? `<div class="valuationNote">Atenție: ${missingPrices} poziți
 </body></html>`;
 }
 
-function printDetail(detail: DocumentDetail) {
+function printDetail(detail: DocumentDetail, inventoryItems: InventoryItem[] = []) {
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
   iframe.style.position = "fixed";
@@ -1209,7 +1250,7 @@ function printDetail(detail: DocumentDetail) {
   };
   win.addEventListener("afterprint", cleanup, { once: true });
   doc.open();
-  doc.write(makePrintHtml(detail));
+  doc.write(makePrintHtml(detail, inventoryItems));
   doc.close();
   win.requestAnimationFrame(() => win.requestAnimationFrame(() => {
     win.focus();
@@ -1525,6 +1566,8 @@ export default function AllInProductMoves() {
           title_ro: line.product_title || "Termék",
           brand_name: line.brand_name || null,
           category_name_ro: line.category_name || null,
+          subcategory_name_ro: line.subcategory_name_ro || line.subcategory_name || null,
+          product_type: line.product_type || null,
           supplier_product_code: line.product_code || null,
           barcode: line.barcode || null,
           display_barcode: line.barcode || null,
@@ -2130,7 +2173,7 @@ export default function AllInProductMoves() {
         <button type="button" className={rowBtnSoft} onClick={() => void openDetailById(item.id)}>{compact ? null : <PackageCheck size={13} />} Részletek</button>
         {(isPreparation || isDraft) ? <button type="button" className={rowPrimaryBtn} onClick={() => void openDraftForEdit(item)}><Edit3 size={13} /> {compact ? "Szerk." : "Szerkesztés"}</button> : null}
         {isPreparation ? <button type="button" className={rowPrimaryBtn} onClick={() => void closePreparationById(item)} title="Előkészítés lezárása"><CheckCircle2 size={13} /> {compact ? "Lezár" : "Lezárás"}</button> : null}
-        {!isPreparation && !isDraft ? <button type="button" className={rowIconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current); }} title="PDF / nyomtatás"><Printer size={14} /></button> : null}
+        {!isPreparation && !isDraft ? <button type="button" className={rowIconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current, inventory); }} title="PDF / nyomtatás"><Printer size={14} /></button> : null}
         {canReopen ? <button type="button" className={rowIconBtn} onClick={() => void reopenAsPreparation(item)} title="Visszaállítás Előkészítésre"><RotateCcw size={14} /></button> : null}
         <button type="button" className={rowDangerIconBtn} onClick={() => setDeleteTarget(item)} title="Végleges törlés"><Trash2 size={14} /></button>
       </div>
@@ -2210,7 +2253,7 @@ export default function AllInProductMoves() {
                       <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${typeMeta.tone}`}><TypeIcon size={12} /> {typeMeta.shortLabel}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/72">{dateTime(item.created_at)}</td>
                       <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
-                      <td className="px-3 py-2 text-center"><span className="inline-flex flex-col rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2 py-1 text-[11px] text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[9px] text-white/58">{moneyRon(item.total_value || 0)}</span></span></td>
+                      <td className="px-3 py-2 text-center"><span className="inline-flex flex-col rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2 py-1 text-[11px] text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[9px] text-white/58">{moneyRon(item.total_value || 0)}</span>{internalTransferNeedsUit(documentTypeOf(item), item.total_value) ? <span className="mt-1 rounded-full border border-amber-200/40 bg-amber-500/18 px-1.5 py-0.5 text-[8px] text-amber-50">UIT szükséges</span> : null}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/65">{item.actor || "-"}</td>
                       <td className="px-3 py-2">{documentActionButtons(item)}</td>
                     </tr>
@@ -2230,7 +2273,7 @@ export default function AllInProductMoves() {
               return (
                 <article key={item.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
                   <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateTime(item.created_at)}</p></div><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span></div>
-                  <div className="mt-3 flex items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span>{internalTransferNeedsUit(documentTypeOf(item), item.total_value) ? <span className="rounded-full border border-amber-200/40 bg-amber-500/16 px-2 py-1 text-[10px] text-amber-50">UIT szükséges</span> : null}</div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
                   <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-white/50">{item.actor || "-"}</span>{documentActionButtons(item, true)}</div>
                 </article>
@@ -2290,7 +2333,7 @@ export default function AllInProductMoves() {
             <div className="flex max-h-[95vh] w-full max-w-[1420px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-[#414b5b] shadow-[0_34px_100px_rgba(2,6,23,.52)]">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#233044] via-[#2d3a4d] to-[#31525a] px-4 py-3.5">
                 <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-1 truncate text-xs text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div></div>
-                <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+                <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3.5">
                 <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-5">
@@ -2315,6 +2358,7 @@ export default function AllInProductMoves() {
                     <p className="mt-2 text-[18px] text-white">{moneyRon(detailValue)}</p>{detailMissingPrices ? <p className="mt-0.5 text-[9px] text-amber-100/65">{detailMissingPrices} sor ár nélkül</p> : <p className="mt-0.5 text-[9px] text-white/35">RON összérték</p>}
                   </div>
                 </div>
+                {internalTransferNeedsUit(documentTypeOf(doc), detailValue) ? <div className="mt-3 flex items-start gap-3 rounded-2xl border-2 border-amber-300/55 bg-amber-500/14 px-4 py-3 text-amber-50 shadow-[0_10px_28px_rgba(245,158,11,.12)]"><AlertTriangle size={20} className="mt-0.5 shrink-0 text-amber-300" /><div><p className="text-sm text-amber-50">UIT kód szükséges</p><p className="mt-1 text-xs leading-relaxed text-amber-100/75">Az átadás értéke meghaladja a 10.000 RON-t ({moneyRon(detailValue)}). A szállítás indítása előtt rögzítsétek az UIT kódot.</p></div></div> : null}
                 {(doc.reason_code || doc.reason_text || doc.external_reference || doc.note) ? <div className="mt-3 grid gap-2 md:grid-cols-3"><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Ok</p><p className="mt-1 text-xs text-white/78">{reasonLabel(documentTypeOf(doc), doc.reason_code, doc.reason_text)}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Hivatkozás</p><p className="mt-1 text-xs text-white/78">{doc.external_reference || "-"}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Megjegyzés</p><p className="mt-1 text-xs text-white/78">{doc.note || "-"}</p></div></div> : null}
 
                 <div className="mt-3 space-y-3">
@@ -2389,6 +2433,8 @@ export default function AllInProductMoves() {
                 <label className={label}>Hivatkozás / számlaszám<input className={input} value={externalReference} onChange={(event) => setExternalReference(event.target.value)} placeholder="Opcionális" /></label>
                 <label className={`${label} md:col-span-2`}>Megjegyzés a bizonylathoz<input className={input} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Csak a dokumentumhoz tartozó releváns megjegyzés" /></label>
               </div>
+
+              {internalTransferNeedsUit(draftType, draftTotalValue) ? <div className="mt-3 flex items-start gap-3 rounded-2xl border-2 border-amber-300/55 bg-amber-500/14 px-4 py-3 text-amber-50 shadow-[0_10px_28px_rgba(245,158,11,.12)]"><AlertTriangle size={20} className="mt-0.5 shrink-0 text-amber-300" /><div><p className="text-sm text-amber-50">Figyelem: UIT kód szükséges</p><p className="mt-1 text-xs leading-relaxed text-amber-100/75">Az átadás becsült értéke meghaladja a 10.000 RON-t ({moneyRon(draftTotalValue)}). A szállítás előtt az UIT kódot kötelező rögzíteni.</p></div></div> : null}
 
               <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(360px,.85fr)_minmax(0,1.6fr)]">
                 <div className="rounded-2xl border border-white/12 bg-[#404a5b] p-3">
