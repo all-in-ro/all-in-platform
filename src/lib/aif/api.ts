@@ -2630,6 +2630,8 @@ export type AifAdminShopRecentSale = {
   balanceDue: number;
   itemCount: number;
   lineCount: number;
+  firstProductTitle?: string | null;
+  firstImageUrl?: string | null;
 };
 
 export type AifAdminShopOverviewResponse = {
