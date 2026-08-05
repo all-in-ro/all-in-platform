@@ -271,6 +271,52 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
       CREATE INDEX IF NOT EXISTS allin_vacation_requests_registered_idx
         ON allin_vacation_requests (registered_at DESC);
+
+      ALTER TABLE allin_time_events
+        ADD COLUMN IF NOT EXISTS source_request_id uuid NULL;
+
+      CREATE INDEX IF NOT EXISTS allin_time_events_source_request_idx
+        ON allin_time_events (source_request_id)
+        WHERE source_request_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS allin_time_off_requests (
+        id uuid PRIMARY KEY,
+        employee_name text NOT NULL,
+        shop_id text NULL,
+        kind text NOT NULL,
+        day_from date NOT NULL,
+        day_to date NOT NULL,
+        hours_off integer NULL,
+        note text NULL,
+        status text NOT NULL DEFAULT 'pending',
+        requested_at timestamptz NOT NULL DEFAULT now(),
+        requested_by text NULL,
+        decided_at timestamptz NULL,
+        decided_by text NULL,
+        decision_note text NULL,
+        employee_seen_at timestamptz NULL,
+        created_event_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CHECK (kind IN ('vacation','short')),
+        CHECK (status IN ('pending','approved','rejected','cancelled')),
+        CHECK (day_to >= day_from),
+        CHECK (
+          (kind='vacation' AND hours_off IS NULL)
+          OR (kind='short' AND hours_off BETWEEN 1 AND 12 AND day_from=day_to)
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS allin_time_off_requests_status_idx
+        ON allin_time_off_requests (status, requested_at DESC);
+
+      CREATE INDEX IF NOT EXISTS allin_time_off_requests_employee_idx
+        ON allin_time_off_requests (lower(employee_name), requested_at DESC);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS allin_time_off_requests_pending_uq
+        ON allin_time_off_requests (
+          lower(employee_name), kind, day_from, day_to, COALESCE(hours_off,0)
+        )
+        WHERE status='pending';
     `);
     const settings = await loadVacationSettings();
     await cleanupDisabledVacationRows(settings.workingDays);
@@ -278,6 +324,88 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
   }
 
   const norm = (v) => String(v ?? "").trim();
+
+  function sessionEmployeeName(req) {
+    const session = req.session || {};
+    const sessionUser = session.user && typeof session.user === "object" ? session.user : {};
+    const candidates = [
+      session.actor,
+      session.employeeName,
+      session.employee_name,
+      session.name,
+      sessionUser.name,
+      sessionUser.fullName,
+      sessionUser.full_name,
+    ];
+    for (const candidate of candidates) {
+      const value = norm(candidate);
+      if (value && !["admin", "administrator", "system"].includes(value.toLowerCase())) return value;
+    }
+    return "";
+  }
+
+  function requireVacationEmployee(req, res, next) {
+    const employeeName = sessionEmployeeName(req);
+    if (!employeeName) {
+      return res.status(401).json({ error: "A dolgozói munkamenet nem azonosítható. Jelentkezz be újra." });
+    }
+    req.vacationEmployeeName = employeeName;
+    next();
+  }
+
+  function requestRow(row = {}) {
+    return {
+      id: String(row.id || ""),
+      employeeName: row.employeeName || row.employee_name || "",
+      shopId: row.shopId || row.shop_id || null,
+      kind: row.kind,
+      dayFrom: row.dayFrom || row.day_from,
+      dayTo: row.dayTo || row.day_to,
+      hoursOff: row.hoursOff ?? row.hours_off ?? null,
+      note: row.note || null,
+      status: row.status,
+      requestedAt: row.requestedAt || row.requested_at || null,
+      requestedBy: row.requestedBy || row.requested_by || null,
+      decidedAt: row.decidedAt || row.decided_at || null,
+      decidedBy: row.decidedBy || row.decided_by || null,
+      decisionNote: row.decisionNote || row.decision_note || null,
+      employeeSeenAt: row.employeeSeenAt || row.employee_seen_at || null,
+    };
+  }
+
+  function validateTimeOffRequestBody(body = {}) {
+    const kind = norm(body.kind);
+    const dayFrom = norm(body.dayFrom || body.day || body.day_from);
+    const dayTo = norm(body.dayTo || body.day_to || dayFrom);
+    const note = body.note != null ? String(body.note).trim() || null : null;
+    if (!["vacation", "short"].includes(kind)) {
+      return { error: "A típus csak szabadság vagy órás elkérés lehet." };
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dayTo)) {
+      return { error: "A dátum formátuma hibás." };
+    }
+    const start = new Date(`${dayFrom}T00:00:00Z`);
+    const end = new Date(`${dayTo}T00:00:00Z`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+      return { error: "A záró dátum nem lehet a kezdő dátum előtt." };
+    }
+    const calendarDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+    if (calendarDays > 62) return { error: "Egy kérés legfeljebb 62 naptári nap lehet." };
+    let hoursOff = null;
+    if (kind === "short") {
+      const parsed = Number(body.hoursOff ?? body.hours_off ?? 4);
+      hoursOff = Number.isFinite(parsed) ? Math.trunc(parsed) : 4;
+      if (hoursOff < 1 || hoursOff > 12) return { error: "Az elkérés 1 és 12 óra között lehet." };
+      if (dayFrom !== dayTo) return { error: "Órás elkérés csak egyetlen napra adható be." };
+    }
+    return { kind, dayFrom, dayTo, hoursOff, note, calendarDays };
+  }
+
+  function dateOnly(value) {
+    if (!value) return "";
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+    return String(value).slice(0, 10);
+  }
 
   function monthRange(monthStr) {
     // monthStr: YYYY-MM
@@ -346,6 +474,331 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     } catch (e) {
       console.error("vacations settings save failed", e);
       res.status(500).json({ error: "Failed to save vacation settings" });
+    }
+  });
+
+  // GET /api/admin/vacations/requests/pending-count
+  router.get("/requests/pending-count", requireAdminOrSecret, async (_req, res) => {
+    try {
+      await ensureTables();
+      const result = await pool.query(
+        `SELECT count(*)::int AS count
+         FROM allin_time_off_requests
+         WHERE status='pending'`
+      );
+      res.json({ ok: true, count: Number(result.rows[0]?.count || 0) });
+    } catch (error) {
+      console.error("vacation pending count failed", error);
+      res.status(500).json({ error: "A függő szabadságkérelmek száma nem tölthető be." });
+    }
+  });
+
+  // GET /api/admin/vacations/requests?status=pending|approved|rejected|cancelled|all
+  router.get("/requests", requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureTables();
+      const statusRaw = norm(req.query.status || "pending").toLowerCase();
+      const status = ["pending", "approved", "rejected", "cancelled"].includes(statusRaw) ? statusRaw : null;
+      const employee = norm(req.query.employee);
+      const args = [];
+      const where = [];
+      if (status) {
+        args.push(status);
+        where.push(`status=$${args.length}`);
+      }
+      if (employee) {
+        args.push(employee);
+        where.push(`lower(employee_name)=lower($${args.length})`);
+      }
+      const result = await pool.query(
+        `SELECT id, employee_name AS "employeeName", shop_id AS "shopId", kind,
+                day_from::text AS "dayFrom", day_to::text AS "dayTo",
+                hours_off AS "hoursOff", note, status,
+                requested_at AS "requestedAt", requested_by AS "requestedBy",
+                decided_at AS "decidedAt", decided_by AS "decidedBy",
+                decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
+         FROM allin_time_off_requests
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+         ORDER BY CASE WHEN status='pending' THEN 0 ELSE 1 END, requested_at DESC
+         LIMIT 1000`,
+        args
+      );
+      res.json({ ok: true, items: result.rows.map(requestRow), count: result.rowCount });
+    } catch (error) {
+      console.error("vacation requests list failed", error);
+      res.status(500).json({ error: "A szabadságkérelmek nem tölthetők be." });
+    }
+  });
+
+  // POST /api/admin/vacations/requests/:id/decision
+  router.post("/requests/:id/decision", requireAdminOrSecret, express.json(), async (req, res) => {
+    const id = norm(req.params.id);
+    const decision = norm(req.body?.decision).toLowerCase();
+    const decisionNote = req.body?.note != null ? String(req.body.note).trim() || null : null;
+    if (!["approved", "rejected"].includes(decision)) {
+      return res.status(400).json({ error: "A döntés approved vagy rejected lehet." });
+    }
+    if (decision === "rejected" && !decisionNote) {
+      return res.status(400).json({ error: "Elutasításnál rövid indoklás szükséges." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await ensureTables();
+      await client.query("BEGIN");
+      const current = await client.query(
+        `SELECT * FROM allin_time_off_requests WHERE id=$1::uuid FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A szabadságkérés nem található." });
+      }
+      const request = current.rows[0];
+      if (request.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Erről a kérésről már született döntés." });
+      }
+
+      const decidedBy = String(req.session?.actor || req.session?.role || "ADMIN");
+      const createdEventIds = [];
+      if (decision === "approved") {
+        if (request.kind === "short") {
+          const eventId = crypto.randomUUID();
+          const inserted = await client.query(
+            `INSERT INTO allin_time_events (
+               id, employee_name, day, kind, hours_off, note, created_by, source_request_id
+             ) VALUES ($1,$2,$3::date,'short',$4,$5,$6,$7)
+             ON CONFLICT (employee_name, day, kind)
+             DO UPDATE SET
+               hours_off=EXCLUDED.hours_off,
+               note=COALESCE(EXCLUDED.note, allin_time_events.note),
+               source_request_id=COALESCE(allin_time_events.source_request_id, EXCLUDED.source_request_id)
+             RETURNING id`,
+            [eventId, request.employee_name, request.day_from, request.hours_off, request.note, decidedBy, request.id]
+          );
+          if (inserted.rows[0]?.id) createdEventIds.push(inserted.rows[0].id);
+        } else {
+          const settingsResult = await client.query(
+            `SELECT working_days AS "workingDays" FROM allin_vacation_settings WHERE id=1`
+          );
+          const workingDays = normalizeWorkingDays(settingsResult.rows[0]?.workingDays);
+          const period = periodInfo(
+            dateOnly(request.day_from),
+            dateOnly(request.day_to),
+            workingDays
+          );
+          if (period.workingDays <= 0) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ error: "A kérés időszakában nincs elszámolható munkanap." });
+          }
+          for (const item of period.dates) {
+            if (!item.working) continue;
+            const eventId = crypto.randomUUID();
+            const inserted = await client.query(
+              `INSERT INTO allin_time_events (
+                 id, employee_name, day, kind, hours_off, note, created_by, source_request_id
+               ) VALUES ($1,$2,$3::date,'vacation',NULL,$4,$5,$6)
+               ON CONFLICT (employee_name, day, kind)
+               DO UPDATE SET
+                 note=COALESCE(EXCLUDED.note, allin_time_events.note),
+                 source_request_id=COALESCE(allin_time_events.source_request_id, EXCLUDED.source_request_id)
+               RETURNING id`,
+              [eventId, request.employee_name, item.day, request.note, decidedBy, request.id]
+            );
+            if (inserted.rows[0]?.id) createdEventIds.push(inserted.rows[0].id);
+          }
+        }
+      }
+
+      const updated = await client.query(
+        `UPDATE allin_time_off_requests
+         SET status=$2,
+             decided_at=now(),
+             decided_by=$3,
+             decision_note=$4,
+             employee_seen_at=NULL,
+             created_event_ids=$5::uuid[],
+             updated_at=now()
+         WHERE id=$1
+         RETURNING id, employee_name AS "employeeName", shop_id AS "shopId", kind,
+                   day_from::text AS "dayFrom", day_to::text AS "dayTo",
+                   hours_off AS "hoursOff", note, status,
+                   requested_at AS "requestedAt", requested_by AS "requestedBy",
+                   decided_at AS "decidedAt", decided_by AS "decidedBy",
+                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"`,
+        [request.id, decision, decidedBy, decisionNote, createdEventIds]
+      );
+      await client.query("COMMIT");
+      res.json({ ok: true, item: requestRow(updated.rows[0]), createdEvents: createdEventIds.length });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("vacation request decision failed", error);
+      res.status(500).json({ error: error?.message || "A szabadságkérés elbírálása nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  // GET /api/admin/vacations/my/requests?year=YYYY
+  router.get("/my/requests", requireVacationEmployee, async (req, res) => {
+    try {
+      await ensureTables();
+      const employeeName = req.vacationEmployeeName;
+      const yearRaw = Number(req.query.year || bucharestYear());
+      const year = Number.isFinite(yearRaw) && yearRaw >= 2000 && yearRaw <= 2100 ? Math.trunc(yearRaw) : bucharestYear();
+      const from = `${year}-01-01`;
+      const to = `${year + 1}-01-01`;
+      const [requestsResult, eventsResult, summaryResult] = await Promise.all([
+        pool.query(
+          `SELECT id, employee_name AS "employeeName", shop_id AS "shopId", kind,
+                  day_from::text AS "dayFrom", day_to::text AS "dayTo",
+                  hours_off AS "hoursOff", note, status,
+                  requested_at AS "requestedAt", requested_by AS "requestedBy",
+                  decided_at AS "decidedAt", decided_by AS "decidedBy",
+                  decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
+           FROM allin_time_off_requests
+           WHERE lower(employee_name)=lower($1)
+             AND day_from < $3::date AND day_to >= $2::date
+           ORDER BY requested_at DESC
+           LIMIT 500`,
+          [employeeName, from, to]
+        ),
+        pool.query(
+          `SELECT id, employee_name AS "employeeName", day::text AS day, kind,
+                  hours_off AS "hoursOff", note, created_at AS "createdAt",
+                  created_by AS "createdBy", source_request_id AS "sourceRequestId"
+           FROM allin_time_events
+           WHERE lower(employee_name)=lower($1)
+             AND day >= $2::date AND day < $3::date
+           ORDER BY day DESC, kind ASC
+           LIMIT 1000`,
+          [employeeName, from, to]
+        ),
+        pool.query(
+          `SELECT
+             count(*) FILTER (WHERE status='pending')::int AS pending,
+             count(*) FILTER (WHERE status='approved')::int AS approved,
+             count(*) FILTER (WHERE status='rejected')::int AS rejected,
+             count(*) FILTER (WHERE status='cancelled')::int AS cancelled,
+             count(*) FILTER (WHERE status IN ('approved','rejected') AND employee_seen_at IS NULL)::int AS unseen
+           FROM allin_time_off_requests
+           WHERE lower(employee_name)=lower($1)`,
+          [employeeName]
+        ),
+      ]);
+      const eventSummary = eventsResult.rows.reduce((acc, item) => {
+        if (item.kind === "vacation") acc.vacationDays += 1;
+        if (item.kind === "short") {
+          acc.shortDays += 1;
+          acc.shortHours += Number(item.hoursOff || 0);
+        }
+        return acc;
+      }, { vacationDays: 0, shortDays: 0, shortHours: 0 });
+      res.json({
+        ok: true,
+        employeeName,
+        year,
+        items: requestsResult.rows.map(requestRow),
+        events: eventsResult.rows,
+        summary: { ...summaryResult.rows[0], ...eventSummary },
+      });
+    } catch (error) {
+      console.error("my vacation requests load failed", error);
+      res.status(500).json({ error: "A saját szabadságadataid nem tölthetők be." });
+    }
+  });
+
+  // POST /api/admin/vacations/my/requests
+  router.post("/my/requests", requireVacationEmployee, express.json(), async (req, res) => {
+    try {
+      await ensureTables();
+      const employeeName = req.vacationEmployeeName;
+      const parsed = validateTimeOffRequestBody(req.body || {});
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      if (parsed.kind === "vacation") {
+        const settings = await loadVacationSettings();
+        const period = periodInfo(parsed.dayFrom, parsed.dayTo, settings.workingDays);
+        if (period.workingDays <= 0) {
+          return res.status(400).json({ error: "A kiválasztott időszakban nincs elszámolható munkanap." });
+        }
+      }
+      const existing = await pool.query(
+        `SELECT id, employee_name AS "employeeName", shop_id AS "shopId", kind,
+                day_from::text AS "dayFrom", day_to::text AS "dayTo",
+                hours_off AS "hoursOff", note, status,
+                requested_at AS "requestedAt", requested_by AS "requestedBy",
+                decided_at AS "decidedAt", decided_by AS "decidedBy",
+                decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
+         FROM allin_time_off_requests
+         WHERE lower(employee_name)=lower($1)
+           AND kind=$2 AND day_from=$3::date AND day_to=$4::date
+           AND COALESCE(hours_off,0)=COALESCE($5,0)
+           AND status='pending'
+         LIMIT 1`,
+        [employeeName, parsed.kind, parsed.dayFrom, parsed.dayTo, parsed.hoursOff]
+      );
+      if (existing.rowCount) {
+        return res.json({ ok: true, duplicate: true, item: requestRow(existing.rows[0]) });
+      }
+      const id = crypto.randomUUID();
+      const shopId = norm(req.session?.shopId || req.session?.shop_id) || null;
+      const inserted = await pool.query(
+        `INSERT INTO allin_time_off_requests (
+           id, employee_name, shop_id, kind, day_from, day_to, hours_off,
+           note, status, requested_by
+         ) VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8,'pending',$2)
+         RETURNING id, employee_name AS "employeeName", shop_id AS "shopId", kind,
+                   day_from::text AS "dayFrom", day_to::text AS "dayTo",
+                   hours_off AS "hoursOff", note, status,
+                   requested_at AS "requestedAt", requested_by AS "requestedBy",
+                   decided_at AS "decidedAt", decided_by AS "decidedBy",
+                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"`,
+        [id, employeeName, shopId, parsed.kind, parsed.dayFrom, parsed.dayTo, parsed.hoursOff, parsed.note]
+      );
+      res.json({ ok: true, item: requestRow(inserted.rows[0]) });
+    } catch (error) {
+      console.error("my vacation request create failed", error);
+      if (error?.code === "23505") return res.status(409).json({ error: "Ugyanerre az időszakra már van függő kérésed." });
+      res.status(500).json({ error: "A szabadságkérés beküldése nem sikerült." });
+    }
+  });
+
+  router.post("/my/requests/:id/cancel", requireVacationEmployee, async (req, res) => {
+    try {
+      await ensureTables();
+      const result = await pool.query(
+        `UPDATE allin_time_off_requests
+         SET status='cancelled', updated_at=now()
+         WHERE id=$1::uuid
+           AND lower(employee_name)=lower($2)
+           AND status='pending'
+         RETURNING id`,
+        [norm(req.params.id), req.vacationEmployeeName]
+      );
+      if (!result.rowCount) return res.status(404).json({ error: "A függő kérés nem található vagy már elbírálták." });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("my vacation request cancel failed", error);
+      res.status(500).json({ error: "A szabadságkérés visszavonása nem sikerült." });
+    }
+  });
+
+  router.post("/my/requests/seen", requireVacationEmployee, async (req, res) => {
+    try {
+      await ensureTables();
+      const result = await pool.query(
+        `UPDATE allin_time_off_requests
+         SET employee_seen_at=now(), updated_at=now()
+         WHERE lower(employee_name)=lower($1)
+           AND status IN ('approved','rejected')
+           AND employee_seen_at IS NULL`,
+        [req.vacationEmployeeName]
+      );
+      res.json({ ok: true, updated: result.rowCount });
+    } catch (error) {
+      console.error("my vacation requests seen failed", error);
+      res.status(500).json({ error: "Az értesítések frissítése nem sikerült." });
     }
   });
 
