@@ -2424,8 +2424,8 @@ const WAREHOUSE_LABEL_COMPANY = "TITAN EURO-COM SRL";
 const WAREHOUSE_LABEL_PREVIEW_SCALE = 0.72;
 // Kis vágási köz maradjon a címkék között. A számítás szükség esetén
 // automatikusan csökkenti a külső margót, hogy az előírt címkeméret megmaradjon.
-const WAREHOUSE_LABEL_GAP_X_MM = 1.5;
-const WAREHOUSE_LABEL_GAP_Y_MM = 1.5;
+const WAREHOUSE_LABEL_GAP_X_MM = 2;
+const WAREHOUSE_LABEL_GAP_Y_MM = 3;
 
 const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
   { id: "40x46", name: "40 × 46 mm, 5 × 6 pe A4", width: "40", height: "46", cols: "5", rows: "6", marginX: "5", marginY: "5" },
@@ -2499,15 +2499,16 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
   width:210mm;
   min-height:297mm;
   overflow:hidden;
-  display:flex;
-  flex-wrap:wrap;
+  display:grid;
+  grid-template-columns:repeat(var(--aif-label-cols), var(--aif-label-w));
+  grid-auto-rows:var(--aif-label-h);
   column-gap:var(--aif-label-gap-x, 0mm);
   row-gap:var(--aif-label-gap-y, 0mm);
   padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
   box-sizing:border-box;
-  align-content:flex-start;
-  align-items:flex-start;
-  justify-content:flex-start;
+  align-content:start;
+  align-items:start;
+  justify-content:start;
   background:#fff;
   color:#111;
   page-break-after:always;
@@ -2517,19 +2518,20 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 }
 .aifWarehouseLabelPrintPage:last-child { page-break-after:auto; break-after:auto; }
 .aifWarehousePrintLabel {
-  flex:0 0 var(--aif-label-w);
   width:var(--aif-label-w);
   height:var(--aif-label-h);
-  border:1px solid #ddd;
-  border-radius:12px;
-  padding:2mm;
+  min-width:0;
+  min-height:0;
+  border:.2mm solid #d9dde3;
+  border-radius:2mm;
+  padding:1.15mm 1.3mm;
   color:#111;
   background:#fff;
   overflow:hidden;
   box-sizing:border-box;
   display:flex;
   flex-direction:column;
-  justify-content:center;
+  justify-content:flex-start;
   font-family:Arial, sans-serif;
   page-break-inside:avoid;
   break-inside:avoid;
@@ -2537,19 +2539,25 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
   -webkit-print-color-adjust:exact;
 }
 .aifWarehousePrintLabel.noBorder { border-color:transparent; }
-.aifWhLabelCompany { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.08em; color:#333; margin-bottom:2px; }
-.aifWhLabelBrand { font-size:10px; text-align:center; text-transform:uppercase; letter-spacing:.05em; color:#222; margin-bottom:2px; }
-.aifWhLabelTitle { font-size:13px; line-height:1.1; text-align:center; color:#111; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:0 0 auto; }
-.aifWhLabelMeta { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; color:#333; font-size:10px; margin-bottom:4px; }
-.aifWhLabelDescription { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; font-size:9.5px; line-height:1.08; color:#222; }
-.aifWhBarcodeSvgWrap { width:100%; overflow:visible; flex:0 0 auto; }
-.aifWhBarcodeSvgWrap svg { display:block; width:100%; height:auto; max-height:none; }
-.aifWhLabelCategory { border-top:1px solid #ddd; padding-top:3px; margin-top:3px; text-align:center; text-transform:uppercase; font-size:10px; color:#111; }
-.aifWhLabelCode { margin-top:3px; font-size:8.5px; color:#444; text-align:center; }
-.aifWhLabelPrice { margin-top:3px; text-align:center; line-height:1; color:#111; white-space:nowrap; }
-.aifWhPriceMajor { font-size:22px; letter-spacing:.08em; }
-.aifWhPriceCents { font-size:12px; vertical-align:top; margin-left:2px; }
-.aifWhPriceUnit { display:inline-block; font-size:8px; margin-left:3px; vertical-align:baseline; }
+.aifWhLabelCompany,
+.aifWhLabelBrand,
+.aifWhLabelTitle,
+.aifWhLabelDescription,
+.aifWhLabelCategory,
+.aifWhLabelCode { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.aifWhLabelCompany { font-size:7.2px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.055em; color:#333; margin-bottom:.35mm; }
+.aifWhLabelBrand { font-size:7px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.04em; color:#222; margin-bottom:.3mm; }
+.aifWhLabelTitle { font-size:9px; line-height:1.05; text-align:center; color:#111; margin-bottom:.4mm; flex:0 0 auto; }
+.aifWhLabelMeta { display:flex; justify-content:center; gap:4px; flex-wrap:nowrap; color:#333; font-size:7.5px; line-height:1; margin-bottom:.4mm; min-height:2mm; }
+.aifWhBarcodeSvgWrap { width:100%; height:12.5mm; overflow:hidden; flex:0 0 12.5mm; display:flex; align-items:center; justify-content:center; }
+.aifWhBarcodeSvgWrap svg { display:block; width:100%; height:100%; max-width:100%; max-height:100%; }
+.aifWhLabelDescription { margin-top:.35mm; text-align:center; font-size:7px; line-height:1; color:#222; }
+.aifWhLabelCategory { margin-top:.35mm; text-align:center; text-transform:uppercase; font-size:7.4px; line-height:1; color:#111; }
+.aifWhLabelCode { margin-top:.35mm; font-size:6.6px; line-height:1; color:#444; text-align:center; }
+.aifWhLabelPrice { margin-top:auto; padding-top:.45mm; text-align:center; line-height:.92; color:#111; white-space:nowrap; }
+.aifWhPriceMajor { font-size:17px; letter-spacing:.055em; }
+.aifWhPriceCents { font-size:9.5px; vertical-align:top; margin-left:1px; }
+.aifWhPriceUnit { display:inline-block; font-size:6.5px; margin-left:2px; vertical-align:baseline; }
 `;
 
 const WAREHOUSE_LABEL_APP_CSS = `
@@ -2574,18 +2582,26 @@ const WAREHOUSE_LABEL_APP_CSS = `
   min-width:var(--aif-label-preview-w);
   height:var(--aif-label-preview-h);
   min-height:var(--aif-label-preview-h);
-  overflow:visible;
+  overflow:hidden;
   box-sizing:border-box;
-  background:#fff;
+  background:#f1f3f6;
   box-shadow:0 14px 34px rgba(0,0,0,.26);
 }
 .aifWhLabelPreviewFrame .aifWarehouseLabelPrintPage {
   position:absolute;
   left:0;
   top:0;
-  overflow:visible;
+  overflow:hidden;
+  background:#f1f3f6;
   transform:scale(var(--aif-label-preview-scale));
   transform-origin:top left;
+}
+.aifWhLabelPreviewFrame .aifWarehousePrintLabel {
+  background:#fff;
+  box-shadow:0 0 0 .15mm rgba(15,23,42,.12);
+}
+.aifWhLabelPreviewFrame .aifWarehousePrintLabel.noBorder {
+  border-color:transparent;
 }
 ${WAREHOUSE_LABEL_SHEET_CSS}
 @media print {
@@ -3082,7 +3098,7 @@ function labelCode128Svg(value: string, height = 62): WarehouseBarcodeRender {
   }
 
   const safeText = code.replace(/[<&>]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m] || m));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 18}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 18}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 13}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5">${safeText}</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height + 12}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Vonalkód ${safeText}"><rect width="${width}" height="${height + 12}" fill="#fff"/><g fill="#000">${bars.join("")}</g><text x="${width / 2}" y="${height + 9}" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.2">${safeText}</text></svg>`;
   return { ok: true, svg, width };
 }
 
@@ -8732,7 +8748,7 @@ export default function AllInWarehouse() {
         productCode: labelProductCodeForItem(mergedLabelItem),
         price,
         stockQty: Math.floor(n(item.total_qty)),
-        render: labelCode128Svg(barcode, 58),
+        render: labelCode128Svg(barcode, 42),
       };
     });
   }, [selectedLabelItems, labelCopies, labelDetailMap]);
