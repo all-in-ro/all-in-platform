@@ -15,7 +15,7 @@ import fs from "fs";
 //   unit: 'day' | 'hour'
 //   amount: integer (positive = we owe employee, negative = we compensated/paid back)
 
-export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
+export default function createVacationsRouter({ pool, requireAuthed, requireAdminOrSecret }) {
   const router = express.Router();
 
   const DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5];
@@ -325,14 +325,22 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
 
   const norm = (v) => String(v ?? "").trim();
 
+  const requireEmployeeSession = typeof requireAuthed === "function"
+    ? requireAuthed
+    : (_req, res) => res.status(500).json({ error: "A dolgozói hitelesítés nincs bekötve a szabadság modulhoz." });
+
   function sessionEmployeeName(req) {
     const session = req.session || {};
+    const requestUser = req.user && typeof req.user === "object" ? req.user : {};
     const sessionUser = session.user && typeof session.user === "object" ? session.user : {};
     const candidates = [
       session.actor,
       session.employeeName,
       session.employee_name,
       session.name,
+      requestUser.name,
+      requestUser.fullName,
+      requestUser.full_name,
       sessionUser.name,
       sessionUser.fullName,
       sessionUser.full_name,
@@ -641,7 +649,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
   });
 
   // GET /api/admin/vacations/my/requests?year=YYYY
-  router.get("/my/requests", requireVacationEmployee, async (req, res) => {
+  router.get("/my/requests", requireEmployeeSession, requireVacationEmployee, async (req, res) => {
     try {
       await ensureTables();
       const employeeName = req.vacationEmployeeName;
@@ -658,7 +666,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
                   decided_at AS "decidedAt", decided_by AS "decidedBy",
                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
            FROM allin_time_off_requests
-           WHERE lower(employee_name)=lower($1)
+           WHERE lower(btrim(employee_name))=lower(btrim($1))
              AND day_from < $3::date AND day_to >= $2::date
            ORDER BY requested_at DESC
            LIMIT 500`,
@@ -669,7 +677,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
                   hours_off AS "hoursOff", note, created_at AS "createdAt",
                   created_by AS "createdBy", source_request_id AS "sourceRequestId"
            FROM allin_time_events
-           WHERE lower(employee_name)=lower($1)
+           WHERE lower(btrim(employee_name))=lower(btrim($1))
              AND day >= $2::date AND day < $3::date
            ORDER BY day DESC, kind ASC
            LIMIT 1000`,
@@ -683,7 +691,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
              count(*) FILTER (WHERE status='cancelled')::int AS cancelled,
              count(*) FILTER (WHERE status IN ('approved','rejected') AND employee_seen_at IS NULL)::int AS unseen
            FROM allin_time_off_requests
-           WHERE lower(employee_name)=lower($1)`,
+           WHERE lower(btrim(employee_name))=lower(btrim($1))`,
           [employeeName]
         ),
       ]);
@@ -710,7 +718,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
   });
 
   // POST /api/admin/vacations/my/requests
-  router.post("/my/requests", requireVacationEmployee, express.json(), async (req, res) => {
+  router.post("/my/requests", requireEmployeeSession, requireVacationEmployee, express.json(), async (req, res) => {
     try {
       await ensureTables();
       const employeeName = req.vacationEmployeeName;
@@ -731,7 +739,7 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
                 decided_at AS "decidedAt", decided_by AS "decidedBy",
                 decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
          FROM allin_time_off_requests
-         WHERE lower(employee_name)=lower($1)
+         WHERE lower(btrim(employee_name))=lower(btrim($1))
            AND kind=$2 AND day_from=$3::date AND day_to=$4::date
            AND COALESCE(hours_off,0)=COALESCE($5,0)
            AND status='pending'
@@ -764,14 +772,14 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     }
   });
 
-  router.post("/my/requests/:id/cancel", requireVacationEmployee, async (req, res) => {
+  router.post("/my/requests/:id/cancel", requireEmployeeSession, requireVacationEmployee, async (req, res) => {
     try {
       await ensureTables();
       const result = await pool.query(
         `UPDATE allin_time_off_requests
          SET status='cancelled', updated_at=now()
          WHERE id=$1::uuid
-           AND lower(employee_name)=lower($2)
+           AND lower(btrim(employee_name))=lower(btrim($2))
            AND status='pending'
          RETURNING id`,
         [norm(req.params.id), req.vacationEmployeeName]
@@ -784,13 +792,13 @@ export default function createVacationsRouter({ pool, requireAdminOrSecret }) {
     }
   });
 
-  router.post("/my/requests/seen", requireVacationEmployee, async (req, res) => {
+  router.post("/my/requests/seen", requireEmployeeSession, requireVacationEmployee, async (req, res) => {
     try {
       await ensureTables();
       const result = await pool.query(
         `UPDATE allin_time_off_requests
          SET employee_seen_at=now(), updated_at=now()
-         WHERE lower(employee_name)=lower($1)
+         WHERE lower(btrim(employee_name))=lower(btrim($1))
            AND status IN ('approved','rejected')
            AND employee_seen_at IS NULL`,
         [req.vacationEmployeeName]
