@@ -1066,7 +1066,7 @@ function documentUitCode(item?: Partial<DocumentListItem> | null) {
 }
 
 function internalTransferNeedsUit(type: DocumentType, totalValue: unknown) {
-  return type === "internal_transfer" && n(totalValue) > UIT_WARNING_THRESHOLD_RON;
+  return type === "internal_transfer" && n(totalValue) >= UIT_WARNING_THRESHOLD_RON;
 }
 
 function internalTransferMissingUit(item?: Partial<DocumentListItem> | null) {
@@ -2244,7 +2244,7 @@ export default function AllInProductMoves() {
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">AllInFashion</p>
                 <h1 className="mt-0.5 text-xl leading-tight">Készletbizonylatok</h1>
-                <p className="mt-0.5 text-[11px] text-white/48">Aviz, retur, sérült termék és készletkorrekció egy helyen</p>
+                <p className="mt-0.5 text-[11px] text-white/48">Aviz, retur, sérült termék és készletkorrekció • minden átadási irány külön PV-ben</p>
               </div>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
