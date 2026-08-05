@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowLeft,
   Banknote,
   Barcode,
   CheckCircle2,
   Clock3,
   CreditCard,
   Landmark,
+  KeyRound,
   Loader2,
   LogOut,
   Minus,
@@ -16,6 +16,7 @@ import {
   Receipt,
   RotateCcw,
   Search,
+  ShieldCheck,
   ShoppingCart,
   Store,
   Trash2,
@@ -126,6 +127,12 @@ function exactCatalogMatch(item: AifShopSaleCatalogItem, query: string) {
     .some((value) => String(value).trim().toLowerCase() === wanted);
 }
 
+const SHOP_ADMIN_UNLOCK_TTL_MS = 10 * 60 * 1000;
+
+function shopAdministrationUnlockKey(shopId: "csikszereda" | "kezdivasarhely") {
+  return `allin:shop-administration-unlock:${shopId}`;
+}
+
 export default function AllInMagazinSale({
   locationCode,
   locationName,
@@ -136,8 +143,10 @@ export default function AllInMagazinSale({
   onLogout,
 }: Props) {
   const storageKey = `allin:shop-sale-cart:${locationCode}`;
+  const shopId = locationCode === "main_warehouse" ? "csikszereda" : "kezdivasarhely";
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<AifShopSaleCatalogItem[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [cart, setCart] = useState<CartLine[]>(() => {
     try {
       const stored = sessionStorage.getItem(storageKey);
@@ -156,6 +165,10 @@ export default function AllInMagazinSale({
   const [customerLoading, setCustomerLoading] = useState(false);
   const [customerSaving, setCustomerSaving] = useState(false);
   const [customerDraft, setCustomerDraft] = useState<CustomerDraft>(EMPTY_CUSTOMER);
+  const [administrationAccessOpen, setAdministrationAccessOpen] = useState(false);
+  const [administrationCode, setAdministrationCode] = useState("");
+  const [administrationBusy, setAdministrationBusy] = useState(false);
+  const [administrationError, setAdministrationError] = useState("");
   const [discountEditor, setDiscountEditor] = useState<DiscountEditor | null>(null);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
@@ -170,12 +183,21 @@ export default function AllInMagazinSale({
   }, [cart, storageKey]);
 
   useEffect(() => {
-    void runSearch("", false);
+    setQuery("");
+    setProducts([]);
+    setHasSearched(false);
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, [locationCode]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (administrationAccessOpen) {
+          setAdministrationAccessOpen(false);
+          setAdministrationCode("");
+          setAdministrationError("");
+          return;
+        }
         if (discountEditor) {
           setDiscountEditor(null);
           return;
@@ -189,25 +211,29 @@ export default function AllInMagazinSale({
           window.setTimeout(() => searchInputRef.current?.focus(), 0);
           return;
         }
-        window.location.hash = homeHash;
+        setQuery("");
+        setProducts([]);
+        setHasSearched(false);
+        setError("");
+        window.setTimeout(() => searchInputRef.current?.focus(), 0);
       }
-      if (event.key === "F2" && !customerModalOpen && !discountEditor) {
+      if (event.key === "F2" && !customerModalOpen && !discountEditor && !administrationAccessOpen) {
         event.preventDefault();
         searchInputRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [customerModalOpen, discountEditor, homeHash, success]);
+  }, [administrationAccessOpen, customerModalOpen, discountEditor, homeHash, success]);
 
   useEffect(() => {
-    if (!customerModalOpen && !discountEditor) return;
+    if (!customerModalOpen && !discountEditor && !administrationAccessOpen) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [customerModalOpen, discountEditor]);
+  }, [administrationAccessOpen, customerModalOpen, discountEditor]);
 
   const subtotal = useMemo(
     () => cart.reduce((sum, line) => sum + numberValue(line.sellPrice) * line.quantity, 0),
@@ -243,22 +269,82 @@ export default function AllInMagazinSale({
     requestKeyRef.current = "";
   }
 
+  function openAdministrationAccess() {
+    if (role === "admin") {
+      window.location.hash = homeHash;
+      return;
+    }
+    setAdministrationCode("");
+    setAdministrationError("");
+    setAdministrationAccessOpen(true);
+  }
+
+  async function unlockAdministration() {
+    const code = administrationCode.trim();
+    if (!code) {
+      setAdministrationError("Írd be a saját üzleti belépőkódodat.");
+      return;
+    }
+
+    setAdministrationBusy(true);
+    setAdministrationError("");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({ kind: "shop", shopId, code }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      }
+
+      window.sessionStorage.setItem(shopAdministrationUnlockKey(shopId), JSON.stringify({
+        shopId,
+        verifiedAt: Date.now(),
+        expiresAt: Date.now() + SHOP_ADMIN_UNLOCK_TTL_MS,
+      }));
+      setAdministrationAccessOpen(false);
+      setAdministrationCode("");
+      window.location.hash = homeHash;
+      window.location.reload();
+    } catch (caught) {
+      setAdministrationError(caught instanceof Error ? caught.message : "A kód ellenőrzése nem sikerült.");
+    } finally {
+      setAdministrationBusy(false);
+    }
+  }
+
   async function runSearch(value = query, autoAddExact = false) {
+    const searchValue = value.trim();
+    if (!searchValue) {
+      setProducts([]);
+      setHasSearched(false);
+      setError("");
+      window.setTimeout(() => searchInputRef.current?.focus(), 0);
+      return;
+    }
+
     setLoading(true);
+    setHasSearched(true);
     setError("");
     try {
       const response = await apiAifShopSaleCatalog({
         location: locationCode,
-        search: value.trim(),
-        limit: value.trim() ? 80 : 36,
+        search: searchValue,
+        limit: 80,
       });
       const items = response.items || [];
       setProducts(items);
-      if (autoAddExact && value.trim()) {
-        const exact = items.filter((item) => exactCatalogMatch(item, value));
+      if (autoAddExact) {
+        const exact = items.filter((item) => exactCatalogMatch(item, searchValue));
         if (exact.length === 1) {
           addToCart(exact[0]);
           setQuery("");
+          setProducts([]);
+          setHasSearched(false);
           window.setTimeout(() => searchInputRef.current?.focus(), 0);
         }
       }
@@ -427,7 +513,7 @@ export default function AllInMagazinSale({
         paymentMethod,
         idempotencyKey: requestKeyRef.current,
         note: note.trim() || null,
-        customer: paymentMethod === "credit" && selectedCustomer
+        customer: selectedCustomer
           ? {
               id: selectedCustomer.id,
               fullName: selectedCustomer.fullName,
@@ -448,7 +534,9 @@ export default function AllInMagazinSale({
       setSelectedCustomer(null);
       setNote("");
       requestKeyRef.current = "";
-      void runSearch(query, false);
+      setQuery("");
+      setProducts([]);
+      setHasSearched(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Az eladás lezárása nem sikerült.");
     } finally {
@@ -481,10 +569,10 @@ export default function AllInMagazinSale({
               </div>
               <button
                 type="button"
-                onClick={() => { window.location.hash = homeHash; }}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm transition hover:bg-[#3e4d63] active:scale-[0.98]"
+                onClick={openAdministrationAccess}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm transition hover:border-[#7bd7d4]/45 hover:bg-[#3e4d63] active:scale-[0.98]"
               >
-                <ArrowLeft size={18} /> Vissza
+                <ShieldCheck size={18} /> Adminisztráció
               </button>
               <button
                 type="button"
@@ -543,15 +631,17 @@ export default function AllInMagazinSale({
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
               <p className="text-sm text-white/60">
-                {query.trim() ? `Találatok: ${products.length}` : "Az üzlet elérhető készlete"}
+                {hasSearched ? `Találatok: ${products.length}` : "A termékek csak keresés vagy vonalkódolvasás után jelennek meg"}
               </p>
-              <button
-                type="button"
-                onClick={() => { setQuery(""); void runSearch("", false); }}
-                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.06] px-3 text-xs text-white/70 hover:bg-white/[0.1]"
-              >
-                <RotateCcw size={15} /> Alaplista
-              </button>
+              {hasSearched || query.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => { setQuery(""); setProducts([]); setHasSearched(false); setError(""); window.setTimeout(() => searchInputRef.current?.focus(), 0); }}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.06] px-3 text-xs text-white/70 hover:bg-white/[0.1]"
+                >
+                  <RotateCcw size={15} /> Találatok törlése
+                </button>
+              ) : null}
             </div>
 
             {loading ? (
@@ -592,11 +682,17 @@ export default function AllInMagazinSale({
                   </button>
                 ))}
               </div>
-            ) : (
-              <div className="mt-3 flex min-h-[420px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-black/5 px-6 text-center">
+            ) : hasSearched ? (
+              <div className="mt-3 flex min-h-[320px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-black/5 px-6 text-center">
                 <PackageSearch size={40} className="text-white/35" />
                 <p className="mt-3 text-lg text-white/75">Nincs találat</p>
                 <p className="mt-1 max-w-md text-sm text-white/45">Ellenőrizd a kódot, a méretet vagy a termék nevét.</p>
+              </div>
+            ) : (
+              <div className="mt-3 flex min-h-[320px] flex-col items-center justify-center rounded-[22px] border border-dashed border-[#7bd7d4]/18 bg-[#273243]/45 px-6 text-center">
+                <Barcode size={44} className="text-[#8ee6e2]/55" />
+                <p className="mt-3 text-lg text-white/78">Olvasd be a termék vonalkódját</p>
+                <p className="mt-1 max-w-lg text-sm leading-relaxed text-white/45">A teljes készletlista nem foglalja el a képernyőt. A találatok csak akkor jelennek meg, amikor valóban keresel valamit.</p>
               </div>
             )}
           </section>
@@ -621,6 +717,57 @@ export default function AllInMagazinSale({
                   <Trash2 size={15} /> Ürítés
                 </button>
               ) : null}
+            </div>
+
+            <div className={`mt-3 rounded-[18px] border p-3 ${paymentMethod === "credit" && !selectedCustomer ? "border-amber-200/34 bg-amber-500/12" : selectedCustomer ? "border-[#7bd7d4]/32 bg-[#2a8d8b]/12" : "border-white/12 bg-black/10"}`}>
+              {selectedCustomer ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/20 text-[#d7fffd]">
+                    <UserRound size={20} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-white">{selectedCustomer.fullName}</p>
+                    <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/48">
+                      {selectedCustomer.phone ? <span>{selectedCustomer.phone}</span> : null}
+                      <span>{numberValue(selectedCustomer.saleCount)} korábbi vásárlás</span>
+                      {numberValue(selectedCustomer.openBalance) > 0 ? <span className="text-rose-100">Hátralék: {formatMoney(numberValue(selectedCustomer.openBalance))}</span> : null}
+                    </p>
+                    <p className="mt-1 text-[10px] text-[#bdf8f5]/70">Ez a vásárlás is bekerül a kliens előzményeibe.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openCustomerModal("search")}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.06] px-3 text-xs text-white/72 hover:bg-white/[0.1]"
+                  >
+                    <Users size={15} /> Másik kliens
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSelectedCustomer}
+                    aria-label="Kliens törlése az eladásból"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-300/25 bg-rose-500/12 text-rose-50 hover:bg-rose-500/22"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openCustomerModal("search")}
+                  className="flex min-h-14 w-full items-center justify-between gap-3 rounded-2xl px-1 text-left text-white transition hover:bg-white/[0.04]"
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><Users size={20} /></span>
+                    <span>
+                      <span className="block text-sm">Vásárló hozzárendelése</span>
+                      <span className="mt-1 block text-[10px] text-white/42">Hűség, kedvezmény és vásárlási előzmény alapja</span>
+                    </span>
+                  </span>
+                  <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentMethod === "credit" ? "border-amber-200/35 bg-amber-300/10 text-amber-50" : "border-white/12 bg-white/[0.05] text-white/45"}`}>
+                    {paymentMethod === "credit" ? "Kötelező" : "Opcionális"}
+                  </span>
+                </button>
+              )}
             </div>
 
             <div className="mt-3 max-h-[43vh] space-y-2 overflow-y-auto pr-1">
@@ -736,47 +883,9 @@ export default function AllInMagazinSale({
                   </div>
                 </div>
 
-                {paymentMethod === "credit" ? (
-                  <div className="mt-3 rounded-[18px] border border-amber-200/25 bg-amber-500/10 p-3">
-                    {selectedCustomer ? (
-                      <div className="flex flex-wrap items-center gap-3">
-                        <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-amber-200/25 bg-amber-300/10 text-amber-100">
-                          <UserRound size={20} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm text-amber-50">{selectedCustomer.fullName}</p>
-                          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/48">
-                            {selectedCustomer.phone ? <span>{selectedCustomer.phone}</span> : null}
-                            {selectedCustomer.email ? <span>{selectedCustomer.email}</span> : null}
-                            {numberValue(selectedCustomer.openBalance) > 0 ? <span className="text-rose-100">Hátralék: {formatMoney(numberValue(selectedCustomer.openBalance))}</span> : null}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => openCustomerModal("search")}
-                          className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.06] px-3 text-xs text-white/72 hover:bg-white/[0.1]"
-                        >
-                          <Users size={15} /> Másik kliens
-                        </button>
-                        <button
-                          type="button"
-                          onClick={clearSelectedCustomer}
-                          aria-label="Kliens törlése az eladásból"
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-300/25 bg-rose-500/12 text-rose-50 hover:bg-rose-500/22"
-                        >
-                          <X size={17} />
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => openCustomerModal("search")}
-                        className="flex min-h-14 w-full items-center justify-between gap-3 rounded-2xl border border-amber-200/30 bg-amber-300/10 px-4 text-left text-amber-50 transition hover:bg-amber-300/16"
-                      >
-                        <span className="flex items-center gap-3"><Users size={20} /> Kliens kiválasztása</span>
-                        <span className="text-xs text-white/45">Kötelező</span>
-                      </button>
-                    )}
+                {paymentMethod === "credit" && !selectedCustomer ? (
+                  <div className="mt-3 rounded-xl border border-amber-200/28 bg-amber-500/10 px-3 py-2 text-xs text-amber-50">
+                    Utólagos fizetéshez előbb válassz klienst a kosár tetején.
                   </div>
                 ) : null}
 
@@ -801,6 +910,53 @@ export default function AllInMagazinSale({
           </aside>
         </div>
       </div>
+
+      {administrationAccessOpen && typeof document !== "undefined" ? createPortal(
+        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-[#111827]/82 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !administrationBusy) setAdministrationAccessOpen(false); }}>
+          <section className="w-full max-w-[500px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_36px_110px_rgba(0,0,0,0.55)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/22 text-[#d7fffd]"><ShieldCheck size={21} /></span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-white/45">Védett menü</p>
+                  <h2 className="mt-1 text-xl font-normal text-white">Adminisztráció megnyitása</h2>
+                </div>
+              </div>
+              <button type="button" disabled={administrationBusy} onClick={() => setAdministrationAccessOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
+            </header>
+            <div className="px-5 py-5">
+              <p className="text-sm leading-relaxed text-white/62">A készlethez, bizonylatokhoz és egyéb kezelőmodulokhoz add meg újra a saját üzleti belépőkódodat.</p>
+              <label className="mt-4 block">
+                <span className="mb-2 block text-[10px] uppercase tracking-[0.12em] text-white/45">Belépőkód</span>
+                <div className="relative">
+                  <KeyRound className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={19} />
+                  <input
+                    autoFocus
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={administrationCode}
+                    onChange={(event) => setAdministrationCode(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter") void unlockAdministration(); }}
+                    placeholder="Saját belépőkód…"
+                    className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-lg text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4] focus:ring-4 focus:ring-[#2a8d8b]/16"
+                  />
+                </div>
+              </label>
+              {administrationError ? <div className="mt-3 rounded-xl border border-rose-300/28 bg-rose-500/14 px-3 py-2.5 text-sm text-rose-50">{administrationError}</div> : null}
+              <div className="mt-3 rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/72">A feloldás 10 percig érvényes ezen a gépen. Az Eladáshoz gomb azonnal visszazárja.</div>
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button type="button" disabled={administrationBusy} onClick={() => setAdministrationAccessOpen(false)} className="inline-flex h-11 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">Mégse</button>
+              <button type="button" disabled={administrationBusy} onClick={() => void unlockAdministration()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#9be9e5]/48 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-55">
+                {administrationBusy ? <Loader2 className="animate-spin" size={17} /> : <ShieldCheck size={17} />}
+                {administrationBusy ? "Ellenőrzés…" : "Megnyitás"}
+              </button>
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
 
       {discountEditor && editingDiscountLine && typeof document !== "undefined" ? createPortal(
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-[#111827]/78 p-4 backdrop-blur-sm">
@@ -870,8 +1026,8 @@ export default function AllInMagazinSale({
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><Users size={24} /></span>
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.16em] text-white/42">Utólagos fizetés</p>
-                  <h2 className="mt-1 text-xl text-white">Kliens kiválasztása</h2>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-white/42">Vevői nyilvántartás</p>
+                  <h2 className="mt-1 text-xl text-white">Vásárló hozzárendelése</h2>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -958,7 +1114,7 @@ export default function AllInMagazinSale({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
-              <p className="text-xs text-white/42">A kiválasztott kliens automatikusan visszakerül az eladáshoz.</p>
+              <p className="text-xs text-white/42">A kiválasztott kliens minden fizetési módnál hozzákapcsolódik a vásárláshoz.</p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm hover:bg-white/[0.09]"><X size={17} /> Mégse</button>
                 {customerModalMode === "new" ? <button type="button" onClick={() => void saveNewCustomer()} disabled={customerSaving} className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-60">{customerSaving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Mentés és kiválasztás</button> : null}
