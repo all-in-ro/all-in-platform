@@ -1519,13 +1519,36 @@ function goHome() {
   window.location.hash = "#allin";
 }
 
-function rememberWarehouseBarcodeReturnTarget(variantId?: string, title?: string) {
+type WarehouseBarcodeReturnContext = {
+  filters?: WarehouseFilterSnapshot | null;
+  productPage?: number | null;
+  scrollY?: number | null;
+  rowViewportTop?: number | null;
+  nextVariantId?: string | null;
+  previousVariantId?: string | null;
+  incomingFocusBatchId?: string | null;
+  incomingFocusMode?: "import" | "activation" | null;
+};
+
+type WarehouseBarcodeReturnTarget = {
+  variantId: string;
+  title?: string | null;
+  barcode?: string | null;
+  context?: WarehouseBarcodeReturnContext | null;
+};
+
+function rememberWarehouseBarcodeReturnTarget(
+  variantId?: string,
+  title?: string,
+  context?: WarehouseBarcodeReturnContext | null,
+) {
   const cleanVariantId = String(variantId || "").trim();
   if (!cleanVariantId || typeof window === "undefined") return;
   try {
     window.localStorage.setItem(warehouseBarcodeReturnStorageKey, JSON.stringify({
       variantId: cleanVariantId,
       title: String(title || "").trim() || null,
+      context: context || null,
       startedAt: new Date().toISOString(),
     }));
   } catch {
@@ -1534,12 +1557,12 @@ function rememberWarehouseBarcodeReturnTarget(variantId?: string, title?: string
 }
 
 function consumeWarehouseBarcodeReturnTarget() {
-  if (typeof window === "undefined") return null as null | { variantId: string; title?: string | null; barcode?: string | null };
+  if (typeof window === "undefined") return null as WarehouseBarcodeReturnTarget | null;
   try {
     const raw = window.localStorage.getItem(warehouseBarcodeReturnStorageKey);
     if (!raw) return null;
     window.localStorage.removeItem(warehouseBarcodeReturnStorageKey);
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as Record<string, any>;
     const variantId = String(parsed?.variantId || "").trim();
     if (!variantId) return null;
 
@@ -1556,23 +1579,29 @@ function consumeWarehouseBarcodeReturnTarget() {
       variantId,
       title: String(parsed?.title || "").trim() || null,
       barcode: savedBarcode || null,
+      context: parsed?.context && typeof parsed.context === "object" ? parsed.context as WarehouseBarcodeReturnContext : null,
     };
   } catch {
     return null;
   }
 }
 
-function goBarcodeManager(variantId?: string, barcode?: string, title?: string) {
+function goBarcodeManager(
+  variantId?: string,
+  barcode?: string,
+  title?: string,
+  returnContext?: WarehouseBarcodeReturnContext | null,
+) {
   const params = new URLSearchParams();
   if (variantId) params.set("variant", variantId);
   if (barcode) params.set("barcode", barcode);
   if (title) params.set("title", title);
   params.set("source", "warehouse");
   params.set("return", "allinwarehouse");
+  params.set("returnMode", "warehouse");
   if (variantId) {
-    params.set("returnDetail", "1");
     params.set("returnVariant", variantId);
-    rememberWarehouseBarcodeReturnTarget(variantId, title);
+    rememberWarehouseBarcodeReturnTarget(variantId, title, returnContext || null);
   }
   const suffix = params.toString() ? `?${params.toString()}` : "";
   window.location.hash = `#allinbarcodes${suffix}`;
@@ -2390,7 +2419,7 @@ type WarehouseLabelPreset = {
 };
 
 const WAREHOUSE_LABEL_COMPANY = "TITAN EURO-COM SRL";
-const WAREHOUSE_LABEL_PREVIEW_SCALE = 0.58;
+const WAREHOUSE_LABEL_PREVIEW_SCALE = 0.72;
 
 const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
   { id: "40x46", name: "40 × 46 mm, 5 × 6 pe A4", width: "40", height: "46", cols: "5", rows: "6", marginX: "5", marginY: "5" },
@@ -2401,7 +2430,7 @@ const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
 
 const WAREHOUSE_LABEL_DEFAULT_CONTENT: Record<WarehouseLabelContentKey, boolean> = {
   company: true,
-  brand: true,
+  brand: false,
   title: true,
   barcode: true,
   description: true,
@@ -2521,19 +2550,33 @@ const WAREHOUSE_LABEL_APP_CSS = `
 .aifWhLabelPreviewFrame {
   max-height:68vh;
   overflow:auto;
+  display:flex;
+  align-items:flex-start;
+  justify-content:flex-start;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
   border-radius:14px;
   border:1px solid rgba(255,255,255,.14);
   background:#2f394a;
-  padding:10px;
+  padding:14px;
 }
 .aifWhLabelPreviewPageBox {
+  position:relative;
+  flex:0 0 auto;
   width:var(--aif-label-preview-w);
+  min-width:var(--aif-label-preview-w);
   height:var(--aif-label-preview-h);
-  overflow:hidden;
+  min-height:var(--aif-label-preview-h);
+  overflow:visible;
+  box-sizing:border-box;
   background:#fff;
   box-shadow:0 14px 34px rgba(0,0,0,.26);
 }
 .aifWhLabelPreviewFrame .aifWarehouseLabelPrintPage {
+  position:absolute;
+  left:0;
+  top:0;
+  overflow:visible;
   transform:scale(var(--aif-label-preview-scale));
   transform-origin:top left;
 }
@@ -5136,6 +5179,7 @@ export default function AllInWarehouse() {
   const [busy, setBusy] = useState(false);
   const [recentImportFocusBusy, setRecentImportFocusBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [barcodeReturnNotice, setBarcodeReturnNotice] = useState<WarehouseBarcodeReturnTarget | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
   const [editBaseline, setEditBaseline] = useState<EditForm>(emptyForm());
@@ -8525,9 +8569,10 @@ export default function AllInWarehouse() {
   }
 
   async function openLabelComposer() {
-    // Minden megnyitáskor keret nélkül induljon, hogy egy korábbi nyomtatásból
-    // véletlenül se maradjon bekapcsolva. Sablon betöltése továbbra is felülírhatja.
+    // Minden megnyitáskor keret és márka nélkül induljon. Mentett sablon
+    // betöltése továbbra is tudatosan visszakapcsolhatja ezeket.
     setLabelShowBorder(false);
+    setLabelContent((current) => ({ ...current, brand: false }));
     if (!selectedLabelItems.length) {
       setMessage("Nincs termék a Vonalkód / címke listában.");
       return;
@@ -9419,6 +9464,23 @@ export default function AllInWarehouse() {
     }
   }
 
+  function barcodeReturnContextForVariant(variantId: string): WarehouseBarcodeReturnContext {
+    const cleanVariantId = String(variantId || "").trim();
+    const anchor = detailReturnAnchorRef.current;
+    const node = cleanVariantId ? findVisibleProductNode(cleanVariantId) : null;
+    const rowViewportTop = anchor?.rowViewportTop ?? (node ? node.getBoundingClientRect().top : null);
+    return {
+      filters: anchor?.filters || currentWarehouseFilterSnapshot(),
+      productPage: anchor?.productPage || safeProductPage,
+      scrollY: anchor?.scrollY ?? (typeof window !== "undefined" ? window.scrollY : 0),
+      rowViewportTop: typeof rowViewportTop === "number" && Number.isFinite(rowViewportTop) ? rowViewportTop : null,
+      nextVariantId: anchor?.nextVariantId || null,
+      previousVariantId: anchor?.previousVariantId || null,
+      incomingFocusBatchId: incomingFocus?.batchId || null,
+      incomingFocusMode: incomingFocus?.mode || null,
+    };
+  }
+
   async function openDetail(id: string) {
     rememberDetailReturnAnchor(id);
     setDetailCloseConfirmOpen(false);
@@ -10137,16 +10199,43 @@ export default function AllInWarehouse() {
     load().then(async () => {
       const returnVariantId = String(barcodeReturnTarget?.variantId || "").trim();
       if (returnVariantId) {
-        resetWarehouseFilters(false);
-        setFiltersOpen(false);
+        const returnContext = barcodeReturnTarget?.context || null;
+        const returnBatchId = String(returnContext?.incomingFocusBatchId || "").trim();
+
+        if (returnBatchId && isUuidLike(returnBatchId)) {
+          await loadIncomingFocusBatch(
+            returnBatchId,
+            false,
+            returnContext?.incomingFocusMode === "activation" ? "activation" : "import",
+            { silentFailure: true },
+          );
+        }
+
+        if (returnContext?.filters) restoreWarehouseFilterSnapshot(returnContext.filters);
+        else resetWarehouseFilters(false);
+
+        setProductPage(Math.max(1, Number(returnContext?.productPage || 1)));
         setSummaryOpen(false);
         setListOpen(true);
-        await openDetail(returnVariantId);
-        setMessage(
-          barcodeReturnTarget?.barcode
-            ? `A bárkód elmentve: ${barcodeReturnTarget.barcode}. Visszahoztalak ugyanennek a terméknek az adatlapjára, így folytathatod a szerkesztést.`
-            : "Visszahoztalak ugyanennek a terméknek az adatlapjára, így nem kell újra kikeresni a listából."
-        );
+
+        const returnCandidates = [
+          returnVariantId,
+          returnContext?.nextVariantId,
+          returnContext?.previousVariantId,
+        ].map((value) => String(value || "").trim()).filter(Boolean);
+        pendingProductJumpCandidateIdsRef.current = Array.from(new Set(returnCandidates));
+        pendingProductJumpFallbackRef.current = {
+          productPage: Math.max(1, Number(returnContext?.productPage || 1)),
+          scrollY: Math.max(0, Number(returnContext?.scrollY || 0)),
+        };
+        pendingProductJumpViewportTopRef.current =
+          typeof returnContext?.rowViewportTop === "number" && Number.isFinite(returnContext.rowViewportTop)
+            ? returnContext.rowViewportTop
+            : null;
+        setPendingProductJumpId(returnVariantId);
+        setHighlightProductId(returnVariantId);
+        setBarcodeReturnNotice(barcodeReturnTarget);
+        setMessage("");
         return;
       }
 
@@ -10296,6 +10385,36 @@ export default function AllInWarehouse() {
         </header>
 
         {message && <div className="rounded-xl border border-white/20 bg-[#404a5b] px-4 py-3 text-sm text-white/85">{message}</div>}
+        {barcodeReturnNotice && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#7bd7d4]/40 bg-[#203f49] px-4 py-3 text-sm text-white shadow-lg">
+            <div className="min-w-0">
+              <p className="text-[#d7fffd]">
+                {barcodeReturnNotice.barcode
+                  ? `A bárkód elmentve: ${barcodeReturnNotice.barcode}.`
+                  : "Visszatértél a raktárlistára."}
+              </p>
+              <p className="mt-0.5 text-xs text-white/58">
+                A terméksor kiemelve marad, így azonnal folytathatod a következő termékkel.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                className={primaryBtn}
+                type="button"
+                onClick={() => {
+                  const variantId = String(barcodeReturnNotice.variantId || "").trim();
+                  setBarcodeReturnNotice(null);
+                  if (variantId) void openDetail(variantId);
+                }}
+              >
+                <Edit3 size={15} /> Termékadatlapra
+              </button>
+              <button className={btnSoft} type="button" onClick={() => setBarcodeReturnNotice(null)}>
+                <X size={14} /> Bezárás
+              </button>
+            </div>
+          </div>
+        )}
         <datalist id="warehouse-standard-size-options">
           {sizeTypes.map((st) => <option key={st.id} value={st.name || st.code}>{st.name_hu || st.code}</option>)}
         </datalist>
@@ -13152,7 +13271,15 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   className={btn}
-                  onClick={() => goBarcodeManager(detail.item?.id, detail.item?.barcode || "", edit.titleRo || detail.item?.title_ro)}
+                  onClick={() => {
+                    const variantId = String(detail.item?.id || "").trim();
+                    goBarcodeManager(
+                      variantId,
+                      detail.item?.barcode || "",
+                      edit.titleRo || detail.item?.title_ro,
+                      barcodeReturnContextForVariant(variantId),
+                    );
+                  }}
                   disabled={!detail.item?.id}
                   type="button"
                   title="Külön vonalkód- és címkemodul megnyitása"
