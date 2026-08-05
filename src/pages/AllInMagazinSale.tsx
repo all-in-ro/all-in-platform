@@ -177,17 +177,36 @@ export default function AllInMagazinSale({
   const [success, setSuccess] = useState<AifShopSaleResult | null>(null);
   const requestKeyRef = useRef("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const automaticLookupTimerRef = useRef<number | null>(null);
+  const searchRequestIdRef = useRef(0);
 
   useEffect(() => {
     sessionStorage.setItem(storageKey, JSON.stringify(cart));
   }, [cart, storageKey]);
 
   useEffect(() => {
+    cancelAutomaticLookup();
+    searchRequestIdRef.current += 1;
+    setLoading(false);
     setQuery("");
     setProducts([]);
     setHasSearched(false);
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, [locationCode]);
+
+  useEffect(() => {
+    cancelAutomaticLookup();
+    const value = query.trim();
+    const looksLikeScannedCode = value.length >= 8 && !/\s/.test(value);
+    if (!looksLikeScannedCode || customerModalOpen || discountEditor || administrationAccessOpen) return;
+
+    automaticLookupTimerRef.current = window.setTimeout(() => {
+      automaticLookupTimerRef.current = null;
+      void runSearch(value, true);
+    }, 180);
+
+    return () => cancelAutomaticLookup();
+  }, [administrationAccessOpen, customerModalOpen, discountEditor, locationCode, query]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -211,11 +230,7 @@ export default function AllInMagazinSale({
           window.setTimeout(() => searchInputRef.current?.focus(), 0);
           return;
         }
-        setQuery("");
-        setProducts([]);
-        setHasSearched(false);
-        setError("");
-        window.setTimeout(() => searchInputRef.current?.focus(), 0);
+        resetSearchResults();
       }
       if (event.key === "F2" && !customerModalOpen && !discountEditor && !administrationAccessOpen) {
         event.preventDefault();
@@ -264,6 +279,24 @@ export default function AllInMagazinSale({
     ? numberValue(editingDiscountLine.sellPrice) * editingDiscountLine.quantity
     : 0;
   const editingDiscountFinal = editingDiscountOriginal * (1 - editingDiscountValue / 100);
+
+  function cancelAutomaticLookup() {
+    if (automaticLookupTimerRef.current !== null) {
+      window.clearTimeout(automaticLookupTimerRef.current);
+      automaticLookupTimerRef.current = null;
+    }
+  }
+
+  function resetSearchResults() {
+    cancelAutomaticLookup();
+    searchRequestIdRef.current += 1;
+    setLoading(false);
+    setQuery("");
+    setProducts([]);
+    setHasSearched(false);
+    setError("");
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  }
 
   function invalidateRequestKey() {
     requestKeyRef.current = "";
@@ -318,15 +351,14 @@ export default function AllInMagazinSale({
   }
 
   async function runSearch(value = query, autoAddExact = false) {
+    cancelAutomaticLookup();
     const searchValue = value.trim();
     if (!searchValue) {
-      setProducts([]);
-      setHasSearched(false);
-      setError("");
-      window.setTimeout(() => searchInputRef.current?.focus(), 0);
+      resetSearchResults();
       return;
     }
 
+    const requestId = ++searchRequestIdRef.current;
     setLoading(true);
     setHasSearched(true);
     setError("");
@@ -336,6 +368,8 @@ export default function AllInMagazinSale({
         search: searchValue,
         limit: 80,
       });
+      if (requestId !== searchRequestIdRef.current) return;
+
       const items = response.items || [];
       setProducts(items);
       if (autoAddExact) {
@@ -349,9 +383,11 @@ export default function AllInMagazinSale({
         }
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A termékek betöltése nem sikerült.");
+      if (requestId === searchRequestIdRef.current) {
+        setError(caught instanceof Error ? caught.message : "A termékek betöltése nem sikerült.");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestIdRef.current) setLoading(false);
     }
   }
 
@@ -494,7 +530,7 @@ export default function AllInMagazinSale({
 
   async function completeSale() {
     if (!cart.length) {
-      setError("A kosár üres. A pénztárgép még gondolatolvasással nem működik.");
+      setError("A kosár üres. Adj hozzá legalább egy terméket az eladás lezárása előtt.");
       return;
     }
     if (paymentMethod === "credit" && !selectedCustomer) {
@@ -534,9 +570,7 @@ export default function AllInMagazinSale({
       setSelectedCustomer(null);
       setNote("");
       requestKeyRef.current = "";
-      setQuery("");
-      setProducts([]);
-      setHasSearched(false);
+      resetSearchResults();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Az eladás lezárása nem sikerült.");
     } finally {
@@ -611,7 +645,10 @@ export default function AllInMagazinSale({
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") void runSearch(query, true);
+                    if (event.key === "Enter") {
+                      cancelAutomaticLookup();
+                      void runSearch(event.currentTarget.value, true);
+                    }
                   }}
                   autoFocus
                   placeholder="Olvasd be a vonalkódot, vagy keress név, kód, méret alapján…"
@@ -636,7 +673,7 @@ export default function AllInMagazinSale({
               {hasSearched || query.trim() ? (
                 <button
                   type="button"
-                  onClick={() => { setQuery(""); setProducts([]); setHasSearched(false); setError(""); window.setTimeout(() => searchInputRef.current?.focus(), 0); }}
+                  onClick={resetSearchResults}
                   className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.06] px-3 text-xs text-white/70 hover:bg-white/[0.1]"
                 >
                   <RotateCcw size={15} /> Találatok törlése
@@ -719,7 +756,7 @@ export default function AllInMagazinSale({
               ) : null}
             </div>
 
-            <div className={`mt-3 rounded-[18px] border p-3 ${paymentMethod === "credit" && !selectedCustomer ? "border-amber-200/34 bg-amber-500/12" : selectedCustomer ? "border-[#7bd7d4]/32 bg-[#2a8d8b]/12" : "border-white/12 bg-black/10"}`}>
+            <div className={`mt-3 rounded-[18px] border p-3 shadow-[0_10px_24px_rgba(15,23,42,0.16)] ${selectedCustomer ? "border-[#9be9e5]/46 bg-[#247f7d]" : "border-[#9be9e5]/58 bg-gradient-to-r from-[#2a8d8b] to-[#237a78]"}`}>
               {selectedCustomer ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/20 text-[#d7fffd]">
@@ -754,16 +791,16 @@ export default function AllInMagazinSale({
                 <button
                   type="button"
                   onClick={() => openCustomerModal("search")}
-                  className="flex min-h-14 w-full items-center justify-between gap-3 rounded-2xl px-1 text-left text-white transition hover:bg-white/[0.04]"
+                  className="flex min-h-14 w-full items-center justify-between gap-3 rounded-2xl px-1 text-left text-white transition hover:bg-white/[0.08]"
                 >
                   <span className="flex items-center gap-3">
-                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#d7fffd]"><Users size={20} /></span>
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/28 bg-white/14 text-white"><Users size={20} /></span>
                     <span>
                       <span className="block text-sm">Vásárló hozzárendelése</span>
-                      <span className="mt-1 block text-[10px] text-white/42">Hűség, kedvezmény és vásárlási előzmény alapja</span>
+                      <span className="mt-1 block text-[10px] text-white/72">Hűség, kedvezmény és vásárlási előzmény alapja</span>
                     </span>
                   </span>
-                  <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentMethod === "credit" ? "border-amber-200/35 bg-amber-300/10 text-amber-50" : "border-white/12 bg-white/[0.05] text-white/45"}`}>
+                  <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentMethod === "credit" ? "border-amber-100/55 bg-amber-300/22 text-amber-50" : "border-white/28 bg-white/12 text-white/85"}`}>
                     {paymentMethod === "credit" ? "Kötelező" : "Opcionális"}
                   </span>
                 </button>
