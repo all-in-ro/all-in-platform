@@ -2313,6 +2313,43 @@ export const apiAifShopifyOrderEvents = apiAifListShopifyOrderEvents;
 
 export type AifShopSalePaymentMethod = "cash" | "card" | "bank_transfer" | "credit";
 
+export type AifRomaniaCounty = {
+  code: string;
+  name: string;
+  sirutaCode?: string | null;
+  sirutaJud?: number | null;
+  priority?: number;
+};
+
+export type AifRomaniaLocality = {
+  code: string;
+  name: string;
+  officialName?: string | null;
+  countyCode: string;
+  countyName: string;
+  parentCode?: string | null;
+  postalCode?: string | null;
+  localityType?: number | null;
+  adminLevel?: number | null;
+  urbanRural?: number | null;
+};
+
+export function apiAifListRomaniaCounties() {
+  return fetchAifJSON<{ ok: true; items: AifRomaniaCounty[] }>("/romania/counties");
+}
+
+export function apiAifListRomaniaLocalities(options: {
+  countyCode: string;
+  search?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  q.set("county", options.countyCode);
+  if (options.search?.trim()) q.set("q", options.search.trim());
+  q.set("limit", String(options.limit || 1000));
+  return fetchAifJSON<{ ok: true; items: AifRomaniaLocality[] }>(`/romania/localities?${q.toString()}`);
+}
+
 export type AifShopCustomer = {
   id: string;
   fullName: string;
@@ -2320,6 +2357,13 @@ export type AifShopCustomer = {
   email?: string | null;
   address?: string | null;
   city?: string | null;
+  countryCode?: string | null;
+  countyCode?: string | null;
+  countyName?: string | null;
+  localityCode?: string | null;
+  localityName?: string | null;
+  postalCode?: string | null;
+  formattedAddress?: string | null;
   notes?: string | null;
   creditLimit: number;
   isActive: boolean;
@@ -2429,6 +2473,10 @@ export function apiAifCreateShopCustomer(input: {
   email?: string | null;
   address?: string | null;
   city?: string | null;
+  countryCode?: string | null;
+  countyCode: string;
+  localityCode: string;
+  postalCode?: string | null;
   note?: string | null;
 }) {
   return fetchAifJSON<{ ok: true; duplicate?: boolean; item: AifShopCustomer }>("/shop-customers", {
@@ -2543,6 +2591,10 @@ export function apiAifCompleteShopSale(input: {
     phone: string;
     email?: string | null;
     address?: string | null;
+    countryCode?: string | null;
+    countyCode?: string | null;
+    localityCode?: string | null;
+    postalCode?: string | null;
     note?: string | null;
   };
   lines: Array<{
