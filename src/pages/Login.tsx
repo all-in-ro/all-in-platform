@@ -409,16 +409,15 @@ export default function Login({
                 ) : null}
 
                 <div className="mt-5 grid grid-cols-2 gap-3">
-                  <Button
+                  <button
                     type="button"
-                    variant="outline"
-                    className="h-12 rounded-2xl border border-slate-300 bg-white px-4 text-sm font-normal text-slate-700 hover:border-slate-400 hover:bg-slate-100"
                     onClick={cancelToChooser}
                     disabled={busy}
+                    className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-slate-400 bg-white px-4 text-sm font-medium text-slate-800 shadow-sm transition hover:border-[#2a8d8b]/55 hover:bg-[#eef8f7] hover:text-[#206f6d] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-55"
                   >
-                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    <ArrowLeft className="h-4 w-4" />
                     Mégse
-                  </Button>
+                  </button>
 
                   <Button
                     type="button"
