@@ -124,6 +124,42 @@ const warehouseBarcodeChangedStorageKey = "allinfashion:barcode:changed:v1";
 const purchaseOrdersChangedStorageKey = "allinfashion:purchaseOrders:changed:v1";
 const purchaseOrdersChangedEventName = "aif:purchase-orders-changed";
 const OPEN_ORDER_HANDOFF_KEY = "allinfashion:purchase-order-open:v1";
+const WAREHOUSE_UIT_WARNING_THRESHOLD_RON = 10000;
+const warehouseUitSuppressedStorageKey = "allinfashion:warehouse:uit-warning-suppressed:v1";
+
+function warehouseUitWarningDocumentKey(documentId?: unknown, documentNumber?: unknown) {
+  return firstWarehouseText(documentId, documentNumber);
+}
+
+function readWarehouseUitSuppressedDocuments() {
+  if (typeof window === "undefined") return new Set<string>();
+  try {
+    const raw = window.sessionStorage.getItem(warehouseUitSuppressedStorageKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map((value) => String(value || "").trim()).filter(Boolean) : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function warehouseUitWarningIsSuppressed(documentId?: unknown, documentNumber?: unknown) {
+  const key = warehouseUitWarningDocumentKey(documentId, documentNumber);
+  return Boolean(key && readWarehouseUitSuppressedDocuments().has(key));
+}
+
+function suppressWarehouseUitWarning(documentId?: unknown, documentNumber?: unknown) {
+  if (typeof window === "undefined") return;
+  const key = warehouseUitWarningDocumentKey(documentId, documentNumber);
+  if (!key) return;
+  try {
+    const next = readWarehouseUitSuppressedDocuments();
+    next.add(key);
+    window.sessionStorage.setItem(warehouseUitSuppressedStorageKey, JSON.stringify(Array.from(next)));
+  } catch {
+    // A figyelmeztetés ettől még bezárható; legfeljebb a munkamenetben újra megjelenik.
+  }
+}
+
 
 function notifyStockMovesChanged(detail: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
@@ -4764,6 +4800,70 @@ async function apiStockTransfer(payload: StockTransferApiPayload) {
   });
 }
 
+
+type WarehouseTransferPreparationSummary = {
+  id: string;
+  document_number?: string | null;
+  document_type?: string | null;
+  status?: string | null;
+  total_value?: number | string | null;
+  total_qty?: number | string | null;
+  line_count?: number | string | null;
+  source_location_id?: string | null;
+  target_location_id?: string | null;
+  from_location_summary?: string | null;
+  to_location_summary?: string | null;
+  uit_code?: string | null;
+  raw?: Record<string, any> | null;
+};
+
+type WarehouseUitWarningState = {
+  documentId: string;
+  documentNumber: string;
+  totalValue: number;
+  totalQty: number;
+  addedValue: number;
+};
+
+type WarehouseTransferToastState = WarehouseUitWarningState & {
+  crossedThreshold: boolean;
+  uitRecorded: boolean;
+};
+
+async function apiOpenTransferPreparations() {
+  return fetchJSON<{ items?: WarehouseTransferPreparationSummary[] }>(
+    `/api/aif/stock-transfer-documents?type=preparation&page=1&limit=100&_=${Date.now()}`,
+  );
+}
+
+function warehousePreparationUitCode(item?: WarehouseTransferPreparationSummary | Record<string, any> | null) {
+  const raw = item?.raw && typeof item.raw === "object" ? item.raw : {};
+  return firstWarehouseText((item as any)?.uit_code, raw.uitCode, raw.uit_code);
+}
+
+function warehousePreparationMatchesRoute(
+  item: WarehouseTransferPreparationSummary,
+  fromLocationId: string,
+  toLocationId: string,
+  fromLocationName = "",
+  toLocationName = "",
+) {
+  const itemFromId = firstWarehouseText(item.source_location_id, item.raw?.sourceLocationId, item.raw?.source_location_id);
+  const itemToId = firstWarehouseText(item.target_location_id, item.raw?.targetLocationId, item.raw?.target_location_id);
+  if (fromLocationId && toLocationId && itemFromId && itemToId) {
+    return itemFromId === fromLocationId && itemToId === toLocationId;
+  }
+
+  const itemFromName = firstWarehouseText(item.from_location_summary, item.raw?.fromLocationName, item.raw?.from_location_name);
+  const itemToName = firstWarehouseText(item.to_location_summary, item.raw?.toLocationName, item.raw?.to_location_name);
+  return Boolean(
+    fromLocationName &&
+    toLocationName &&
+    normalizeSearch(itemFromName) === normalizeSearch(fromLocationName) &&
+    normalizeSearch(itemToName) === normalizeSearch(toLocationName)
+  );
+}
+
 type SelectedVariantSelectionResponse = {
   ok?: true;
   count?: number;
@@ -5270,6 +5370,13 @@ export default function AllInWarehouse() {
   const stockMoveSubmitLockRef = useRef(false);
   const stockMoveIdempotencyKeyRef = useRef("");
   const stockMovePayloadFingerprintRef = useRef("");
+  const [openTransferPreparations, setOpenTransferPreparations] = useState<WarehouseTransferPreparationSummary[]>([]);
+  const [openTransferPreparationsBusy, setOpenTransferPreparationsBusy] = useState(false);
+  const [openTransferPreparationsLoaded, setOpenTransferPreparationsLoaded] = useState(false);
+  const [warehouseUitWarning, setWarehouseUitWarning] = useState<WarehouseUitWarningState | null>(null);
+  const [warehouseUitSuppressChecked, setWarehouseUitSuppressChecked] = useState(false);
+  const [warehouseTransferToast, setWarehouseTransferToast] = useState<WarehouseTransferToastState | null>(null);
+  const warehouseTransferToastTimerRef = useRef<number | null>(null);
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
   const [labelWidth, setLabelWidth] = useState("40");
@@ -5312,6 +5419,60 @@ export default function AllInWarehouse() {
   const pendingProductJumpViewportTopRef = useRef<number | null>(null);
   const pendingProductJumpCandidateIdsRef = useRef<string[]>([]);
   const pendingProductJumpFallbackRef = useRef<{ productPage: number; scrollY: number } | null>(null);
+
+  const refreshOpenTransferPreparations = useCallback(async () => {
+    setOpenTransferPreparationsBusy(true);
+    try {
+      const result = await apiOpenTransferPreparations();
+      const rows = (result.items || []).filter((item) => {
+        const status = String(item.status || "").trim().toLowerCase();
+        const type = String(item.document_type || item.raw?.documentType || item.raw?.document_type || "internal_transfer").trim().toLowerCase();
+        return status === "preparation" && type === "internal_transfer";
+      });
+      setOpenTransferPreparations(rows);
+      setOpenTransferPreparationsLoaded(true);
+      return rows;
+    } catch {
+      setOpenTransferPreparationsLoaded(false);
+      return [] as WarehouseTransferPreparationSummary[];
+    } finally {
+      setOpenTransferPreparationsBusy(false);
+    }
+  }, []);
+
+  const closeWarehouseUitWarning = useCallback(() => {
+    if (warehouseUitWarning && warehouseUitSuppressChecked) {
+      suppressWarehouseUitWarning(warehouseUitWarning.documentId, warehouseUitWarning.documentNumber);
+    }
+    setWarehouseUitWarning(null);
+    setWarehouseUitSuppressChecked(false);
+  }, [warehouseUitSuppressChecked, warehouseUitWarning]);
+
+  useEffect(() => {
+    if (!warehouseUitWarning) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      closeWarehouseUitWarning();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [closeWarehouseUitWarning, warehouseUitWarning]);
+
+  useEffect(() => () => {
+    if (warehouseTransferToastTimerRef.current !== null) {
+      window.clearTimeout(warehouseTransferToastTimerRef.current);
+      warehouseTransferToastTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const stockEditorMoveOpen = Boolean(stockEditorTarget && !stockEditorAllowTotalChange);
+    if (selectedWorkPanel !== "move" && !stockEditorMoveOpen) return;
+    void refreshOpenTransferPreparations();
+  }, [refreshOpenTransferPreparations, selectedWorkPanel, stockEditorAllowTotalChange, stockEditorTarget?.variant_id]);
 
   const loadOpenPurchaseOrderState = useCallback(async () => {
     try {
@@ -6074,6 +6235,8 @@ export default function AllInWarehouse() {
       });
       const changedVariantId = String(stockEditorTarget.variant_id || "");
       let preparationNumber = "";
+      let transferResult: Awaited<ReturnType<typeof apiStockTransfer>> | null = null;
+      let transferAddedValue = 0;
       if (stockEditorAllowTotalChange) {
         await apiVariantStockUpdate(changedVariantId, rows, {
           mode: "correction",
@@ -6090,13 +6253,15 @@ export default function AllInWarehouse() {
           finishCloseStockEditor();
           return;
         }
-        const transferResult = await apiStockTransfer({
+        transferAddedValue = transferLines.reduce((sum, line) => sum + line.qty * (priceNumber(stockEditorTarget.sell_price) || 0), 0);
+        transferResult = await apiStockTransfer({
           title: "Aviz intern de transfer stoc",
           note: stockEditorNote.trim(),
           idempotencyKey: createStockTransferIdempotencyKey(),
           lines: transferLines,
         });
         preparationNumber = String(transferResult.documentNumber || transferResult.transferId || "");
+        handleWarehouseStockTransferResult(transferResult, transferAddedValue);
         notifyStockMovesChanged({ variantId: changedVariantId, source: "warehouse_transfer_preparation", transferId: transferResult.transferId, documentId: transferResult.documentId });
       }
       await load();
@@ -8028,6 +8193,174 @@ export default function AllInWarehouse() {
     return { from: row.fromLocationName || "Forráshely", to: row.toLocationName || "Célhely", routeCount: 1 };
   }, [preparedMoveRows]);
 
+  const stockEditorTransferPreview = useMemo(() => {
+    if (!stockEditorTarget || stockEditorAllowTotalChange) return null;
+    try {
+      const lines = stockEditorTransferLines();
+      if (!lines.length) return null;
+      const routes = Array.from(new Map(lines.map((line) => [
+        `${line.fromLocationId}=>${line.toLocationId}`,
+        line,
+      ] as const)).values());
+      if (routes.length !== 1) return null;
+      const route = routes[0];
+      const qty = lines.reduce((sum, line) => sum + line.qty, 0);
+      const addedValue = qty * (priceNumber(stockEditorTarget.sell_price) || 0);
+      return {
+        fromLocationId: route.fromLocationId,
+        toLocationId: route.toLocationId,
+        fromLocationName: locationNameByValue(route.fromLocationId),
+        toLocationName: locationNameByValue(route.toLocationId),
+        qty,
+        addedValue,
+      };
+    } catch {
+      return null;
+    }
+  }, [stockEditorAllowTotalChange, stockEditorRows, stockEditorTarget?.variant_id, stockLocationRows, stockRows]);
+
+  const warehouseMoveValuePreview = useMemo(() => {
+    let fromLocationId = "";
+    let toLocationId = "";
+    let fromLocationName = "";
+    let toLocationName = "";
+    let addedValue = 0;
+    let qty = 0;
+    let mode: "bulk" | "single" = "bulk";
+
+    if (selectedWorkPanel === "move" && moveHasSingleRoute && moveValidRows.length) {
+      const first = moveValidRows[0];
+      fromLocationId = first.fromLocationId;
+      toLocationId = first.toLocationId;
+      fromLocationName = first.fromLocationName;
+      toLocationName = first.toLocationName;
+      addedValue = moveTotalValue;
+      qty = moveTotalQty;
+      mode = "bulk";
+    } else if (stockEditorTransferPreview) {
+      fromLocationId = stockEditorTransferPreview.fromLocationId;
+      toLocationId = stockEditorTransferPreview.toLocationId;
+      fromLocationName = stockEditorTransferPreview.fromLocationName;
+      toLocationName = stockEditorTransferPreview.toLocationName;
+      addedValue = stockEditorTransferPreview.addedValue;
+      qty = stockEditorTransferPreview.qty;
+      mode = "single";
+    } else {
+      return null;
+    }
+
+    const preparation = openTransferPreparations.find((item) =>
+      warehousePreparationMatchesRoute(item, fromLocationId, toLocationId, fromLocationName, toLocationName)
+    ) || null;
+    const currentValue = priceNumber(preparation?.total_value) || 0;
+    const projectedValue = currentValue + addedValue;
+    const thresholdReached = projectedValue >= WAREHOUSE_UIT_WARNING_THRESHOLD_RON;
+    const uitRecorded = Boolean(warehousePreparationUitCode(preparation));
+    return {
+      mode,
+      preparation,
+      fromLocationName,
+      toLocationName,
+      qty,
+      addedValue,
+      currentValue,
+      projectedValue,
+      thresholdReached,
+      uitRecorded,
+      remainingValue: WAREHOUSE_UIT_WARNING_THRESHOLD_RON - projectedValue,
+    };
+  }, [
+    moveHasSingleRoute,
+    moveTotalQty,
+    moveTotalValue,
+    moveValidRows,
+    openTransferPreparations,
+    selectedWorkPanel,
+    stockEditorTransferPreview,
+  ]);
+
+  function showWarehouseTransferToast(next: WarehouseTransferToastState) {
+    if (warehouseTransferToastTimerRef.current !== null) {
+      window.clearTimeout(warehouseTransferToastTimerRef.current);
+    }
+    setWarehouseTransferToast(next);
+    warehouseTransferToastTimerRef.current = window.setTimeout(() => {
+      setWarehouseTransferToast(null);
+      warehouseTransferToastTimerRef.current = null;
+    }, 8500);
+  }
+
+  function handleWarehouseStockTransferResult(
+    result: Awaited<ReturnType<typeof apiStockTransfer>>,
+    fallbackAddedValue = 0,
+  ) {
+    const document = result.document && typeof result.document === "object" ? result.document : {};
+    const documentId = firstWarehouseText(result.documentId, document.id, result.transferId);
+    const documentNumber = firstWarehouseText(result.documentNumber, document.document_number, result.transferId, "PV-előkészítés");
+    const knownPreparation = openTransferPreparations.find((item) =>
+      String(item.id || "") === documentId ||
+      normalizeSearch(item.document_number) === normalizeSearch(documentNumber)
+    ) || null;
+    const knownTotalValue = priceNumber(knownPreparation?.total_value) || 0;
+    const totalValue = priceNumber(result.documentTotalValue ?? document.total_value) ?? (knownTotalValue + fallbackAddedValue);
+    const totalQty = Math.max(0, Math.floor(n(result.documentTotalQty ?? document.total_qty ?? result.totalQty ?? result.movedQty ?? knownPreparation?.total_qty)));
+    const addedValue = Math.max(0, fallbackAddedValue);
+    const uitCode = warehousePreparationUitCode(document) || warehousePreparationUitCode(knownPreparation);
+    const crossedThreshold = totalValue >= WAREHOUSE_UIT_WARNING_THRESHOLD_RON;
+
+    const summary: WarehouseTransferPreparationSummary = {
+      id: documentId,
+      document_number: documentNumber,
+      document_type: "internal_transfer",
+      status: String(result.status || document.status || "preparation"),
+      total_value: totalValue,
+      total_qty: totalQty,
+      line_count: result.documentLineCount ?? document.line_count ?? null,
+      source_location_id: firstWarehouseText(document.source_location_id, document.sourceLocationId, knownPreparation?.source_location_id) || null,
+      target_location_id: firstWarehouseText(document.target_location_id, document.targetLocationId, knownPreparation?.target_location_id) || null,
+      from_location_summary: firstWarehouseText(document.from_location_summary, document.fromLocationName, knownPreparation?.from_location_summary) || null,
+      to_location_summary: firstWarehouseText(document.to_location_summary, document.toLocationName, knownPreparation?.to_location_summary) || null,
+      uit_code: uitCode || null,
+      raw: document.raw && typeof document.raw === "object" ? document.raw : null,
+    };
+
+    if (documentId) {
+      setOpenTransferPreparations((current) => {
+        const next = current.filter((item) => String(item.id || "") !== documentId);
+        return [summary, ...next];
+      });
+      setOpenTransferPreparationsLoaded(true);
+    }
+
+    showWarehouseTransferToast({
+      documentId,
+      documentNumber,
+      totalValue,
+      totalQty,
+      addedValue,
+      crossedThreshold,
+      uitRecorded: Boolean(uitCode),
+    });
+
+    if (
+      crossedThreshold &&
+      !uitCode &&
+      !result.duplicate &&
+      !warehouseUitWarningIsSuppressed(documentId, documentNumber)
+    ) {
+      setWarehouseUitSuppressChecked(false);
+      setWarehouseUitWarning({
+        documentId,
+        documentNumber,
+        totalValue,
+        totalQty,
+        addedValue,
+      });
+    }
+
+    void refreshOpenTransferPreparations();
+  }
+
   function movePrintLines() {
     return moveValidRows.map((row, index): StockTransferPrintLine => {
       const unitPrice = priceNumber(row.item.sell_price) || 0;
@@ -8172,6 +8505,7 @@ export default function AllInWarehouse() {
     setMessage("");
     try {
       const result = await apiStockTransfer({ ...payload, idempotencyKey });
+      handleWarehouseStockTransferResult(result, moveTotalValue);
       notifyStockMovesChanged({ source: "warehouse_transfer", transferId: result.transferId, duplicate: Boolean(result.duplicate) });
       await load();
       const movedLines = Number(result.movedLines ?? result.movedRows ?? result.lineCount ?? rowsToMove.length);
@@ -12199,6 +12533,58 @@ export default function AllInWarehouse() {
         </div>
       )}
 
+      {warehouseMoveValuePreview && (
+        <div className="pointer-events-none fixed right-5 top-[96px] z-[76] w-[310px] overflow-hidden rounded-[22px] border border-white/18 bg-[#202c3d]/96 text-white shadow-[0_28px_78px_rgba(2,6,23,0.58)] backdrop-blur-xl">
+          <div className={`h-1.5 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2dd4bf]"}`} />
+          <div className="p-3.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300/30 bg-red-500/14 text-red-200" : "border-[#5eead4]/25 bg-[#2dd4bf]/12 text-[#99f6e4]"}`}>
+                  {warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? <AlertTriangle size={18} /> : warehouseMoveValuePreview.uitRecorded ? <CheckCircle2 size={18} /> : <Receipt size={18} />}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-white/42">PV-előkészítés élő értéke</p>
+                  <p className="mt-1 truncate text-sm text-white" title={`${warehouseMoveValuePreview.fromLocationName} → ${warehouseMoveValuePreview.toLocationName}`}>
+                    {warehouseMoveValuePreview.preparation?.document_number || "Új előkészítés"}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-white/46">{warehouseMoveValuePreview.fromLocationName} → {warehouseMoveValuePreview.toLocationName}</p>
+                </div>
+              </div>
+              {openTransferPreparationsBusy ? <RefreshCw size={14} className="mt-1 shrink-0 animate-spin text-white/45" /> : null}
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="rounded-xl border border-white/10 bg-white/[0.05] px-2.5 py-2">
+                <span className="block text-white/42">Már az előkészítésben</span>
+                <strong className="mt-1 block text-[13px] font-normal text-white">{openTransferPreparationsLoaded ? `${money(warehouseMoveValuePreview.currentValue)} RON` : "Betöltés..."}</strong>
+              </div>
+              <div className="rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/12 px-2.5 py-2">
+                <span className="block text-[#cffffd]/55">Most hozzáadod</span>
+                <strong className="mt-1 block text-[13px] font-normal text-[#d7fffd]">+ {money(warehouseMoveValuePreview.addedValue)} RON</strong>
+                <span className="mt-0.5 block text-[9px] text-white/38">{warehouseMoveValuePreview.qty} db</span>
+              </div>
+            </div>
+
+            <div className={`mt-2 rounded-2xl border px-3 py-2.5 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300/35 bg-red-500/14" : "border-[#5eead4]/22 bg-[#2dd4bf]/10"}`}>
+              <div className="flex items-center justify-between gap-3">
+                <span className={`text-[10px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "text-red-200" : "text-[#99f6e4]"}`}>Mentés után</span>
+                <span className={`rounded-full border px-2 py-0.5 text-[9px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300/35 bg-red-500/15 text-red-100" : "border-[#5eead4]/25 bg-[#2dd4bf]/10 text-[#ccfbf1]"}`}>
+                  {warehouseMoveValuePreview.uitRecorded ? "UIT rögzítve" : warehouseMoveValuePreview.thresholdReached ? "UIT szükséges" : `${money(Math.max(0, warehouseMoveValuePreview.remainingValue))} RON maradt`}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[24px] leading-none text-white">{money(warehouseMoveValuePreview.projectedValue)} <span className="text-[10px] text-white/45">RON</span></p>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/25">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2dd4bf]"}`}
+                  style={{ width: `${Math.min(100, Math.max(2, (warehouseMoveValuePreview.projectedValue / WAREHOUSE_UIT_WARNING_THRESHOLD_RON) * 100))}%` }}
+                />
+              </div>
+              <p className="mt-2 text-[9px] leading-relaxed text-white/42">A darabszám vagy egy terméksor módosításakor az összeg azonnal újraszámolódik.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ShopifyProductExportModal
         open={shopifyExportModalOpen}
         items={shopifyExportItems}
@@ -12211,6 +12597,86 @@ export default function AllInWarehouse() {
         onClose={() => setShopifySyncCenterOpen(false)}
         onChanged={() => load()}
       />
+
+      {warehouseTransferToast && (
+        <div className={`fixed bottom-5 right-5 z-[125] w-[360px] overflow-hidden rounded-[22px] border bg-[#202c3d]/98 text-white shadow-[0_28px_80px_rgba(2,6,23,0.62)] backdrop-blur-xl ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300/35" : "border-[#7bd7d4]/30"}`}>
+          <div className={`h-1.5 ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "bg-red-500" : "bg-[#2dd4bf]"}`} />
+          <div className="flex items-start gap-3 p-3.5">
+            <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300/30 bg-red-500/14 text-red-200" : "border-[#5eead4]/25 bg-[#2dd4bf]/12 text-[#99f6e4]"}`}>
+              {warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/42">Előkészítés frissítve</p>
+              <p className="mt-1 truncate text-sm text-white" title={warehouseTransferToast.documentNumber}>{warehouseTransferToast.documentNumber}</p>
+              <p className="mt-1 text-[11px] text-white/54">Most hozzáadva: +{money(warehouseTransferToast.addedValue)} RON</p>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <p className="text-[22px] leading-none text-white">{money(warehouseTransferToast.totalValue)} <span className="text-[10px] text-white/45">RON</span></p>
+                <span className={`rounded-full border px-2 py-1 text-[9px] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300/35 bg-red-500/15 text-red-100" : "border-[#5eead4]/25 bg-[#2dd4bf]/10 text-[#ccfbf1]"}`}>
+                  {warehouseTransferToast.uitRecorded ? "UIT rögzítve" : warehouseTransferToast.crossedThreshold ? "UIT-határ elérve" : `${money(Math.max(0, WAREHOUSE_UIT_WARNING_THRESHOLD_RON - warehouseTransferToast.totalValue))} RON a határig`}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06] text-white/60 hover:bg-white/[0.10] hover:text-white"
+              onClick={() => setWarehouseTransferToast(null)}
+              aria-label="Értesítés bezárása"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {warehouseUitWarning && (
+        <div className="fixed inset-0 z-[135] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-md" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWarehouseUitWarning(); }}>
+          <div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-red-300/40 bg-[#3e4858] text-white shadow-[0_34px_100px_rgba(2,6,23,0.72)]">
+            <div className="flex items-start gap-3 border-b border-white/12 bg-gradient-to-r from-[#6f1d2d] via-[#8d2436] to-[#d31126] px-4 py-4">
+              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/22 bg-white/12 text-white shadow-lg"><AlertTriangle size={23} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-white/72">UIT figyelmeztetés</p>
+                <h2 className="mt-1 text-[22px] leading-tight text-white">Az előkészítés elérte a 10.000 RON-t</h2>
+                <p className="mt-1 truncate text-xs text-white/72" title={warehouseUitWarning.documentNumber}>{warehouseUitWarning.documentNumber}</p>
+              </div>
+              <button type="button" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/12 text-white hover:bg-black/20" onClick={closeWarehouseUitWarning} aria-label="Bezárás"><X size={15} /></button>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-2xl border border-white/12 bg-[#303a4c] px-3 py-3">
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Most hozzáadva</p>
+                  <p className="mt-1 text-[18px] text-white">+{money(warehouseUitWarning.addedValue)} RON</p>
+                </div>
+                <div className="rounded-2xl border border-red-300/28 bg-red-500/14 px-3 py-3">
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-red-200">Előkészítés összesen</p>
+                  <p className="mt-1 text-[18px] text-white">{money(warehouseUitWarning.totalValue)} RON</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-red-300/24 bg-red-950/20 px-3.5 py-3 text-xs leading-relaxed text-red-50">
+                A szállításhoz UIT kód szükséges. A munkát nyugodtan folytathatod, ez csak egyszer szól, és az adott előkészítésnél letilthatod a további felugró figyelmeztetést.
+              </div>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/12 bg-white/[0.05] px-3.5 py-3 text-xs leading-relaxed text-white/78 hover:bg-white/[0.08]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-[#2a8d8b]"
+                  checked={warehouseUitSuppressChecked}
+                  onChange={(event) => setWarehouseUitSuppressChecked(event.target.checked)}
+                />
+                <span><span className="block text-white">Ennél az előkészítésnél ne mutassa újra</span><span className="mt-1 block text-[10px] text-white/45">A piros UIT jelzés a Készletbizonylatok oldalon továbbra is megmarad.</span></span>
+              </label>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <span className="text-[10px] text-white/42">ESC: bezárás és munka folytatása</span>
+                <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_10px_24px_rgba(15,23,42,0.22)] hover:bg-[#319c99]" onClick={closeWarehouseUitWarning}>
+                  <CheckCircle2 size={15} /> Tudomásul vettem
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {stockMoveConfirmOpen && selectedWorkPanel === "move" && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-md">
