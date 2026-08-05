@@ -2467,7 +2467,7 @@ export function apiAifGetShopCustomer(
   return fetchAifJSON<AifShopCustomerDetail>(`/shop-customers/${encodeURIComponent(id)}${suffix}`);
 }
 
-export function apiAifCreateShopCustomer(input: {
+export type AifShopCustomerInput = {
   fullName: string;
   phone: string;
   email?: string | null;
@@ -2478,11 +2478,41 @@ export function apiAifCreateShopCustomer(input: {
   localityCode: string;
   postalCode?: string | null;
   note?: string | null;
-}) {
+};
+
+export function apiAifCreateShopCustomer(input: AifShopCustomerInput) {
   return fetchAifJSON<{ ok: true; duplicate?: boolean; item: AifShopCustomer }>("/shop-customers", {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function apiAifUpdateShopCustomer(id: string, input: AifShopCustomerInput) {
+  return fetchAifJSON<{ ok: true; item: AifShopCustomer }>(
+    `/shop-customers/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export type AifShopCustomerDeleteResult = {
+  ok: true;
+  mode: "deleted" | "archived";
+  id: string;
+  usage: {
+    sales: number;
+    payments: number;
+    openBalance: number;
+  };
+};
+
+export function apiAifDeleteShopCustomer(id: string) {
+  return fetchAifJSON<AifShopCustomerDeleteResult>(
+    `/shop-customers/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 }
 
 export function apiAifRecordShopCustomerPayment(
