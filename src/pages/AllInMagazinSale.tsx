@@ -33,8 +33,12 @@ import {
 import {
   apiAifCompleteShopSale,
   apiAifCreateShopCustomer,
+  apiAifListRomaniaCounties,
+  apiAifListRomaniaLocalities,
   apiAifListShopCustomers,
   apiAifShopSaleCatalog,
+  type AifRomaniaCounty,
+  type AifRomaniaLocality,
   type AifShopCustomer,
   type AifShopSaleCatalogItem,
   type AifShopSalePaymentMethod,
@@ -60,6 +64,9 @@ type CustomerDraft = {
   fullName: string;
   phone: string;
   email: string;
+  countyCode: string;
+  localityCode: string;
+  postalCode: string;
   address: string;
   note: string;
 };
@@ -75,6 +82,9 @@ const EMPTY_CUSTOMER: CustomerDraft = {
   fullName: "",
   phone: "",
   email: "",
+  countyCode: "",
+  localityCode: "",
+  postalCode: "",
   address: "",
   note: "",
 };
@@ -119,6 +129,18 @@ function productCode(item: AifShopSaleCatalogItem) {
   return item.productCode || item.modelCode || item.internalSku || item.barcode || "–";
 }
 
+function preferredCountyCode(locationCode: Props["locationCode"]) {
+  return locationCode === "magazin_targu_secuiesc" ? "CV" : "HR";
+}
+
+function customerAddressLabel(customer: AifShopCustomer) {
+  const locality = customer.localityName || customer.city || "";
+  const county = customer.countyName || "";
+  return [[locality, county].filter(Boolean).join(", "), customer.address, customer.postalCode]
+    .filter(Boolean)
+    .join(" • ");
+}
+
 function exactCatalogMatch(item: AifShopSaleCatalogItem, query: string) {
   const wanted = query.trim().toLowerCase();
   if (!wanted) return false;
@@ -144,6 +166,7 @@ export default function AllInMagazinSale({
 }: Props) {
   const storageKey = `allin:shop-sale-cart:${locationCode}`;
   const shopId = locationCode === "main_warehouse" ? "csikszereda" : "kezdivasarhely";
+  const defaultCountyCode = preferredCountyCode(locationCode);
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<AifShopSaleCatalogItem[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -165,6 +188,9 @@ export default function AllInMagazinSale({
   const [customerLoading, setCustomerLoading] = useState(false);
   const [customerSaving, setCustomerSaving] = useState(false);
   const [customerDraft, setCustomerDraft] = useState<CustomerDraft>(EMPTY_CUSTOMER);
+  const [counties, setCounties] = useState<AifRomaniaCounty[]>([]);
+  const [localities, setLocalities] = useState<AifRomaniaLocality[]>([]);
+  const [geoLoading, setGeoLoading] = useState(false);
   const [administrationAccessOpen, setAdministrationAccessOpen] = useState(false);
   const [administrationCode, setAdministrationCode] = useState("");
   const [administrationBusy, setAdministrationBusy] = useState(false);
@@ -467,6 +493,51 @@ export default function AllInMagazinSale({
     }
   }
 
+  async function loadLocalities(countyCode: string, selectedCode = "") {
+    if (!countyCode) {
+      setLocalities([]);
+      return;
+    }
+    setGeoLoading(true);
+    try {
+      const response = await apiAifListRomaniaLocalities({ countyCode, limit: 1000 });
+      setLocalities(response.items || []);
+      if (selectedCode && !(response.items || []).some((item) => item.code === selectedCode)) {
+        setCustomerDraft((current) => ({ ...current, localityCode: "", postalCode: "" }));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A helységek nem tölthetők be.");
+      setLocalities([]);
+    } finally {
+      setGeoLoading(false);
+    }
+  }
+
+  async function loadCountiesForForm() {
+    try {
+      const response = await apiAifListRomaniaCounties();
+      setCounties(response.items || []);
+      return response.items || [];
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A megyék nem tölthetők be.");
+      return [];
+    }
+  }
+
+  function changeCustomerCounty(countyCode: string) {
+    setCustomerDraft((current) => ({ ...current, countyCode, localityCode: "", postalCode: "" }));
+    void loadLocalities(countyCode);
+  }
+
+  function changeCustomerLocality(localityCode: string) {
+    const locality = localities.find((item) => item.code === localityCode);
+    setCustomerDraft((current) => ({
+      ...current,
+      localityCode,
+      postalCode: locality?.postalCode || current.postalCode || "",
+    }));
+  }
+
   function openCustomerModal(mode: CustomerModalMode = "search") {
     setCustomerModalMode(mode);
     setCustomerModalOpen(true);
@@ -475,7 +546,10 @@ export default function AllInMagazinSale({
       setCustomerQuery("");
       void loadCustomers("");
     } else {
-      setCustomerDraft(EMPTY_CUSTOMER);
+      setCustomerDraft({ ...EMPTY_CUSTOMER, countyCode: defaultCountyCode });
+      setLocalities([]);
+      void loadLocalities(defaultCountyCode);
+      if (!counties.length) void loadCountiesForForm();
     }
   }
 
@@ -500,6 +574,10 @@ export default function AllInMagazinSale({
       setError("Új kliensnél a név és a telefonszám kötelező.");
       return;
     }
+    if (!customerDraft.countyCode || !customerDraft.localityCode) {
+      setError("Új kliensnél a megye és a helység kiválasztása kötelező.");
+      return;
+    }
 
     setCustomerSaving(true);
     setError("");
@@ -508,6 +586,10 @@ export default function AllInMagazinSale({
         fullName,
         phone,
         email: customerDraft.email.trim() || null,
+        countryCode: "RO",
+        countyCode: customerDraft.countyCode,
+        localityCode: customerDraft.localityCode,
+        postalCode: customerDraft.postalCode.trim() || null,
         address: customerDraft.address.trim() || null,
         note: customerDraft.note.trim() || null,
       });
@@ -556,6 +638,10 @@ export default function AllInMagazinSale({
               phone: selectedCustomer.phone || "",
               email: selectedCustomer.email || null,
               address: selectedCustomer.address || null,
+              countryCode: selectedCustomer.countryCode || "RO",
+              countyCode: selectedCustomer.countyCode || null,
+              localityCode: selectedCustomer.localityCode || null,
+              postalCode: selectedCustomer.postalCode || null,
               note: selectedCustomer.notes || null,
             }
           : undefined,
@@ -769,6 +855,7 @@ export default function AllInMagazinSale({
                       <span>{numberValue(selectedCustomer.saleCount)} korábbi vásárlás</span>
                       {numberValue(selectedCustomer.openBalance) > 0 ? <span className="text-rose-100">Hátralék: {formatMoney(numberValue(selectedCustomer.openBalance))}</span> : null}
                     </p>
+                    {customerAddressLabel(selectedCustomer) ? <p className="mt-1 truncate text-[10px] text-white/62">{customerAddressLabel(selectedCustomer)}</p> : null}
                     <p className="mt-1 text-[10px] text-[#bdf8f5]/70">Ez a vásárlás is bekerül a kliens előzményeibe.</p>
                   </div>
                   <button
@@ -1069,7 +1156,7 @@ export default function AllInMagazinSale({
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" onClick={() => { setCustomerModalMode("search"); setCustomerQuery(""); void loadCustomers(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white ${customerModalMode === "search" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><Search size={15} /> Keresés</button>
-                <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft(EMPTY_CUSTOMER); setError(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white ${customerModalMode === "new" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><UserPlus size={15} /> Új kliens</button>
+                <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft({ ...EMPTY_CUSTOMER, countyCode: defaultCountyCode }); setLocalities([]); void loadLocalities(defaultCountyCode); if (!counties.length) void loadCountiesForForm(); setError(""); }} className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white ${customerModalMode === "new" ? "border-[#9be9e5]/45 bg-[#2a8d8b]" : "border-white/15 bg-white/[0.05]"}`}><UserPlus size={15} /> Új kliens</button>
                 <button type="button" onClick={() => setCustomerModalOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button>
               </div>
             </div>
@@ -1112,7 +1199,7 @@ export default function AllInMagazinSale({
                             <div className="mt-2 space-y-1 text-xs text-white/52">
                               {item.phone ? <p className="flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{item.phone}</p> : null}
                               {item.email ? <p className="flex items-center gap-2 truncate"><Mail size={13} className="text-[#8ee6e2]" />{item.email}</p> : null}
-                              {item.address ? <p className="flex items-center gap-2 truncate"><MapPin size={13} className="text-[#8ee6e2]" />{item.address}</p> : null}
+                              {customerAddressLabel(item) ? <p className="flex items-center gap-2 truncate"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(item)}</p> : null}
                             </div>
                             <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
                               <span className="rounded-full border border-white/12 bg-black/10 px-2 py-1">{numberValue(item.saleCount)} vásárlás</span>
@@ -1126,7 +1213,7 @@ export default function AllInMagazinSale({
                         <Users size={38} className="text-white/28" />
                         <p className="mt-3 text-base text-white/68">Nincs találat</p>
                         <p className="mt-1 text-xs text-white/42">Keress másképp, vagy rögzíts új klienst.</p>
-                        <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft({ ...EMPTY_CUSTOMER, fullName: customerQuery }); }} className="mt-4 inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm text-white"><UserPlus size={17} /> Új kliens</button>
+                        <button type="button" onClick={() => { setCustomerModalMode("new"); setCustomerDraft({ ...EMPTY_CUSTOMER, fullName: customerQuery, countyCode: defaultCountyCode }); setLocalities([]); void loadLocalities(defaultCountyCode); if (!counties.length) void loadCountiesForForm(); }} className="mt-4 inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-4 text-sm text-white"><UserPlus size={17} /> Új kliens</button>
                       </div>
                     )}
                   </div>
@@ -1142,7 +1229,10 @@ export default function AllInMagazinSale({
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Név *<input autoFocus value={customerDraft.fullName} onChange={(event) => setCustomerDraft((current) => ({ ...current, fullName: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Telefonszám *<input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">E-mail<input type="email" value={customerDraft.email} onChange={(event) => setCustomerDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
-                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Cím<input value={customerDraft.address} onChange={(event) => setCustomerDraft((current) => ({ ...current, address: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megye *<select value={customerDraft.countyCode} onChange={(event) => changeCustomerCounty(event.target.value)} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]"><option value="">Válassz megyét</option>{counties.map((county) => <option key={county.code} value={county.code}>{county.name}</option>)}</select></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Helység *<select value={customerDraft.localityCode} onChange={(event) => changeCustomerLocality(event.target.value)} disabled={!customerDraft.countyCode || geoLoading} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4] disabled:cursor-not-allowed disabled:opacity-50"><option value="">{geoLoading ? "Helységek betöltése…" : "Válassz helységet"}</option>{localities.map((locality) => <option key={locality.code} value={locality.code}>{locality.name}</option>)}</select></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Irányítószám<input value={customerDraft.postalCode} onChange={(event) => setCustomerDraft((current) => ({ ...current, postalCode: event.target.value.replace(/[^0-9]/g, "").slice(0, 6) }))} placeholder="Automatikusan kitöltődik" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48 sm:col-span-2">Pontos cím<input value={customerDraft.address} onChange={(event) => setCustomerDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Utca, házszám, tömbház, lépcsőház, lakás…" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                     </div>
                     <label className="mt-3 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megjegyzés<textarea value={customerDraft.note} onChange={(event) => setCustomerDraft((current) => ({ ...current, note: event.target.value }))} rows={3} className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                   </div>
