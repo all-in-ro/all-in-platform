@@ -170,6 +170,7 @@ function TouchDateControl({
         >
           <ChevronLeft size={25} />
         </button>
+
         <div className="relative min-w-0">
           <input
             ref={inputRef}
@@ -177,20 +178,21 @@ function TouchDateControl({
             value={value}
             min={min}
             onChange={(event) => onChange(event.target.value)}
-            onClick={(event) => {
-              if (typeof event.currentTarget.showPicker === "function") event.currentTarget.showPicker();
-            }}
-            className="h-16 w-full touch-manipulation bg-transparent px-4 text-center text-lg text-white outline-none [color-scheme:dark] focus:bg-white/[0.04]"
+            className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+            tabIndex={-1}
+            aria-hidden="true"
           />
           <button
             type="button"
             onClick={openPicker}
-            className="pointer-events-auto absolute inset-y-0 right-0 inline-flex w-14 items-center justify-center text-[#9ff3ef]"
-            aria-label={`${label}: naptár megnyitása`}
+            className="flex h-16 w-full touch-manipulation items-center justify-center gap-3 px-3 text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
+            aria-label={`${label}: ${formatDate(value)}, naptár megnyitása`}
           >
-            <CalendarDays size={23} />
+            <span className="whitespace-nowrap text-lg tabular-nums">{formatDate(value)}</span>
+            <CalendarDays size={22} className="shrink-0 text-[#9ff3ef]" />
           </button>
         </div>
+
         <button
           type="button"
           onClick={() => shift(1)}
