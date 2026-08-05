@@ -2419,7 +2419,13 @@ type WarehouseLabelPreset = {
 };
 
 const WAREHOUSE_LABEL_COMPANY = "TITAN EURO-COM SRL";
+// Az előnézet legnagyobb nagyítása. A tényleges értéket a panel szélessége
+// alapján számoljuk, így az A4-es lap nem lóg ki és nem vágódik le.
 const WAREHOUSE_LABEL_PREVIEW_SCALE = 0.72;
+// Kis vágási köz maradjon a címkék között. A számítás szükség esetén
+// automatikusan csökkenti a külső margót, hogy az előírt címkeméret megmaradjon.
+const WAREHOUSE_LABEL_GAP_X_MM = 1.5;
+const WAREHOUSE_LABEL_GAP_Y_MM = 1.5;
 
 const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
   { id: "40x46", name: "40 × 46 mm, 5 × 6 pe A4", width: "40", height: "46", cols: "5", rows: "6", marginX: "5", marginY: "5" },
@@ -2495,7 +2501,8 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
   overflow:hidden;
   display:flex;
   flex-wrap:wrap;
-  gap:0;
+  column-gap:var(--aif-label-gap-x, 0mm);
+  row-gap:var(--aif-label-gap-y, 0mm);
   padding:var(--aif-label-margin-y) var(--aif-label-margin-x);
   box-sizing:border-box;
   align-content:flex-start;
@@ -2725,6 +2732,8 @@ type WarehouseLabelPrintDocumentLayout = {
   labelRowCount: number;
   labelMarginXmm: number;
   labelMarginYmm: number;
+  labelGapXmm: number;
+  labelGapYmm: number;
 };
 
 function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: WarehouseLabelPrintDocumentOptions) {
@@ -2779,6 +2788,8 @@ function warehouseLabelPrintStyleString(layout: WarehouseLabelPrintDocumentLayou
     `--aif-label-rows:${layout.labelRowCount}`,
     `--aif-label-margin-x:${layout.labelMarginXmm}mm`,
     `--aif-label-margin-y:${layout.labelMarginYmm}mm`,
+    `--aif-label-gap-x:${layout.labelGapXmm}mm`,
+    `--aif-label-gap-y:${layout.labelGapYmm}mm`,
   ].join(";");
 }
 
@@ -5258,6 +5269,8 @@ export default function AllInWarehouse() {
   const [labelContent, setLabelContent] = useState<Record<WarehouseLabelContentKey, boolean>>(WAREHOUSE_LABEL_DEFAULT_CONTENT);
   const [labelTemplateName, setLabelTemplateName] = useState("Standard 40x46");
   const [labelTemplates, setLabelTemplates] = useState<WarehouseLabelTemplate[]>(() => readWarehouseLabelTemplates());
+  const labelPreviewFrameRef = useRef<HTMLDivElement | null>(null);
+  const [labelPreviewScale, setLabelPreviewScale] = useState(0.58);
   const [labelDetailMap, setLabelDetailMap] = useState<Record<string, DetailResponse>>({});
   const [labelDetailsBusy, setLabelDetailsBusy] = useState(false);
   const [barcodeScanner, setBarcodeScanner] = useState<BarcodeScannerSession | null>(null);
@@ -8628,6 +8641,32 @@ export default function AllInWarehouse() {
     }
   }
 
+  useEffect(() => {
+    if (!labelComposerOpen) return;
+    const frame = labelPreviewFrameRef.current;
+    if (!frame) return;
+
+    const updatePreviewScale = () => {
+      // 1 mm = 96 / 25.4 CSS pixel. A belső 28 px a preview keretének kétoldali paddingje.
+      const a4WidthPx = 210 * 96 / 25.4;
+      const availableWidth = Math.max(240, frame.clientWidth - 28);
+      const nextScale = Math.min(
+        WAREHOUSE_LABEL_PREVIEW_SCALE,
+        Math.max(0.32, availableWidth / a4WidthPx),
+      );
+      setLabelPreviewScale((current) => Math.abs(current - nextScale) < 0.002 ? current : Number(nextScale.toFixed(4)));
+    };
+
+    updatePreviewScale();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updatePreviewScale) : null;
+    observer?.observe(frame);
+    window.addEventListener("resize", updatePreviewScale);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updatePreviewScale);
+    };
+  }, [labelComposerOpen]);
+
   function updateLabelCopies(id: string, value: string) {
     const qty = labelInt(value, 1, 0, 999);
     setLabelCopies((current) => ({ ...current, [id]: String(qty) }));
@@ -8644,8 +8683,22 @@ export default function AllInWarehouse() {
   const labelH = labelMm(labelHeight, 46, 15, 100);
   const labelColCount = labelInt(labelCols, 5, 1, 8);
   const labelRowCount = labelInt(labelRows, 6, 1, 12);
-  const labelMarginXmm = labelMm(labelMarginX, 5, 0, 25);
-  const labelMarginYmm = labelMm(labelMarginY, 5, 0, 25);
+  const requestedLabelMarginXmm = labelMm(labelMarginX, 5, 0, 25);
+  const requestedLabelMarginYmm = labelMm(labelMarginY, 5, 0, 25);
+  // A címkék közti rés valódi üres vágási sáv. A megadott címkeméretet nem
+  // zsugorítjuk; ha kell, inkább a külső A4-margó csökken automatikusan.
+  const maxLabelGapXmm = labelColCount > 1
+    ? Math.max(0, (210 - labelColCount * labelW) / (labelColCount - 1))
+    : 0;
+  const maxLabelGapYmm = labelRowCount > 1
+    ? Math.max(0, (297 - labelRowCount * labelH) / (labelRowCount - 1))
+    : 0;
+  const labelGapXmm = labelColCount > 1 ? Math.min(WAREHOUSE_LABEL_GAP_X_MM, maxLabelGapXmm) : 0;
+  const labelGapYmm = labelRowCount > 1 ? Math.min(WAREHOUSE_LABEL_GAP_Y_MM, maxLabelGapYmm) : 0;
+  const maxLabelMarginXmm = Math.max(0, (210 - labelColCount * labelW - (labelColCount - 1) * labelGapXmm) / 2);
+  const maxLabelMarginYmm = Math.max(0, (297 - labelRowCount * labelH - (labelRowCount - 1) * labelGapYmm) / 2);
+  const labelMarginXmm = Math.min(requestedLabelMarginXmm, maxLabelMarginXmm);
+  const labelMarginYmm = Math.min(requestedLabelMarginYmm, maxLabelMarginYmm);
   const labelsPerPage = Math.max(1, labelColCount * labelRowCount);
 
   const labelRowsForPrint = useMemo(() => {
@@ -8732,11 +8785,13 @@ export default function AllInWarehouse() {
     "--aif-label-rows": String(labelRowCount),
     "--aif-label-margin-x": `${labelMarginXmm}mm`,
     "--aif-label-margin-y": `${labelMarginYmm}mm`,
+    "--aif-label-gap-x": `${labelGapXmm}mm`,
+    "--aif-label-gap-y": `${labelGapYmm}mm`,
     "--aif-label-page-w": "210mm",
     "--aif-label-page-h": "297mm",
-    "--aif-label-preview-scale": String(WAREHOUSE_LABEL_PREVIEW_SCALE),
-    "--aif-label-preview-w": `${210 * WAREHOUSE_LABEL_PREVIEW_SCALE}mm`,
-    "--aif-label-preview-h": `${297 * WAREHOUSE_LABEL_PREVIEW_SCALE}mm`,
+    "--aif-label-preview-scale": String(labelPreviewScale),
+    "--aif-label-preview-w": `${210 * labelPreviewScale}mm`,
+    "--aif-label-preview-h": `${297 * labelPreviewScale}mm`,
   } as React.CSSProperties & Record<string, string>;
 
   function printGeneratedLabels() {
@@ -8755,7 +8810,7 @@ export default function AllInWarehouse() {
     const printHtml = warehouseLabelPrintDocumentHtml(
       labelPrintPages,
       { labelContent, labelCompanyName, labelCurrency, labelUnitText, labelShowBorder },
-      { labelW, labelH, labelColCount, labelRowCount, labelMarginXmm, labelMarginYmm },
+      { labelW, labelH, labelColCount, labelRowCount, labelMarginXmm, labelMarginYmm, labelGapXmm, labelGapYmm },
     );
 
     const iframe = document.createElement("iframe");
@@ -11364,7 +11419,7 @@ export default function AllInWarehouse() {
                     <span className="text-xs text-white/55">{Math.min(labelPrintItems.length, labelsPerPage)} / {labelPrintItems.length} címke</span>
                   </div>
                   {labelPrintItems.length ? (
-                    <div className="aifWhLabelPreviewFrame" style={labelPrintStyle}>
+                    <div ref={labelPreviewFrameRef} className="aifWhLabelPreviewFrame" style={labelPrintStyle}>
                       <div className="aifWhLabelPreviewPageBox">
                         <div className="aifWarehouseLabelPrintPage">
                           {(labelPrintPages[0] || []).map((printLabel) => (
