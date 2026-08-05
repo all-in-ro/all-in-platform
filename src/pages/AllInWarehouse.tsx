@@ -2425,7 +2425,7 @@ const WAREHOUSE_LABEL_PREVIEW_SCALE = 0.72;
 // Kis vágási köz maradjon a címkék között. A számítás szükség esetén
 // automatikusan csökkenti a külső margót, hogy az előírt címkeméret megmaradjon.
 const WAREHOUSE_LABEL_GAP_X_MM = 2;
-const WAREHOUSE_LABEL_GAP_Y_MM = 3;
+const WAREHOUSE_LABEL_GAP_Y_MM = 2;
 
 const WAREHOUSE_LABEL_PRESETS: WarehouseLabelPreset[] = [
   { id: "40x46", name: "40 × 46 mm, 5 × 6 pe A4", width: "40", height: "46", cols: "5", rows: "6", marginX: "5", marginY: "5" },
@@ -2524,14 +2524,14 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
   min-height:0;
   border:.2mm solid #d9dde3;
   border-radius:2mm;
-  padding:1.15mm 1.3mm;
+  padding:1.25mm 1.45mm;
   color:#111;
   background:#fff;
   overflow:hidden;
   box-sizing:border-box;
   display:flex;
   flex-direction:column;
-  justify-content:flex-start;
+  justify-content:center;
   font-family:Arial, sans-serif;
   page-break-inside:avoid;
   break-inside:avoid;
@@ -2545,19 +2545,19 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 .aifWhLabelDescription,
 .aifWhLabelCategory,
 .aifWhLabelCode { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.aifWhLabelCompany { font-size:7.2px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.055em; color:#333; margin-bottom:.35mm; }
-.aifWhLabelBrand { font-size:7px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.04em; color:#222; margin-bottom:.3mm; }
-.aifWhLabelTitle { font-size:9px; line-height:1.05; text-align:center; color:#111; margin-bottom:.4mm; flex:0 0 auto; }
-.aifWhLabelMeta { display:flex; justify-content:center; gap:4px; flex-wrap:nowrap; color:#333; font-size:7.5px; line-height:1; margin-bottom:.4mm; min-height:2mm; }
-.aifWhBarcodeSvgWrap { width:100%; height:12.5mm; overflow:hidden; flex:0 0 12.5mm; display:flex; align-items:center; justify-content:center; }
+.aifWhLabelCompany { font-size:8.4px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.055em; color:#333; margin-bottom:.45mm; }
+.aifWhLabelBrand { font-size:8px; line-height:1.05; text-align:center; text-transform:uppercase; letter-spacing:.04em; color:#222; margin-bottom:.4mm; }
+.aifWhLabelTitle { font-size:10.4px; line-height:1.06; text-align:center; color:#111; margin-bottom:.55mm; flex:0 0 auto; }
+.aifWhLabelMeta { display:flex; justify-content:center; gap:4px; flex-wrap:nowrap; color:#333; font-size:8.2px; line-height:1; margin-bottom:.5mm; min-height:2mm; }
+.aifWhBarcodeSvgWrap { width:100%; height:13.8mm; overflow:hidden; flex:0 0 13.8mm; display:flex; align-items:center; justify-content:center; margin-bottom:.45mm; }
 .aifWhBarcodeSvgWrap svg { display:block; width:100%; height:100%; max-width:100%; max-height:100%; }
-.aifWhLabelDescription { margin-top:.35mm; text-align:center; font-size:7px; line-height:1; color:#222; }
-.aifWhLabelCategory { margin-top:.35mm; text-align:center; text-transform:uppercase; font-size:7.4px; line-height:1; color:#111; }
-.aifWhLabelCode { margin-top:.35mm; font-size:6.6px; line-height:1; color:#444; text-align:center; }
-.aifWhLabelPrice { margin-top:auto; padding-top:.45mm; text-align:center; line-height:.92; color:#111; white-space:nowrap; }
-.aifWhPriceMajor { font-size:17px; letter-spacing:.055em; }
-.aifWhPriceCents { font-size:9.5px; vertical-align:top; margin-left:1px; }
-.aifWhPriceUnit { display:inline-block; font-size:6.5px; margin-left:2px; vertical-align:baseline; }
+.aifWhLabelDescription { text-align:center; font-size:7.7px; line-height:1.05; color:#222; margin-bottom:.35mm; }
+.aifWhLabelCategory { text-align:center; text-transform:uppercase; font-size:8.1px; line-height:1.05; color:#111; margin-bottom:.35mm; }
+.aifWhLabelCode { font-size:7.1px; line-height:1.05; color:#444; text-align:center; margin-bottom:.55mm; }
+.aifWhLabelPrice { margin-top:0; padding-top:0; text-align:center; line-height:.92; color:#111; white-space:nowrap; }
+.aifWhPriceMajor { font-size:20px; letter-spacing:.055em; }
+.aifWhPriceCents { font-size:10.5px; vertical-align:top; margin-left:1px; }
+.aifWhPriceUnit { display:inline-block; font-size:7px; margin-left:2px; vertical-align:baseline; }
 `;
 
 const WAREHOUSE_LABEL_APP_CSS = `
@@ -8748,7 +8748,7 @@ export default function AllInWarehouse() {
         productCode: labelProductCodeForItem(mergedLabelItem),
         price,
         stockQty: Math.floor(n(item.total_qty)),
-        render: labelCode128Svg(barcode, 42),
+        render: labelCode128Svg(barcode, 52),
       };
     });
   }, [selectedLabelItems, labelCopies, labelDetailMap]);
