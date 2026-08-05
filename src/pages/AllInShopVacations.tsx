@@ -132,6 +132,44 @@ function shiftIsoDate(value: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function monthKeyFromIso(value?: string) {
+  const source = /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : todayIso();
+  return source.slice(0, 7);
+}
+
+function monthLabel(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, 1, 12));
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("hu-HU", {
+    year: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function shiftMonthKey(value: string, amount: number) {
+  const [year, month] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + amount, 1, 12));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function calendarCells(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const first = new Date(Date.UTC(year, month - 1, 1, 12));
+  const daysInMonth = new Date(Date.UTC(year, month, 0, 12)).getUTCDate();
+  const jsDay = first.getUTCDay();
+  const mondayOffset = jsDay === 0 ? 6 : jsDay - 1;
+  const cells: Array<string | null> = Array.from({ length: mondayOffset }, () => null);
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(`${monthKey}-${String(day).padStart(2, "0")}`);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+const CALENDAR_WEEK_DAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"];
+
 function TouchDateControl({
   label,
   value,
@@ -143,14 +181,22 @@ function TouchDateControl({
   onChange: (value: string) => void;
   min?: string;
 }) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(() => monthKeyFromIso(value));
 
-  const openPicker = () => {
-    const input = inputRef.current;
-    if (!input) return;
-    if (typeof input.showPicker === "function") input.showPicker();
-    else input.focus();
-  };
+  useEffect(() => {
+    if (!pickerOpen) return;
+    setVisibleMonth(monthKeyFromIso(value));
+  }, [pickerOpen, value]);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPickerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pickerOpen]);
 
   const shift = (days: number) => {
     const next = shiftIsoDate(value, days);
@@ -158,51 +204,154 @@ function TouchDateControl({
     onChange(next);
   };
 
-  return (
-    <div className="grid gap-1.5">
-      <span className="text-[10px] uppercase tracking-[0.1em] text-white/48">{label}</span>
-      <div className="grid grid-cols-[58px_minmax(0,1fr)_58px] overflow-hidden rounded-2xl border border-white/18 bg-[#273243] shadow-[0_8px_20px_rgba(15,23,42,0.16)]">
-        <button
-          type="button"
-          onClick={() => shift(-1)}
-          className="inline-flex h-16 touch-manipulation items-center justify-center border-r border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
-          aria-label={`${label}: előző nap`}
-        >
-          <ChevronLeft size={25} />
-        </button>
+  const selectDate = (next: string) => {
+    if (min && next < min) return;
+    onChange(next);
+    setPickerOpen(false);
+  };
 
-        <div className="relative min-w-0">
-          <input
-            ref={inputRef}
-            type="date"
-            value={value}
-            min={min}
-            onChange={(event) => onChange(event.target.value)}
-            className="absolute bottom-0 left-1/2 h-px w-px -translate-x-1/2 opacity-0"
-            tabIndex={-1}
-            aria-hidden="true"
-          />
+  const cells = calendarCells(visibleMonth);
+  const today = todayIso();
+
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <span className="text-[10px] uppercase tracking-[0.1em] text-white/48">{label}</span>
+        <div className="grid grid-cols-[58px_minmax(0,1fr)_58px] overflow-hidden rounded-2xl border border-white/18 bg-[#273243] shadow-[0_8px_20px_rgba(15,23,42,0.16)]">
           <button
             type="button"
-            onClick={openPicker}
-            className="flex h-16 w-full touch-manipulation items-center justify-center gap-3 px-3 text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
+            onClick={() => shift(-1)}
+            className="inline-flex h-16 touch-manipulation items-center justify-center border-r border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
+            aria-label={`${label}: előző nap`}
+          >
+            <ChevronLeft size={26} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="flex h-16 min-w-0 touch-manipulation items-center justify-center px-2 text-center text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
             aria-label={`${label}: ${formatDate(value)}, naptár megnyitása`}
           >
-            <span className="whitespace-nowrap text-lg tabular-nums">{formatDate(value)}</span>
-            <CalendarDays size={22} className="shrink-0 text-[#9ff3ef]" />
+            <span className="whitespace-nowrap text-[17px] tabular-nums sm:text-lg">{formatDate(value)}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => shift(1)}
+            className="inline-flex h-16 touch-manipulation items-center justify-center border-l border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
+            aria-label={`${label}: következő nap`}
+          >
+            <ChevronRight size={26} />
           </button>
         </div>
-
-        <button
-          type="button"
-          onClick={() => shift(1)}
-          className="inline-flex h-16 touch-manipulation items-center justify-center border-l border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
-          aria-label={`${label}: következő nap`}
-        >
-          <ChevronRight size={25} />
-        </button>
       </div>
-    </div>
+
+      {pickerOpen && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[420] grid place-items-center bg-slate-950/82 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setPickerOpen(false);
+          }}
+        >
+          <section className="w-full max-w-[560px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_36px_120px_rgba(0,0,0,0.64)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#1f5f61] to-[#2a8d8b] px-4 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/12">
+                  <CalendarDays size={22} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-white/60">{label}</p>
+                  <h3 className="mt-1 truncate text-lg">{formatDate(value)}</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPickerOpen(false)}
+                className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl border border-white/22 bg-black/10 text-white active:bg-white/15"
+                aria-label="Naptár bezárása"
+              >
+                <X size={20} />
+              </button>
+            </header>
+
+            <div className="p-4 sm:p-5">
+              <div className="grid grid-cols-[58px_minmax(0,1fr)_58px] items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibleMonth((current) => shiftMonthKey(current, -1))}
+                  className="inline-flex h-14 touch-manipulation items-center justify-center rounded-2xl border border-white/16 bg-[#273243] text-white active:bg-[#2a8d8b]"
+                  aria-label="Előző hónap"
+                >
+                  <ChevronLeft size={27} />
+                </button>
+                <div className="text-center text-xl capitalize text-white">{monthLabel(visibleMonth)}</div>
+                <button
+                  type="button"
+                  onClick={() => setVisibleMonth((current) => shiftMonthKey(current, 1))}
+                  className="inline-flex h-14 touch-manipulation items-center justify-center rounded-2xl border border-white/16 bg-[#273243] text-white active:bg-[#2a8d8b]"
+                  aria-label="Következő hónap"
+                >
+                  <ChevronRight size={27} />
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-7 gap-1.5 text-center">
+                {CALENDAR_WEEK_DAYS.map((dayName) => (
+                  <div key={dayName} className="py-2 text-[11px] uppercase tracking-[0.08em] text-white/45">{dayName}</div>
+                ))}
+                {cells.map((cell, index) => {
+                  if (!cell) return <div key={`empty-${index}`} className="h-12 sm:h-14" />;
+                  const dayNumber = Number(cell.slice(-2));
+                  const selected = cell === value;
+                  const isToday = cell === today;
+                  const disabled = Boolean(min && cell < min);
+                  return (
+                    <button
+                      key={cell}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => selectDate(cell)}
+                      className={`relative flex h-12 touch-manipulation items-center justify-center rounded-xl border text-base transition sm:h-14 sm:text-lg ${
+                        selected
+                          ? "border-[#b7f1ed] bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.26)]"
+                          : disabled
+                            ? "border-transparent bg-transparent text-white/18"
+                            : isToday
+                              ? "border-[#7bd7d4]/55 bg-[#2a8d8b]/20 text-[#d7fffd] active:bg-[#2a8d8b]"
+                              : "border-white/10 bg-[#354153] text-white active:bg-[#2a8d8b]"
+                      }`}
+                    >
+                      {dayNumber}
+                      {isToday && !selected ? <span className="absolute bottom-1.5 h-1 w-1 rounded-full bg-[#9ff3ef]" /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(false)}
+                  className="inline-flex min-h-12 touch-manipulation items-center justify-center rounded-2xl border border-white/16 bg-[#354153] px-4 text-sm text-white active:bg-white/12"
+                >
+                  Mégse
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(min && today < min)}
+                  onClick={() => selectDate(today)}
+                  className="inline-flex min-h-12 touch-manipulation items-center justify-center rounded-2xl border border-[#9be9e5]/42 bg-[#2a8d8b] px-4 text-sm text-white active:bg-[#237b79] disabled:opacity-35"
+                >
+                  Mai nap
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 
@@ -242,11 +391,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({
-        year: String(targetYear),
-        employeeName: actor,
-      });
-      const body = await fetchJson(`/admin/vacations/my/requests?${params.toString()}`);
+      const body = await fetchJson(`/admin/vacations/my/requests?year=${encodeURIComponent(String(targetYear))}`);
       setOverview(body as VacationOverview);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A szabadságadataid nem tölthetők be.");
@@ -303,7 +448,6 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     try {
       const body = await fetchJson("/admin/vacations/my/requests", {
         method: "POST",
-        headers: { "x-allin-employee": actor },
         body: JSON.stringify({
           employeeName: actor,
           kind,
@@ -328,10 +472,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setError("");
     setNotice("");
     try {
-      await fetchJson(`/admin/vacations/my/requests/${encodeURIComponent(id)}/cancel?employeeName=${encodeURIComponent(actor)}`, {
-        method: "POST",
-        headers: { "x-allin-employee": actor },
-      });
+      await fetchJson(`/admin/vacations/my/requests/${encodeURIComponent(id)}/cancel`, { method: "POST" });
       setNotice("A még el nem bírált kérés visszavonva.");
       await loadOverview(year);
     } catch (caught) {
@@ -344,10 +485,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
   async function markDecisionsSeen() {
     setError("");
     try {
-      await fetchJson(`/admin/vacations/my/requests/seen?employeeName=${encodeURIComponent(actor)}`, {
-        method: "POST",
-        headers: { "x-allin-employee": actor },
-      });
+      await fetchJson("/admin/vacations/my/requests/seen", { method: "POST" });
       await loadOverview(year);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Az értesítés lezárása nem sikerült.");
