@@ -291,6 +291,88 @@ function SmartSelect({
   );
 }
 
+
+function ProductThumb({ src, alt }: { src?: string | null; alt: string }) {
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    setFailed(false);
+    setOpen(false);
+  }, [src]);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const width = 270;
+    const height = 310;
+    const gap = 12;
+    const roomRight = window.innerWidth - rect.right;
+    const left = roomRight >= width + gap
+      ? rect.right + gap
+      : Math.max(gap, rect.left - width - gap);
+    const top = Math.max(gap, Math.min(rect.top - 10, window.innerHeight - height - gap));
+    setPosition({ left, top });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const reposition = () => updatePosition();
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  if (!src || failed) {
+    return (
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/12 bg-[#2b3748] text-[9px] text-white/42">
+        Nincs kép
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        className="relative flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-[#253345] shadow-sm"
+        onMouseEnter={() => {
+          updatePosition();
+          setOpen(true);
+        }}
+        onMouseLeave={() => setOpen(false)}
+      >
+        <img
+          src={src}
+          alt={alt}
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      </div>
+
+      {open && position && createPortal(
+        <div
+          className="pointer-events-none fixed overflow-hidden rounded-2xl border border-[#7bd7d4]/38 bg-[#253449] p-2.5 shadow-[0_26px_70px_rgba(2,6,23,0.68)]"
+          style={{ zIndex: 700, left: position.left, top: position.top, width: 270 }}
+        >
+          <div className="grid h-[250px] place-items-center overflow-hidden rounded-xl bg-[#1f2a39]">
+            <img src={src} alt={alt} className="max-h-full max-w-full object-contain" />
+          </div>
+          <p className="mt-2 truncate px-1 text-[11px] text-white/76">{alt}</p>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function DeltaBadge({ current, previous }: { current: number; previous: number }) {
   const delta = percentChange(current, previous);
   const positive = delta > 0.01;
@@ -982,9 +1064,10 @@ export default function AllInAdminMagazinDashboard({
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1080px] border-collapse text-xs">
+              <table className="w-full min-w-[1240px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
+                    <th className="px-3 py-3 text-left">Termék</th>
                     <th className="px-3 py-3 text-left">Időpont</th>
                     <th className="px-3 py-3 text-left">Bizonylat</th>
                     <th className="px-3 py-3 text-left">Eladó / kliens</th>
@@ -998,7 +1081,23 @@ export default function AllInAdminMagazinDashboard({
                 </thead>
                 <tbody>
                   {(data?.recentSales || []).map((sale) => (
-                    <tr key={sale.id} className="border-t border-white/8 hover:bg-white/[0.035]">
+                    <tr key={sale.id} className="border-t border-white/8 align-top hover:bg-white/[0.035]">
+                      <td className="min-w-[250px] px-3 py-3">
+                        <div className="flex items-start gap-3">
+                          <ProductThumb
+                            src={sale.firstImageUrl}
+                            alt={sale.firstProductTitle || sale.saleNumber}
+                          />
+                          <div className="min-w-0 pt-0.5">
+                            <p className="max-w-[230px] truncate text-white" title={sale.firstProductTitle || "Nincs mentett termék"}>
+                              {sale.firstProductTitle || "Nincs mentett termék"}
+                            </p>
+                            <p className="mt-1 text-[10px] text-white/42">
+                              {sale.lineCount > 1 ? `+${sale.lineCount - 1} további tétel` : "1 tétel"}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
                       <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
                       <td className="px-3 py-3"><p className="text-white">{sale.saleNumber}</p><p className="mt-1 text-[10px] text-white/38">{saleTypeLabel(sale.saleType)}</p></td>
                       <td className="px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
