@@ -6259,6 +6259,12 @@ export default function AllInWarehouse() {
 
     setStockEditorSaving(true);
     setMessage("");
+    // Egy korábbi értesítés nem használható a most induló mentés eredményeként.
+    if (warehouseTransferToastTimerRef.current !== null) {
+      window.clearTimeout(warehouseTransferToastTimerRef.current);
+      warehouseTransferToastTimerRef.current = null;
+    }
+    setWarehouseTransferToast(null);
     try {
       const rows = stockLocationRows.map((loc) => {
         const key = locationKey(loc);
@@ -8293,8 +8299,33 @@ export default function AllInWarehouse() {
     const preparation = openTransferPreparations.find((item) =>
       warehousePreparationMatchesRoute(item, fromLocationId, toLocationId, fromLocationName, toLocationName)
     ) || null;
-    const currentValue = priceNumber(preparation?.total_value) || 0;
-    const projectedValue = currentValue + addedValue;
+
+    // Mentés után a backend már az új PV-összeget adja vissza, miközben a modalban
+    // a most mentett sor még egy rövid ideig látható. Ha ilyenkor az új összeghez
+    // még egyszer hozzáadnánk a draft értékét, 697,50 helyett 837,00 jelenne meg.
+    // Mentés közben ezért a friss toast backend-eredménye az igazságforrás.
+    const saveInProgress = stockEditorSaving || stockMoveSaving;
+    const toastDocumentMatches = Boolean(
+      warehouseTransferToast?.documentId &&
+      preparation?.id &&
+      String(warehouseTransferToast.documentId) === String(preparation.id)
+    );
+    const toastRouteMatches = Boolean(
+      warehouseTransferToast?.routeLabel &&
+      normalizeSearch(warehouseTransferToast.routeLabel) === normalizeSearch(`${fromLocationName} → ${toLocationName}`)
+    );
+    const confirmedToast = saveInProgress && warehouseTransferToast && (toastDocumentMatches || toastRouteMatches)
+      ? warehouseTransferToast
+      : null;
+
+    const confirmedTotalValue = confirmedToast ? priceNumber(confirmedToast.totalValue) : null;
+    const confirmedAddedValue = confirmedToast ? priceNumber(confirmedToast.addedValue) : null;
+    const previewAddedValue = confirmedAddedValue ?? addedValue;
+    const storedCurrentValue = priceNumber(preparation?.total_value) || 0;
+    const currentValue = confirmedTotalValue !== null
+      ? Math.max(0, confirmedTotalValue - previewAddedValue)
+      : storedCurrentValue;
+    const projectedValue = confirmedTotalValue ?? (currentValue + previewAddedValue);
     const thresholdReached = projectedValue >= WAREHOUSE_UIT_WARNING_THRESHOLD_RON;
     const uitRecorded = Boolean(warehousePreparationUitCode(preparation));
     return {
@@ -8303,7 +8334,7 @@ export default function AllInWarehouse() {
       fromLocationName,
       toLocationName,
       qty,
-      addedValue,
+      addedValue: previewAddedValue,
       currentValue,
       projectedValue,
       thresholdReached,
@@ -8317,7 +8348,10 @@ export default function AllInWarehouse() {
     moveValidRows,
     openTransferPreparations,
     selectedWorkPanel,
+    stockEditorSaving,
     stockEditorTransferPreview,
+    stockMoveSaving,
+    warehouseTransferToast,
   ]);
 
   function showWarehouseTransferToast(next: WarehouseTransferToastState) {
@@ -8579,6 +8613,12 @@ export default function AllInWarehouse() {
     setStockMoveSaving(true);
     setStockMoveConfirmOpen(false);
     setMessage("");
+    // Egy korábbi értesítés ne fagyassza rá a régi összeget az új mentésre.
+    if (warehouseTransferToastTimerRef.current !== null) {
+      window.clearTimeout(warehouseTransferToastTimerRef.current);
+      warehouseTransferToastTimerRef.current = null;
+    }
+    setWarehouseTransferToast(null);
     try {
       const result = await apiStockTransfer({ ...payload, idempotencyKey });
       handleWarehouseStockTransferResult(result, moveTotalValue);
