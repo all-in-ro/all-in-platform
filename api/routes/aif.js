@@ -155,6 +155,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           subcategory_name text NULL,
           color_name text NULL,
           size text NULL,
+          image_url text NULL,
           raw jsonb NOT NULL DEFAULT '{}'::jsonb,
           created_at timestamptz NOT NULL DEFAULT now(),
           UNIQUE (sale_id, line_no)
@@ -164,6 +165,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_brand_idx ON aif_shop_sale_lines (lower(brand_name)) WHERE brand_name IS NOT NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_category_idx ON aif_shop_sale_lines (lower(category_name)) WHERE category_name IS NOT NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_sale_lines ADD COLUMN IF NOT EXISTS subcategory_name text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_sale_lines ADD COLUMN IF NOT EXISTS image_url text NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_lines_subcategory_idx
           ON aif_shop_sale_lines (lower(subcategory_name)) WHERE subcategory_name IS NOT NULL`);
         await pool.query(`UPDATE aif_shop_sale_lines sl
@@ -174,6 +176,81 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           WHERE sl.variant_id=v.id
             AND NULLIF(btrim(COALESCE(sl.subcategory_name,'')),'') IS NULL
             AND subc.id IS NOT NULL`);
+        await pool.query(`UPDATE aif_shop_sale_lines sl
+          SET image_url=COALESCE(
+            NULLIF(v.image_url,''),
+            NULLIF(sl.raw->>'imageUrl',''),
+            NULLIF(sl.raw->>'image_url','')
+          )
+          FROM aif_product_variants v
+          WHERE sl.variant_id=v.id
+            AND NULLIF(btrim(COALESCE(sl.image_url,'')),'') IS NULL`);
+        await pool.query(`WITH image_candidates AS (
+            SELECT sl.id AS sale_line_id, v.image_url
+            FROM aif_shop_sale_lines sl
+            JOIN aif_product_variants v
+              ON lower(btrim(COALESCE(v.barcode,'')))=lower(btrim(sl.barcode))
+            WHERE NULLIF(btrim(COALESCE(sl.image_url,'')),'') IS NULL
+              AND NULLIF(btrim(COALESCE(sl.barcode,'')),'') IS NOT NULL
+              AND NULLIF(btrim(COALESCE(v.image_url,'')),'') IS NOT NULL
+
+            UNION ALL
+
+            SELECT sl.id AS sale_line_id, v.image_url
+            FROM aif_shop_sale_lines sl
+            JOIN aif_product_variants v ON true
+            JOIN aif_product_models m ON m.id=v.model_id
+            LEFT JOIN aif_variant_supplier_codes sc ON sc.variant_id=v.id
+            WHERE NULLIF(btrim(COALESCE(sl.image_url,'')),'') IS NULL
+              AND NULLIF(btrim(COALESCE(sl.product_code,'')),'') IS NOT NULL
+              AND NULLIF(btrim(COALESCE(v.image_url,'')),'') IS NOT NULL
+              AND (
+                lower(btrim(sl.product_code))=lower(btrim(COALESCE(sc.supplier_product_code,'')))
+                OR lower(btrim(sl.product_code))=lower(btrim(COALESCE(v.internal_sku,'')))
+                OR lower(btrim(sl.product_code))=lower(btrim(COALESCE(m.model_code,'')))
+              )
+              AND (
+                NULLIF(btrim(COALESCE(sl.size,'')),'') IS NULL
+                OR lower(btrim(sl.size))=lower(btrim(COALESCE(v.size,'')))
+              )
+
+            UNION ALL
+
+            SELECT sl.id AS sale_line_id, v.image_url
+            FROM aif_shop_sale_lines sl
+            JOIN aif_product_models m
+              ON lower(regexp_replace(btrim(COALESCE(sl.product_title,'')), '[[:space:]]+', ' ', 'g'))
+               = lower(regexp_replace(btrim(COALESCE(NULLIF(m.title_ro,''),m.shopify_title,'')), '[[:space:]]+', ' ', 'g'))
+            JOIN aif_product_variants v ON v.model_id=m.id
+            LEFT JOIN aif_brands b ON b.id=m.brand_id
+            WHERE NULLIF(btrim(COALESCE(sl.image_url,'')),'') IS NULL
+              AND NULLIF(btrim(COALESCE(sl.product_title,'')),'') IS NOT NULL
+              AND NULLIF(btrim(COALESCE(v.image_url,'')),'') IS NOT NULL
+              AND (
+                NULLIF(btrim(COALESCE(sl.brand_name,'')),'') IS NULL
+                OR lower(btrim(sl.brand_name))=lower(btrim(COALESCE(b.name,'')))
+                OR lower(btrim(sl.brand_name))=lower(btrim(COALESCE(b.code,'')))
+              )
+              AND (
+                NULLIF(btrim(COALESCE(sl.size,'')),'') IS NULL
+                OR lower(btrim(sl.size))=lower(btrim(COALESCE(v.size,'')))
+              )
+              AND (
+                NULLIF(btrim(COALESCE(sl.color_name,'')),'') IS NULL
+                OR lower(btrim(sl.color_name))=lower(btrim(COALESCE(v.color_name,'')))
+                OR lower(btrim(sl.color_name))=lower(btrim(COALESCE(v.color_code,'')))
+              )
+          ), safe_images AS (
+            SELECT sale_line_id, min(image_url) AS image_url
+            FROM image_candidates
+            GROUP BY sale_line_id
+            HAVING count(DISTINCT image_url)=1
+          )
+          UPDATE aif_shop_sale_lines sl
+          SET image_url=si.image_url
+          FROM safe_images si
+          WHERE sl.id=si.sale_line_id
+            AND NULLIF(btrim(COALESCE(sl.image_url,'')),'') IS NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_sale_payments (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -16075,7 +16152,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const stockResult = await client.query(
         `SELECT
            s.location_id, s.variant_id, s.qty, s.reserved_qty,
-           v.internal_sku, v.barcode, v.sell_price, v.buy_price, v.size, v.color_name,
+           v.internal_sku, v.barcode, v.sell_price, v.buy_price, v.size, v.color_name, v.image_url,
            m.model_code, COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
            b.name AS brand_name,
            c.name_ro AS category_name,
@@ -16254,9 +16331,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              sale_id, line_no, variant_id, quantity, list_price, unit_price,
              discount_amount, discount_percent, line_total, buy_price_snapshot,
              product_title, product_code, barcode, brand_name, category_name,
-             subcategory_name, color_name, size, raw
+             subcategory_name, color_name, size, image_url, raw
            ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb
            )`,
           [
             sale.id,
@@ -16277,7 +16354,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             line.stock.subcategory_name || null,
             line.stock.color_name || null,
             line.stock.size || null,
-            JSON.stringify({ availableBefore: before - Number(line.stock.reserved_qty || 0), listPriceSource: "variant_sell_price" }),
+            line.stock.image_url || null,
+            JSON.stringify({
+              availableBefore: before - Number(line.stock.reserved_qty || 0),
+              listPriceSource: "variant_sell_price",
+              imageUrl: line.stock.image_url || null,
+            }),
           ]
         );
         await client.query(
@@ -16715,15 +16797,41 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              SELECT sale_id, count(*)::int AS line_count, COALESCE(sum(quantity),0)::int AS item_count
              FROM aif_shop_sale_lines
              GROUP BY sale_id
+           ),
+           first_line AS (
+             SELECT DISTINCT ON (sl.sale_id)
+               sl.sale_id,
+               COALESCE(
+                 NULLIF(sl.image_url,''),
+                 NULLIF(v.image_url,''),
+                 NULLIF(sl.raw->>'imageUrl',''),
+                 NULLIF(sl.raw->>'image_url','')
+               ) AS first_image_url,
+               COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS first_product_title
+             FROM aif_shop_sale_lines sl
+             LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+             ORDER BY
+               sl.sale_id,
+               CASE WHEN COALESCE(
+                 NULLIF(sl.image_url,''),
+                 NULLIF(v.image_url,''),
+                 NULLIF(sl.raw->>'imageUrl',''),
+                 NULLIF(sl.raw->>'image_url','')
+               ) IS NULL THEN 1 ELSE 0 END,
+               sl.line_no ASC,
+               sl.created_at ASC
            )
            SELECT
              fs.id, fs.sale_number, fs.sold_at, fs.actor, fs.customer_name, fs.customer_phone,
              fs.status, fs.payment_status, fs.sale_type,
              fs.subtotal, fs.discount_total, fs.total, fs.paid_total, fs.balance_due,
              COALESCE(lt.item_count,0)::int AS item_count,
-             COALESCE(lt.line_count,0)::int AS line_count
+             COALESCE(lt.line_count,0)::int AS line_count,
+             fl.first_product_title,
+             fl.first_image_url
            FROM filtered_sales fs
            LEFT JOIN line_totals lt ON lt.sale_id=fs.id
+           LEFT JOIN first_line fl ON fl.sale_id=fs.id
            ORDER BY fs.sold_at DESC, fs.created_at DESC
            LIMIT 40`,
           currentFilters.args
@@ -16852,6 +16960,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           balanceDue: aifNumber(row.balance_due),
           itemCount: aifNumber(row.item_count),
           lineCount: aifNumber(row.line_count),
+          firstProductTitle: row.first_product_title || null,
+          firstImageUrl: row.first_image_url || null,
         })),
         filterOptions: {
           employees: employeesOptionResult.rows.map((row) => row.actor).filter(Boolean),
