@@ -185,11 +185,10 @@ function TouchDateControl({
           <button
             type="button"
             onClick={openPicker}
-            className="flex h-16 w-full touch-manipulation items-center justify-center gap-3 px-3 text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
+            className="flex h-16 w-full touch-manipulation items-center justify-center px-2 text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
             aria-label={`${label}: ${formatDate(value)}, naptár megnyitása`}
           >
-            <span className="whitespace-nowrap text-lg tabular-nums">{formatDate(value)}</span>
-            <CalendarDays size={22} className="shrink-0 text-[#9ff3ef]" />
+            <span className="whitespace-nowrap text-[17px] tabular-nums">{formatDate(value)}</span>
           </button>
         </div>
 
@@ -229,6 +228,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
       cache: "no-store",
       headers: {
         Accept: "application/json",
+        "X-AllIn-Employee": actor,
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
         ...(init?.headers || {}),
       },
@@ -242,7 +242,8 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setLoading(true);
     setError("");
     try {
-      const body = await fetchJson(`/admin/vacations/my/requests?year=${encodeURIComponent(String(targetYear))}`);
+      const params = new URLSearchParams({ year: String(targetYear), employee: actor });
+      const body = await fetchJson(`/admin/vacations/my/requests?${params.toString()}`);
       setOverview(body as VacationOverview);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A szabadságadataid nem tölthetők be.");
