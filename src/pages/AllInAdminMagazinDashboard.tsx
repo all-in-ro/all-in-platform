@@ -318,6 +318,8 @@ function MetricCard({
   current,
   previous,
   tone = "normal",
+  onClick,
+  actionLabel,
 }: {
   title: string;
   value: string;
@@ -325,32 +327,60 @@ function MetricCard({
   icon: ComponentType<{ size?: number; className?: string }>;
   current: number;
   previous: number;
-  tone?: "normal" | "warning" | "danger";
+  tone?: "normal" | "warning" | "danger" | "success" | "accent";
+  onClick?: () => void;
+  actionLabel?: string;
 }) {
   const toneClass =
     tone === "danger"
       ? "border-rose-200/25 bg-gradient-to-br from-[#593544] to-[#3d394b]"
       : tone === "warning"
         ? "border-amber-200/24 bg-gradient-to-br from-[#5a5039] to-[#3d4452]"
-        : "border-white/16 bg-gradient-to-br from-[#3c495c] to-[#344154]";
+        : tone === "success"
+          ? "border-emerald-200/30 bg-gradient-to-br from-[#227a64] via-[#256a60] to-[#344154]"
+          : tone === "accent"
+            ? "border-[#8ce7e2]/30 bg-gradient-to-br from-[#2d626a] via-[#345866] to-[#344154]"
+            : "border-white/16 bg-gradient-to-br from-[#3c495c] to-[#344154]";
+  const baseClass = `min-w-0 rounded-[20px] border p-3.5 text-left shadow-[0_12px_30px_rgba(15,23,42,0.16)] ${toneClass}`;
 
-  return (
-    <article className={`min-w-0 rounded-[20px] border p-3.5 shadow-[0_12px_30px_rgba(15,23,42,0.16)] ${toneClass}`}>
+  const content = (
+    <>
       <div className="flex min-w-0 items-start justify-between gap-2.5">
         <div className="min-w-0">
-          <p className="text-[9px] uppercase tracking-[0.14em] text-white/48">{title}</p>
+          <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">{title}</p>
           <p className="mt-2 whitespace-nowrap text-[clamp(1rem,1.3vw,1.38rem)] leading-tight tracking-tight text-white">{value}</p>
         </div>
-        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#bff8f5]">
+        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/26 bg-white/[0.08] text-[#d8fffd]">
           <Icon size={17} />
         </span>
       </div>
       <div className="mt-2.5 flex min-w-0 items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-[10px] text-white/48" title={hint}>{hint}</span>
-        <DeltaBadge current={current} previous={previous} />
+        <span className="min-w-0 truncate text-[10px] text-white/58" title={hint}>{hint}</span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {actionLabel ? (
+            <span className="rounded-full border border-white/16 bg-black/10 px-2 py-1 text-[9px] text-white/68">
+              {actionLabel}
+            </span>
+          ) : null}
+          <DeltaBadge current={current} previous={previous} />
+        </span>
       </div>
-    </article>
+    </>
   );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`${baseClass} w-full transition hover:-translate-y-0.5 hover:border-[#9be9e5]/48 hover:brightness-110 active:translate-y-0 active:scale-[0.99]`}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <article className={baseClass}>{content}</article>;
 }
 
 function RevenueChart({ data }: { data: AifAdminShopOverviewResponse["trend"] }) {
@@ -548,6 +578,7 @@ export default function AllInAdminMagazinDashboard({
   const [data, setData] = useState<AifAdminShopOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [discountView, setDiscountView] = useState<"money" | "percent">("money");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -585,6 +616,12 @@ export default function AllInAdminMagazinDashboard({
   const summary = data?.summary;
   const previous = data?.previousSummary;
   const stock = data?.stockSnapshot;
+  const discountPercent = numberValue(summary?.salesBeforeDiscount) > 0
+    ? numberValue(summary?.discountTotal) / numberValue(summary?.salesBeforeDiscount) * 100
+    : 0;
+  const previousDiscountPercent = numberValue(previous?.salesBeforeDiscount) > 0
+    ? numberValue(previous?.discountTotal) / numberValue(previous?.salesBeforeDiscount) * 100
+    : 0;
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-[#5f6b7b] via-[#566171] to-[#485361] p-3 text-white sm:p-4 lg:p-6">
@@ -715,12 +752,12 @@ export default function AllInAdminMagazinDashboard({
                 />
               </label>
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-                Kategória
+                Alkategória
                 <SmartSelect
                   value={draft.category}
                   onChange={(value) => setDraft({ ...draft, category: value })}
-                  placeholder="Minden kategória"
-                  options={[{ value: "", label: "Minden kategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))]}
+                  placeholder="Minden alkategória"
+                  options={[{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))]}
                 />
               </label>
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
@@ -762,6 +799,7 @@ export default function AllInAdminMagazinDashboard({
             icon={CircleDollarSign}
             current={numberValue(summary?.revenue)}
             previous={numberValue(previous?.revenue)}
+            tone="success"
           />
           <MetricCard
             title="Eladások"
@@ -789,12 +827,14 @@ export default function AllInAdminMagazinDashboard({
           />
           <MetricCard
             title="Kedvezmény"
-            value={money(summary?.discountTotal)}
-            hint="Eladási árból engedve"
+            value={discountView === "percent" ? `${discountPercent.toFixed(1)}%` : money(summary?.discountTotal)}
+            hint={discountView === "percent" ? `${money(summary?.discountTotal)} összes kedvezmény` : "Kattints a százalékos nézethez"}
             icon={Percent}
-            current={numberValue(summary?.discountTotal)}
-            previous={numberValue(previous?.discountTotal)}
-            tone={numberValue(summary?.discountTotal) > 0 ? "warning" : "normal"}
+            current={discountView === "percent" ? discountPercent : numberValue(summary?.discountTotal)}
+            previous={discountView === "percent" ? previousDiscountPercent : numberValue(previous?.discountTotal)}
+            tone="accent"
+            onClick={() => setDiscountView((current) => current === "money" ? "percent" : "money")}
+            actionLabel={discountView === "percent" ? "RON" : "%"}
           />
           <MetricCard
             title="Kintlévőség"
@@ -807,11 +847,12 @@ export default function AllInAdminMagazinDashboard({
           />
           <MetricCard
             title="Becsült árrés"
-            value={money(summary?.grossProfit)}
-            hint={`${numberValue(summary?.grossMargin).toFixed(1)}% becsült árrés`}
+            value={`${numberValue(summary?.grossMargin).toFixed(1)}%`}
+            hint={`${money(summary?.grossProfit)} becsült eredmény`}
             icon={TrendingUp}
-            current={numberValue(summary?.grossProfit)}
-            previous={numberValue(previous?.grossProfit)}
+            current={numberValue(summary?.grossMargin)}
+            previous={numberValue(previous?.grossMargin)}
+            tone="success"
           />
         </section>
 
@@ -891,7 +932,7 @@ export default function AllInAdminMagazinDashboard({
 
         <section className="grid gap-3 xl:grid-cols-3">
           <RankingBars title="Márkák teljesítménye" subtitle="Forgalom szerint" items={data?.brands || []} icon={Tags} />
-          <RankingBars title="Kategóriák" subtitle="Eladott darab szerint" items={data?.categories || []} valueMode="qty" icon={Layers3} />
+          <RankingBars title="Alkategóriák" subtitle="Eladott darab szerint" items={data?.categories || []} valueMode="qty" icon={Layers3} />
           <RankingBars title="Top termékek" subtitle="Forgalom szerint" items={data?.products || []} icon={ShoppingBag} />
         </section>
 
