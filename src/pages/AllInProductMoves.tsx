@@ -162,6 +162,7 @@ type DocumentListItem = {
   supplier_name?: string | null;
   reception_id?: string | null;
   external_reference?: string | null;
+  uit_code?: string | null;
   reason_code?: string | null;
   reason_text?: string | null;
   operation_direction?: string | null;
@@ -872,7 +873,7 @@ function DocumentFlowOverview({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
         <div>
           <p className="text-[9px] uppercase tracking-[0.16em] text-white/38">Mozgási áttekintés</p>
-         
+          <p className="mt-1 text-sm text-white/82">Egyetlen pillantással látszik, mi érkezik és mi indul tovább.</p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-white/55">
           <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1">{quantity(totalQty)} db</span>
@@ -1051,8 +1052,25 @@ function documentLineSubcategory(line: DocumentLine, variants: Map<string, Inven
   );
 }
 
+function normalizedUitCode(value: unknown) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/[^A-Z0-9-]/g, "")
+    .slice(0, 64);
+}
+
+function documentUitCode(item?: Partial<DocumentListItem> | null) {
+  const raw = item?.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  return normalizedUitCode(firstText(item?.uit_code, raw.uitCode, raw.uit_code));
+}
+
 function internalTransferNeedsUit(type: DocumentType, totalValue: unknown) {
   return type === "internal_transfer" && n(totalValue) > UIT_WARNING_THRESHOLD_RON;
+}
+
+function internalTransferMissingUit(item?: Partial<DocumentListItem> | null) {
+  return internalTransferNeedsUit(documentTypeOf(item), item?.total_value) && !documentUitCode(item);
 }
 
 function documentPrintMeta(type: DocumentType, doc: DocumentListItem) {
@@ -1115,6 +1133,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   const flow = documentFlowGroups(detail);
   const variants = inventoryVariantMap(inventoryItems);
   const uitRequired = internalTransferNeedsUit(type, totalValue);
+  const uitCode = documentUitCode(doc);
 
   const renderRows = (rows: IndexedDocumentLine[]) => rows.map(({ line, index }) => {
     const image = line.image_url
@@ -1194,7 +1213,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
   .route{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3mm;margin-bottom:3.5mm}.routeCard{border:1px solid #ccd7d4;border-radius:2.5mm;padding:2.5mm 3mm;background:#f7faf9}.routeCard span{display:block;color:#6a7683;font-size:8px;letter-spacing:.08em;text-transform:uppercase}.routeCard strong{display:block;margin-top:1mm;font-size:11px}
   .routeOutgoing{border-color:#ef4444;background:#fff1f2}.routeOutgoing span,.routeOutgoing strong{color:#991b1b}.routeIncoming{border-color:#0f9f8f;background:#ecfdf9}.routeIncoming span,.routeIncoming strong{color:#0f5f59}
   .declaration{margin-bottom:3.5mm;border-left:3px solid #255f54;background:#f5f8f7;padding:2.5mm 3mm;color:#354353;line-height:1.45}.note{margin-bottom:3.5mm;border:1px solid #d3dcda;border-radius:2.5mm;padding:2.5mm 3mm}
-  .uitWarning{margin-bottom:3.5mm;border:2px solid #f59e0b;border-radius:2.5mm;background:#fff7ed;padding:2.8mm 3mm;color:#92400e;font-weight:700;line-height:1.45}.uitCode{display:inline-block;min-width:52mm;margin-left:2mm;border-bottom:1px solid #92400e;color:#92400e}
+  .uitWarning{margin-bottom:3.5mm;border:2px solid #dc2626;border-radius:2.5mm;background:#fff1f2;padding:2.8mm 3mm;color:#991b1b;font-weight:700;line-height:1.45}.uitWarning.recorded{border-color:#0f9f8f;background:#ecfdf9;color:#0f5f59}.uitCode{display:inline-block;min-width:52mm;margin-left:2mm;border-bottom:1px solid currentColor;color:inherit}.uitValue{display:inline-block;margin-left:2mm;font-size:11px;letter-spacing:.06em}
   .flowSection{margin-top:3.5mm;break-inside:auto;border:1px solid #d8e1e5;border-radius:2.5mm;overflow:hidden}.flowHeader{display:flex;align-items:center;justify-content:space-between;gap:5mm;padding:2.4mm 3mm;background:#f8fafc;border-top:3px solid #64748b;border-bottom:1px solid #d8e1e5;color:#172033}.flowHeader div{display:grid;gap:.7mm}.flowHeader strong{font-size:10px;letter-spacing:.09em}.flowHeader span{font-size:7.5px;color:#64748b}.flowHeader b{font-size:9px;white-space:nowrap}.flowSection.incoming .flowHeader{background:#ecfdf9;border-top-color:#14b8a6;color:#0f5f59}.flowSection.outgoing .flowHeader{background:#fff1f2;border-top-color:#ef4444;color:#991b1b}.flowSection.neutral .flowHeader{background:#f1f5f9;border-top-color:#64748b;color:#334155}
   table{width:100%;border-collapse:collapse;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}th{background:#26384b;color:#fff;border:1px solid #26384b;padding:2.2mm 1.4mm;font-size:7.7px;line-height:1.2;text-transform:uppercase;text-align:left}td{border:1px solid #d4dcdf;padding:1.7mm 1.4mm;font-size:8.5px;line-height:1.25;vertical-align:middle;overflow-wrap:anywhere}tbody tr:nth-child(even) td{background:#f8fafb}
   th:nth-child(1),td:nth-child(1){width:7mm}th:nth-child(2),td:nth-child(2){width:58mm}th:nth-child(3),td:nth-child(3){width:20mm}th:nth-child(4),td:nth-child(4){width:23mm}th:nth-child(5),td:nth-child(5){width:9mm}th:nth-child(6),td:nth-child(6){width:10mm}th:nth-child(7),td:nth-child(7){width:19mm}th:nth-child(8),td:nth-child(8){width:20mm}th:nth-child(9),td:nth-child(9){width:24mm}
@@ -1211,7 +1230,7 @@ function makePrintHtml(detail: DocumentDetail, inventoryItems: InventoryItem[] =
 <div class="title"><div class="eyebrow">Document intern de gestiune</div><h1>${escapeHtml(doc.title || documentMeta(type).label)}</h1><div class="subtitle">${escapeHtml(doc.subtitle || meta.operation)}</div>${legacyMark}</div>
 <div class="route"><div class="${routeLeftClass}"><span>${escapeHtml(type === "internal_transfer" ? "Ieșire / gestiune sursă" : meta.leftLabel)}</span><strong>${escapeHtml(meta.leftValue)}</strong></div><div class="${routeRightClass}"><span>${escapeHtml(type === "internal_transfer" ? "Intrare / gestiune destinație" : meta.rightLabel)}</span><strong>${escapeHtml(meta.rightValue)}</strong></div></div>
 <div class="declaration">${escapeHtml(meta.declaration)}</div>
-${uitRequired ? `<div class="uitWarning">ATENȚIE: valoarea transferului depășește 10.000 RON. Pentru expediere este necesar cod UIT. Cod UIT:<span class="uitCode">&nbsp;</span></div>` : ""}
+${uitRequired || uitCode ? `<div class="uitWarning ${uitCode ? "recorded" : ""}">${uitCode ? "Cod UIT înregistrat:" : "ATENȚIE: valoarea transferului depășește 10.000 RON. Pentru expediere este necesar cod UIT. Cod UIT:"}${uitCode ? `<span class="uitValue">${escapeHtml(uitCode)}</span>` : `<span class="uitCode">&nbsp;</span>`}</div>` : ""}
 ${reason && type !== "internal_transfer" ? `<div class="note"><strong>Motiv:</strong> ${escapeHtml(reason)}</div>` : ""}
 ${doc.note ? `<div class="note"><strong>Observații interne relevante documentului:</strong> ${escapeHtml(doc.note)}</div>` : ""}
 ${sectionsHtml}
@@ -1307,6 +1326,9 @@ export default function AllInProductMoves() {
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailUitCode, setDetailUitCode] = useState("");
+  const [detailUitSaving, setDetailUitSaving] = useState(false);
+  const [detailUitError, setDetailUitError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<DocumentListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -1325,6 +1347,7 @@ export default function AllInProductMoves() {
   const [reasonText, setReasonText] = useState("");
   const [correctionDirection, setCorrectionDirection] = useState<CorrectionDirection>("decrease");
   const [externalReference, setExternalReference] = useState("");
+  const [uitCode, setUitCode] = useState("");
   const [note, setNote] = useState("");
   const [scanValue, setScanValue] = useState("");
   const [productSearch, setProductSearch] = useState("");
@@ -1407,6 +1430,8 @@ export default function AllInProductMoves() {
     try {
       const result = await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(id)}`);
       setDetail(result);
+      setDetailUitCode(documentUitCode(result.document));
+      setDetailUitError("");
     } catch (loadError: any) {
       setError(loadError?.message || "A bizonylat részleteinek betöltése nem sikerült.");
     } finally {
@@ -1503,6 +1528,7 @@ export default function AllInProductMoves() {
     setReasonText("");
     setCorrectionDirection("decrease");
     setExternalReference("");
+    setUitCode("");
     setNote("");
     setScanValue("");
     setProductSearch("");
@@ -1522,6 +1548,7 @@ export default function AllInProductMoves() {
     setReasonCode("");
     setReasonText("");
     setCorrectionDirection("decrease");
+    if (nextType !== "internal_transfer") setUitCode("");
   }
 
   function openCreate(nextType: DocumentType = "internal_transfer") {
@@ -1554,6 +1581,7 @@ export default function AllInProductMoves() {
       setReasonText(String(result.document.reason_text || ""));
       setCorrectionDirection(result.document.operation_direction === "increase" ? "increase" : "decrease");
       setExternalReference(String(result.document.external_reference || ""));
+      setUitCode(documentUitCode(result.document));
       setNote(String(result.document.note || ""));
       const inventoryById = new Map<string, InventoryItem>(inventory.map((row) => [String(row.variant_id), row]));
       const rows: Record<string, DraftLine> = {};
@@ -1843,6 +1871,7 @@ export default function AllInProductMoves() {
       reasonText: draftType === "internal_transfer" ? null : reasonText.trim() || (reasonCode ? reasonLabel(draftType, reasonCode) : null),
       operationDirection: draftType === "stock_correction" ? correctionDirection : null,
       externalReference: externalReference.trim() || null,
+      uitCode: draftType === "internal_transfer" ? normalizedUitCode(uitCode) || null : null,
       note: note.trim() || null,
       lines: draftLineArray.map((row) => ({
         variantId: row.item.variant_id,
@@ -2156,6 +2185,31 @@ export default function AllInProductMoves() {
     }
   }
 
+  async function saveDetailUitCode() {
+    if (!detail?.document?.id || detailUitSaving) return;
+    setDetailUitSaving(true);
+    setDetailUitError("");
+    try {
+      const result = await fetchJson<{ document?: DocumentListItem; item?: DocumentListItem }>(
+        `/stock-transfer-documents/${encodeURIComponent(detail.document.id)}/uit`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ uitCode: normalizedUitCode(detailUitCode) || null }),
+        },
+      );
+      const updatedDocument = result.document || result.item;
+      if (!updatedDocument) throw new Error("Az UIT kód mentése után nem érkezett vissza a bizonylat.");
+      setDetail((current) => current ? { ...current, document: { ...current.document, ...updatedDocument } } : current);
+      setItems((current) => current.map((item) => item.id === updatedDocument.id ? { ...item, ...updatedDocument } : item));
+      setDetailUitCode(documentUitCode(updatedDocument));
+      setMessage(documentUitCode(updatedDocument) ? `UIT kód mentve: ${documentUitCode(updatedDocument)}.` : "Az UIT kód törölve.");
+    } catch (saveError: any) {
+      setDetailUitError(saveError?.message || "Az UIT kód mentése nem sikerült.");
+    } finally {
+      setDetailUitSaving(false);
+    }
+  }
+
   const activeFilterCount = useMemo(
     () => [search, from, to, fromLocation, toLocation, type !== "all" ? type : ""].filter(Boolean).length,
     [from, fromLocation, search, to, toLocation, type],
@@ -2247,13 +2301,15 @@ export default function AllInProductMoves() {
                   const BadgeIcon = badge.icon;
                   const typeMeta = documentMeta(documentTypeOf(item));
                   const TypeIcon = typeMeta.icon;
+                  const itemUitCode = documentUitCode(item);
+                  const itemNeedsUit = !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
                   return (
                     <tr key={item.id} className="border-t border-white/10 align-middle text-[12px] leading-tight transition hover:bg-white/[0.035]">
-                      <td className="px-3 py-2"><div className="flex items-center gap-2"><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06]"><FileText size={16} /></span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><span className={`mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${badge.cls}`}><BadgeIcon size={10} /> {badge.label}</span></div></div></td>
+                      <td className="px-3 py-2"><div className="flex items-center gap-2"><span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06]"><FileText size={16} /></span><div className="min-w-0"><p className="max-w-[190px] truncate text-[13px] font-normal text-white" title={displayDocumentNumber(item)}>{displayDocumentNumber(item)}</p><div className="mt-0.5 flex flex-wrap gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${badge.cls}`}><BadgeIcon size={10} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-1.5 py-0.5 text-[9px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={10} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-1.5 py-0.5 text-[9px] text-white"><CheckCircle2 size={10} /> UIT rögzítve</span> : null}</div></div></div></td>
                       <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${typeMeta.tone}`}><TypeIcon size={12} /> {typeMeta.shortLabel}</span></td>
                       <td className="px-3 py-2 text-[11px] text-white/72">{dateTime(item.created_at)}</td>
                       <td className="px-3 py-2"><div className="grid gap-0.5"><span className="inline-flex items-center gap-1 text-[11px] text-red-100"><ArrowUpRight size={12} className="text-red-500" /> <span className="text-red-300">Kimenő:</span> {item.from_location_summary || "-"}</span><span className="inline-flex items-center gap-1 text-[11px] text-[#d7fffd]"><ArrowDownLeft size={12} className="text-[#2dd4bf]" /> <span className="text-[#7bd7d4]">Bejövő:</span> {item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</span>{item.external_reference ? <span className="text-[9px] text-white/42">Hivatkozás: {item.external_reference}</span> : null}</div></td>
-                      <td className="px-3 py-2 text-center"><span className="inline-flex flex-col rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2 py-1 text-[11px] text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[9px] text-white/58">{moneyRon(item.total_value || 0)}</span>{internalTransferNeedsUit(documentTypeOf(item), item.total_value) ? <span className="mt-1 rounded-full border border-amber-200/40 bg-amber-500/18 px-1.5 py-0.5 text-[8px] text-amber-50">UIT szükséges</span> : null}</span></td>
+                      <td className="px-3 py-2 text-center"><span className="inline-flex flex-col rounded-lg border border-[#7bd7d4]/26 bg-[#2a8d8b]/13 px-2 py-1 text-[11px] text-[#d7fffd]"><span>{quantity(item.line_count)} sor • {quantity(item.total_qty)} db</span><span className="mt-0.5 text-[9px] text-white/58">{moneyRon(item.total_value || 0)}</span></span></td>
                       <td className="px-3 py-2 text-[11px] text-white/65">{item.actor || "-"}</td>
                       <td className="px-3 py-2">{documentActionButtons(item)}</td>
                     </tr>
@@ -2270,10 +2326,12 @@ export default function AllInProductMoves() {
               const BadgeIcon = badge.icon;
               const meta = documentMeta(documentTypeOf(item));
               const TypeIcon = meta.icon;
+              const itemUitCode = documentUitCode(item);
+              const itemNeedsUit = !item.isLegacy && item.status !== "legacy" && internalTransferNeedsUit(documentTypeOf(item), item.total_value);
               return (
                 <article key={item.id} className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
-                  <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateTime(item.created_at)}</p></div><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span></div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span>{internalTransferNeedsUit(documentTypeOf(item), item.total_value) ? <span className="rounded-full border border-amber-200/40 bg-amber-500/16 px-2 py-1 text-[10px] text-amber-50">UIT szükséges</span> : null}</div>
+                  <div className="flex items-start justify-between gap-3"><div><p className="text-base text-white">{displayDocumentNumber(item)}</p><p className="mt-1 text-xs text-white/48">{dateTime(item.created_at)}</p></div><div className="flex flex-col items-end gap-1"><span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${badge.cls}`}><BadgeIcon size={11} /> {badge.label}</span>{itemNeedsUit && !itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-red-300/75 bg-red-600 px-2 py-1 text-[10px] text-white shadow-[0_0_18px_rgba(220,38,38,.34)]"><AlertTriangle size={11} /> UIT szükséges</span> : itemUitCode ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/45 bg-[#2a8d8b] px-2 py-1 text-[10px] text-white"><CheckCircle2 size={11} /> UIT rögzítve</span> : null}</div></div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${meta.tone}`}><TypeIcon size={13} /> {meta.shortLabel}</span><span className="text-xs text-[#d7fffd]">{quantity(item.total_qty)} db • {moneyRon(item.total_value || 0)}</span></div>
                   <div className="mt-3 grid gap-2 text-xs"><div className="rounded-xl border border-red-400/30 bg-red-950/30 px-3 py-2"><span className="inline-flex items-center gap-1 text-red-300"><ArrowUpRight size={12} /> Kimenő / forrás</span><p className="mt-0.5 text-red-50">{item.from_location_summary || "-"}</p></div><div className="rounded-xl border border-[#7bd7d4]/30 bg-[#174c55]/40 px-3 py-2"><span className="inline-flex items-center gap-1 text-[#7bd7d4]"><ArrowDownLeft size={12} /> Bejövő / cél</span><p className="mt-0.5 text-[#d7fffd]">{item.supplier_name || item.to_location_summary || reasonLabel(documentTypeOf(item), item.reason_code, item.reason_text)}</p></div></div>
                   <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="text-xs text-white/50">{item.actor || "-"}</span>{documentActionButtons(item, true)}</div>
                 </article>
@@ -2358,7 +2416,7 @@ export default function AllInProductMoves() {
                     <p className="mt-2 text-[18px] text-white">{moneyRon(detailValue)}</p>{detailMissingPrices ? <p className="mt-0.5 text-[9px] text-amber-100/65">{detailMissingPrices} sor ár nélkül</p> : <p className="mt-0.5 text-[9px] text-white/35">RON összérték</p>}
                   </div>
                 </div>
-                {internalTransferNeedsUit(documentTypeOf(doc), detailValue) ? <div className="mt-3 flex items-start gap-3 rounded-2xl border-2 border-amber-300/55 bg-amber-500/14 px-4 py-3 text-amber-50 shadow-[0_10px_28px_rgba(245,158,11,.12)]"><AlertTriangle size={20} className="mt-0.5 shrink-0 text-amber-300" /><div><p className="text-sm text-amber-50">UIT kód szükséges</p><p className="mt-1 text-xs leading-relaxed text-amber-100/75">Az átadás értéke meghaladja a 10.000 RON-t ({moneyRon(detailValue)}). A szállítás indítása előtt rögzítsétek az UIT kódot.</p></div></div> : null}
+                {documentTypeOf(doc) === "internal_transfer" && !doc.isLegacy && doc.status !== "legacy" ? <div className={`mt-3 rounded-2xl border-2 px-4 py-3 shadow-[0_10px_28px_rgba(0,0,0,.12)] ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "border-red-300/75 bg-red-600/24" : "border-[#7bd7d4]/45 bg-[#174c55]/60"}`}><div className="flex flex-wrap items-end gap-3"><div className="flex min-w-[250px] flex-1 items-start gap-3"><AlertTriangle size={20} className={`mt-0.5 shrink-0 ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "text-red-300" : "text-[#7bd7d4]"}`} /><div><p className="text-sm text-white">{internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !documentUitCode(doc) ? "UIT kód szükséges" : documentUitCode(doc) ? "UIT kód rögzítve" : "UIT kód"}</p><p className="mt-1 text-xs leading-relaxed text-white/65">{internalTransferNeedsUit(documentTypeOf(doc), detailValue) ? `Az átadás értéke meghaladja a 10.000 RON-t (${moneyRon(detailValue)}). A szállítás előtt rögzítsétek az UIT kódot.` : "Ehhez az átadáshoz szükség esetén itt rögzíthető az UIT kód."}</p></div></div><label className="grid min-w-[260px] flex-1 gap-1 text-xs text-white/70">UIT kód<input className={`${input} ${internalTransferNeedsUit(documentTypeOf(doc), detailValue) && !detailUitCode ? "border-red-300/80 bg-red-950/30" : ""}`} value={detailUitCode} onChange={(event) => setDetailUitCode(normalizedUitCode(event.target.value))} placeholder="Írd be az UIT kódot" /></label><button type="button" className={primaryBtn} onClick={() => void saveDetailUitCode()} disabled={detailUitSaving}>{detailUitSaving ? <RefreshCw size={15} className="animate-spin" /> : <Save size={15} />} {detailUitSaving ? "Mentés..." : "UIT mentése"}</button></div>{detailUitError ? <p className="mt-2 text-xs text-red-100">{detailUitError}</p> : null}</div> : null}
                 {(doc.reason_code || doc.reason_text || doc.external_reference || doc.note) ? <div className="mt-3 grid gap-2 md:grid-cols-3"><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Ok</p><p className="mt-1 text-xs text-white/78">{reasonLabel(documentTypeOf(doc), doc.reason_code, doc.reason_text)}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Hivatkozás</p><p className="mt-1 text-xs text-white/78">{doc.external_reference || "-"}</p></div><div className="rounded-xl border border-white/12 bg-white/[0.05] px-3 py-2"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Megjegyzés</p><p className="mt-1 text-xs text-white/78">{doc.note || "-"}</p></div></div> : null}
 
                 <div className="mt-3 space-y-3">
@@ -2426,6 +2484,7 @@ export default function AllInProductMoves() {
               <div className="mt-3 grid gap-3 rounded-2xl border border-white/12 bg-white/[0.045] p-3 md:grid-cols-2 xl:grid-cols-4">
                 <label className={label}>Forráshely / érintett készlethely<CompactSelect value={sourceLocationId} onChange={setSourceLocationId} placeholder="Válassz helyszínt" options={[{ value: "", label: "Válassz helyszínt" }, ...locations.map((location) => ({ value: location.id, label: location.name }))]} /></label>
                 {draftType === "internal_transfer" ? <label className={label}>Célhely<CompactSelect value={targetLocationId} onChange={setTargetLocationId} placeholder="Válassz célhelyet" options={[{ value: "", label: "Válassz célhelyet" }, ...locations.filter((location) => location.id !== sourceLocationId).map((location) => ({ value: location.id, label: location.name }))]} /></label> : null}
+                {draftType === "internal_transfer" ? <label className={label}>UIT kód<input className={`${input} ${internalTransferNeedsUit(draftType, draftTotalValue) && !uitCode ? "border-red-300/80 bg-red-950/30" : ""}`} value={uitCode} onChange={(event) => setUitCode(normalizedUitCode(event.target.value))} placeholder={internalTransferNeedsUit(draftType, draftTotalValue) ? "Kötelező a szállításhoz" : "Ha szükséges"} /></label> : null}
                 {draftType === "supplier_return" ? <><label className={label}>Beszállító<CompactSelect value={supplierId} onChange={(next) => void loadSupplierReceptions(next)} placeholder="Válassz beszállítót" options={[{ value: "", label: "Válassz beszállítót" }, ...suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))]} /></label><label className={label}>Kapcsolt receptió / számla<CompactSelect value={receptionId} onChange={setReceptionId} placeholder="Nincs megadva" options={[{ value: "", label: "Nincs megadva" }, ...selectedSupplierReceptions.map((reception) => ({ value: reception.id, label: `${reception.invoice_number || "Számla nélkül"} • ${reception.reception_date ? String(reception.reception_date).slice(0, 10) : "-"}` }))]} /></label></> : null}
                 {draftType === "stock_correction" ? <label className={label}>Korrekció iránya<CompactSelect value={correctionDirection} onChange={(next) => { setCorrectionDirection(next as CorrectionDirection); setDraftLines({}); }} options={[{ value: "decrease", label: "Készlet csökkentése" }, { value: "increase", label: "Készlet növelése" }]} /></label> : null}
                 {draftType !== "internal_transfer" ? <label className={label}>Művelet oka<CompactSelect value={reasonCode} onChange={setReasonCode} placeholder="Válassz okot" options={[{ value: "", label: "Válassz okot" }, ...REASON_OPTIONS[draftType].map((option) => ({ value: option.value, label: option.label }))]} /></label> : null}
@@ -2434,7 +2493,7 @@ export default function AllInProductMoves() {
                 <label className={`${label} md:col-span-2`}>Megjegyzés a bizonylathoz<input className={input} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Csak a dokumentumhoz tartozó releváns megjegyzés" /></label>
               </div>
 
-              {internalTransferNeedsUit(draftType, draftTotalValue) ? <div className="mt-3 flex items-start gap-3 rounded-2xl border-2 border-amber-300/55 bg-amber-500/14 px-4 py-3 text-amber-50 shadow-[0_10px_28px_rgba(245,158,11,.12)]"><AlertTriangle size={20} className="mt-0.5 shrink-0 text-amber-300" /><div><p className="text-sm text-amber-50">Figyelem: UIT kód szükséges</p><p className="mt-1 text-xs leading-relaxed text-amber-100/75">Az átadás becsült értéke meghaladja a 10.000 RON-t ({moneyRon(draftTotalValue)}). A szállítás előtt az UIT kódot kötelező rögzíteni.</p></div></div> : null}
+              {internalTransferNeedsUit(draftType, draftTotalValue) ? <div className={`mt-3 flex items-start gap-3 rounded-2xl border-2 px-4 py-3 text-white shadow-[0_10px_28px_rgba(220,38,38,.16)] ${uitCode ? "border-[#7bd7d4]/55 bg-[#174c55]/72" : "border-red-300/75 bg-red-600/28"}`}><AlertTriangle size={20} className={`mt-0.5 shrink-0 ${uitCode ? "text-[#7bd7d4]" : "text-red-300"}`} /><div><p className="text-sm text-white">{uitCode ? "UIT kód rögzítve az előkészítéshez" : "Figyelem: UIT kód szükséges"}</p><p className="mt-1 text-xs leading-relaxed text-white/72">Az átadás becsült értéke meghaladja a 10.000 RON-t ({moneyRon(draftTotalValue)}). {uitCode ? `Rögzített kód: ${uitCode}` : "A szállítás előtt írd be az UIT kódot a fenti mezőbe."}</p></div></div> : null}
 
               <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(360px,.85fr)_minmax(0,1.6fr)]">
                 <div className="rounded-2xl border border-white/12 bg-[#404a5b] p-3">
