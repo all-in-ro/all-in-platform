@@ -15554,6 +15554,139 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.delete("/shop-customers/:customerId/sales/:saleId", requireAuthed, async (req, res) => {
+    const customerId = text(req.params.customerId);
+    const saleId = text(req.params.saleId);
+    if (!customerId || !saleId) return res.status(400).json({ error: "Hiányzik a kliens vagy a vásárlás azonosítója." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+
+      const customerResult = await client.query(
+        `SELECT id, full_name, phone
+         FROM aif_shop_customers
+         WHERE id::text=$1 AND is_active=true
+         FOR UPDATE`,
+        [customerId]
+      );
+      if (!customerResult.rowCount) {
+        const error = new Error("A kliens nem található vagy inaktív.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const customer = customerResult.rows[0];
+
+      const saleResult = await client.query(
+        `SELECT s.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_sales s
+         JOIN aif_locations l ON l.id=s.location_id
+         WHERE s.id::text=$1 AND s.customer_id=$2
+         FOR UPDATE OF s`,
+        [saleId, customer.id]
+      );
+      if (!saleResult.rowCount) {
+        const error = new Error("Ez a vásárlás nem tartozik ehhez a klienshez, vagy már törölve lett tőle.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const sale = saleResult.rows[0];
+
+      if (normCode(req.session?.role) === "shop") {
+        const sessionLocation = await aifResolveShopLocation(req, client, sale.location_id);
+        if (String(sessionLocation.id) !== String(sale.location_id)) {
+          const error = new Error("Másik üzlet vásárlását ebből a munkamenetből nem lehet módosítani.");
+          error.statusCode = 403;
+          throw error;
+        }
+      }
+
+      const allocations = await client.query(
+        `SELECT count(*)::int AS count
+         FROM aif_shop_customer_payment_allocations
+         WHERE sale_id=$1`,
+        [sale.id]
+      );
+      if (Number(allocations.rows[0]?.count || 0) > 0) {
+        const error = new Error("Ehhez a vásárláshoz már tartozásbefizetés kapcsolódik, ezért nem választható le automatikusan. Előbb a kapcsolt befizetést kell rendezni.");
+        error.statusCode = 409;
+        error.code = "customer_sale_has_payment_allocations";
+        throw error;
+      }
+
+      const actor = actorFrom(req);
+      const detachedAt = new Date().toISOString();
+      const detachAudit = {
+        source: "shop_customer_sale_detach",
+        customerId: String(customer.id),
+        customerName: customer.full_name || sale.customer_name || null,
+        customerPhone: customer.phone || sale.customer_phone || null,
+        detachedAt,
+        detachedBy: actor,
+      };
+
+      await client.query(
+        `UPDATE aif_shop_sales
+         SET customer_id=NULL,
+             customer_name=NULL,
+             customer_phone=NULL,
+             raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object('customerDetachment',$2::jsonb),
+             updated_at=now()
+         WHERE id=$1`,
+        [sale.id, JSON.stringify(detachAudit)]
+      );
+
+      await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+         VALUES ($1,'customer_detached',$2,$3,$4::jsonb)`,
+        [
+          sale.id,
+          actor,
+          `Vásárlás leválasztva a kliensről: ${customer.full_name || customer.id}`,
+          JSON.stringify({
+            ...detachAudit,
+            saleNumber: sale.sale_number,
+            total: aifNumber(sale.total),
+            paidTotal: aifNumber(sale.paid_total),
+            balanceDue: aifNumber(sale.balance_due),
+            locationId: String(sale.location_id),
+            locationCode: sale.location_code,
+            locationName: sale.location_name,
+          }),
+        ]
+      );
+
+      await client.query(
+        `UPDATE aif_shop_customers SET updated_by=$2, updated_at=now() WHERE id=$1`,
+        [customer.id, actor]
+      );
+
+      const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+      const snapshot = await aifLoadShopCustomerSnapshot(client, customer.id, currentYear);
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        mode: "detached_from_customer",
+        customerId: String(customer.id),
+        saleId: String(sale.id),
+        saleNumber: sale.sale_number,
+        item: aifShopCustomerResponse(snapshot || customer),
+        openBalance: aifNumber(snapshot?.open_balance),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF shop customer sale detach failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A vásárlás leválasztása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   router.post("/shop-customers/:id/payments", requireAuthed, async (req, res) => {
     const customerId = text(req.params.id);
     const body = req.body || {};
