@@ -12681,37 +12681,64 @@ export default function AllInWarehouse() {
         onChanged={() => load()}
       />
 
-      {warehouseTransferToast && (
-        <div className={`fixed bottom-5 right-5 z-[125] w-[380px] overflow-hidden rounded-[22px] border bg-[#f8fafc]/98 text-slate-900 shadow-[0_24px_72px_rgba(15,23,42,0.34)] backdrop-blur-xl ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300" : "border-teal-300"}`}>
-          <div className={`h-1.5 ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "bg-red-500" : "bg-[#2a8d8b]"}`} />
-          <div className="flex items-start gap-3 p-3.5">
-            <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-200 bg-red-50 text-red-600" : "border-teal-200 bg-teal-50 text-[#187876]"}`}>
-              {warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
+      {warehouseTransferToast && typeof document !== "undefined" ? createPortal(
+        <div
+          className={`fixed bottom-5 right-5 z-[125] w-[390px] max-w-[calc(100vw-24px)] overflow-hidden rounded-[22px] border text-slate-900 shadow-[0_28px_90px_rgba(15,23,42,0.48)] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300" : "border-teal-300"}`}
+          style={{ backgroundColor: "#ffffff", color: "#0f172a", opacity: 1 }}
+          role="status"
+          aria-live="polite"
+        >
+          <div className={`flex items-start gap-3 px-3.5 py-3 text-white ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "bg-[#b4233d]" : "bg-[#176f6c]"}`}>
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/35 bg-white/15 text-white shadow-sm">
+              {warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? <AlertTriangle size={19} /> : <CheckCircle2 size={19} />}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[9px] uppercase tracking-[0.16em] text-slate-500">Előkészítés frissítve</p>
-              <p className="mt-1 truncate text-sm text-slate-900" title={warehouseTransferToast.documentNumber}>{warehouseTransferToast.documentNumber}</p>
-              {warehouseTransferToast.routeLabel ? <p className="mt-0.5 truncate text-[10px] text-slate-600" title={warehouseTransferToast.routeLabel}>{warehouseTransferToast.routeLabel}</p> : null}
-              <p className="mt-1 text-[11px] text-slate-600">Most hozzáadva: <span className="text-[#0f5f59]">+{money(warehouseTransferToast.addedValue)} RON</span></p>
-              <div className="mt-2 flex items-end justify-between gap-3">
-                <p className="text-[22px] leading-none text-slate-900">{money(warehouseTransferToast.totalValue)} <span className="text-[10px] text-slate-500">RON</span></p>
-                <span className={`rounded-full border px-2 py-1 text-[9px] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-200 bg-red-50 text-red-700" : "border-teal-200 bg-teal-50 text-[#187876]"}`}>
-                  {warehouseTransferToast.uitRecorded ? "UIT rögzítve" : warehouseTransferToast.crossedThreshold ? "UIT-határ elérve" : `${money(Math.max(0, WAREHOUSE_UIT_WARNING_THRESHOLD_RON - warehouseTransferToast.totalValue))} RON a határig`}
-                </span>
-              </div>
-              {Number(warehouseTransferToast.documentCount || 1) === 1 ? <p className="mt-2 text-[9px] text-slate-500">Az ellenkező irány külön PV-be kerül.</p> : null}
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/80">Előkészítés frissítve</p>
+              <p className="mt-1 truncate text-[15px] leading-tight text-white" title={warehouseTransferToast.documentNumber}>{warehouseTransferToast.documentNumber}</p>
             </div>
             <button
               type="button"
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-900"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/30 bg-white/12 text-white hover:bg-white/22"
               onClick={() => setWarehouseTransferToast(null)}
               aria-label="Értesítés bezárása"
             >
-              <X size={13} />
+              <X size={14} />
             </button>
           </div>
-        </div>
-      )}
+
+          <div className="bg-white p-3.5">
+            {warehouseTransferToast.routeLabel ? (
+              <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-snug text-slate-700" title={warehouseTransferToast.routeLabel}>
+                <span className="block text-[9px] uppercase tracking-[0.11em] text-slate-500">Útvonal</span>
+                <span className="mt-0.5 block truncate text-slate-800">{warehouseTransferToast.routeLabel}</span>
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-2xl border border-teal-200 bg-teal-50 px-3 py-2.5">
+                <p className="text-[9px] uppercase tracking-[0.11em] text-[#176f6c]">Most hozzáadva</p>
+                <p className="mt-1 text-[17px] leading-none text-[#0f5f59]">+{money(warehouseTransferToast.addedValue)} <span className="text-[9px] text-[#176f6c]">RON</span></p>
+              </div>
+              <div className={`rounded-2xl border px-3 py-2.5 ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-200 bg-red-50" : "border-slate-200 bg-slate-50"}`}>
+                <p className={`text-[9px] uppercase tracking-[0.11em] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "text-red-700" : "text-slate-500"}`}>PV összesen</p>
+                <p className={`mt-1 text-[20px] leading-none ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "text-red-900" : "text-slate-900"}`}>{money(warehouseTransferToast.totalValue)} <span className="text-[9px] text-slate-500">RON</span></p>
+              </div>
+            </div>
+
+            <div className={`mt-3 flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-200 bg-red-50" : "border-teal-200 bg-[#effbf9]"}`}>
+              <span className={`text-[10px] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "text-red-800" : "text-[#176f6c]"}`}>
+                {warehouseTransferToast.uitRecorded ? "Az UIT kód rögzítve van." : warehouseTransferToast.crossedThreshold ? "A PV elérte az UIT-határt." : "Az UIT-határig még maradt:"}
+              </span>
+              <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300 bg-white text-red-700" : "border-teal-300 bg-white text-[#176f6c]"}`}>
+                {warehouseTransferToast.uitRecorded ? "UIT rögzítve" : warehouseTransferToast.crossedThreshold ? "UIT szükséges" : `${money(Math.max(0, WAREHOUSE_UIT_WARNING_THRESHOLD_RON - warehouseTransferToast.totalValue))} RON`}
+              </span>
+            </div>
+
+            {Number(warehouseTransferToast.documentCount || 1) === 1 ? <p className="mt-2 text-[9px] leading-relaxed text-slate-500">Az ellenkező irány külön PV-előkészítésbe kerül.</p> : null}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
 
       {warehouseUitWarning && (
         <div className="fixed inset-0 z-[135] flex items-center justify-center bg-slate-950/58 p-3 backdrop-blur-md" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWarehouseUitWarning(); }}>
