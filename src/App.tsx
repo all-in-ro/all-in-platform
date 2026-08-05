@@ -156,7 +156,7 @@ function hashToScreen(rawHash: string): Screen {
 }
 
 function shopHomeScreen(shopId: ShopId): ScreenName {
-  return shopId === "csikszereda" ? "magazinciuc" : "magazintargu";
+  return shopId === "csikszereda" ? "magazinciucsale" : "magazintargusale";
 }
 
 function isShopScreenAllowed(shopId: ShopId, screenName: ScreenName) {
@@ -184,7 +184,13 @@ function clearShopBrowserState() {
   const keys: string[] = [];
   for (let index = 0; index < sessionStorage.length; index += 1) {
     const key = sessionStorage.key(index);
-    if (key && (key.startsWith("allin:shop-sale-cart:") || key === "allin:last_hash")) {
+    if (
+      key && (
+        key.startsWith("allin:shop-sale-cart:") ||
+        key.startsWith("allin:shop-administration-unlock:") ||
+        key === "allin:last_hash"
+      )
+    ) {
       keys.push(key);
     }
   }
