@@ -2326,9 +2326,82 @@ export type AifShopCustomer = {
   openBalance: number;
   openSales: number;
   saleCount: number;
+  yearPurchaseTotal?: number;
+  lifetimePurchaseTotal?: number;
+  lifetimePaidTotal?: number;
   lastSaleAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+};
+
+export type AifShopCustomerSaleHistoryItem = {
+  id: string;
+  saleNumber: string;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  actor?: string | null;
+  soldAt: string;
+  status: string;
+  paymentStatus: string;
+  saleType: string;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  paidTotal: number;
+  balanceDue: number;
+  lineCount: number;
+  itemCount: number;
+};
+
+export type AifShopCustomerPaymentAllocation = {
+  saleId: string;
+  saleNumber: string;
+  soldAt?: string | null;
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+};
+
+export type AifShopCustomerPaymentMethod = "cash" | "card" | "bank_transfer";
+
+export type AifShopCustomerPaymentHistoryItem = {
+  id: string;
+  amount: number;
+  method: AifShopCustomerPaymentMethod | string;
+  paidAt: string;
+  actor?: string | null;
+  reference?: string | null;
+  note?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  allocations: AifShopCustomerPaymentAllocation[];
+};
+
+export type AifShopCustomerDetail = {
+  ok: true;
+  item: AifShopCustomer;
+  summary: {
+    year: number;
+    yearPurchaseTotal: number;
+    lifetimePurchaseTotal: number;
+    lifetimePaidTotal: number;
+    openBalance: number;
+    openSales: number;
+    saleCount: number;
+    lastSaleAt?: string | null;
+  };
+  sales: AifShopCustomerSaleHistoryItem[];
+  payments: AifShopCustomerPaymentHistoryItem[];
+};
+
+export type AifShopCustomerPaymentResult = {
+  ok: true;
+  duplicate?: boolean;
+  payment: AifShopCustomerPaymentHistoryItem;
+  item: AifShopCustomer;
+  openBalance: number;
 };
 
 export function apiAifListShopCustomers(options?: { search?: string; limit?: number }) {
@@ -2336,6 +2409,18 @@ export function apiAifListShopCustomers(options?: { search?: string; limit?: num
   if (options?.search?.trim()) q.set("q", options.search.trim());
   q.set("limit", String(options?.limit || 60));
   return fetchAifJSON<{ ok: true; items: AifShopCustomer[]; count: number }>(`/shop-customers?${q.toString()}`);
+}
+
+export function apiAifGetShopCustomer(
+  id: string,
+  options?: { year?: number; salesLimit?: number; paymentsLimit?: number },
+) {
+  const q = new URLSearchParams();
+  if (options?.year) q.set("year", String(options.year));
+  if (options?.salesLimit) q.set("salesLimit", String(options.salesLimit));
+  if (options?.paymentsLimit) q.set("paymentsLimit", String(options.paymentsLimit));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return fetchAifJSON<AifShopCustomerDetail>(`/shop-customers/${encodeURIComponent(id)}${suffix}`);
 }
 
 export function apiAifCreateShopCustomer(input: {
@@ -2350,6 +2435,27 @@ export function apiAifCreateShopCustomer(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function apiAifRecordShopCustomerPayment(
+  id: string,
+  input: {
+    amount: number;
+    method: AifShopCustomerPaymentMethod;
+    location: string;
+    reference?: string | null;
+    note?: string | null;
+    idempotencyKey: string;
+  },
+) {
+  return fetchAifJSON<AifShopCustomerPaymentResult>(
+    `/shop-customers/${encodeURIComponent(id)}/payments`,
+    {
+      method: "POST",
+      headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export type AifShopSaleCatalogItem = {
