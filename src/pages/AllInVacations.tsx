@@ -2296,7 +2296,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                     <button
                       type="button"
                       onClick={() => openRequestDecision(request, "approved")}
-                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-emerald-200/40 bg-emerald-600 px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(5,150,105,0.22)] transition hover:bg-emerald-500 active:scale-[0.98]"
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-[#9be9e5]/45 bg-[#208d8b] px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(32,141,139,0.24)] transition hover:bg-[#267f7d] active:scale-[0.98]"
                     >
                       <ThumbsUp className="h-3.5 w-3.5" /> Elfogadás
                     </button>
@@ -2407,7 +2407,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
       {decisionTarget && (
         <div className="fixed inset-0 z-[136] grid place-items-center bg-slate-950/80 px-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !decisionBusy) setDecisionTarget(null); }}>
-          <section className={`w-full max-w-[620px] overflow-hidden rounded-[26px] border text-white shadow-[0_34px_110px_rgba(0,0,0,0.58)] ${decisionMode === "approved" ? "border-emerald-200/38 bg-[#314b48]" : "border-rose-200/38 bg-[#4b3039]"}`}>
+          <section className={`w-full max-w-[620px] overflow-hidden rounded-[26px] border text-white shadow-[0_34px_110px_rgba(0,0,0,0.58)] ${decisionMode === "approved" ? "border-[#7bd7d4]/38 bg-[#344452]" : "border-rose-200/38 bg-[#4b3039]"}`}>
             <header className={`flex items-start justify-between gap-3 border-b border-white/12 px-5 py-4 ${decisionMode === "approved" ? "bg-gradient-to-r from-[#1f6d62] to-[#2a8d8b]" : "bg-gradient-to-r from-[#8f1730] to-[#5c2230]"}`}>
               <div className="flex min-w-0 items-center gap-3">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/12">
@@ -2451,7 +2451,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 />
               </label>
 
-              <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed ${decisionMode === "approved" ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50" : "border-rose-200/24 bg-rose-500/10 text-rose-50"}`}>
+              <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed ${decisionMode === "approved" ? "border-[#7bd7d4]/24 bg-[#2a8d8b]/10 text-[#e5fffd]" : "border-rose-200/24 bg-rose-500/10 text-rose-50"}`}>
                 {decisionMode === "approved"
                   ? "Elfogadáskor a szabadság vagy órás elkérés automatikusan bekerül a hivatalos nyilvántartásba, és az alkalmazott értesítést kap."
                   : "Elutasításkor nem készül távolléti bejegyzés. Az alkalmazott az indoklással együtt látni fogja a döntést."}
@@ -2464,7 +2464,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 type="button"
                 disabled={decisionBusy || (decisionMode === "rejected" && !decisionNote.trim())}
                 onClick={() => void submitRequestDecision()}
-                className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-5 text-sm text-white transition disabled:opacity-50 ${decisionMode === "approved" ? "border-emerald-200/45 bg-emerald-600 hover:bg-emerald-500" : "border-rose-200/45 bg-rose-600 hover:bg-rose-500"}`}
+                className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-5 text-sm text-white transition disabled:opacity-50 ${decisionMode === "approved" ? "border-[#9be9e5]/45 bg-[#208d8b] hover:bg-[#267f7d]" : "border-rose-200/45 bg-rose-600 hover:bg-rose-500"}`}
               >
                 {decisionBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : decisionMode === "approved" ? <ThumbsUp className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
                 {decisionBusy ? "Mentés…" : decisionMode === "approved" ? "Elfogadás és rögzítés" : "Elutasítás"}
