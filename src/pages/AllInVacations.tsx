@@ -2210,54 +2210,96 @@ export default function AllInVacations({ api }: { api?: string }) {
         ) : null}
 
         {pendingRequests.length > 0 || pendingRequestsBusy ? (
-          <section className="overflow-hidden rounded-[24px] border border-rose-200/55 bg-gradient-to-br from-[#a70f28] via-[#821025] to-[#5c1422] shadow-[0_18px_44px_rgba(159,18,57,0.28)]">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rose-100/18 bg-black/10 px-4 py-3.5">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-100/35 bg-white/12 text-rose-50"><BellRing className="h-5 w-5" /></span>
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.17em] text-rose-100/62">Vezetői döntésre vár</div>
-                  <div className="mt-1 text-lg text-white">Függő szabadság- és elkéréskérelmek</div>
+          <section className="overflow-hidden rounded-[20px] border border-rose-200/42 bg-[#3b2c37] shadow-[0_14px_34px_rgba(95,15,38,0.22)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100/14 bg-gradient-to-r from-[#7c1025] via-[#681125] to-[#4c1b28] px-3 py-2.5 sm:px-4">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-100/30 bg-white/10 text-rose-50">
+                  <BellRing className="h-4.5 w-4.5" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-[0.16em] text-rose-100/56">Vezetői döntésre vár</div>
+                  <div className="truncate text-sm text-white sm:text-base">Függő kérelmek</div>
                 </div>
               </div>
-              <span className="rounded-full border border-rose-100/35 bg-white/12 px-3 py-1 text-xs text-rose-50">{pendingRequests.length} új kérés</span>
+              <span className="rounded-full border border-rose-100/28 bg-white/10 px-2.5 py-1 text-[10px] text-rose-50">
+                {pendingRequests.length} új
+              </span>
             </div>
 
-            <div className="grid gap-2 p-3 lg:grid-cols-2">
+            <div className="grid gap-2 p-2.5 xl:grid-cols-2">
               {pendingRequestsBusy ? (
-                <div className="col-span-full flex min-h-[120px] items-center justify-center gap-2 text-sm text-rose-50/75"><RefreshCw className="h-4 w-4 animate-spin" /> Kérelmek betöltése…</div>
+                <div className="col-span-full flex min-h-[76px] items-center justify-center gap-2 rounded-xl border border-rose-100/14 bg-black/10 text-sm text-rose-50/72">
+                  <RefreshCw className="h-4 w-4 animate-spin" /> Kérelmek betöltése…
+                </div>
               ) : pendingRequests.map((request) => (
-                <article key={request.id} className="rounded-2xl border border-rose-100/25 bg-[#351b28]/72 p-3.5 shadow-[0_10px_24px_rgba(0,0,0,0.16)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <button
-                      type="button"
-                      className="min-w-0 text-left"
-                      onClick={() => {
-                        setSelected(request.employeeName);
-                        if (isMobile) setMobilePane("details");
-                      }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-100/35 bg-white text-sm text-[#a31128]">{initials(request.employeeName)}</span>
-                        <div className="min-w-0">
-                          <div className="truncate text-base text-white">{request.employeeName}</div>
-                          <div className="mt-0.5 text-[10px] text-rose-100/55">Beküldve: {formatRequestDateTime(request.requestedAt)}</div>
+                <article
+                  key={request.id}
+                  className="grid gap-2 rounded-2xl border border-rose-100/18 bg-[#303746] px-3 py-2.5 shadow-[0_8px_20px_rgba(0,0,0,0.14)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                >
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <button
+                        type="button"
+                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-200/36 bg-rose-50 text-xs text-[#9f1730] transition hover:bg-white"
+                        onClick={() => {
+                          setSelected(request.employeeName);
+                          if (isMobile) setMobilePane("details");
+                        }}
+                        title={`${request.employeeName} adatlapjának megnyitása`}
+                      >
+                        {initials(request.employeeName)}
+                      </button>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <button
+                            type="button"
+                            className="truncate text-left text-sm text-white transition hover:text-[#bdf8f5]"
+                            onClick={() => {
+                              setSelected(request.employeeName);
+                              if (isMobile) setMobilePane("details");
+                            }}
+                          >
+                            {request.employeeName}
+                          </button>
+                          <span className="rounded-full border border-amber-200/25 bg-amber-400/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-amber-50">
+                            Elbírálás alatt
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] text-white/40">
+                          {formatRequestDateTime(request.requestedAt)}
                         </div>
                       </div>
-                    </button>
-                    <span className="rounded-full border border-amber-100/38 bg-amber-300/12 px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-amber-50">Elbírálás alatt</span>
-                  </div>
-
-                  <div className="mt-3 rounded-xl border border-rose-100/15 bg-black/12 px-3 py-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm text-white">{request.kind === "vacation" ? "Szabadság" : "Órás elkérés"}</span>
-                      <span className="text-sm text-rose-50">{requestPeriodLabel(request)}</span>
                     </div>
-                    {request.note ? <div className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-rose-50/72"><MessageSquareText className="mt-0.5 h-3.5 w-3.5 shrink-0" />{request.note}</div> : null}
+
+                    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-white/8 bg-black/10 px-2.5 py-2">
+                      <span className="rounded-lg border border-rose-200/20 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-50">
+                        {request.kind === "vacation" ? "Szabadság" : "Órás elkérés"}
+                      </span>
+                      <span className="text-sm text-white">{requestPeriodLabel(request)}</span>
+                      {request.note ? (
+                        <span className="min-w-0 flex-1 truncate text-[11px] text-white/48" title={request.note}>
+                          <MessageSquareText className="mr-1 inline h-3.5 w-3.5" />{request.note}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button type="button" onClick={() => openRequestDecision(request, "rejected")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-rose-100/25 bg-black/14 px-3 text-xs text-rose-50 transition hover:bg-black/24"><ThumbsDown className="h-4 w-4" /> Elutasítás</button>
-                    <button type="button" onClick={() => openRequestDecision(request, "approved")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-emerald-200/45 bg-emerald-600 px-3 text-xs text-white shadow-[0_8px_20px_rgba(5,150,105,0.25)] transition hover:bg-emerald-500"><ThumbsUp className="h-4 w-4" /> Elfogadás</button>
+                  <div className="grid grid-cols-2 gap-2 sm:w-[214px]">
+                    <button
+                      type="button"
+                      onClick={() => openRequestDecision(request, "rejected")}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-rose-200/22 bg-rose-950/26 px-3 text-[11px] text-rose-50 transition hover:bg-rose-950/42 active:scale-[0.98]"
+                    >
+                      <ThumbsDown className="h-3.5 w-3.5" /> Elutasítás
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openRequestDecision(request, "approved")}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-emerald-200/40 bg-emerald-600 px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(5,150,105,0.22)] transition hover:bg-emerald-500 active:scale-[0.98]"
+                    >
+                      <ThumbsUp className="h-3.5 w-3.5" /> Elfogadás
+                    </button>
                   </div>
                 </article>
               ))}
