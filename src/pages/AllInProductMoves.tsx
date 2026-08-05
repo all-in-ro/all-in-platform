@@ -69,6 +69,7 @@ function notifyStockMovesChanged() {
 type DocumentType = "internal_transfer" | "supplier_return" | "damaged_writeoff" | "stock_correction";
 type ArchiveFilter = "all" | "official" | "draft" | "preparation" | "legacy" | "cancelled" | DocumentType;
 type CorrectionDirection = "increase" | "decrease";
+type DeleteMode = "restore_stock" | "permanent";
 
 type LocationItem = { id: string; code?: string | null; name: string; is_active?: boolean };
 type SupplierItem = { id: string; code?: string | null; name: string; is_active?: boolean };
@@ -1331,6 +1332,7 @@ export default function AllInProductMoves() {
   const [detailUitError, setDetailUitError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<DocumentListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deletingMode, setDeletingMode] = useState<DeleteMode | null>(null);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsType, setSettingsType] = useState<DocumentType>("internal_transfer");
@@ -2161,29 +2163,101 @@ export default function AllInProductMoves() {
     }
   }
 
-  async function confirmDelete() {
+  function canRestoreStockOnDelete(item: DocumentListItem) {
+    if (item.isLegacy || item.status === "legacy") return false;
+    if (item.status === "draft") return false;
+    const type = documentTypeOf(item);
+    return ["internal_transfer", "damaged_writeoff"].includes(type)
+      && ["preparation", "issued"].includes(String(item.status || ""));
+  }
+
+  function restoreDeleteUnavailableReason(item: DocumentListItem) {
+    if (item.isLegacy || item.status === "legacy") return "Régi archív bizonylatnál a készlet automatikus visszaállítása nem biztonságos.";
+    if (item.status === "draft") return "Ez az előkészítés még nem módosította a készletet.";
+    if (!["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(item))) {
+      return "Ennél a bizonylattípusnál nincs biztonságos automatikus készlet-visszaállítás.";
+    }
+    return "A készlet automatikus visszaállítása ennél a bizonylatnál nem érhető el.";
+  }
+
+  async function confirmDelete(mode: DeleteMode) {
     if (!deleteTarget || deleting) return;
+    const target = deleteTarget;
+    const number = displayDocumentNumber(target);
     setDeleting(true);
+    setDeletingMode(mode);
     setError("");
     try {
-      const deletePath = deleteTarget.status === "draft"
-        ? `/stock-documents/${encodeURIComponent(deleteTarget.id)}/draft`
-        : deleteTarget.status === "preparation"
-          ? `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}/preparation`
-          : `/stock-transfer-documents/${encodeURIComponent(deleteTarget.id)}`;
-      await fetchJson<{ ok: boolean; restoredQty?: number }>(deletePath, { method: "DELETE" });
-      notifyStockMovesChanged();
-      const number = displayDocumentNumber(deleteTarget);
-      if (detail?.document.id === deleteTarget.id) setDetail(null);
+      if (mode === "restore_stock") {
+        if (!canRestoreStockOnDelete(target)) {
+          throw new Error(restoreDeleteUnavailableReason(target));
+        }
+
+        if (target.status === "issued") {
+          await fetchJson(`/stock-transfer-documents/${encodeURIComponent(target.id)}/reopen`, {
+            method: "POST",
+            body: "{}",
+          });
+        }
+
+        const result = await fetchJson<{ ok: boolean; restoredQty?: number }>(
+          `/stock-transfer-documents/${encodeURIComponent(target.id)}/preparation`,
+          { method: "DELETE" },
+        );
+        notifyStockMovesChanged();
+        if (detail?.document.id === target.id) setDetail(null);
+        setDeleteTarget(null);
+        setMessage(`${number} törölve. A bizonylat készletmozgása vissza lett fordítva, visszaállított mennyiség: ${quantity(result.restoredQty || target.total_qty || 0)} db.`);
+        await Promise.all([loadList(), loadBaseData()]);
+        return;
+      }
+
+      if (target.status === "draft") {
+        await fetchJson<{ ok: boolean }>(
+          `/stock-documents/${encodeURIComponent(target.id)}/draft`,
+          { method: "DELETE" },
+        );
+      } else if (target.status === "preparation") {
+        /*
+          A végleges törlésnél a készlethez nem nyúlunk. A backend a nyitott
+          előkészítést csak készlet-visszaállítással engedné törölni, ezért
+          előbb lezárjuk, majd az archívumból végleg eltávolítjuk. Emberi
+          nyelven: a papír megy, a készlet marad. Végre egyértelműen.
+        */
+        if (n(target.total_qty) > 0) {
+          await fetchJson(`/stock-transfer-documents/${encodeURIComponent(target.id)}/close`, {
+            method: "POST",
+            body: "{}",
+          });
+          await fetchJson<{ ok: boolean }>(
+            `/stock-transfer-documents/${encodeURIComponent(target.id)}`,
+            { method: "DELETE" },
+          );
+        } else {
+          await fetchJson<{ ok: boolean }>(
+            `/stock-transfer-documents/${encodeURIComponent(target.id)}/preparation`,
+            { method: "DELETE" },
+          );
+        }
+      } else {
+        await fetchJson<{ ok: boolean }>(
+          `/stock-transfer-documents/${encodeURIComponent(target.id)}`,
+          { method: "DELETE" },
+        );
+      }
+
+      if (detail?.document.id === target.id) setDetail(null);
       setDeleteTarget(null);
-      setMessage(deleteTarget.status === "preparation" ? `${number} előkészítés törölve, a benne mozgatott készlet visszaállítva.` : `${number} véglegesen törölve az archívumból. A lezárt bizonylat készletmozgása változatlan maradt.`);
+      setMessage(`${number} véglegesen törölve. A raktárkészlet változatlan maradt.`);
       await loadList();
     } catch (deleteError: any) {
-      setError(deleteError?.message || "A bizonylat végleges törlése nem sikerült.");
+      setError(deleteError?.message || "A bizonylat törlése nem sikerült.");
     } finally {
       setDeleting(false);
+      setDeletingMode(null);
     }
   }
+
 
   async function saveDetailUitCode() {
     if (!detail?.document?.id || detailUitSaving) return;
@@ -2229,7 +2303,7 @@ export default function AllInProductMoves() {
         {isPreparation ? <button type="button" className={rowPrimaryBtn} onClick={() => void closePreparationById(item)} title="Előkészítés lezárása"><CheckCircle2 size={13} /> {compact ? "Lezár" : "Lezárás"}</button> : null}
         {!isPreparation && !isDraft ? <button type="button" className={rowIconBtn} onClick={async () => { const current = detail?.document.id === item.id ? detail : await fetchJson<DocumentDetail>(`/stock-transfer-documents/${encodeURIComponent(item.id)}`); printDetail(current, inventory); }} title="PDF / nyomtatás"><Printer size={14} /></button> : null}
         {canReopen ? <button type="button" className={rowIconBtn} onClick={() => void reopenAsPreparation(item)} title="Visszaállítás Előkészítésre"><RotateCcw size={14} /></button> : null}
-        <button type="button" className={rowDangerIconBtn} onClick={() => setDeleteTarget(item)} title="Végleges törlés"><Trash2 size={14} /></button>
+        <button type="button" className={rowDangerIconBtn} onClick={() => setDeleteTarget(item)} title="Törlés"><Trash2 size={14} /></button>
       </div>
     );
   }
@@ -2391,7 +2465,7 @@ export default function AllInProductMoves() {
             <div className="flex max-h-[95vh] w-full max-w-[1420px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-[#414b5b] shadow-[0_34px_100px_rgba(2,6,23,.52)]">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#233044] via-[#2d3a4d] to-[#31525a] px-4 py-3.5">
                 <div className="flex min-w-0 items-start gap-3"><span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]"><TypeIcon size={21} /></span><div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.18em] text-[#cffffd]/65">{doc.status === "preparation" || doc.status === "draft" ? "Készletbizonylat előkészítése" : "Készletbizonylat részletei"}</p><h2 className="mt-0.5 truncate text-[22px]">{doc.status === "draft" ? meta.shortLabel : displayDocumentNumber(doc)}</h2><p className="mt-1 truncate text-xs text-white/58">{doc.status === "draft" ? `Azonosító: ${displayDocumentNumber(doc)} • ${doc.subtitle || meta.label}` : `${meta.label} • ${doc.subtitle || "-"}`}</p></div></div>
-                <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Végleges törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
+                <div className="flex flex-wrap gap-2">{doc.status === "preparation" ? <><button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button><button type="button" className={primaryBtn} onClick={() => void closePreparationById(doc)}><CheckCircle2 size={15} /> Lezárás</button></> : doc.status === "draft" ? <button type="button" className={primaryBtn} onClick={() => void openDraftForEdit(doc)}><Edit3 size={15} /> Előkészítés folytatása</button> : <><button type="button" className={primaryBtn} onClick={() => printDetail(detail, inventory)}><Printer size={15} /> PDF / nyomtatás</button>{["internal_transfer", "damaged_writeoff"].includes(documentTypeOf(doc)) ? <button type="button" className={btnSoft} onClick={() => void reopenAsPreparation(doc)}><RotateCcw size={15} /> Előkészítésre</button> : null}</>}<button type="button" className={dangerBtn} onClick={() => setDeleteTarget(doc)}><Trash2 size={15} /> Törlés</button><button type="button" className={btn} onClick={() => setDetail(null)}><X size={15} /> Bezárás</button></div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-3.5">
                 <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-5">
@@ -2554,11 +2628,68 @@ export default function AllInProductMoves() {
         </div>
       ) : null}
 
-      {deleteTarget ? (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-rose-200/25 bg-[#4b5362] p-4 shadow-2xl"><div className="flex items-start gap-3"><span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200/28 bg-rose-500/14 text-rose-50"><AlertTriangle size={19} /></span><div><h3 className="text-lg">Végleges törlés</h3><p className="mt-1 text-sm leading-relaxed text-white/62">A(z) <span className="text-white">{displayDocumentNumber(deleteTarget)}</span> {deleteTarget.status === "preparation" ? "előkészítés törlődik, és minden benne szereplő mozgatás visszakerül az eredeti készlethelyre." : deleteTarget.status === "draft" ? "előkészítés végleg törlődik. Készletmozgás még nem történt." : "bizonylat végleg eltűnik az archívumból. A készletet ez nem írja vissza, mert a valós készletmozgás már megtörtént."}</p></div></div><div className="mt-4 flex justify-end gap-2"><button type="button" className={btnSoft} onClick={() => setDeleteTarget(null)} disabled={deleting}>Mégse</button><button type="button" className={dangerBtn} onClick={() => void confirmDelete()} disabled={deleting}><Trash2 size={15} /> {deleting ? "Törlés..." : "Végleges törlés"}</button></div></div>
-        </div>
-      ) : null}
+      {deleteTarget ? (() => {
+        const restoreAvailable = canRestoreStockOnDelete(deleteTarget);
+        const noRestoreReason = restoreDeleteUnavailableReason(deleteTarget);
+        const targetNumber = displayDocumentNumber(deleteTarget);
+        const targetQty = quantity(deleteTarget.total_qty || 0);
+        return (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-[24px] border border-white/16 bg-[#4b5362] shadow-[0_30px_90px_rgba(2,6,23,.55)]">
+              <div className="flex items-start gap-3 border-b border-white/12 bg-gradient-to-r from-[#3b2730] via-[#3d3544] to-[#344154] px-4 py-4">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/28 bg-rose-500/14 text-rose-50"><AlertTriangle size={20} /></span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/58">Törlési mód kiválasztása</p>
+                  <h3 className="mt-1 text-lg text-white">Mi történjen a készlettel?</h3>
+                  <p className="mt-1 text-sm leading-relaxed text-white/62">
+                    <span className="text-white">{targetNumber}</span> • {targetQty} db. A két művelet nem ugyanaz, ezért a rendszer most nem találgat helyetted.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 p-4 md:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={!restoreAvailable || deleting}
+                  onClick={() => void confirmDelete("restore_stock")}
+                  className="group rounded-2xl border border-amber-200/28 bg-amber-500/10 p-4 text-left transition hover:-translate-y-0.5 hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0"
+                >
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200/25 bg-amber-500/14 text-amber-50">
+                    {deletingMode === "restore_stock" ? <RefreshCw size={18} className="animate-spin" /> : <RotateCcw size={18} />}
+                  </span>
+                  <p className="mt-3 text-sm text-white">Törlés készlet-visszaállítással</p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-white/58">
+                    A bizonylat törlődik, és a benne szereplő készletmozgás visszafordul. Ezt csak akkor válaszd, ha maga a mozgás is hibás.
+                  </p>
+                  {!restoreAvailable ? <p className="mt-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-[10px] leading-relaxed text-amber-50/72">{noRestoreReason}</p> : null}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void confirmDelete("permanent")}
+                  className="group rounded-2xl border border-rose-200/30 bg-rose-600/14 p-4 text-left transition hover:-translate-y-0.5 hover:bg-rose-600/20 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0"
+                >
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-200/28 bg-rose-600 text-white shadow-[0_8px_20px_rgba(225,29,72,.22)]">
+                    {deletingMode === "permanent" ? <RefreshCw size={18} className="animate-spin" /> : <Trash2 size={18} />}
+                  </span>
+                  <p className="mt-3 text-sm text-white">Végleges törlés, készlethez ne nyúljon</p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-white/58">
+                    Csak a bizonylat tűnik el. A jelenlegi raktárkészlet változatlan marad. Régi, már rendezett dokumentumoknál ezt válaszd.
+                  </p>
+                  <p className="mt-3 rounded-xl border border-rose-200/14 bg-rose-950/18 px-3 py-2 text-[10px] leading-relaxed text-rose-50/76">
+                    Ez a művelet nem állít vissza egyetlen darabot sem a raktárba.
+                  </p>
+                </button>
+              </div>
+
+              <div className="flex justify-end border-t border-white/12 bg-[#303a4c] px-4 py-3">
+                <button type="button" className={btnSoft} onClick={() => setDeleteTarget(null)} disabled={deleting}>Mégse</button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
     </div>
   );
 }
