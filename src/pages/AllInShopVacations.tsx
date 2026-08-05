@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   BellRing,
@@ -6,10 +6,14 @@ import {
   CalendarClock,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   History,
   Loader2,
   MessageSquareText,
+  Minus,
+  Plus,
   Send,
   Trash2,
   X,
@@ -119,6 +123,85 @@ function periodLabel(item: VacationRequestItem) {
   return item.dayFrom === item.dayTo
     ? formatDate(item.dayFrom)
     : `${formatDate(item.dayFrom)} – ${formatDate(item.dayTo)}`;
+}
+
+function shiftIsoDate(value: string, days: number) {
+  const date = new Date(`${value || todayIso()}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value || todayIso();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function TouchDateControl({
+  label,
+  value,
+  onChange,
+  min,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  min?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const openPicker = () => {
+    const input = inputRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === "function") input.showPicker();
+    else input.focus();
+  };
+
+  const shift = (days: number) => {
+    const next = shiftIsoDate(value, days);
+    if (min && next < min) return;
+    onChange(next);
+  };
+
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-[10px] uppercase tracking-[0.1em] text-white/48">{label}</span>
+      <div className="grid grid-cols-[58px_minmax(0,1fr)_58px] overflow-hidden rounded-2xl border border-white/18 bg-[#273243] shadow-[0_8px_20px_rgba(15,23,42,0.16)]">
+        <button
+          type="button"
+          onClick={() => shift(-1)}
+          className="inline-flex h-16 touch-manipulation items-center justify-center border-r border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
+          aria-label={`${label}: előző nap`}
+        >
+          <ChevronLeft size={25} />
+        </button>
+        <div className="relative min-w-0">
+          <input
+            ref={inputRef}
+            type="date"
+            value={value}
+            min={min}
+            onChange={(event) => onChange(event.target.value)}
+            onClick={(event) => {
+              if (typeof event.currentTarget.showPicker === "function") event.currentTarget.showPicker();
+            }}
+            className="h-16 w-full touch-manipulation bg-transparent px-4 text-center text-lg text-white outline-none [color-scheme:dark] focus:bg-white/[0.04]"
+          />
+          <button
+            type="button"
+            onClick={openPicker}
+            className="pointer-events-auto absolute inset-y-0 right-0 inline-flex w-14 items-center justify-center text-[#9ff3ef]"
+            aria-label={`${label}: naptár megnyitása`}
+          >
+            <CalendarDays size={23} />
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => shift(1)}
+          className="inline-flex h-16 touch-manipulation items-center justify-center border-l border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
+          aria-label={`${label}: következő nap`}
+        >
+          <ChevronRight size={25} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function AllInShopVacations({ open, actor, locationName, apiBase, onClose }: Props) {
@@ -351,31 +434,79 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
             <section className="rounded-[24px] border border-[#7bd7d4]/22 bg-gradient-to-br from-[#35555d] to-[#374357] p-4 sm:p-5">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/20 text-[#d7fffd]"><CalendarClock size={21} /></span>
-                <div><p className="text-[10px] uppercase tracking-[0.14em] text-white/45">Új kérés</p><h3 className="mt-1 text-lg">Szabadság vagy elkérés igénylése</h3></div>
+                <h3 className="text-lg">Új igénylés</h3>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setKind("vacation")} className={`min-h-12 rounded-xl border px-3 text-sm transition ${kind === "vacation" ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#293548] text-white/62 hover:bg-white/[0.08]"}`}><CalendarDays className="mr-2 inline" size={17} /> Szabadság</button>
-                <button type="button" onClick={() => { setKind("short"); setDayTo(dayFrom); }} className={`min-h-12 rounded-xl border px-3 text-sm transition ${kind === "short" ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#293548] text-white/62 hover:bg-white/[0.08]"}`}><Clock3 className="mr-2 inline" size={17} /> Órás elkérés</button>
+                <button type="button" onClick={() => setKind("vacation")} className={`min-h-14 touch-manipulation rounded-2xl border px-3 text-base transition active:scale-[0.985] ${kind === "vacation" ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#293548] text-white/72 hover:bg-white/[0.08]"}`}><CalendarDays className="mr-2 inline" size={20} /> Szabadság</button>
+                <button type="button" onClick={() => { setKind("short"); setDayTo(dayFrom); }} className={`min-h-14 touch-manipulation rounded-2xl border px-3 text-base transition active:scale-[0.985] ${kind === "short" ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#293548] text-white/72 hover:bg-white/[0.08]"}`}><Clock3 className="mr-2 inline" size={20} /> Órás elkérés</button>
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Kezdő nap<input type="date" value={dayFrom} onChange={(event) => { const value = event.target.value; setDayFrom(value); if (kind === "short" || dayTo < value) setDayTo(value); }} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]" /></label>
-                {kind === "vacation" ? <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Utolsó nap<input type="date" value={dayTo} onChange={(event) => setDayTo(event.target.value)} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]" /></label> : <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Óraszám<input type="number" min={1} max={12} value={hoursOff} onChange={(event) => setHoursOff(Number(event.target.value))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]" /></label>}
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <TouchDateControl
+                  label={kind === "short" ? "Nap" : "Kezdő nap"}
+                  value={dayFrom}
+                  onChange={(value) => {
+                    setDayFrom(value);
+                    if (kind === "short" || dayTo < value) setDayTo(value);
+                  }}
+                />
+                {kind === "vacation" ? (
+                  <TouchDateControl
+                    label="Utolsó nap"
+                    value={dayTo}
+                    min={dayFrom}
+                    onChange={setDayTo}
+                  />
+                ) : (
+                  <div className="grid gap-1.5">
+                    <span className="text-[10px] uppercase tracking-[0.1em] text-white/48">Óraszám</span>
+                    <div className="grid grid-cols-[68px_minmax(0,1fr)_68px] overflow-hidden rounded-2xl border border-white/18 bg-[#273243] shadow-[0_8px_20px_rgba(15,23,42,0.16)]">
+                      <button
+                        type="button"
+                        onClick={() => setHoursOff((current) => Math.max(1, current - 1))}
+                        className="inline-flex h-16 touch-manipulation items-center justify-center border-r border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
+                        aria-label="Egy órával kevesebb"
+                      >
+                        <Minus size={26} />
+                      </button>
+                      <div className="flex h-16 items-center justify-center gap-2 text-2xl text-white">
+                        <span>{hoursOff}</span>
+                        <span className="text-sm text-white/55">óra</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setHoursOff((current) => Math.min(12, current + 1))}
+                        className="inline-flex h-16 touch-manipulation items-center justify-center border-l border-white/12 text-white transition hover:bg-white/[0.08] active:bg-[#2a8d8b]"
+                        aria-label="Egy órával több"
+                      >
+                        <Plus size={26} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[1, 2, 4, 8].map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setHoursOff(value)}
+                          className={`h-11 touch-manipulation rounded-xl border text-sm transition active:scale-[0.98] ${hoursOff === value ? "border-[#9be9e5]/55 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#293548] text-white/65 hover:bg-white/[0.08]"}`}
+                        >
+                          {value} óra
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <label className="mt-3 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megjegyzés<textarea rows={4} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Pl. családi program, orvos, hivatalos ügy…" className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4]" /></label>
+              <label className="mt-4 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megjegyzés<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Megjegyzés" className="resize-none rounded-2xl border border-white/16 bg-[#273243] px-4 py-3 text-base normal-case tracking-normal text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4]" /></label>
 
-              <div className="mt-4 rounded-2xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-3 py-3 text-xs leading-relaxed text-[#d7fffd]/72">
-                A kérés csak vezetői jóváhagyás után kerül be a hivatalos szabadságnyilvántartásba. Addig elbírálás alatt marad és visszavonható.
-              </div>
-
-              <button type="button" disabled={saving} onClick={() => void submitRequest()} className="mt-4 inline-flex min-h-13 w-full items-center justify-center gap-2 rounded-2xl border border-[#a4efeb]/50 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-4 text-sm text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)] hover:brightness-110 disabled:opacity-55">{saving ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}{saving ? "Küldés…" : "Kérés elküldése"}</button>
+              <button type="button" disabled={saving} onClick={() => void submitRequest()} className="mt-4 inline-flex min-h-14 w-full touch-manipulation items-center justify-center gap-2 rounded-2xl border border-[#a4efeb]/50 bg-gradient-to-r from-[#2a8d8b] to-[#207572] px-4 text-base text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)] transition hover:brightness-110 active:scale-[0.985] disabled:opacity-55">{saving ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}{saving ? "Küldés…" : "Kérés elküldése"}</button>
             </section>
 
             <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3"><span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><History size={20} /></span><div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Kérések és döntések</p><h3 className="mt-1 text-lg">Saját előzmények</h3></div></div>
+                <div className="flex items-center gap-3"><span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><History size={20} /></span><h3 className="text-lg">Saját előzmények</h3></div>
                 <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{overview?.items.length || 0} kérés</span>
               </div>
 
@@ -393,7 +524,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
                       {item.status === "pending" ? <button type="button" disabled={cancelBusyId === item.id} onClick={() => void cancelRequest(item.id)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300/35 bg-rose-500/12 px-2.5 text-[11px] text-rose-50 hover:bg-rose-500/20 disabled:opacity-50">{cancelBusyId === item.id ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />} Visszavonás</button> : null}
                     </div>
                   </article>
-                )) : <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42"><CalendarCheck2 size={32} /><p className="mt-2 text-sm">Még nincs szabadságkérelmed ebben az évben.</p></div>}
+                )) : <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42"><CalendarCheck2 size={32} /><p className="mt-2 text-sm">Nincs még kérés ebben az évben.</p></div>}
               </div>
             </section>
           </div>
@@ -407,7 +538,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
                   <p className="mt-1 text-xs text-white/52">{event.kind === "vacation" ? "Szabadság" : `${event.hoursOff || 0} óra elkérés`}</p>
                   {event.note ? <p className="mt-2 truncate text-[10px] text-white/38">{event.note}</p> : null}
                 </div>
-              )) : <div className="col-span-full flex min-h-[120px] items-center justify-center rounded-2xl border border-dashed border-white/12 text-sm text-white/42">Ebben az évben még nincs hivatalosan rögzített távollét.</div>}
+              )) : <div className="col-span-full flex min-h-[120px] items-center justify-center rounded-2xl border border-dashed border-white/12 text-sm text-white/42">Nincs még elfogadott távollét.</div>}
             </div>
           </section>
         </div>
