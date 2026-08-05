@@ -326,13 +326,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_document_lines ADD COLUMN IF NOT EXISTS qty_delta integer NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_stock_transfer_documents_type_created_idx
           ON aif_stock_transfer_documents (document_type, created_at DESC)`);
-        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_uq
-          ON aif_stock_transfer_documents (owner_key)
-          WHERE status='preparation' AND document_type='internal_transfer' AND owner_key IS NOT NULL`);
-        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_type_uq
+        // Egy nyitott belső átadási előkészítés egyetlen pontos útvonalat jelent.
+        // Az A -> B és a B -> A mozgás két külön PV, ezért nem növelhetik egymás értékét.
+        await pool.query(`DROP INDEX IF EXISTS aif_stock_transfer_documents_open_preparation_owner_uq`);
+        await pool.query(`DROP INDEX IF EXISTS aif_stock_transfer_documents_open_preparation_owner_type_uq`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_preparation_owner_route_uq
+          ON aif_stock_transfer_documents (owner_key, document_type, source_location_id, target_location_id)
+          WHERE status='preparation'
+            AND document_type='internal_transfer'
+            AND owner_key IS NOT NULL
+            AND source_location_id IS NOT NULL
+            AND target_location_id IS NOT NULL`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_stock_transfer_documents_open_damaged_owner_uq
           ON aif_stock_transfer_documents (owner_key, document_type)
           WHERE status='preparation'
-            AND document_type IN ('internal_transfer','damaged_writeoff')
+            AND document_type='damaged_writeoff'
             AND owner_key IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_stock_document_settings (
@@ -10607,22 +10615,50 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return { document: updated.rows[0] || null, lines: rows };
   }
 
-  async function getOrCreateAifOpenPreparation(client, { ownerKey, actor, title, note, idempotencyKey }) {
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif:stock-preparation:${ownerKey}`]);
+  async function getOrCreateAifOpenPreparation(client, {
+    ownerKey,
+    actor,
+    title,
+    note,
+    idempotencyKey,
+    routeFrom,
+    routeTo,
+  }) {
+    if (!routeFrom?.id || !routeTo?.id) {
+      throw Object.assign(new Error('A PV-előkészítéshez pontos forrás- és célhely szükséges.'), {
+        statusCode: 400,
+        code: 'stock_transfer_route_required',
+      });
+    }
+    if (String(routeFrom.id) === String(routeTo.id)) {
+      throw Object.assign(new Error('A forrás és a cél nem lehet ugyanaz.'), {
+        statusCode: 400,
+        code: 'stock_transfer_same_location',
+      });
+    }
+
+    const routeLock = `aif:stock-preparation:${ownerKey}:${routeFrom.id}:${routeTo.id}`;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [routeLock]);
     const current = await client.query(
       `SELECT * FROM aif_stock_transfer_documents
-       WHERE owner_key=$1 AND document_type='internal_transfer' AND status='preparation'
+       WHERE owner_key=$1
+         AND document_type='internal_transfer'
+         AND status='preparation'
+         AND source_location_id=$2
+         AND target_location_id=$3
        ORDER BY updated_at DESC, created_at DESC
        LIMIT 1
        FOR UPDATE`,
-      [ownerKey]
+      [ownerKey, String(routeFrom.id), String(routeTo.id)]
     );
     if (current.rowCount) {
       const updated = await client.query(
         `UPDATE aif_stock_transfer_documents
          SET subtitle=COALESCE(NULLIF($2,''),subtitle),
              note=COALESCE($3,note), actor=$4,
-             raw=COALESCE(raw,'{}'::jsonb) || $5::jsonb,
+             source_location_id=$5,target_location_id=$6,
+             from_location_summary=$7,to_location_summary=$8,
+             raw=COALESCE(raw,'{}'::jsonb) || $9::jsonb,
              updated_at=now()
          WHERE id=$1
          RETURNING *`,
@@ -10631,7 +10667,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           title,
           note,
           actor,
-          JSON.stringify({ preparation: true, lastIdempotencyKey: idempotencyKey || null, lastAppendAt: new Date().toISOString() }),
+          String(routeFrom.id),
+          String(routeTo.id),
+          routeFrom.name || routeFrom.code,
+          routeTo.name || routeTo.code,
+          JSON.stringify({
+            preparation: true,
+            routeSeparated: true,
+            sourceLocationId: String(routeFrom.id),
+            sourceLocationName: routeFrom.name || routeFrom.code,
+            targetLocationId: String(routeTo.id),
+            targetLocationName: routeTo.name || routeTo.code,
+            lastIdempotencyKey: idempotencyKey || null,
+            lastAppendAt: new Date().toISOString(),
+          }),
         ]
       );
       return { document: updated.rows[0], created: false };
@@ -10644,10 +10693,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          transfer_id, document_number, series, sequence_number, sequence_year,
          title, subtitle, note, status, actor, owner_key, raw,
          document_type, operation_direction, price_basis, total_value, currency_code,
+         source_location_id,target_location_id,from_location_summary,to_location_summary,
          created_at, updated_at
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,'preparation',$9,$10,$11::jsonb,
-         'internal_transfer','transfer','selling_price',0,'RON',now(),now()
+         'internal_transfer','transfer','selling_price',0,'RON',
+         $12,$13,$14,$15,now(),now()
        )
        RETURNING *`,
       [
@@ -10661,7 +10712,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         note,
         actor,
         ownerKey,
-        JSON.stringify({ preparation: true, documentType: 'internal_transfer', idempotencyKey: idempotencyKey || null, openedAt: new Date().toISOString() }),
+        JSON.stringify({
+          preparation: true,
+          routeSeparated: true,
+          documentType: 'internal_transfer',
+          idempotencyKey: idempotencyKey || null,
+          sourceLocationId: String(routeFrom.id),
+          sourceLocationName: routeFrom.name || routeFrom.code,
+          targetLocationId: String(routeTo.id),
+          targetLocationName: routeTo.name || routeTo.code,
+          openedAt: new Date().toISOString(),
+        }),
+        String(routeFrom.id),
+        String(routeTo.id),
+        routeFrom.name || routeFrom.code,
+        routeTo.name || routeTo.code,
       ]
     );
     return { document: inserted.rows[0], created: true };
@@ -11371,17 +11436,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
-      const preparation = await getOrCreateAifOpenPreparation(client, { ownerKey, actor, title, note, idempotencyKey });
-      let document = preparation.document;
-      const movedItems = [];
-      let movementRows = 0;
-      let movedQty = 0;
+      // A sorokat pontos útvonal szerint csoportosítjuk. Így az A -> B és B -> A
+      // mozgás soha nem kerül ugyanabba az előkészítésbe, még egyetlen kérésen belül sem.
+      const routeGroups = new Map();
       for (let index = 0; index < rowsInput.length; index += 1) {
+        const input = rowsInput[index] || {};
         try {
-          const result = await appendAifPreparationLine(client, { document, input: rowsInput[index] || {}, actor, note, title });
-          movedItems.push(result.item);
-          movementRows += result.movementRows;
-          movedQty += Number(result.item.qty || 0);
+          const fromInput = text(input.fromLocationId || input.from_location_id || input.fromLocationCode || input.from_location_code || input.from || input.sourceLocationId || input.source_location_id);
+          const toInput = text(input.toLocationId || input.to_location_id || input.toLocationCode || input.to_location_code || input.to || input.targetLocationId || input.target_location_id);
+          if (!fromInput) throw Object.assign(new Error('Hiányzik a forráshely.'), { statusCode: 400 });
+          if (!toInput) throw Object.assign(new Error('Hiányzik a célhely.'), { statusCode: 400 });
+          const routeFrom = await readAifPreparationLocation(client, fromInput, 'forráshely');
+          const routeTo = await readAifPreparationLocation(client, toInput, 'célhely');
+          if (String(routeFrom.id) === String(routeTo.id)) {
+            throw Object.assign(new Error('A forrás és a cél nem lehet ugyanaz.'), { statusCode: 400 });
+          }
+          const routeKey = `${routeFrom.id}=>${routeTo.id}`;
+          const group = routeGroups.get(routeKey) || { routeFrom, routeTo, rows: [] };
+          group.rows.push({ input, originalIndex: index });
+          routeGroups.set(routeKey, group);
         } catch (lineError) {
           if (!lineError.statusCode) lineError.statusCode = 400;
           lineError.message = `A(z) ${index + 1}. sor: ${lineError.message || lineError}`;
@@ -11389,34 +11462,115 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
-      const refreshed = await refreshAifPreparationDocument(client, document.id, {
-        lastIdempotencyKey: idempotencyKey || null,
-        lastAppendAt: new Date().toISOString(),
-        lastAppendedItems: movedItems,
-      });
-      document = refreshed.document || document;
+      const documents = [];
+      const movedItems = [];
+      let movementRows = 0;
+      let movedQty = 0;
+      let requestTotalValue = 0;
+
+      for (const group of routeGroups.values()) {
+        const preparation = await getOrCreateAifOpenPreparation(client, {
+          ownerKey,
+          actor,
+          title,
+          note,
+          idempotencyKey,
+          routeFrom: group.routeFrom,
+          routeTo: group.routeTo,
+        });
+        let document = preparation.document;
+        const groupMovedItems = [];
+        let groupMovementRows = 0;
+        let groupMovedQty = 0;
+
+        for (const row of group.rows) {
+          try {
+            const result = await appendAifPreparationLine(client, {
+              document,
+              input: row.input,
+              actor,
+              note,
+              title,
+            });
+            groupMovedItems.push(result.item);
+            movedItems.push(result.item);
+            groupMovementRows += result.movementRows;
+            movementRows += result.movementRows;
+            groupMovedQty += Number(result.item.qty || 0);
+            movedQty += Number(result.item.qty || 0);
+            requestTotalValue += Number(result.item.lineTotal || 0);
+          } catch (lineError) {
+            if (!lineError.statusCode) lineError.statusCode = 400;
+            lineError.message = `A(z) ${row.originalIndex + 1}. sor: ${lineError.message || lineError}`;
+            throw lineError;
+          }
+        }
+
+        const refreshed = await refreshAifPreparationDocument(client, document.id, {
+          routeSeparated: true,
+          sourceLocationId: String(group.routeFrom.id),
+          sourceLocationName: group.routeFrom.name || group.routeFrom.code,
+          targetLocationId: String(group.routeTo.id),
+          targetLocationName: group.routeTo.name || group.routeTo.code,
+          lastIdempotencyKey: idempotencyKey || null,
+          lastAppendAt: new Date().toISOString(),
+          lastAppendedItems: groupMovedItems,
+        });
+        document = refreshed.document || document;
+        documents.push({
+          preparationCreated: preparation.created,
+          status: 'preparation',
+          transferId: document.transfer_id,
+          documentId: String(document.id),
+          documentNumber: document.document_number,
+          documentCreatedAt: document.created_at || null,
+          documentTitle: document.title || null,
+          documentSubtitle: document.subtitle || null,
+          document,
+          sourceLocationId: String(group.routeFrom.id),
+          sourceLocationName: group.routeFrom.name || group.routeFrom.code,
+          targetLocationId: String(group.routeTo.id),
+          targetLocationName: group.routeTo.name || group.routeTo.code,
+          lineCount: groupMovedItems.length,
+          movedRows: groupMovedItems.length,
+          movedLines: groupMovedItems.length,
+          movedQty: groupMovedQty,
+          totalQty: groupMovedQty,
+          documentLineCount: Number(document.line_count || refreshed.lines.length || 0),
+          documentTotalQty: Number(document.total_qty || 0),
+          documentTotalValue: Number(document.total_value || 0),
+          movements: groupMovementRows,
+          items: groupMovedItems,
+        });
+      }
+
+      const primary = documents[0] || {};
       const responsePayload = {
         ok: true,
         duplicate: false,
-        preparationCreated: preparation.created,
+        preparationCreated: Boolean(primary.preparationCreated),
         status: 'preparation',
         idempotencyKey: idempotencyKey || null,
-        transferId: document.transfer_id,
-        documentId: String(document.id),
-        documentNumber: document.document_number,
-        documentCreatedAt: document.created_at || null,
-        documentTitle: document.title || null,
-        documentSubtitle: document.subtitle || null,
-        document,
+        transferId: primary.transferId || null,
+        documentId: primary.documentId || null,
+        documentNumber: primary.documentNumber || null,
+        documentCreatedAt: primary.documentCreatedAt || null,
+        documentTitle: primary.documentTitle || null,
+        documentSubtitle: primary.documentSubtitle || null,
+        document: primary.document || null,
         title,
+        documentCount: documents.length,
+        documents,
         lineCount: movedItems.length,
         movedRows: movedItems.length,
         movedLines: movedItems.length,
         movedQty,
         totalQty: movedQty,
-        documentLineCount: Number(document.line_count || refreshed.lines.length || 0),
-        documentTotalQty: Number(document.total_qty || 0),
-        documentTotalValue: Number(document.total_value || 0),
+        requestTotalQty: movedQty,
+        requestTotalValue: Math.round((requestTotalValue + Number.EPSILON) * 100) / 100,
+        documentLineCount: Number(primary.documentLineCount || 0),
+        documentTotalQty: Number(primary.documentTotalQty || 0),
+        documentTotalValue: Number(primary.documentTotalValue || 0),
         movements: movementRows,
         items: movedItems,
       };
@@ -11426,7 +11580,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           `UPDATE aif_stock_transfer_requests
            SET status='completed',transfer_id=$3,response=$4::jsonb,updated_at=now()
            WHERE owner_key=$1 AND idempotency_key=$2`,
-          [ownerKey, idempotencyKey, document.transfer_id, JSON.stringify(responsePayload)]
+          [ownerKey, idempotencyKey, responsePayload.transferId, JSON.stringify(responsePayload)]
         );
       }
       await client.query('COMMIT');
@@ -11528,6 +11682,46 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           qty: qty + Number(currentDesired?.qty || 0),
           firstIndex: currentDesired?.firstIndex ?? index,
         });
+      }
+
+      const desiredRoutes = new Map();
+      for (const row of desiredByKey.values()) {
+        const routeKey = `${row.routeFrom.id}=>${row.routeTo.id}`;
+        if (!desiredRoutes.has(routeKey)) desiredRoutes.set(routeKey, row);
+      }
+      if (desiredRoutes.size > 1) {
+        throw Object.assign(new Error('Egy PV-előkészítés csak egyetlen Honnan → Hová irányt tartalmazhat. Az ellenkező vagy másik irányhoz külön PV készül.'), {
+          statusCode: 400,
+          code: 'stock_transfer_preparation_mixed_routes',
+        });
+      }
+      const desiredRoute = Array.from(desiredRoutes.values())[0] || null;
+      if (desiredRoute) {
+        const conflict = await client.query(
+          `SELECT id,document_number
+           FROM aif_stock_transfer_documents
+           WHERE owner_key=$1
+             AND document_type='internal_transfer'
+             AND status='preparation'
+             AND source_location_id=$2
+             AND target_location_id=$3
+             AND id<>$4
+           LIMIT 1
+           FOR UPDATE`,
+          [
+            document.owner_key || ownerKey,
+            String(desiredRoute.routeFrom.id),
+            String(desiredRoute.routeTo.id),
+            document.id,
+          ]
+        );
+        if (conflict.rowCount) {
+          throw Object.assign(new Error(`Ehhez az irányhoz már van nyitott előkészítés: ${conflict.rows[0].document_number}. A tételeket ott folytasd.`), {
+            statusCode: 409,
+            code: 'stock_transfer_route_preparation_exists',
+            documentId: String(conflict.rows[0].id),
+          });
+        }
       }
 
       let nextLineNo = existingResult.rows.reduce((max, line) => Math.max(max, Number(line.line_no || 0)), 0) + 1;
@@ -11755,19 +11949,31 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const document = current.rows[0];
       const documentType = cleanAifStockDocumentType(document.document_type, null);
       if (!['internal_transfer','damaged_writeoff'].includes(documentType)) throw Object.assign(new Error('Ez a bizonylattípus nem állítható vissza előkészítésre.'), { statusCode: 400 });
-      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif:stock-preparation:${ownerKey}:${documentType}`]);
+      const routeSpecific = documentType === 'internal_transfer' && document.source_location_id && document.target_location_id;
+      const reopenLock = routeSpecific
+        ? `aif:stock-preparation:${ownerKey}:${document.source_location_id}:${document.target_location_id}`
+        : `aif:stock-preparation:${ownerKey}:${documentType}`;
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [reopenLock]);
       if (document.status === 'preparation') {
         await client.query('COMMIT');
         return res.json({ ok: true, unchanged: true, status: 'preparation', document });
       }
       if (document.status !== 'issued') throw Object.assign(new Error('Csak lezárt bizonylat állítható vissza előkészítésre.'), { statusCode: 400 });
-      const other = await client.query(
-        `SELECT document_number FROM aif_stock_transfer_documents
-         WHERE owner_key=$1 AND document_type=$2 AND status='preparation' AND id<>$3
-         LIMIT 1`,
-        [ownerKey, documentType, document.id]
-      );
-      if (other.rowCount) throw Object.assign(new Error(`Már van nyitott előkészítés: ${other.rows[0].document_number}. Előbb zárd le vagy töröld azt.`), { statusCode: 409, code: 'another_preparation_is_open' });
+      const other = routeSpecific
+        ? await client.query(
+            `SELECT document_number FROM aif_stock_transfer_documents
+             WHERE owner_key=$1 AND document_type='internal_transfer' AND status='preparation' AND id<>$2
+               AND source_location_id=$3 AND target_location_id=$4
+             LIMIT 1`,
+            [ownerKey, document.id, document.source_location_id, document.target_location_id]
+          )
+        : await client.query(
+            `SELECT document_number FROM aif_stock_transfer_documents
+             WHERE owner_key=$1 AND document_type=$2 AND status='preparation' AND id<>$3
+             LIMIT 1`,
+            [ownerKey, documentType, document.id]
+          );
+      if (other.rowCount) throw Object.assign(new Error(`Ehhez az irányhoz már van nyitott előkészítés: ${other.rows[0].document_number}. Előbb zárd le vagy töröld azt.`), { statusCode: 409, code: 'another_preparation_is_open' });
       const updated = await client.query(
         `UPDATE aif_stock_transfer_documents
          SET status='preparation',owner_key=$2,actor=$3,
