@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
+  CalendarDays,
   Boxes,
   Clock3,
   LogOut,
@@ -35,13 +36,6 @@ type ActionCard = {
 };
 
 const actions: ActionCard[] = [
-  {
-    key: "sale",
-    title: "Új eladás",
-    description: "Gyors termékfelvétel, kosár és fizetés.",
-    icon: ShoppingCart,
-    primary: true,
-  },
   {
     key: "search",
     title: "Termék keresése",
@@ -83,6 +77,12 @@ const actions: ActionCard[] = [
     title: "Napi összesítés",
     description: "Forgalom, darabszám és műszakzárás.",
     icon: BarChart3,
+  },
+  {
+    key: "vacations",
+    title: "Szabadságok",
+    description: "Szabadságigények, jóváhagyások és távollétek.",
+    icon: CalendarDays,
   },
 ];
 
