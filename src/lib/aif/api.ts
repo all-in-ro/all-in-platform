@@ -2458,6 +2458,23 @@ export function apiAifRecordShopCustomerPayment(
   );
 }
 
+export type AifShopCustomerSaleDetachResult = {
+  ok: true;
+  mode: "detached_from_customer";
+  customerId: string;
+  saleId: string;
+  saleNumber: string;
+  item: AifShopCustomer;
+  openBalance: number;
+};
+
+export function apiAifDetachShopCustomerSale(customerId: string, saleId: string) {
+  return fetchAifJSON<AifShopCustomerSaleDetachResult>(
+    `/shop-customers/${encodeURIComponent(customerId)}/sales/${encodeURIComponent(saleId)}`,
+    { method: "DELETE" },
+  );
+}
+
 export type AifShopSaleCatalogItem = {
   variantId: string;
   internalSku?: string | null;
