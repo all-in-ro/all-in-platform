@@ -4789,8 +4789,44 @@ function stockTransferPayloadFingerprint(payload: Omit<StockTransferApiPayload, 
   });
 }
 
+type StockTransferDocumentResult = {
+  preparationCreated?: boolean;
+  status?: string;
+  transferId?: string | null;
+  documentId?: string | null;
+  documentNumber?: string | null;
+  documentCreatedAt?: string | null;
+  documentTitle?: string | null;
+  documentSubtitle?: string | null;
+  document?: Record<string, any> | null;
+  sourceLocationId?: string | null;
+  sourceLocationName?: string | null;
+  targetLocationId?: string | null;
+  targetLocationName?: string | null;
+  movedLines?: number;
+  movedRows?: number;
+  lineCount?: number;
+  movedQty?: number;
+  totalQty?: number;
+  documentLineCount?: number;
+  documentTotalQty?: number;
+  documentTotalValue?: number;
+  movements?: number;
+  items?: any[];
+};
+
+type StockTransferApiResponse = StockTransferDocumentResult & {
+  ok: true;
+  duplicate?: boolean;
+  idempotencyKey?: string | null;
+  documentCount?: number;
+  documents?: StockTransferDocumentResult[];
+  requestTotalQty?: number;
+  requestTotalValue?: number;
+};
+
 async function apiStockTransfer(payload: StockTransferApiPayload) {
-  return fetchJSON<{ ok: true; duplicate?: boolean; preparationCreated?: boolean; status?: string; idempotencyKey?: string | null; transferId: string; documentId?: string | null; documentNumber?: string | null; documentCreatedAt?: string | null; documentTitle?: string | null; documentSubtitle?: string | null; document?: Record<string, any> | null; movedLines?: number; movedRows?: number; lineCount?: number; movedQty?: number; totalQty?: number; documentLineCount?: number; documentTotalQty?: number; documentTotalValue?: number; items?: any[] }>("/api/aif/stock-transfers", {
+  return fetchJSON<StockTransferApiResponse>("/api/aif/stock-transfers", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -4823,11 +4859,13 @@ type WarehouseUitWarningState = {
   totalValue: number;
   totalQty: number;
   addedValue: number;
+  routeLabel?: string;
 };
 
 type WarehouseTransferToastState = WarehouseUitWarningState & {
   crossedThreshold: boolean;
   uitRecorded: boolean;
+  documentCount?: number;
 };
 
 async function apiOpenTransferPreparations() {
@@ -6260,7 +6298,10 @@ export default function AllInWarehouse() {
           idempotencyKey: createStockTransferIdempotencyKey(),
           lines: transferLines,
         });
-        preparationNumber = String(transferResult.documentNumber || transferResult.transferId || "");
+        preparationNumber = (transferResult.documents || [])
+          .map((entry) => String(entry.documentNumber || entry.transferId || "").trim())
+          .filter(Boolean)
+          .join(", ") || String(transferResult.documentNumber || transferResult.transferId || "");
         handleWarehouseStockTransferResult(transferResult, transferAddedValue);
         notifyStockMovesChanged({ variantId: changedVariantId, source: "warehouse_transfer_preparation", transferId: transferResult.transferId, documentId: transferResult.documentId });
       }
@@ -8294,67 +8335,102 @@ export default function AllInWarehouse() {
     result: Awaited<ReturnType<typeof apiStockTransfer>>,
     fallbackAddedValue = 0,
   ) {
-    const document = result.document && typeof result.document === "object" ? result.document : {};
-    const documentId = firstWarehouseText(result.documentId, document.id, result.transferId);
-    const documentNumber = firstWarehouseText(result.documentNumber, document.document_number, result.transferId, "PV-előkészítés");
-    const knownPreparation = openTransferPreparations.find((item) =>
-      String(item.id || "") === documentId ||
-      normalizeSearch(item.document_number) === normalizeSearch(documentNumber)
-    ) || null;
-    const knownTotalValue = priceNumber(knownPreparation?.total_value) || 0;
-    const totalValue = priceNumber(result.documentTotalValue ?? document.total_value) ?? (knownTotalValue + fallbackAddedValue);
-    const totalQty = Math.max(0, Math.floor(n(result.documentTotalQty ?? document.total_qty ?? result.totalQty ?? result.movedQty ?? knownPreparation?.total_qty)));
-    const addedValue = Math.max(0, fallbackAddedValue);
-    const uitCode = warehousePreparationUitCode(document) || warehousePreparationUitCode(knownPreparation);
-    const crossedThreshold = totalValue >= WAREHOUSE_UIT_WARNING_THRESHOLD_RON;
+    const resultDocuments: StockTransferDocumentResult[] = Array.isArray(result.documents) && result.documents.length
+      ? result.documents
+      : [result];
 
-    const summary: WarehouseTransferPreparationSummary = {
-      id: documentId,
-      document_number: documentNumber,
-      document_type: "internal_transfer",
-      status: String(result.status || document.status || "preparation"),
-      total_value: totalValue,
-      total_qty: totalQty,
-      line_count: result.documentLineCount ?? document.line_count ?? null,
-      source_location_id: firstWarehouseText(document.source_location_id, document.sourceLocationId, knownPreparation?.source_location_id) || null,
-      target_location_id: firstWarehouseText(document.target_location_id, document.targetLocationId, knownPreparation?.target_location_id) || null,
-      from_location_summary: firstWarehouseText(document.from_location_summary, document.fromLocationName, knownPreparation?.from_location_summary) || null,
-      to_location_summary: firstWarehouseText(document.to_location_summary, document.toLocationName, knownPreparation?.to_location_summary) || null,
-      uit_code: uitCode || null,
-      raw: document.raw && typeof document.raw === "object" ? document.raw : null,
-    };
+    const prepared = resultDocuments.map((entry) => {
+      const document = entry.document && typeof entry.document === "object" ? entry.document : {};
+      const documentId = firstWarehouseText(entry.documentId, document.id, entry.transferId);
+      const documentNumber = firstWarehouseText(entry.documentNumber, document.document_number, entry.transferId, "PV-előkészítés");
+      const knownPreparation = openTransferPreparations.find((item) =>
+        String(item.id || "") === documentId ||
+        normalizeSearch(item.document_number) === normalizeSearch(documentNumber)
+      ) || null;
+      const knownTotalValue = priceNumber(knownPreparation?.total_value) || 0;
+      const itemAddedValue = (entry.items || []).reduce((sum, item) => sum + (priceNumber(item?.lineTotal ?? item?.line_total) || 0), 0);
+      const addedValue = Math.max(0, itemAddedValue || (resultDocuments.length === 1 ? fallbackAddedValue : 0));
+      const totalValue = priceNumber(entry.documentTotalValue ?? document.total_value) ?? (knownTotalValue + addedValue);
+      const totalQty = Math.max(0, Math.floor(n(entry.documentTotalQty ?? document.total_qty ?? entry.totalQty ?? entry.movedQty ?? knownPreparation?.total_qty)));
+      const uitCode = warehousePreparationUitCode(document) || warehousePreparationUitCode(knownPreparation);
+      const crossedThreshold = totalValue >= WAREHOUSE_UIT_WARNING_THRESHOLD_RON;
+      const sourceLocationId = firstWarehouseText(entry.sourceLocationId, document.source_location_id, document.sourceLocationId, knownPreparation?.source_location_id);
+      const targetLocationId = firstWarehouseText(entry.targetLocationId, document.target_location_id, document.targetLocationId, knownPreparation?.target_location_id);
+      const sourceLocationName = firstWarehouseText(entry.sourceLocationName, document.from_location_summary, document.fromLocationName, knownPreparation?.from_location_summary, locationNameByValue(sourceLocationId));
+      const targetLocationName = firstWarehouseText(entry.targetLocationName, document.to_location_summary, document.toLocationName, knownPreparation?.to_location_summary, locationNameByValue(targetLocationId));
+      const routeLabel = sourceLocationName && targetLocationName ? `${sourceLocationName} → ${targetLocationName}` : "";
 
-    if (documentId) {
-      setOpenTransferPreparations((current) => {
-        const next = current.filter((item) => String(item.id || "") !== documentId);
-        return [summary, ...next];
-      });
-      setOpenTransferPreparationsLoaded(true);
-    }
+      const summary: WarehouseTransferPreparationSummary = {
+        id: documentId,
+        document_number: documentNumber,
+        document_type: "internal_transfer",
+        status: String(entry.status || result.status || document.status || "preparation"),
+        total_value: totalValue,
+        total_qty: totalQty,
+        line_count: entry.documentLineCount ?? document.line_count ?? null,
+        source_location_id: sourceLocationId || null,
+        target_location_id: targetLocationId || null,
+        from_location_summary: sourceLocationName || null,
+        to_location_summary: targetLocationName || null,
+        uit_code: uitCode || null,
+        raw: document.raw && typeof document.raw === "object" ? document.raw : null,
+      };
 
-    showWarehouseTransferToast({
-      documentId,
-      documentNumber,
-      totalValue,
-      totalQty,
-      addedValue,
-      crossedThreshold,
-      uitRecorded: Boolean(uitCode),
-    });
-
-    if (
-      crossedThreshold &&
-      !uitCode &&
-      !result.duplicate &&
-      !warehouseUitWarningIsSuppressed(documentId, documentNumber)
-    ) {
-      setWarehouseUitSuppressChecked(false);
-      setWarehouseUitWarning({
+      return {
+        summary,
         documentId,
         documentNumber,
         totalValue,
         totalQty,
         addedValue,
+        crossedThreshold,
+        uitCode,
+        routeLabel,
+      };
+    });
+
+    const validSummaries = prepared.filter((row) => row.documentId);
+    if (validSummaries.length) {
+      setOpenTransferPreparations((current) => {
+        const changedIds = new Set(validSummaries.map((row) => String(row.documentId)));
+        const next = current.filter((item) => !changedIds.has(String(item.id || "")));
+        return [...validSummaries.map((row) => row.summary), ...next];
+      });
+      setOpenTransferPreparationsLoaded(true);
+    }
+
+    const toastTarget = prepared.find((row) => row.crossedThreshold && !row.uitCode) || prepared[0];
+    if (toastTarget) {
+      showWarehouseTransferToast({
+        documentId: toastTarget.documentId,
+        documentNumber: prepared.length > 1 ? `${prepared.length} külön irányú PV frissítve` : toastTarget.documentNumber,
+        totalValue: toastTarget.totalValue,
+        totalQty: toastTarget.totalQty,
+        addedValue: prepared.length > 1
+          ? prepared.reduce((sum, row) => sum + row.addedValue, 0)
+          : toastTarget.addedValue,
+        crossedThreshold: toastTarget.crossedThreshold,
+        uitRecorded: Boolean(toastTarget.uitCode),
+        routeLabel: prepared.length > 1 ? "Minden útvonal saját előkészítést kapott." : toastTarget.routeLabel,
+        documentCount: prepared.length,
+      });
+    }
+
+    const warningTarget = prepared.find((row) =>
+      row.crossedThreshold &&
+      !row.uitCode &&
+      !result.duplicate &&
+      !warehouseUitWarningIsSuppressed(row.documentId, row.documentNumber)
+    );
+    if (warningTarget) {
+      setWarehouseUitSuppressChecked(false);
+      setWarehouseUitWarning({
+        documentId: warningTarget.documentId,
+        documentNumber: warningTarget.documentNumber,
+        totalValue: warningTarget.totalValue,
+        totalQty: warningTarget.totalQty,
+        addedValue: warningTarget.addedValue,
+        routeLabel: warningTarget.routeLabel,
       });
     }
 
@@ -8517,11 +8593,14 @@ export default function AllInWarehouse() {
       setStockMoveConfirmOpen(false);
       stockMoveIdempotencyKeyRef.current = "";
       stockMovePayloadFingerprintRef.current = "";
-      const officialDocumentNumber = String(result.documentNumber || "").trim();
+      const officialDocumentNumber = (result.documents || [])
+        .map((entry) => String(entry.documentNumber || entry.transferId || "").trim())
+        .filter(Boolean)
+        .join(", ") || String(result.documentNumber || "").trim();
       setMessage(
         result.duplicate
           ? `Az ismételt mentési kérést a rendszer felismerte, ezért a készletet nem mozgatta meg újra. ${officialDocumentNumber ? `Előkészítés: ${officialDocumentNumber}. ` : ""}A már rögzített művelet: ${movedLines} sor, ${movedQty} db.`
-          : `Készletmozgatás hozzáadva az átadási előkészítéshez: ${officialDocumentNumber || result.transferId}. ${movedLines} sor, ${movedQty} db. Az előkészítés a Készletbizonylatok oldalon szerkeszthető és lezárható.`
+          : `Készletmozgatás hozzáadva ${Number(result.documentCount || result.documents?.length || 1) > 1 ? `${Number(result.documentCount || result.documents?.length)} külön irányú előkészítéshez` : "az átadási előkészítéshez"}: ${officialDocumentNumber || result.transferId}. ${movedLines} sor, ${movedQty} db. Az ellenkező irány mindig külön PV-be kerül.`
       );
       if (!selectionCleanup.synced) {
         setMessage((current) => `${current} A kész termékeket helyben kivettem a kijelölésből, de a szerveres munkalista mentése hibázott.`);
@@ -12534,52 +12613,56 @@ export default function AllInWarehouse() {
       )}
 
       {warehouseMoveValuePreview && (
-        <div className="pointer-events-none fixed right-5 top-[96px] z-[76] w-[310px] overflow-hidden rounded-[22px] border border-white/18 bg-[#202c3d]/96 text-white shadow-[0_28px_78px_rgba(2,6,23,0.58)] backdrop-blur-xl">
-          <div className={`h-1.5 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2dd4bf]"}`} />
+        <div className="pointer-events-none fixed right-5 top-[96px] z-[76] w-[330px] overflow-hidden rounded-[22px] border border-slate-300 bg-[#f8fafc]/98 text-slate-900 shadow-[0_24px_70px_rgba(15,23,42,0.30)] backdrop-blur-xl">
+          <div className={`h-1.5 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2a8d8b]"}`} />
           <div className="p-3.5">
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-start gap-2.5">
-                <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300/30 bg-red-500/14 text-red-200" : "border-[#5eead4]/25 bg-[#2dd4bf]/12 text-[#99f6e4]"}`}>
+                <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-red-50 text-red-600" : "border-teal-200 bg-teal-50 text-[#187876]"}`}>
                   {warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? <AlertTriangle size={18} /> : warehouseMoveValuePreview.uitRecorded ? <CheckCircle2 size={18} /> : <Receipt size={18} />}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-[9px] uppercase tracking-[0.16em] text-white/42">PV-előkészítés élő értéke</p>
-                  <p className="mt-1 truncate text-sm text-white" title={`${warehouseMoveValuePreview.fromLocationName} → ${warehouseMoveValuePreview.toLocationName}`}>
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-slate-500">PV-előkészítés élő értéke</p>
+                  <p className="mt-1 truncate text-sm text-slate-900" title={`${warehouseMoveValuePreview.fromLocationName} → ${warehouseMoveValuePreview.toLocationName}`}>
                     {warehouseMoveValuePreview.preparation?.document_number || "Új előkészítés"}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] text-white/46">{warehouseMoveValuePreview.fromLocationName} → {warehouseMoveValuePreview.toLocationName}</p>
+                  <p className="mt-0.5 truncate text-[10px] text-slate-600">{warehouseMoveValuePreview.fromLocationName} → {warehouseMoveValuePreview.toLocationName}</p>
                 </div>
               </div>
-              {openTransferPreparationsBusy ? <RefreshCw size={14} className="mt-1 shrink-0 animate-spin text-white/45" /> : null}
+              {openTransferPreparationsBusy ? <RefreshCw size={14} className="mt-1 shrink-0 animate-spin text-slate-500" /> : null}
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-              <div className="rounded-xl border border-white/10 bg-white/[0.05] px-2.5 py-2">
-                <span className="block text-white/42">Már az előkészítésben</span>
-                <strong className="mt-1 block text-[13px] font-normal text-white">{openTransferPreparationsLoaded ? `${money(warehouseMoveValuePreview.currentValue)} RON` : "Betöltés..."}</strong>
+              <div className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 shadow-sm">
+                <span className="block text-slate-500">Már ebben az irányban</span>
+                <strong className="mt-1 block text-[13px] font-normal text-slate-900">{openTransferPreparationsLoaded ? `${money(warehouseMoveValuePreview.currentValue)} RON` : "Betöltés..."}</strong>
               </div>
-              <div className="rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/12 px-2.5 py-2">
-                <span className="block text-[#cffffd]/55">Most hozzáadod</span>
-                <strong className="mt-1 block text-[13px] font-normal text-[#d7fffd]">+ {money(warehouseMoveValuePreview.addedValue)} RON</strong>
-                <span className="mt-0.5 block text-[9px] text-white/38">{warehouseMoveValuePreview.qty} db</span>
+              <div className="rounded-xl border border-teal-200 bg-teal-50 px-2.5 py-2 shadow-sm">
+                <span className="block text-[#187876]">Most hozzáadod</span>
+                <strong className="mt-1 block text-[13px] font-normal text-[#0f5f59]">+ {money(warehouseMoveValuePreview.addedValue)} RON</strong>
+                <span className="mt-0.5 block text-[9px] text-slate-500">{warehouseMoveValuePreview.qty} db</span>
               </div>
             </div>
 
-            <div className={`mt-2 rounded-2xl border px-3 py-2.5 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300/35 bg-red-500/14" : "border-[#5eead4]/22 bg-[#2dd4bf]/10"}`}>
+            <div className={`mt-2 rounded-2xl border px-3 py-2.5 shadow-sm ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-red-50" : "border-teal-200 bg-[#effbf9]"}`}>
               <div className="flex items-center justify-between gap-3">
-                <span className={`text-[10px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "text-red-200" : "text-[#99f6e4]"}`}>Mentés után</span>
-                <span className={`rounded-full border px-2 py-0.5 text-[9px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-300/35 bg-red-500/15 text-red-100" : "border-[#5eead4]/25 bg-[#2dd4bf]/10 text-[#ccfbf1]"}`}>
+                <span className={`text-[10px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "text-red-700" : "text-[#187876]"}`}>Mentés után, ezen a PV-n</span>
+                <span className={`rounded-full border px-2 py-0.5 text-[9px] ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "border-red-200 bg-white text-red-700" : "border-teal-200 bg-white text-[#187876]"}`}>
                   {warehouseMoveValuePreview.uitRecorded ? "UIT rögzítve" : warehouseMoveValuePreview.thresholdReached ? "UIT szükséges" : `${money(Math.max(0, warehouseMoveValuePreview.remainingValue))} RON maradt`}
                 </span>
               </div>
-              <p className="mt-1.5 text-[24px] leading-none text-white">{money(warehouseMoveValuePreview.projectedValue)} <span className="text-[10px] text-white/45">RON</span></p>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/25">
+              <p className="mt-1.5 text-[24px] leading-none text-slate-900">{money(warehouseMoveValuePreview.projectedValue)} <span className="text-[10px] text-slate-500">RON</span></p>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
                 <div
-                  className={`h-full rounded-full transition-all duration-300 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2dd4bf]"}`}
+                  className={`h-full rounded-full transition-all duration-300 ${warehouseMoveValuePreview.thresholdReached && !warehouseMoveValuePreview.uitRecorded ? "bg-red-500" : "bg-[#2a8d8b]"}`}
                   style={{ width: `${Math.min(100, Math.max(2, (warehouseMoveValuePreview.projectedValue / WAREHOUSE_UIT_WARNING_THRESHOLD_RON) * 100))}%` }}
                 />
               </div>
-              <p className="mt-2 text-[9px] leading-relaxed text-white/42">A darabszám vagy egy terméksor módosításakor az összeg azonnal újraszámolódik.</p>
+              <p className="mt-2 text-[9px] leading-relaxed text-slate-500">A darabszám vagy egy terméksor módosításakor az összeg azonnal újraszámolódik.</p>
+            </div>
+
+            <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-[10px] leading-relaxed text-sky-800">
+              Az ellenkező irány külön PV-előkészítést kap, ezért a két útvonal értéke nem adódik össze.
             </div>
           </div>
         </div>
@@ -12599,26 +12682,28 @@ export default function AllInWarehouse() {
       />
 
       {warehouseTransferToast && (
-        <div className={`fixed bottom-5 right-5 z-[125] w-[360px] overflow-hidden rounded-[22px] border bg-[#202c3d]/98 text-white shadow-[0_28px_80px_rgba(2,6,23,0.62)] backdrop-blur-xl ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300/35" : "border-[#7bd7d4]/30"}`}>
-          <div className={`h-1.5 ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "bg-red-500" : "bg-[#2dd4bf]"}`} />
+        <div className={`fixed bottom-5 right-5 z-[125] w-[380px] overflow-hidden rounded-[22px] border bg-[#f8fafc]/98 text-slate-900 shadow-[0_24px_72px_rgba(15,23,42,0.34)] backdrop-blur-xl ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300" : "border-teal-300"}`}>
+          <div className={`h-1.5 ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "bg-red-500" : "bg-[#2a8d8b]"}`} />
           <div className="flex items-start gap-3 p-3.5">
-            <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300/30 bg-red-500/14 text-red-200" : "border-[#5eead4]/25 bg-[#2dd4bf]/12 text-[#99f6e4]"}`}>
+            <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-200 bg-red-50 text-red-600" : "border-teal-200 bg-teal-50 text-[#187876]"}`}>
               {warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[9px] uppercase tracking-[0.16em] text-white/42">Előkészítés frissítve</p>
-              <p className="mt-1 truncate text-sm text-white" title={warehouseTransferToast.documentNumber}>{warehouseTransferToast.documentNumber}</p>
-              <p className="mt-1 text-[11px] text-white/54">Most hozzáadva: +{money(warehouseTransferToast.addedValue)} RON</p>
+              <p className="text-[9px] uppercase tracking-[0.16em] text-slate-500">Előkészítés frissítve</p>
+              <p className="mt-1 truncate text-sm text-slate-900" title={warehouseTransferToast.documentNumber}>{warehouseTransferToast.documentNumber}</p>
+              {warehouseTransferToast.routeLabel ? <p className="mt-0.5 truncate text-[10px] text-slate-600" title={warehouseTransferToast.routeLabel}>{warehouseTransferToast.routeLabel}</p> : null}
+              <p className="mt-1 text-[11px] text-slate-600">Most hozzáadva: <span className="text-[#0f5f59]">+{money(warehouseTransferToast.addedValue)} RON</span></p>
               <div className="mt-2 flex items-end justify-between gap-3">
-                <p className="text-[22px] leading-none text-white">{money(warehouseTransferToast.totalValue)} <span className="text-[10px] text-white/45">RON</span></p>
-                <span className={`rounded-full border px-2 py-1 text-[9px] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-300/35 bg-red-500/15 text-red-100" : "border-[#5eead4]/25 bg-[#2dd4bf]/10 text-[#ccfbf1]"}`}>
+                <p className="text-[22px] leading-none text-slate-900">{money(warehouseTransferToast.totalValue)} <span className="text-[10px] text-slate-500">RON</span></p>
+                <span className={`rounded-full border px-2 py-1 text-[9px] ${warehouseTransferToast.crossedThreshold && !warehouseTransferToast.uitRecorded ? "border-red-200 bg-red-50 text-red-700" : "border-teal-200 bg-teal-50 text-[#187876]"}`}>
                   {warehouseTransferToast.uitRecorded ? "UIT rögzítve" : warehouseTransferToast.crossedThreshold ? "UIT-határ elérve" : `${money(Math.max(0, WAREHOUSE_UIT_WARNING_THRESHOLD_RON - warehouseTransferToast.totalValue))} RON a határig`}
                 </span>
               </div>
+              {Number(warehouseTransferToast.documentCount || 1) === 1 ? <p className="mt-2 text-[9px] text-slate-500">Az ellenkező irány külön PV-be kerül.</p> : null}
             </div>
             <button
               type="button"
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.06] text-white/60 hover:bg-white/[0.10] hover:text-white"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-900"
               onClick={() => setWarehouseTransferToast(null)}
               aria-label="Értesítés bezárása"
             >
@@ -12629,47 +12714,48 @@ export default function AllInWarehouse() {
       )}
 
       {warehouseUitWarning && (
-        <div className="fixed inset-0 z-[135] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-md" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWarehouseUitWarning(); }}>
-          <div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-red-300/40 bg-[#3e4858] text-white shadow-[0_34px_100px_rgba(2,6,23,0.72)]">
-            <div className="flex items-start gap-3 border-b border-white/12 bg-gradient-to-r from-[#6f1d2d] via-[#8d2436] to-[#d31126] px-4 py-4">
-              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/22 bg-white/12 text-white shadow-lg"><AlertTriangle size={23} /></span>
+        <div className="fixed inset-0 z-[135] flex items-center justify-center bg-slate-950/58 p-3 backdrop-blur-md" onMouseDown={(event) => { if (event.currentTarget === event.target) closeWarehouseUitWarning(); }}>
+          <div className="w-full max-w-lg overflow-hidden rounded-[26px] border border-red-300 bg-[#f8fafc] text-slate-900 shadow-[0_32px_90px_rgba(2,6,23,0.52)]">
+            <div className="flex items-start gap-3 border-b border-red-300 bg-gradient-to-r from-[#8f1f32] via-[#b4233d] to-[#d31126] px-4 py-4 text-white">
+              <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/30 bg-white/15 text-white shadow-lg"><AlertTriangle size={23} /></span>
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-white/72">UIT figyelmeztetés</p>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-white/78">UIT figyelmeztetés</p>
                 <h2 className="mt-1 text-[22px] leading-tight text-white">Az előkészítés elérte a 10.000 RON-t</h2>
-                <p className="mt-1 truncate text-xs text-white/72" title={warehouseUitWarning.documentNumber}>{warehouseUitWarning.documentNumber}</p>
+                <p className="mt-1 truncate text-xs text-white/82" title={warehouseUitWarning.documentNumber}>{warehouseUitWarning.documentNumber}</p>
+                {warehouseUitWarning.routeLabel ? <p className="mt-0.5 truncate text-[10px] text-white/72" title={warehouseUitWarning.routeLabel}>{warehouseUitWarning.routeLabel}</p> : null}
               </div>
-              <button type="button" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/12 text-white hover:bg-black/20" onClick={closeWarehouseUitWarning} aria-label="Bezárás"><X size={15} /></button>
+              <button type="button" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-black/10 text-white hover:bg-black/20" onClick={closeWarehouseUitWarning} aria-label="Bezárás"><X size={15} /></button>
             </div>
 
             <div className="space-y-3 p-4">
               <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-2xl border border-white/12 bg-[#303a4c] px-3 py-3">
-                  <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Most hozzáadva</p>
-                  <p className="mt-1 text-[18px] text-white">+{money(warehouseUitWarning.addedValue)} RON</p>
+                <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-sm">
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-slate-500">Most hozzáadva</p>
+                  <p className="mt-1 text-[18px] text-slate-900">+{money(warehouseUitWarning.addedValue)} RON</p>
                 </div>
-                <div className="rounded-2xl border border-red-300/28 bg-red-500/14 px-3 py-3">
-                  <p className="text-[9px] uppercase tracking-[0.12em] text-red-200">Előkészítés összesen</p>
-                  <p className="mt-1 text-[18px] text-white">{money(warehouseUitWarning.totalValue)} RON</p>
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-3 shadow-sm">
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-red-700">Ez a PV összesen</p>
+                  <p className="mt-1 text-[18px] text-red-900">{money(warehouseUitWarning.totalValue)} RON</p>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-red-300/24 bg-red-950/20 px-3.5 py-3 text-xs leading-relaxed text-red-50">
-                A szállításhoz UIT kód szükséges. A munkát nyugodtan folytathatod, ez csak egyszer szól, és az adott előkészítésnél letilthatod a további felugró figyelmeztetést.
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-3.5 py-3 text-xs leading-relaxed text-red-900">
+                A szállításhoz UIT kód szükséges. Ez kizárólag ennek az útvonalnak az értéke. Az ellenkező irány külön PV-előkészítésben fut, ezért nem növeli ezt az összeget.
               </div>
 
-              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/12 bg-white/[0.05] px-3.5 py-3 text-xs leading-relaxed text-white/78 hover:bg-white/[0.08]">
+              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 text-xs leading-relaxed text-slate-700 shadow-sm hover:bg-slate-50">
                 <input
                   type="checkbox"
                   className="mt-0.5 h-4 w-4 shrink-0 accent-[#2a8d8b]"
                   checked={warehouseUitSuppressChecked}
                   onChange={(event) => setWarehouseUitSuppressChecked(event.target.checked)}
                 />
-                <span><span className="block text-white">Ennél az előkészítésnél ne mutassa újra</span><span className="mt-1 block text-[10px] text-white/45">A piros UIT jelzés a Készletbizonylatok oldalon továbbra is megmarad.</span></span>
+                <span><span className="block text-slate-900">Ennél az előkészítésnél ne mutassa újra</span><span className="mt-1 block text-[10px] text-slate-500">A piros UIT jelzés a Készletbizonylatok oldalon továbbra is megmarad.</span></span>
               </label>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                <span className="text-[10px] text-white/42">ESC: bezárás és munka folytatása</span>
-                <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_10px_24px_rgba(15,23,42,0.22)] hover:bg-[#319c99]" onClick={closeWarehouseUitWarning}>
+                <span className="text-[10px] text-slate-500">ESC: bezárás és munka folytatása</span>
+                <button type="button" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b] bg-[#2a8d8b] px-4 text-xs text-white shadow-[0_10px_24px_rgba(15,23,42,0.16)] hover:bg-[#319c99]" onClick={closeWarehouseUitWarning}>
                   <CheckCircle2 size={15} /> Tudomásul vettem
                 </button>
               </div>
@@ -12710,7 +12796,7 @@ export default function AllInWarehouse() {
 
               <div className="flex items-start gap-2 rounded-xl border border-amber-200/24 bg-amber-300/[0.08] px-3 py-2.5 text-xs leading-relaxed text-amber-50">
                 <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                <span>A készlet azonnal átkerül a forráshelyről a célhelyre. A művelet bekerül a nyitott PV-előkészítésbe, ahol lezárásig még szerkeszthető.</span>
+                <span>A készlet azonnal átkerül a forráshelyről a célhelyre. A művelet ennek a pontos iránynak a nyitott PV-előkészítésébe kerül. Az ellenkező irány külön PV-t kap.</span>
               </div>
 
               <div className="flex flex-wrap justify-end gap-2 pt-1">
@@ -12738,7 +12824,7 @@ export default function AllInWarehouse() {
 
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-[#5bd0cc]/30 bg-[#203f49] px-3 py-2 text-xs text-[#d7fffd]">
-                Mozgatás módban a teljes készlet nem változik: ha az egyik célhelyre pluszolsz, automatikusan leveszi másik célhelyről. Új áru vagy leltárkorrekció esetén kapcsold be a készletkorrekció módot.
+                Mozgatás módban a teljes készlet nem változik: ha az egyik célhelyre pluszolsz, automatikusan leveszi másik célhelyről. Minden Honnan → Hová irány külön PV-előkészítést kap. Új áru vagy leltárkorrekció esetén kapcsold be a készletkorrekció módot.
               </div>
 
               <div className="grid gap-2 rounded-xl border border-white/12 bg-[#3f4959]/70 p-3 text-xs text-white/72 sm:grid-cols-[1fr_auto] sm:items-center">
