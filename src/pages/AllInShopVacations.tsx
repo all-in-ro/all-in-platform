@@ -178,17 +178,18 @@ function TouchDateControl({
             value={value}
             min={min}
             onChange={(event) => onChange(event.target.value)}
-            className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+            className="absolute bottom-0 left-1/2 h-px w-px -translate-x-1/2 opacity-0"
             tabIndex={-1}
             aria-hidden="true"
           />
           <button
             type="button"
             onClick={openPicker}
-            className="flex h-16 w-full touch-manipulation items-center justify-center px-2 text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
+            className="flex h-16 w-full touch-manipulation items-center justify-center gap-3 px-3 text-white transition hover:bg-white/[0.06] active:bg-[#2a8d8b]"
             aria-label={`${label}: ${formatDate(value)}, naptár megnyitása`}
           >
-            <span className="whitespace-nowrap text-[17px] tabular-nums">{formatDate(value)}</span>
+            <span className="whitespace-nowrap text-lg tabular-nums">{formatDate(value)}</span>
+            <CalendarDays size={22} className="shrink-0 text-[#9ff3ef]" />
           </button>
         </div>
 
@@ -228,7 +229,6 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
       cache: "no-store",
       headers: {
         Accept: "application/json",
-        "X-AllIn-Employee": actor,
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
         ...(init?.headers || {}),
       },
@@ -242,7 +242,10 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ year: String(targetYear), employee: actor });
+      const params = new URLSearchParams({
+        year: String(targetYear),
+        employeeName: actor,
+      });
       const body = await fetchJson(`/admin/vacations/my/requests?${params.toString()}`);
       setOverview(body as VacationOverview);
     } catch (caught) {
@@ -300,6 +303,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     try {
       const body = await fetchJson("/admin/vacations/my/requests", {
         method: "POST",
+        headers: { "x-allin-employee": actor },
         body: JSON.stringify({
           employeeName: actor,
           kind,
@@ -324,7 +328,10 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setError("");
     setNotice("");
     try {
-      await fetchJson(`/admin/vacations/my/requests/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+      await fetchJson(`/admin/vacations/my/requests/${encodeURIComponent(id)}/cancel?employeeName=${encodeURIComponent(actor)}`, {
+        method: "POST",
+        headers: { "x-allin-employee": actor },
+      });
       setNotice("A még el nem bírált kérés visszavonva.");
       await loadOverview(year);
     } catch (caught) {
@@ -337,7 +344,10 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
   async function markDecisionsSeen() {
     setError("");
     try {
-      await fetchJson("/admin/vacations/my/requests/seen", { method: "POST" });
+      await fetchJson(`/admin/vacations/my/requests/seen?employeeName=${encodeURIComponent(actor)}`, {
+        method: "POST",
+        headers: { "x-allin-employee": actor },
+      });
       await loadOverview(year);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Az értesítés lezárása nem sikerült.");
