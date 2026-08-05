@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlertTriangle,
   ArrowLeft,
   Banknote,
   CalendarDays,
@@ -12,6 +13,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  Pencil,
   Receipt,
   Save,
   Search,
@@ -25,12 +27,14 @@ import {
 } from "lucide-react";
 import {
   apiAifCreateShopCustomer,
+  apiAifDeleteShopCustomer,
   apiAifDetachShopCustomerSale,
   apiAifGetShopCustomer,
   apiAifListRomaniaCounties,
   apiAifListRomaniaLocalities,
   apiAifListShopCustomers,
   apiAifRecordShopCustomerPayment,
+  apiAifUpdateShopCustomer,
   type AifRomaniaCounty,
   type AifRomaniaLocality,
   type AifShopCustomer,
@@ -39,7 +43,7 @@ import {
   type AifShopCustomerSaleHistoryItem,
 } from "../lib/aif/api";
 
-type ClientMode = "search" | "new" | "detail";
+type ClientMode = "search" | "new" | "edit" | "detail";
 
 type Props = {
   open: boolean;
@@ -186,6 +190,8 @@ export default function AllInMagazinClients({
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [saleDetachTarget, setSaleDetachTarget] = useState<AifShopCustomerSaleHistoryItem | null>(null);
   const [saleDetaching, setSaleDetaching] = useState(false);
+  const [customerDeleteOpen, setCustomerDeleteOpen] = useState(false);
+  const [customerDeleting, setCustomerDeleting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -197,6 +203,10 @@ export default function AllInMagazinClients({
     () => Array.from({ length: 6 }, (_, index) => currentYear - index),
     [currentYear],
   );
+  const customerHasHistory = Boolean(
+    detail && (numberValue(detail.summary.saleCount) > 0 || detail.payments.length > 0),
+  );
+  const customerHasOpenBalance = numberValue(detail?.summary.openBalance) > 0.005;
 
   async function loadLocalities(countyCode: string, selectedCode = "") {
     if (!countyCode) {
@@ -255,6 +265,8 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setSaleDetachTarget(null);
     setSaleDetaching(false);
+    setCustomerDeleteOpen(false);
+    setCustomerDeleting(false);
     paymentRequestKeyRef.current = "";
     if (initialMode === "new") {
       const nextDraft = { ...EMPTY_DRAFT, countyCode: defaultCountyCode };
@@ -273,8 +285,17 @@ export default function AllInMagazinClients({
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (customerDeleteOpen) {
+        if (!customerDeleting) setCustomerDeleteOpen(false);
+        return;
+      }
       if (saleDetachTarget) {
         if (!saleDetaching) setSaleDetachTarget(null);
+        return;
+      }
+      if (mode === "edit") {
+        setMode("detail");
+        setError("");
         return;
       }
       if (mode === "detail") {
@@ -288,7 +309,7 @@ export default function AllInMagazinClients({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [mode, onClose, open, saleDetachTarget, saleDetaching]);
+  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, saleDetachTarget, saleDetaching]);
 
   async function loadCustomers(value = query) {
     setLoading(true);
@@ -325,10 +346,12 @@ export default function AllInMagazinClients({
     setMode("search");
     setSelected(null);
     setDetail(null);
+    setDraft(EMPTY_DRAFT);
     setError("");
     setSuccess("");
     setPaymentDraft(EMPTY_PAYMENT);
     setSaleDetachTarget(null);
+    setCustomerDeleteOpen(false);
     paymentRequestKeyRef.current = "";
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }
@@ -341,6 +364,7 @@ export default function AllInMagazinClients({
     setLocalities([]);
     void loadLocalities(defaultCountyCode);
     if (!counties.length) void loadCountiesForForm();
+    setCustomerDeleteOpen(false);
     setError("");
     setSuccess("");
   }
@@ -352,10 +376,45 @@ export default function AllInMagazinClients({
     setDetailYear(currentYear);
     setPaymentDraft(EMPTY_PAYMENT);
     setSaleDetachTarget(null);
+    setCustomerDeleteOpen(false);
     paymentRequestKeyRef.current = "";
     setError("");
     setSuccess("");
     void loadCustomerDetail(customer.id, currentYear);
+  }
+
+  function openEdit() {
+    const customer = detail?.item || selected;
+    if (!customer) return;
+    const countyCode = customer.countyCode || defaultCountyCode;
+    const localityCode = customer.localityCode || "";
+    setDraft({
+      fullName: customer.fullName || "",
+      phone: customer.phone || "",
+      email: customer.email || "",
+      countyCode,
+      localityCode,
+      postalCode: customer.postalCode || "",
+      address: customer.address || "",
+      note: customer.notes || "",
+    });
+    setLocalities([]);
+    void loadLocalities(countyCode, localityCode);
+    if (!counties.length) void loadCountiesForForm();
+    setMode("edit");
+    setCustomerDeleteOpen(false);
+    setError("");
+    setSuccess("");
+  }
+
+  function cancelCustomerForm() {
+    if (mode === "edit" && selected) {
+      setMode("detail");
+      setDraft(EMPTY_DRAFT);
+      setError("");
+      return;
+    }
+    openSearch();
   }
 
   async function saveCustomer() {
@@ -369,12 +428,16 @@ export default function AllInMagazinClients({
       setError("A megye és a helység kiválasztása kötelező.");
       return;
     }
+    if (mode === "edit" && !selected) {
+      setError("A szerkesztendő kliens nem található.");
+      return;
+    }
 
     setSaving(true);
     setError("");
     setSuccess("");
     try {
-      const response = await apiAifCreateShopCustomer({
+      const input = {
         fullName,
         phone,
         email: draft.email.trim() || null,
@@ -384,7 +447,10 @@ export default function AllInMagazinClients({
         postalCode: draft.postalCode.trim() || null,
         address: draft.address.trim() || null,
         note: draft.note.trim() || null,
-      });
+      };
+      const response = mode === "edit" && selected
+        ? await apiAifUpdateShopCustomer(selected.id, input)
+        : await apiAifCreateShopCustomer(input);
       const saved = response.item;
       setItems((current) => {
         const exists = current.some((item) => item.id === saved.id);
@@ -395,12 +461,43 @@ export default function AllInMagazinClients({
       setSelected(saved);
       setMode("detail");
       setDraft(EMPTY_DRAFT);
-      setSuccess(response.duplicate ? "A meglévő kliens adatai frissítve." : "A kliens rögzítve.");
-      await loadCustomerDetail(saved.id, currentYear);
+      setSuccess(
+        mode === "edit"
+          ? "A kliens adatai frissítve."
+          : ("duplicate" in response && response.duplicate ? "A meglévő kliens adatai frissítve." : "A kliens rögzítve."),
+      );
+      await loadCustomerDetail(saved.id, detailYear || currentYear);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A kliens mentése nem sikerült.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteCustomer() {
+    if (!selected) return;
+    setCustomerDeleting(true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await apiAifDeleteShopCustomer(selected.id);
+      const deletedName = selected.fullName;
+      setItems((current) => current.filter((item) => item.id !== selected.id));
+      setSelected(null);
+      setDetail(null);
+      setDraft(EMPTY_DRAFT);
+      setCustomerDeleteOpen(false);
+      setMode("search");
+      setSuccess(
+        response.mode === "archived"
+          ? `${deletedName} archiválva. A korábbi vásárlások és befizetések megmaradtak.`
+          : `${deletedName} végleg törölve.`,
+      );
+      await loadCustomers(query);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A kliens törlése nem sikerült.");
+    } finally {
+      setCustomerDeleting(false);
     }
   }
 
@@ -491,7 +588,7 @@ export default function AllInMagazinClients({
               type="button"
               onClick={openSearch}
               className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs text-white transition ${
-                mode === "search" || mode === "detail"
+                mode === "search" || mode === "detail" || mode === "edit"
                   ? "border-[#9be9e5]/45 bg-[#2a8d8b]"
                   : "border-white/15 bg-white/[0.05] hover:bg-white/[0.09]"
               }`}
@@ -636,13 +733,16 @@ export default function AllInMagazinClients({
                 </div>
               )}
             </>
-          ) : mode === "new" ? (
+          ) : mode === "new" || mode === "edit" ? (
             <div className="mx-auto max-w-[780px] rounded-[22px] border border-white/13 bg-[#374357] p-4 sm:p-5">
               <div className="flex items-center gap-3">
                 <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#d7fffd]">
-                  <UserPlus size={20} />
+                  {mode === "edit" ? <Pencil size={20} /> : <UserPlus size={20} />}
                 </span>
-                <h3 className="text-lg text-white">Új kliens</h3>
+                <div>
+                  <h3 className="text-lg text-white">{mode === "edit" ? "Kliens szerkesztése" : "Új kliens"}</h3>
+                  {mode === "edit" ? <p className="mt-1 text-xs text-white/45">A régi adatokat itt lehet egységes megye- és helységadatra javítani.</p> : null}
+                </div>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -695,7 +795,7 @@ export default function AllInMagazinClients({
               <div className="mt-4 flex justify-end gap-2 border-t border-white/10 pt-4">
                 <button
                   type="button"
-                  onClick={openSearch}
+                  onClick={cancelCustomerForm}
                   className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]"
                 >
                   <X size={17} /> Mégse
@@ -707,7 +807,7 @@ export default function AllInMagazinClients({
                   className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:opacity-60"
                 >
                   {saving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />}
-                  Mentés
+                  {mode === "edit" ? "Módosítások mentése" : "Mentés"}
                 </button>
               </div>
             </div>
@@ -722,21 +822,39 @@ export default function AllInMagazinClients({
                   <ArrowLeft size={15} /> Vissza a listához
                 </button>
 
-                <label className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#293548] px-3 py-2 text-xs text-white/65">
-                  <CalendarDays size={15} className="text-[#8ee6e2]" />
-                  Éves összesítés
-                  <select
-                    value={detailYear}
-                    onChange={(event) => {
-                      const year = Number(event.target.value);
-                      setDetailYear(year);
-                      if (selected) void loadCustomerDetail(selected.id, year);
-                    }}
-                    className="h-8 rounded-lg border border-white/14 bg-[#1f2937] px-2 text-xs text-white outline-none"
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={openEdit}
+                    disabled={!detail || detailLoading}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:opacity-50"
                   >
-                    {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
-                  </select>
-                </label>
+                    <Pencil size={15} /> Szerkesztés
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomerDeleteOpen(true)}
+                    disabled={!detail || detailLoading}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-rose-300/50 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:opacity-50"
+                  >
+                    <Trash2 size={15} /> Kliens törlése
+                  </button>
+                  <label className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#293548] px-3 py-1 text-xs text-white/65">
+                    <CalendarDays size={15} className="text-[#8ee6e2]" />
+                    Éves összesítés
+                    <select
+                      value={detailYear}
+                      onChange={(event) => {
+                        const year = Number(event.target.value);
+                        setDetailYear(year);
+                        if (selected) void loadCustomerDetail(selected.id, year);
+                      }}
+                      className="h-8 rounded-lg border border-white/14 bg-[#1f2937] px-2 text-xs text-white outline-none"
+                    >
+                      {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
+                    </select>
+                  </label>
+                </div>
               </div>
 
               {detailLoading && !detail ? (
@@ -1015,6 +1133,57 @@ export default function AllInMagazinClients({
           </button>
         </div>
       </div>
+
+      {customerDeleteOpen && selected && detail ? (
+        <div className="fixed inset-0 z-[285] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-[560px] overflow-hidden rounded-[26px] border border-rose-300/36 bg-[#303a4c] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4a2632] to-[#303a4c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/35 bg-rose-500/18 text-rose-50"><Trash2 size={20} /></span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-rose-100/60">Kliens törlése</p>
+                  <h3 className="mt-1 truncate text-xl text-white">{selected.fullName}</h3>
+                </div>
+              </div>
+              <button type="button" disabled={customerDeleting} onClick={() => setCustomerDeleteOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
+            </header>
+            <div className="space-y-3 px-5 py-5">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-2xl border border-white/10 bg-[#273243] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Vásárlások</p><p className="mt-2 text-lg text-white">{detail.summary.saleCount}</p></div>
+                <div className="rounded-2xl border border-white/10 bg-[#273243] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Befizetések</p><p className="mt-2 text-lg text-white">{detail.payments.length}</p></div>
+                <div className={`rounded-2xl border p-3 ${customerHasOpenBalance ? "border-rose-300/25 bg-rose-500/12" : "border-emerald-300/20 bg-emerald-500/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Nyitott tartozás</p><p className="mt-2 text-lg text-white">{formatMoney(detail.summary.openBalance)}</p></div>
+              </div>
+
+              {customerHasOpenBalance ? (
+                <div className="flex items-start gap-3 rounded-2xl border border-amber-200/28 bg-amber-400/10 px-4 py-3 text-amber-50">
+                  <AlertTriangle size={20} className="mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm">A kliens addig nem törölhető, amíg nyitott tartozása van.</p>
+                    <p className="mt-1 text-xs leading-relaxed text-amber-100/70">Előbb rendezd a tartozást vagy válaszd le a hibásan hozzárendelt vásárlást.</p>
+                  </div>
+                </div>
+              ) : customerHasHistory ? (
+                <div className="rounded-2xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-4 py-3">
+                  <p className="text-sm text-white/78">A kliensnek van korábbi előzménye, ezért biztonságosan archiválódik.</p>
+                  <p className="mt-1 text-xs leading-relaxed text-[#d7fffd]/68">Eltűnik az aktív klienslistából, de a vásárlások, befizetések, bizonylatok és készletmozgások megmaradnak.</p>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3">
+                  <p className="text-sm text-white/78">A kliensnek nincs vásárlási vagy befizetési előzménye.</p>
+                  <p className="mt-1 text-xs leading-relaxed text-rose-100/70">A rekord végleg törlődik az adatbázisból.</p>
+                </div>
+              )}
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button type="button" disabled={customerDeleting} onClick={() => setCustomerDeleteOpen(false)} className="inline-flex h-11 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">Mégse</button>
+              <button type="button" disabled={customerDeleting || customerHasOpenBalance} onClick={() => void deleteCustomer()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-rose-300/55 bg-rose-600 px-5 text-sm text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-45">
+                {customerDeleting ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />}
+                {customerDeleting ? "Törlés…" : customerHasHistory ? "Kliens archiválása" : "Végleges törlés"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {saleDetachTarget ? (
         <div className="fixed inset-0 z-[280] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm">
