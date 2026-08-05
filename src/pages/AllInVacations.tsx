@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
   BarChart3,
+  BellRing,
   CheckCircle2,
   CalendarDays,
   CalendarPlus,
@@ -12,12 +13,15 @@ import {
   ClipboardList,
   Clock3,
   History,
+  MessageSquareText,
   Home,
   RefreshCw,
   Save,
   Scale,
   Search,
   Settings2,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   UserRound,
   Users2,
@@ -96,6 +100,26 @@ type SavedVacationPeriod = {
   note: string | null;
 };
 
+type VacationRequestStatus = "pending" | "approved" | "rejected" | "cancelled";
+
+type VacationRequestItem = {
+  id: string;
+  employeeName: string;
+  shopId?: string | null;
+  kind: "vacation" | "short";
+  dayFrom: string;
+  dayTo: string;
+  hoursOff?: number | null;
+  note?: string | null;
+  status: VacationRequestStatus;
+  requestedAt?: string | null;
+  requestedBy?: string | null;
+  decidedAt?: string | null;
+  decidedBy?: string | null;
+  decisionNote?: string | null;
+  employeeSeenAt?: string | null;
+};
+
 const WEEK_DAYS = [
   { id: 1, short: "H", label: "Hétfő" },
   { id: 2, short: "K", label: "Kedd" },
@@ -126,6 +150,27 @@ function yyyymmNow() {
 
 function fmtKind(k: TimeEvent["kind"]) {
   return k === "vacation" ? "Szabadság" : "Elkérezés";
+}
+
+function formatRequestDate(value?: string | null) {
+  if (!value) return "–";
+  const date = new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "UTC" });
+}
+
+function formatRequestDateTime(value?: string | null) {
+  if (!value) return "–";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "–";
+  return date.toLocaleString("hu-HU", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function requestPeriodLabel(request: VacationRequestItem) {
+  if (request.kind === "short") return `${formatRequestDate(request.dayFrom)} • ${request.hoursOff || 0} óra`;
+  return request.dayFrom === request.dayTo
+    ? formatRequestDate(request.dayFrom)
+    : `${formatRequestDate(request.dayFrom)} – ${formatRequestDate(request.dayTo)}`;
 }
 
 function empKey(name: string) {
@@ -440,6 +485,21 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [pageNotice, setPageNotice] = useState("");
+  const [pendingRequests, setPendingRequests] = useState<VacationRequestItem[]>([]);
+  const [pendingRequestsBusy, setPendingRequestsBusy] = useState(false);
+  const [pendingRequestsError, setPendingRequestsError] = useState("");
+  const [decisionTarget, setDecisionTarget] = useState<VacationRequestItem | null>(null);
+  const [decisionMode, setDecisionMode] = useState<"approved" | "rejected">("approved");
+  const [decisionNote, setDecisionNote] = useState("");
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const pendingByEmployee = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const request of pendingRequests) {
+      const key = empKey(request.employeeName);
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return map;
+  }, [pendingRequests]);
   const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
   const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
   const [archiveYearOpen, setArchiveYearOpen] = useState(false);
@@ -518,18 +578,19 @@ export default function AllInVacations({ api }: { api?: string }) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!confirmOpen && !summaryOpen && !pdfOpen && !settingsOpen) return;
+    if (!confirmOpen && !summaryOpen && !pdfOpen && !settingsOpen && !decisionTarget) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setConfirmOpen(false);
         setSummaryOpen(false);
         setPdfOpen(false);
         setSettingsOpen(false);
+        if (!decisionBusy) setDecisionTarget(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmOpen, summaryOpen, pdfOpen, settingsOpen]);
+  }, [confirmOpen, summaryOpen, pdfOpen, settingsOpen, decisionTarget, decisionBusy]);
 
   // Custom dropdowns use only the AllIn palette, never the browser's blue native menu.
   useEffect(() => {
@@ -746,6 +807,69 @@ export default function AllInVacations({ api }: { api?: string }) {
     }
   };
 
+  const fetchPendingRequests = async () => {
+    setPendingRequestsBusy(true);
+    setPendingRequestsError("");
+    try {
+      const response = await fetch(`${apiBase}/admin/vacations/requests?status=pending`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      setPendingRequests(Array.isArray(body?.items) ? body.items : []);
+    } catch (error: any) {
+      setPendingRequestsError(String(error?.message || error || "A függő szabadságkérelmek nem tölthetők be."));
+      setPendingRequests([]);
+    } finally {
+      setPendingRequestsBusy(false);
+    }
+  };
+
+  const openRequestDecision = (request: VacationRequestItem, decision: "approved" | "rejected") => {
+    setDecisionTarget(request);
+    setDecisionMode(decision);
+    setDecisionNote("");
+    setPendingRequestsError("");
+  };
+
+  const submitRequestDecision = async () => {
+    if (!decisionTarget) return;
+    if (decisionMode === "rejected" && !decisionNote.trim()) {
+      setPendingRequestsError("Elutasításnál rövid indoklást kell írni az alkalmazottnak.");
+      return;
+    }
+    setDecisionBusy(true);
+    setPendingRequestsError("");
+    try {
+      const response = await fetch(`${apiBase}/admin/vacations/requests/${encodeURIComponent(decisionTarget.id)}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Accept: "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ decision: decisionMode, note: decisionNote.trim() || null }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+      const employeeName = decisionTarget.employeeName;
+      setDecisionTarget(null);
+      setDecisionNote("");
+      setPageNotice(
+        decisionMode === "approved"
+          ? `${employeeName} szabadságkérése elfogadva és automatikusan bekerült a nyilvántartásba.`
+          : `${employeeName} szabadságkérése elutasítva. Az alkalmazott értesítést kap.`
+      );
+      await fetchPendingRequests();
+      if (selected && empKey(selected) === empKey(employeeName)) {
+        await Promise.all([fetchList(employeeName), fetchActivityMonths(employeeName)]);
+      }
+      if (summaryOpen) await fetchYearSummary(summaryYear);
+    } catch (error: any) {
+      setPendingRequestsError(String(error?.message || error || "A szabadságkérés elbírálása nem sikerült."));
+    } finally {
+      setDecisionBusy(false);
+    }
+  };
+
   const fetchYearSummary = async (year?: number) => {
     const y = Number(year ?? summaryYear);
     if (!Number.isFinite(y) || y < 2000 || y > 2100) return;
@@ -873,6 +997,7 @@ export default function AllInVacations({ api }: { api?: string }) {
   useEffect(() => {
     void fetchEmployees();
     void fetchVacationSettings();
+    void fetchPendingRequests();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase]);
 
@@ -1221,6 +1346,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               const shortHoursValue = employeeSummary?.shortHours ?? 0;
               const balanceDays = employeeComp?.balanceDays ?? 0;
               const balanceHours = employeeComp?.balanceHours ?? 0;
+              const pendingCount = pendingByEmployee.get(empKey(e.name)) || 0;
 
               return (
                 <button
@@ -1229,9 +1355,11 @@ export default function AllInVacations({ api }: { api?: string }) {
                   type="button"
                   className={
                     "group w-full rounded-2xl border px-3 py-3 text-left transition " +
-                    (active
-                      ? "border-[#b7f1ed]/62 bg-[#247f7d] shadow-[0_10px_26px_rgba(21,92,91,0.24)]"
-                      : "border-[#b7f1ed]/18 bg-[#55717a] hover:border-[#b7f1ed]/34 hover:bg-[#607d84]")
+                    (pendingCount > 0
+                      ? "border-rose-200/72 bg-gradient-to-br from-[#b6132b] to-[#7f1023] shadow-[0_12px_30px_rgba(190,18,60,0.30)] hover:brightness-110"
+                      : active
+                        ? "border-[#b7f1ed]/62 bg-[#247f7d] shadow-[0_10px_26px_rgba(21,92,91,0.24)]"
+                        : "border-[#b7f1ed]/18 bg-[#55717a] hover:border-[#b7f1ed]/34 hover:bg-[#607d84]")
                   }
                   onClick={() => {
                     setSelected(e.name);
@@ -1242,22 +1370,29 @@ export default function AllInVacations({ api }: { api?: string }) {
                     <span
                       className={
                         "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-sm " +
-                        (active
-                          ? "border-white/45 bg-white text-[#247f7d]"
-                          : "border-white/25 bg-[#e7faf8] text-[#247f7d]")
+                        (pendingCount > 0
+                          ? "border-rose-100/65 bg-white text-[#a31128]"
+                          : active
+                            ? "border-white/45 bg-white text-[#247f7d]"
+                            : "border-white/25 bg-[#e7faf8] text-[#247f7d]")
                       }
                     >
                       {initials(e.name)}
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="truncate text-sm text-white">{e.name}</div>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm text-white">{e.name}</div>
+                          {pendingCount > 0 ? <span className="mt-1 inline-flex rounded-full border border-rose-100/45 bg-white/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-rose-50">{pendingCount} elbírálatlan kérés</span> : null}
+                        </div>
                         <ChevronRight
                           className={
                             "h-4 w-4 " +
-                            (active
-                              ? "text-[#7bd7d4]"
-                              : "text-white/28 transition group-hover:text-white/55")
+                            (pendingCount > 0
+                              ? "text-rose-100"
+                              : active
+                                ? "text-[#7bd7d4]"
+                                : "text-white/28 transition group-hover:text-white/55")
                           }
                         />
                       </div>
@@ -2040,6 +2175,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                 onClick={() => {
                   void fetchEmployees();
                   void fetchList();
+                  void fetchPendingRequests();
                 }}
                 disabled={empBusy || listBusy}
               >
@@ -2065,6 +2201,68 @@ export default function AllInVacations({ api }: { api?: string }) {
           <div className="rounded-2xl border border-rose-200/25 bg-rose-500/12 px-4 py-3 text-sm text-rose-50 whitespace-pre-wrap">
             {yearErr}
           </div>
+        ) : null}
+
+        {pendingRequestsError ? (
+          <div className="rounded-2xl border border-rose-200/30 bg-rose-500/14 px-4 py-3 text-sm text-rose-50 whitespace-pre-wrap">
+            {pendingRequestsError}
+          </div>
+        ) : null}
+
+        {pendingRequests.length > 0 || pendingRequestsBusy ? (
+          <section className="overflow-hidden rounded-[24px] border border-rose-200/55 bg-gradient-to-br from-[#a70f28] via-[#821025] to-[#5c1422] shadow-[0_18px_44px_rgba(159,18,57,0.28)]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rose-100/18 bg-black/10 px-4 py-3.5">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-100/35 bg-white/12 text-rose-50"><BellRing className="h-5 w-5" /></span>
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.17em] text-rose-100/62">Vezetői döntésre vár</div>
+                  <div className="mt-1 text-lg text-white">Függő szabadság- és elkéréskérelmek</div>
+                </div>
+              </div>
+              <span className="rounded-full border border-rose-100/35 bg-white/12 px-3 py-1 text-xs text-rose-50">{pendingRequests.length} új kérés</span>
+            </div>
+
+            <div className="grid gap-2 p-3 lg:grid-cols-2">
+              {pendingRequestsBusy ? (
+                <div className="col-span-full flex min-h-[120px] items-center justify-center gap-2 text-sm text-rose-50/75"><RefreshCw className="h-4 w-4 animate-spin" /> Kérelmek betöltése…</div>
+              ) : pendingRequests.map((request) => (
+                <article key={request.id} className="rounded-2xl border border-rose-100/25 bg-[#351b28]/72 p-3.5 shadow-[0_10px_24px_rgba(0,0,0,0.16)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <button
+                      type="button"
+                      className="min-w-0 text-left"
+                      onClick={() => {
+                        setSelected(request.employeeName);
+                        if (isMobile) setMobilePane("details");
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-100/35 bg-white text-sm text-[#a31128]">{initials(request.employeeName)}</span>
+                        <div className="min-w-0">
+                          <div className="truncate text-base text-white">{request.employeeName}</div>
+                          <div className="mt-0.5 text-[10px] text-rose-100/55">Beküldve: {formatRequestDateTime(request.requestedAt)}</div>
+                        </div>
+                      </div>
+                    </button>
+                    <span className="rounded-full border border-amber-100/38 bg-amber-300/12 px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-amber-50">Elbírálás alatt</span>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-rose-100/15 bg-black/12 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm text-white">{request.kind === "vacation" ? "Szabadság" : "Órás elkérés"}</span>
+                      <span className="text-sm text-rose-50">{requestPeriodLabel(request)}</span>
+                    </div>
+                    {request.note ? <div className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-rose-50/72"><MessageSquareText className="mt-0.5 h-3.5 w-3.5 shrink-0" />{request.note}</div> : null}
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => openRequestDecision(request, "rejected")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-rose-100/25 bg-black/14 px-3 text-xs text-rose-50 transition hover:bg-black/24"><ThumbsDown className="h-4 w-4" /> Elutasítás</button>
+                    <button type="button" onClick={() => openRequestDecision(request, "approved")} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-emerald-200/45 bg-emerald-600 px-3 text-xs text-white shadow-[0_8px_20px_rgba(5,150,105,0.25)] transition hover:bg-emerald-500"><ThumbsUp className="h-4 w-4" /> Elfogadás</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         ) : null}
 
         <section className={card}>
@@ -2164,6 +2362,75 @@ export default function AllInVacations({ api }: { api?: string }) {
           </div>
         </main>
       </div>
+
+      {decisionTarget && (
+        <div className="fixed inset-0 z-[136] grid place-items-center bg-slate-950/80 px-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !decisionBusy) setDecisionTarget(null); }}>
+          <section className={`w-full max-w-[620px] overflow-hidden rounded-[26px] border text-white shadow-[0_34px_110px_rgba(0,0,0,0.58)] ${decisionMode === "approved" ? "border-emerald-200/38 bg-[#314b48]" : "border-rose-200/38 bg-[#4b3039]"}`}>
+            <header className={`flex items-start justify-between gap-3 border-b border-white/12 px-5 py-4 ${decisionMode === "approved" ? "bg-gradient-to-r from-[#1f6d62] to-[#2a8d8b]" : "bg-gradient-to-r from-[#8f1730] to-[#5c2230]"}`}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/12">
+                  {decisionMode === "approved" ? <ThumbsUp className="h-5 w-5" /> : <ThumbsDown className="h-5 w-5" />}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-white/60">Szabadságkérés elbírálása</div>
+                  <div className="mt-1 truncate text-xl">{decisionMode === "approved" ? "Kérés elfogadása" : "Kérés elutasítása"}</div>
+                </div>
+              </div>
+              <button type="button" disabled={decisionBusy} className={iconBtn} onClick={() => setDecisionTarget(null)}><X className="h-4 w-4" /></button>
+            </header>
+
+            <div className="space-y-4 p-5">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/12 bg-black/10 p-3">
+                  <div className="text-[9px] uppercase tracking-[0.11em] text-white/42">Alkalmazott</div>
+                  <div className="mt-2 text-lg text-white">{decisionTarget.employeeName}</div>
+                </div>
+                <div className="rounded-2xl border border-white/12 bg-black/10 p-3">
+                  <div className="text-[9px] uppercase tracking-[0.11em] text-white/42">Kért időszak</div>
+                  <div className="mt-2 text-lg text-white">{requestPeriodLabel(decisionTarget)}</div>
+                </div>
+              </div>
+
+              {decisionTarget.note ? (
+                <div className="rounded-2xl border border-white/12 bg-black/10 px-4 py-3 text-sm leading-relaxed text-white/70">
+                  <MessageSquareText className="mr-2 inline h-4 w-4" />{decisionTarget.note}
+                </div>
+              ) : null}
+
+              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.11em] text-white/50">
+                {decisionMode === "approved" ? "Vezetői megjegyzés az alkalmazottnak" : "Elutasítás indoka *"}
+                <textarea
+                  autoFocus
+                  rows={4}
+                  value={decisionNote}
+                  onChange={(event) => setDecisionNote(event.target.value)}
+                  placeholder={decisionMode === "approved" ? "Opcionális, pl. jó pihenést…" : "Írd le röviden, miért nem elfogadható az időpont…"}
+                  className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/34 focus:border-[#72d8d4]"
+                />
+              </label>
+
+              <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed ${decisionMode === "approved" ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50" : "border-rose-200/24 bg-rose-500/10 text-rose-50"}`}>
+                {decisionMode === "approved"
+                  ? "Elfogadáskor a szabadság vagy órás elkérés automatikusan bekerül a hivatalos nyilvántartásba, és az alkalmazott értesítést kap."
+                  : "Elutasításkor nem készül távolléti bejegyzés. Az alkalmazott az indoklással együtt látni fogja a döntést."}
+              </div>
+            </div>
+
+            <footer className="flex flex-wrap justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button type="button" disabled={decisionBusy} className={btnSoft} onClick={() => setDecisionTarget(null)}>Mégse</button>
+              <button
+                type="button"
+                disabled={decisionBusy || (decisionMode === "rejected" && !decisionNote.trim())}
+                onClick={() => void submitRequestDecision()}
+                className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-5 text-sm text-white transition disabled:opacity-50 ${decisionMode === "approved" ? "border-emerald-200/45 bg-emerald-600 hover:bg-emerald-500" : "border-rose-200/45 bg-rose-600 hover:bg-rose-500"}`}
+              >
+                {decisionBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : decisionMode === "approved" ? <ThumbsUp className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
+                {decisionBusy ? "Mentés…" : decisionMode === "approved" ? "Elfogadás és rögzítés" : "Elutasítás"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {settingsOpen && (
         <div className="fixed inset-0 z-[118] grid place-items-center bg-slate-950/76 px-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !settingsBusy) setSettingsOpen(false); }}>
