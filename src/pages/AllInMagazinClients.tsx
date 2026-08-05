@@ -27,8 +27,12 @@ import {
   apiAifCreateShopCustomer,
   apiAifDetachShopCustomerSale,
   apiAifGetShopCustomer,
+  apiAifListRomaniaCounties,
+  apiAifListRomaniaLocalities,
   apiAifListShopCustomers,
   apiAifRecordShopCustomerPayment,
+  type AifRomaniaCounty,
+  type AifRomaniaLocality,
   type AifShopCustomer,
   type AifShopCustomerDetail,
   type AifShopCustomerPaymentMethod,
@@ -48,6 +52,9 @@ type CustomerDraft = {
   fullName: string;
   phone: string;
   email: string;
+  countyCode: string;
+  localityCode: string;
+  postalCode: string;
   address: string;
   note: string;
 };
@@ -63,6 +70,9 @@ const EMPTY_DRAFT: CustomerDraft = {
   fullName: "",
   phone: "",
   email: "",
+  countyCode: "",
+  localityCode: "",
+  postalCode: "",
   address: "",
   note: "",
 };
@@ -132,6 +142,21 @@ function locationCodeFromName(locationName: string) {
     : "main_warehouse";
 }
 
+function preferredCountyCode(locationName: string) {
+  const normalized = locationName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return normalized.includes("targu") || normalized.includes("kezdi") ? "CV" : "HR";
+}
+
+function customerAddressLabel(customer: AifShopCustomer) {
+  const locality = customer.localityName || customer.city || "";
+  const county = customer.countyName || "";
+  const place = [locality, county].filter(Boolean).join(", ");
+  return [place, customer.address, customer.postalCode].filter(Boolean).join(" • ");
+}
+
 function paymentMethodLabel(method: string) {
   const found = PAYMENT_METHODS.find((item) => item.value === method);
   return found?.label || method || "Egyéb";
@@ -151,6 +176,9 @@ export default function AllInMagazinClients({
   const [detail, setDetail] = useState<AifShopCustomerDetail | null>(null);
   const [detailYear, setDetailYear] = useState(currentYear);
   const [draft, setDraft] = useState<CustomerDraft>(EMPTY_DRAFT);
+  const [counties, setCounties] = useState<AifRomaniaCounty[]>([]);
+  const [localities, setLocalities] = useState<AifRomaniaLocality[]>([]);
+  const [geoLoading, setGeoLoading] = useState(false);
   const [paymentDraft, setPaymentDraft] = useState<PaymentDraft>(EMPTY_PAYMENT);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -164,13 +192,60 @@ export default function AllInMagazinClients({
   const paymentRequestKeyRef = useRef("");
 
   const locationCode = useMemo(() => locationCodeFromName(locationName), [locationName]);
+  const defaultCountyCode = useMemo(() => preferredCountyCode(locationName), [locationName]);
   const yearOptions = useMemo(
     () => Array.from({ length: 6 }, (_, index) => currentYear - index),
     [currentYear],
   );
 
+  async function loadLocalities(countyCode: string, selectedCode = "") {
+    if (!countyCode) {
+      setLocalities([]);
+      return;
+    }
+    setGeoLoading(true);
+    try {
+      const response = await apiAifListRomaniaLocalities({ countyCode, limit: 1000 });
+      setLocalities(response.items || []);
+      if (selectedCode && !(response.items || []).some((item) => item.code === selectedCode)) {
+        setDraft((current) => ({ ...current, localityCode: "", postalCode: "" }));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A helységek nem tölthetők be.");
+      setLocalities([]);
+    } finally {
+      setGeoLoading(false);
+    }
+  }
+
+  async function loadCountiesForForm() {
+    try {
+      const response = await apiAifListRomaniaCounties();
+      setCounties(response.items || []);
+      return response.items || [];
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A megyék nem tölthetők be.");
+      return [];
+    }
+  }
+
+  function changeDraftCounty(countyCode: string) {
+    setDraft((current) => ({ ...current, countyCode, localityCode: "", postalCode: "" }));
+    void loadLocalities(countyCode);
+  }
+
+  function changeDraftLocality(localityCode: string) {
+    const locality = localities.find((item) => item.code === localityCode);
+    setDraft((current) => ({
+      ...current,
+      localityCode,
+      postalCode: locality?.postalCode || current.postalCode || "",
+    }));
+  }
+
   useEffect(() => {
     if (!open) return;
+    void loadCountiesForForm();
     setMode(initialMode);
     setSelected(null);
     setDetail(null);
@@ -182,13 +257,15 @@ export default function AllInMagazinClients({
     setSaleDetaching(false);
     paymentRequestKeyRef.current = "";
     if (initialMode === "new") {
-      setDraft(EMPTY_DRAFT);
+      const nextDraft = { ...EMPTY_DRAFT, countyCode: defaultCountyCode };
+      setDraft(nextDraft);
+      void loadLocalities(defaultCountyCode);
     } else {
       setQuery("");
       void loadCustomers("");
       window.setTimeout(() => searchInputRef.current?.focus(), 0);
     }
-  }, [currentYear, initialMode, open]);
+  }, [currentYear, defaultCountyCode, initialMode, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -260,7 +337,10 @@ export default function AllInMagazinClients({
     setMode("new");
     setSelected(null);
     setDetail(null);
-    setDraft({ ...EMPTY_DRAFT, fullName: prefillName });
+    setDraft({ ...EMPTY_DRAFT, fullName: prefillName, countyCode: defaultCountyCode });
+    setLocalities([]);
+    void loadLocalities(defaultCountyCode);
+    if (!counties.length) void loadCountiesForForm();
     setError("");
     setSuccess("");
   }
@@ -285,6 +365,10 @@ export default function AllInMagazinClients({
       setError("A név és a telefonszám kötelező.");
       return;
     }
+    if (!draft.countyCode || !draft.localityCode) {
+      setError("A megye és a helység kiválasztása kötelező.");
+      return;
+    }
 
     setSaving(true);
     setError("");
@@ -294,6 +378,10 @@ export default function AllInMagazinClients({
         fullName,
         phone,
         email: draft.email.trim() || null,
+        countryCode: "RO",
+        countyCode: draft.countyCode,
+        localityCode: draft.localityCode,
+        postalCode: draft.postalCode.trim() || null,
         address: draft.address.trim() || null,
         note: draft.note.trim() || null,
       });
@@ -515,7 +603,7 @@ export default function AllInMagazinClients({
                           <div className="mt-2 space-y-1 text-xs text-white/55">
                             {item.phone ? <p className="flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{item.phone}</p> : null}
                             {item.email ? <p className="flex items-center gap-2 truncate"><Mail size={13} className="text-[#8ee6e2]" />{item.email}</p> : null}
-                            {item.address ? <p className="flex items-center gap-2 truncate"><MapPin size={13} className="text-[#8ee6e2]" />{item.address}</p> : null}
+                            {customerAddressLabel(item) ? <p className="flex items-center gap-2 truncate"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(item)}</p> : null}
                           </div>
                           <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
                             <span className="rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2.5 py-2 text-[#d7fffd]">
@@ -560,37 +648,37 @@ export default function AllInMagazinClients({
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50">
                   Név *
-                  <input
-                    autoFocus
-                    value={draft.fullName}
-                    onChange={(event) => setDraft((current) => ({ ...current, fullName: event.target.value }))}
-                    className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]"
-                  />
+                  <input autoFocus value={draft.fullName} onChange={(event) => setDraft((current) => ({ ...current, fullName: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]" />
                 </label>
                 <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50">
                   Telefonszám *
-                  <input
-                    value={draft.phone}
-                    onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))}
-                    className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]"
-                  />
+                  <input value={draft.phone} onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]" />
                 </label>
                 <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50">
                   E-mail
-                  <input
-                    type="email"
-                    value={draft.email}
-                    onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
-                    className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]"
-                  />
+                  <input type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]" />
                 </label>
                 <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50">
-                  Cím
-                  <input
-                    value={draft.address}
-                    onChange={(event) => setDraft((current) => ({ ...current, address: event.target.value }))}
-                    className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]"
-                  />
+                  Megye *
+                  <select value={draft.countyCode} onChange={(event) => changeDraftCounty(event.target.value)} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]">
+                    <option value="">Válassz megyét</option>
+                    {counties.map((county) => <option key={county.code} value={county.code}>{county.name}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50">
+                  Helység *
+                  <select value={draft.localityCode} onChange={(event) => changeDraftLocality(event.target.value)} disabled={!draft.countyCode || geoLoading} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4] disabled:cursor-not-allowed disabled:opacity-50">
+                    <option value="">{geoLoading ? "Helységek betöltése…" : "Válassz helységet"}</option>
+                    {localities.map((locality) => <option key={locality.code} value={locality.code}>{locality.name}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50">
+                  Irányítószám
+                  <input value={draft.postalCode} onChange={(event) => setDraft((current) => ({ ...current, postalCode: event.target.value.replace(/[^0-9]/g, "").slice(0, 6) }))} placeholder="Automatikusan kitöltődik" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4]" />
+                </label>
+                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/50 sm:col-span-2">
+                  Pontos cím
+                  <input value={draft.address} onChange={(event) => setDraft((current) => ({ ...current, address: event.target.value }))} placeholder="Utca, házszám, tömbház, lépcsőház, lakás…" className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4]" />
                 </label>
               </div>
 
@@ -667,7 +755,7 @@ export default function AllInMagazinClients({
                         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/55">
                           {detail.item.phone ? <span className="inline-flex items-center gap-2"><Phone size={13} className="text-[#8ee6e2]" />{detail.item.phone}</span> : null}
                           {detail.item.email ? <span className="inline-flex items-center gap-2"><Mail size={13} className="text-[#8ee6e2]" />{detail.item.email}</span> : null}
-                          {detail.item.address ? <span className="inline-flex items-center gap-2"><MapPin size={13} className="text-[#8ee6e2]" />{detail.item.address}</span> : null}
+                          {customerAddressLabel(detail.item) ? <span className="inline-flex items-center gap-2"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(detail.item)}</span> : null}
                         </div>
                       </div>
                     </div>
