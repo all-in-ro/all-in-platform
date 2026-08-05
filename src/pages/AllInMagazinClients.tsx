@@ -16,6 +16,7 @@ import {
   Save,
   Search,
   ShoppingBag,
+  Trash2,
   UserPlus,
   UserRound,
   Users,
@@ -24,12 +25,14 @@ import {
 } from "lucide-react";
 import {
   apiAifCreateShopCustomer,
+  apiAifDetachShopCustomerSale,
   apiAifGetShopCustomer,
   apiAifListShopCustomers,
   apiAifRecordShopCustomerPayment,
   type AifShopCustomer,
   type AifShopCustomerDetail,
   type AifShopCustomerPaymentMethod,
+  type AifShopCustomerSaleHistoryItem,
 } from "../lib/aif/api";
 
 type ClientMode = "search" | "new" | "detail";
@@ -153,6 +156,8 @@ export default function AllInMagazinClients({
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [saleDetachTarget, setSaleDetachTarget] = useState<AifShopCustomerSaleHistoryItem | null>(null);
+  const [saleDetaching, setSaleDetaching] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -173,6 +178,8 @@ export default function AllInMagazinClients({
     setError("");
     setSuccess("");
     setPaymentDraft(EMPTY_PAYMENT);
+    setSaleDetachTarget(null);
+    setSaleDetaching(false);
     paymentRequestKeyRef.current = "";
     if (initialMode === "new") {
       setDraft(EMPTY_DRAFT);
@@ -189,6 +196,10 @@ export default function AllInMagazinClients({
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (saleDetachTarget) {
+        if (!saleDetaching) setSaleDetachTarget(null);
+        return;
+      }
       if (mode === "detail") {
         openSearch();
         return;
@@ -200,7 +211,7 @@ export default function AllInMagazinClients({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [mode, onClose, open]);
+  }, [mode, onClose, open, saleDetachTarget, saleDetaching]);
 
   async function loadCustomers(value = query) {
     setLoading(true);
@@ -240,6 +251,7 @@ export default function AllInMagazinClients({
     setError("");
     setSuccess("");
     setPaymentDraft(EMPTY_PAYMENT);
+    setSaleDetachTarget(null);
     paymentRequestKeyRef.current = "";
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }
@@ -259,6 +271,7 @@ export default function AllInMagazinClients({
     setDetail(null);
     setDetailYear(currentYear);
     setPaymentDraft(EMPTY_PAYMENT);
+    setSaleDetachTarget(null);
     paymentRequestKeyRef.current = "";
     setError("");
     setSuccess("");
@@ -342,6 +355,26 @@ export default function AllInMagazinClients({
       setError(caught instanceof Error ? caught.message : "A befizetés rögzítése nem sikerült.");
     } finally {
       setPaymentSaving(false);
+    }
+  }
+
+  async function detachCustomerSale() {
+    if (!selected || !saleDetachTarget) return;
+    setSaleDetaching(true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await apiAifDetachShopCustomerSale(selected.id, saleDetachTarget.id);
+      setSuccess(`${response.saleNumber} törölve a kliens vásárlási előzményeiből. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`);
+      setSaleDetachTarget(null);
+      await Promise.all([
+        loadCustomerDetail(selected.id, detailYear),
+        loadCustomers(query),
+      ]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A vásárlás leválasztása nem sikerült.");
+    } finally {
+      setSaleDetaching(false);
     }
   }
 
@@ -844,7 +877,17 @@ export default function AllInMagazinClients({
                                 <p className="truncate text-sm text-white">{sale.saleNumber}</p>
                                 <p className="mt-1 text-[11px] text-white/45">{formatDateTime(sale.soldAt)} • {sale.locationName || "–"}</p>
                               </div>
-                              <p className="shrink-0 text-lg text-white">{formatMoney(sale.total)}</p>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <p className="text-lg text-white">{formatMoney(sale.total)}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => setSaleDetachTarget(sale)}
+                                  className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-2.5 text-[11px] text-white shadow-[0_6px_14px_rgba(225,29,72,0.22)] hover:bg-rose-500"
+                                  title="Törlés a kliens vásárlási előzményeiből"
+                                >
+                                  <Trash2 size={14} /> Törlés
+                                </button>
+                              </div>
                             </div>
                             <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
                               <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 text-white/55">{sale.itemCount} db</span>
@@ -884,6 +927,38 @@ export default function AllInMagazinClients({
           </button>
         </div>
       </div>
+
+      {saleDetachTarget ? (
+        <div className="fixed inset-0 z-[280] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-[520px] overflow-hidden rounded-[26px] border border-rose-300/36 bg-[#303a4c] text-white shadow-[0_32px_100px_rgba(0,0,0,0.56)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4a2632] to-[#303a4c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/35 bg-rose-500/18 text-rose-50"><Trash2 size={20} /></span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-rose-100/60">Vásárlás törlése a klienstől</p>
+                  <h3 className="mt-1 truncate text-xl text-white">{saleDetachTarget.saleNumber}</h3>
+                </div>
+              </div>
+              <button type="button" disabled={saleDetaching} onClick={() => setSaleDetachTarget(null)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
+            </header>
+            <div className="space-y-3 px-5 py-5">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-2xl border border-white/10 bg-[#273243] p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/42">Vásárlás összege</p><p className="mt-2 text-lg text-white">{formatMoney(saleDetachTarget.total)}</p></div>
+                <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-3"><p className="text-[9px] uppercase tracking-[0.1em] text-rose-100/60">Tartozás ebből</p><p className="mt-2 text-lg text-rose-50">{formatMoney(saleDetachTarget.balanceDue)}</p></div>
+              </div>
+              <p className="text-sm leading-relaxed text-white/72">A vásárlás lekerül erről a kliensről, ezért a tartozása és vásárlási összesítése is azonnal csökken.</p>
+              <p className="rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-3 py-2.5 text-xs leading-relaxed text-[#d7fffd]/76">Az eladási bizonylat és a készletmozgás megmarad. Kizárólag a klienskapcsolat kerül eltávolításra.</p>
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button type="button" disabled={saleDetaching} onClick={() => setSaleDetachTarget(null)} className="inline-flex h-11 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">Mégse</button>
+              <button type="button" disabled={saleDetaching} onClick={() => void detachCustomerSale()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-rose-300/55 bg-rose-600 px-5 text-sm text-white hover:bg-rose-500 disabled:opacity-55">
+                {saleDetaching ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />}
+                {saleDetaching ? "Törlés…" : "Törlés a klienstől"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>,
     document.body,
   );
