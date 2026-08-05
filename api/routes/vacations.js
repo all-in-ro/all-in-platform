@@ -327,7 +327,14 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
 
   const requireEmployeeSession = typeof requireAuthed === "function"
     ? requireAuthed
-    : (_req, res) => res.status(500).json({ error: "A dolgozói hitelesítés nincs bekötve a szabadság modulhoz." });
+    : (req, res, next) => {
+        const employeeName = sessionEmployeeName(req);
+        if (!employeeName) {
+          return res.status(401).json({ error: "A dolgozói munkamenet nem azonosítható. Jelentkezz be újra." });
+        }
+        req.vacationEmployeeName = employeeName;
+        next();
+      };
 
   function sessionEmployeeName(req) {
     const session = req.session || {};
@@ -353,7 +360,7 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
   }
 
   function requireVacationEmployee(req, res, next) {
-    const employeeName = sessionEmployeeName(req);
+    const employeeName = norm(req.vacationEmployeeName) || sessionEmployeeName(req);
     if (!employeeName) {
       return res.status(401).json({ error: "A dolgozói munkamenet nem azonosítható. Jelentkezz be újra." });
     }
