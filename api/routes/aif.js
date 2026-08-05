@@ -295,6 +295,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS supplier_name text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reception_id text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS external_reference text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS uit_code text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reason_code text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS reason_text text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_stock_transfer_documents ADD COLUMN IF NOT EXISTS operation_direction text NULL`);
@@ -693,6 +694,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+
+  function cleanAifUitCode(value) {
+    const compact = text(value).toUpperCase().replace(/\s+/g, "");
+    if (!compact) return null;
+    return compact.replace(/[^A-Z0-9-]/g, "").slice(0, 64) || null;
+  }
 
   const uuidTextRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   function isUuidText(value) {
@@ -8967,7 +8974,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 title, subtitle, note, status, actor, owner_key, line_count, total_qty,
                 from_location_summary, to_location_summary, raw, created_at, updated_at,
                 document_type, source_location_id, target_location_id,
-                supplier_id, supplier_name, reception_id, external_reference,
+                supplier_id, supplier_name, reception_id, external_reference, uit_code,
                 reason_code, reason_text, operation_direction, price_basis,
                 total_value, currency_code,
                 COALESCE((
@@ -9055,6 +9062,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         supplier_name: null,
         reception_id: null,
         external_reference: null,
+        uit_code: null,
         reason_code: null,
         reason_text: null,
         operation_direction: 'transfer',
@@ -9095,7 +9103,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         items = items.filter((item) => [
           item.document_number, item.transfer_id, item.title, item.subtitle, item.note,
           item.actor, item.from_location_summary, item.to_location_summary,
-          item.document_type, item.supplier_name, item.external_reference,
+          item.document_type, item.supplier_name, item.external_reference, item.uit_code,
           item.reason_code, item.reason_text, item.line_search, JSON.stringify(item.raw || {}),
         ].join(' ').toLowerCase().includes(search));
       }
@@ -9461,6 +9469,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const reasonCode = normCode(body.reasonCode || body.reason_code || body.reason);
     const reasonText = emptyToNull(body.reasonText || body.reason_text || body.reasonLabel || body.reason_label);
     const externalReference = emptyToNull(body.externalReference || body.external_reference || body.reference);
+    const uitCode = documentType === 'internal_transfer' ? cleanAifUitCode(body.uitCode || body.uit_code) : null;
     const note = emptyToNull(body.note);
     const operationDirection = documentType === 'stock_correction'
       ? (normCode(body.operationDirection || body.operation_direction || body.correctionDirection || body.correction_direction) === 'increase' ? 'increase' : 'decrease')
@@ -9516,9 +9525,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              title=$2,subtitle=$3,note=$4,actor=$5,owner_key=$6,
              from_location_summary=$7,to_location_summary=$8,
              document_type=$9,source_location_id=$10,target_location_id=$11,
-             supplier_id=$12,supplier_name=$13,reception_id=$14,external_reference=$15,
-             reason_code=$16,reason_text=$17,operation_direction=$18,price_basis=$19,
-             raw=COALESCE(raw,'{}'::jsonb) || $20::jsonb,updated_at=now()
+             supplier_id=$12,supplier_name=$13,reception_id=$14,external_reference=$15,uit_code=$16,
+             reason_code=$17,reason_text=$18,operation_direction=$19,price_basis=$20,
+             raw=COALESCE(raw,'{}'::jsonb) || $21::jsonb,updated_at=now()
            WHERE id=$1 RETURNING *`,
           [
             current.rows[0].id,
@@ -9536,11 +9545,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             supplier?.name || null,
             reception ? String(reception.id) : null,
             externalReference || reception?.invoice_number || null,
+            uitCode,
             reasonCode || null,
             reasonText,
             operationDirection,
             AIF_STOCK_DOCUMENT_TYPES[documentType].priceBasis,
-            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference }),
+            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference, uitCode }),
           ]
         );
         document = updated.rows[0];
@@ -9553,12 +9563,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              title,subtitle,note,status,actor,owner_key,line_count,total_qty,
              from_location_summary,to_location_summary,raw,
              document_type,source_location_id,target_location_id,
-             supplier_id,supplier_name,reception_id,external_reference,
+             supplier_id,supplier_name,reception_id,external_reference,uit_code,
              reason_code,reason_text,operation_direction,price_basis,
              total_value,currency_code,created_at,updated_at
            ) VALUES (
              $1,$2,'DRAFT',0,$3,$4,$5,$6,'draft',$7,$8,0,0,$9,$10,$11::jsonb,
-             $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0,'RON',now(),now()
+             $12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,0,'RON',now(),now()
            ) RETURNING *`,
           [
             ref.transferId,
@@ -9571,7 +9581,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             ownerKey,
             sourceSummary,
             counterpartySummary,
-            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference }),
+            JSON.stringify({ draft: true, documentType, sourceLocationId: sourceLocation?.id || null, targetLocationId: targetLocation?.id || null, supplierId: supplier?.id || null, receptionId: reception?.id || null, reasonCode, reasonText, operationDirection, externalReference, uitCode }),
             documentType,
             sourceLocation ? String(sourceLocation.id) : null,
             targetLocation ? String(targetLocation.id) : null,
@@ -9579,6 +9589,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             supplier?.name || null,
             reception ? String(reception.id) : null,
             externalReference || reception?.invoice_number || null,
+            uitCode,
             reasonCode || null,
             reasonText,
             operationDirection,
@@ -9744,6 +9755,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const reasonText = emptyToNull(body.reasonText || body.reason_text || body.reasonLabel || body.reason_label);
     const note = emptyToNull(body.note);
     const externalReference = emptyToNull(body.externalReference || body.external_reference || body.reference);
+    const uitCode = documentType === 'internal_transfer' ? cleanAifUitCode(body.uitCode || body.uit_code) : null;
     const operationDirection = documentType === 'stock_correction'
       ? (normCode(body.operationDirection || body.operation_direction || body.correctionDirection || body.correction_direction) === 'increase' ? 'increase' : 'decrease')
       : documentType === 'internal_transfer'
@@ -9777,6 +9789,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       reasonText,
       operationDirection,
       externalReference,
+      uitCode,
       note,
       lines: linesInput,
     };
@@ -9864,12 +9877,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            title, subtitle, note, status, actor, owner_key, line_count, total_qty,
            from_location_summary, to_location_summary, raw,
            document_type, source_location_id, target_location_id,
-           supplier_id, supplier_name, reception_id, external_reference,
+           supplier_id, supplier_name, reception_id, external_reference, uit_code,
            reason_code, reason_text, operation_direction, price_basis,
            total_value, currency_code, created_at, updated_at
          ) VALUES (
            $1,$2,$3,$4,$5,$6,$7,$8,'issued',$9,$10,0,0,$11,$12,$13::jsonb,
-           $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,0,'RON',now(),now()
+           $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,0,'RON',now(),now()
          )
          RETURNING *`,
         [
@@ -9897,6 +9910,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             reasonText,
             operationDirection,
             externalReference,
+            uitCode,
           }),
           documentType,
           String(sourceLocation.id),
@@ -9905,6 +9919,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           supplier?.name || null,
           reception ? String(reception.id) : null,
           externalReference || reception?.invoice_number || null,
+          uitCode,
           reasonCode || null,
           reasonText,
           operationDirection,
@@ -11429,6 +11444,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   async function handleUpdateStockTransferPreparation(req, res) {
     const id = text(req.params.id);
     const body = req.body || {};
+    const uitCodeProvided = body.uitCode !== undefined || body.uit_code !== undefined;
+    const requestedUitCode = cleanAifUitCode(body.uitCode || body.uit_code);
     const linesInput = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : Array.isArray(body.rows) ? body.rows : [];
     if (!id) return res.status(400).json({ error: 'Előkészítés azonosító szükséges.' });
     const client = await pool.connect();
@@ -11638,10 +11655,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const note = body.note === undefined ? document.note : emptyToNull(body.note);
       const header = await client.query(
         `UPDATE aif_stock_transfer_documents
-         SET subtitle=COALESCE($2,subtitle),note=$3,actor=$4,owner_key=COALESCE(owner_key,$5),updated_at=now()
+         SET subtitle=COALESCE($2,subtitle),note=$3,actor=$4,owner_key=COALESCE(owner_key,$5),
+             uit_code=$6,
+             raw=COALESCE(raw,'{}'::jsonb) || $7::jsonb,
+             updated_at=now()
          WHERE id=$1
          RETURNING *`,
-        [document.id, subtitle, note, actor, ownerKey]
+        [document.id, subtitle, note, actor, ownerKey, uitCodeProvided ? requestedUitCode : document.uit_code, JSON.stringify({ uitCode: uitCodeProvided ? requestedUitCode : document.uit_code, uitUpdatedAt: new Date().toISOString(), uitUpdatedBy: actor })]
       );
       document = header.rows[0] || document;
       const refreshed = await refreshAifPreparationDocument(client, document.id, {
@@ -11845,12 +11865,55 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   }
 
+  async function updateAifStockTransferUitCode(req, res) {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Bizonylat azonosító szükséges.' });
+    const body = req.body || {};
+    const uitCode = cleanAifUitCode(body.uitCode ?? body.uit_code ?? body.code);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await ensureAifStockTransferDocumentsSchema();
+      const current = await client.query(
+        `SELECT * FROM aif_stock_transfer_documents
+         WHERE (id::text=$1 OR transfer_id=$1 OR document_number=$1)
+         FOR UPDATE`,
+        [id]
+      );
+      if (!current.rowCount) throw Object.assign(new Error('A bizonylat nem található.'), { statusCode: 404 });
+      const document = current.rows[0];
+      if (cleanAifStockDocumentType(document.document_type, null) !== 'internal_transfer') {
+        throw Object.assign(new Error('UIT kód csak belső átadáshoz rögzíthető.'), { statusCode: 400 });
+      }
+      const actor = actorFrom(req);
+      const updated = await client.query(
+        `UPDATE aif_stock_transfer_documents
+         SET uit_code=$2,actor=COALESCE(actor,$3),
+             raw=COALESCE(raw,'{}'::jsonb) || $4::jsonb,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [document.id, uitCode, actor, JSON.stringify({ uitCode, uitUpdatedAt: new Date().toISOString(), uitUpdatedBy: actor })]
+      );
+      await client.query('COMMIT');
+      return res.json({ ok: true, document: updated.rows[0], item: updated.rows[0], uitCode });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'Az UIT kód mentése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  }
+
   router.post('/stock-documents/preparation', requireAuthed, handleSaveDamagedPreparation);
   router.post('/stock/documents/preparation', requireAuthed, handleSaveDamagedPreparation);
   router.post('/stock-transfers', requireAuthed, handleStockTransfer);
   router.post('/stock/transfers', requireAuthed, handleStockTransfer);
   router.put('/stock-transfer-documents/:id/preparation', requireAuthed, handleUpdateStockTransferPreparation);
   router.patch('/stock-transfer-documents/:id/preparation', requireAuthed, handleUpdateStockTransferPreparation);
+  router.put('/stock-transfer-documents/:id/uit', requireAuthed, updateAifStockTransferUitCode);
+  router.patch('/stock-transfer-documents/:id/uit', requireAuthed, updateAifStockTransferUitCode);
   router.post('/stock-transfer-documents/:id/close', requireAuthed, closeAifStockTransferPreparation);
   router.post('/stock-transfer-documents/:id/reopen', requireAuthed, reopenAifStockTransferPreparation);
   router.delete('/stock-transfer-documents/:id/preparation', requireAuthed, deleteAifStockTransferPreparation);
