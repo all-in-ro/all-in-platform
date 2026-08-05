@@ -18,6 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import AllInMagazinClients from "./AllInMagazinClients";
+import AllInShopVacations from "./AllInShopVacations";
 
 type Props = {
   apiBase?: string;
@@ -81,8 +82,9 @@ const actions: ActionCard[] = [
   {
     key: "vacations",
     title: "Szabadságok",
-    description: "Szabadságigények, jóváhagyások és távollétek.",
+    description: "Saját kérelmek, döntések és elfogadott távollétek.",
     icon: CalendarDays,
+    primary: true,
   },
 ];
 
@@ -125,6 +127,7 @@ function clearShopAdministrationUnlock() {
 }
 
 export default function AllInMagazinTargu({
+  apiBase = "/api",
   actor = "Üzleti felhasználó",
   role = "shop",
   onLogout,
@@ -133,6 +136,7 @@ export default function AllInMagazinTargu({
   const [notice, setNotice] = useState("");
   const [clientsOpen, setClientsOpen] = useState(false);
   const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
+  const [vacationsOpen, setVacationsOpen] = useState(false);
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
 
@@ -176,6 +180,11 @@ export default function AllInMagazinTargu({
   function openModule(action: ActionCard) {
     if (action.key === "sale") {
       window.location.hash = "magazintargusale";
+      return;
+    }
+    if (action.key === "vacations") {
+      setNotice("");
+      setVacationsOpen(true);
       return;
     }
     setNotice(`${action.title}: a modul a következő fejlesztési lépésben kerül bekötésre.`);
@@ -295,7 +304,7 @@ export default function AllInMagazinTargu({
                       <Icon size={24} strokeWidth={1.8} />
                     </span>
                     <span className="rounded-full border border-white/14 bg-black/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-white/55">
-                      {action.primary ? "Megnyitás" : "Következő lépés"}
+                      {action.primary ? "Aktív modul" : "Következő lépés"}
                     </span>
                   </div>
                   <h3 className="mt-4 text-lg text-white">{action.title}</h3>
@@ -348,6 +357,13 @@ export default function AllInMagazinTargu({
         initialMode={clientsInitialMode}
         locationName="Magazin - Târgu Secuiesc"
         onClose={() => setClientsOpen(false)}
+      />
+      <AllInShopVacations
+        open={vacationsOpen}
+        actor={actor}
+        locationName="Magazin - Târgu Secuiesc"
+        apiBase={apiBase}
+        onClose={() => setVacationsOpen(false)}
       />
     </main>
   );
