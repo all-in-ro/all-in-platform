@@ -20,6 +20,7 @@ import {
 import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
 
+
 type Props = {
   apiBase?: string;
   actor?: string;
