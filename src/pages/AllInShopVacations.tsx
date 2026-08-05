@@ -391,7 +391,11 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setLoading(true);
     setError("");
     try {
-      const body = await fetchJson(`/admin/vacations/my/requests?year=${encodeURIComponent(String(targetYear))}`);
+      const params = new URLSearchParams({
+        year: String(targetYear),
+        employeeName: actor,
+      });
+      const body = await fetchJson(`/admin/vacations/my/requests?${params.toString()}`);
       setOverview(body as VacationOverview);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A szabadságadataid nem tölthetők be.");
@@ -448,6 +452,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     try {
       const body = await fetchJson("/admin/vacations/my/requests", {
         method: "POST",
+        headers: { "x-allin-employee": actor },
         body: JSON.stringify({
           employeeName: actor,
           kind,
@@ -472,7 +477,10 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
     setError("");
     setNotice("");
     try {
-      await fetchJson(`/admin/vacations/my/requests/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+      await fetchJson(`/admin/vacations/my/requests/${encodeURIComponent(id)}/cancel?employeeName=${encodeURIComponent(actor)}`, {
+        method: "POST",
+        headers: { "x-allin-employee": actor },
+      });
       setNotice("A még el nem bírált kérés visszavonva.");
       await loadOverview(year);
     } catch (caught) {
@@ -485,7 +493,10 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
   async function markDecisionsSeen() {
     setError("");
     try {
-      await fetchJson("/admin/vacations/my/requests/seen", { method: "POST" });
+      await fetchJson(`/admin/vacations/my/requests/seen?employeeName=${encodeURIComponent(actor)}`, {
+        method: "POST",
+        headers: { "x-allin-employee": actor },
+      });
       await loadOverview(year);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Az értesítés lezárása nem sikerült.");
