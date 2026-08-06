@@ -70,6 +70,14 @@ type PaymentDraft = {
   note: string;
 };
 
+type ProductImagePreview = {
+  url: string;
+  title: string;
+  left: number;
+  top: number;
+  size: number;
+};
+
 const EMPTY_DRAFT: CustomerDraft = {
   fullName: "",
   phone: "",
@@ -195,6 +203,7 @@ export default function AllInMagazinClients({
   const [customerDeleting, setCustomerDeleting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [productImagePreview, setProductImagePreview] = useState<ProductImagePreview | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const paymentRequestKeyRef = useRef("");
 
@@ -264,6 +273,7 @@ export default function AllInMagazinClients({
     setYearPickerOpen(false);
     setError("");
     setSuccess("");
+    setProductImagePreview(null);
     setPaymentDraft(EMPTY_PAYMENT);
     setSaleDetachTarget(null);
     setSaleDetaching(false);
@@ -287,6 +297,10 @@ export default function AllInMagazinClients({
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (productImagePreview) {
+        setProductImagePreview(null);
+        return;
+      }
       if (yearPickerOpen) {
         setYearPickerOpen(false);
         return;
@@ -315,7 +329,7 @@ export default function AllInMagazinClients({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, saleDetachTarget, saleDetaching, yearPickerOpen]);
+  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, productImagePreview, saleDetachTarget, saleDetaching, yearPickerOpen]);
 
   async function loadCustomers(value = query) {
     setLoading(true);
@@ -355,6 +369,7 @@ export default function AllInMagazinClients({
     setDraft(EMPTY_DRAFT);
     setError("");
     setSuccess("");
+    setProductImagePreview(null);
     setPaymentDraft(EMPTY_PAYMENT);
     setSaleDetachTarget(null);
     setCustomerDeleteOpen(false);
@@ -571,6 +586,31 @@ export default function AllInMagazinClients({
     }
   }
 
+  function showProductImagePreview(target: HTMLElement, url: string, title: string) {
+    const rect = target.getBoundingClientRect();
+    const viewportPadding = 16;
+    const gap = 14;
+    const size = Math.max(
+      200,
+      Math.min(340, window.innerWidth - viewportPadding * 2, window.innerHeight - viewportPadding * 2),
+    );
+
+    let left = rect.right + gap;
+    if (left + size > window.innerWidth - viewportPadding) {
+      left = rect.left - size - gap;
+    }
+    left = Math.max(viewportPadding, Math.min(left, window.innerWidth - size - viewportPadding));
+
+    let top = rect.top + rect.height / 2 - size / 2;
+    top = Math.max(viewportPadding, Math.min(top, window.innerHeight - size - viewportPadding));
+
+    setProductImagePreview({ url, title, left, top, size });
+  }
+
+  function hideProductImagePreview() {
+    setProductImagePreview(null);
+  }
+
   if (!open || typeof document === "undefined") return null;
 
   return createPortal(
@@ -638,7 +678,7 @@ export default function AllInMagazinClients({
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5" onScroll={hideProductImagePreview}>
           {mode === "search" ? (
             <>
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
@@ -1037,7 +1077,7 @@ export default function AllInMagazinClients({
                       </div>
                     </div>
 
-                    <div className="mt-4 max-h-[640px] space-y-3 overflow-y-auto pr-1">
+                    <div className="mt-4 max-h-[640px] space-y-3 overflow-y-auto pr-1" onScroll={hideProductImagePreview}>
                       {detail.sales.length ? detail.sales.map((sale) => (
                         <article key={sale.id} className="overflow-hidden rounded-[22px] border border-white/12 bg-[#293548]">
                           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#303b4e] px-4 py-3">
@@ -1071,7 +1111,13 @@ export default function AllInMagazinClients({
                                 key={line.id || `${sale.id}-${line.lineNo}`}
                                 className="grid grid-cols-[68px_minmax(0,1fr)] gap-3 rounded-2xl border border-white/10 bg-[#253144] p-3 sm:grid-cols-[68px_minmax(0,1fr)_minmax(210px,auto)] sm:items-center"
                               >
-                                <span className="flex h-[68px] w-[68px] shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/12 bg-white/95">
+                                <span
+                                  className={`flex h-[68px] w-[68px] shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-white/95 transition ${line.imageUrl ? "cursor-zoom-in border-[#7bd7d4]/35 hover:border-[#9be9e5] hover:ring-4 hover:ring-[#2a8d8b]/18" : "border-white/12"}`}
+                                  onMouseEnter={(event) => {
+                                    if (line.imageUrl) showProductImagePreview(event.currentTarget, line.imageUrl, line.productTitle || "Termék");
+                                  }}
+                                  onMouseLeave={hideProductImagePreview}
+                                >
                                   {line.imageUrl ? (
                                     <img src={line.imageUrl} alt={line.productTitle || "Termék"} className="h-full w-full object-contain" />
                                   ) : (
@@ -1208,6 +1254,25 @@ export default function AllInMagazinClients({
           </button>
         </div>
       </div>
+
+      {productImagePreview ? (
+        <div
+          className="pointer-events-none fixed z-[410] overflow-hidden rounded-[22px] border-2 border-[#72d8d4] bg-white shadow-[0_24px_70px_rgba(0,0,0,0.62)]"
+          style={{
+            left: productImagePreview.left,
+            top: productImagePreview.top,
+            width: productImagePreview.size,
+            height: productImagePreview.size,
+          }}
+          aria-hidden="true"
+        >
+          <img
+            src={productImagePreview.url}
+            alt={productImagePreview.title}
+            className="h-full w-full object-contain"
+          />
+        </div>
+      ) : null}
 
       {yearPickerOpen ? (
         <div
