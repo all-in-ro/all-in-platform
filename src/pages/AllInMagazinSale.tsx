@@ -155,6 +155,15 @@ function shopAdministrationUnlockKey(shopId: "csikszereda" | "kezdivasarhely") {
   return `allin:shop-administration-unlock:${shopId}`;
 }
 
+function normalizeEmployeeAccessCode(value: string) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+  const prefixed = normalized.match(/^AIF-(?:C|K)-([A-Z0-9]{4,64})$/);
+  return (prefixed?.[1] || normalized.replace(/[^A-Z0-9]/g, "")).slice(0, 64);
+}
+
 export default function AllInMagazinSale({
   locationCode,
   locationName,
@@ -205,6 +214,8 @@ export default function AllInMagazinSale({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const automaticLookupTimerRef = useRef<number | null>(null);
   const searchRequestIdRef = useRef(0);
+  const administrationScanTimerRef = useRef<number | null>(null);
+  const administrationUnlockingRef = useRef(false);
 
   useEffect(() => {
     sessionStorage.setItem(storageKey, JSON.stringify(cart));
@@ -276,6 +287,28 @@ export default function AllInMagazinSale({
     };
   }, [administrationAccessOpen, customerModalOpen, discountEditor]);
 
+
+  useEffect(() => {
+    if (!administrationAccessOpen || administrationBusy) return;
+    const code = normalizeEmployeeAccessCode(administrationCode);
+    if (code.length < 8) return;
+
+    if (administrationScanTimerRef.current !== null) {
+      window.clearTimeout(administrationScanTimerRef.current);
+    }
+    administrationScanTimerRef.current = window.setTimeout(() => {
+      administrationScanTimerRef.current = null;
+      void unlockAdministration(code);
+    }, 160);
+
+    return () => {
+      if (administrationScanTimerRef.current !== null) {
+        window.clearTimeout(administrationScanTimerRef.current);
+        administrationScanTimerRef.current = null;
+      }
+    };
+  }, [administrationAccessOpen, administrationBusy, administrationCode]);
+
   const subtotal = useMemo(
     () => cart.reduce((sum, line) => sum + numberValue(line.sellPrice) * line.quantity, 0),
     [cart],
@@ -333,18 +366,29 @@ export default function AllInMagazinSale({
       window.location.hash = homeHash;
       return;
     }
+    if (administrationScanTimerRef.current !== null) {
+      window.clearTimeout(administrationScanTimerRef.current);
+      administrationScanTimerRef.current = null;
+    }
+    administrationUnlockingRef.current = false;
     setAdministrationCode("");
     setAdministrationError("");
     setAdministrationAccessOpen(true);
   }
 
-  async function unlockAdministration() {
-    const code = administrationCode.trim();
+  async function unlockAdministration(rawValue = administrationCode) {
+    if (administrationBusy || administrationUnlockingRef.current) return;
+    const code = normalizeEmployeeAccessCode(rawValue);
     if (!code) {
-      setAdministrationError("Írd be a saját üzleti belépőkódodat.");
+      setAdministrationError("Olvasd be a saját kártyádat vagy írd be a belépőkódodat.");
       return;
     }
 
+    if (administrationScanTimerRef.current !== null) {
+      window.clearTimeout(administrationScanTimerRef.current);
+      administrationScanTimerRef.current = null;
+    }
+    administrationUnlockingRef.current = true;
     setAdministrationBusy(true);
     setAdministrationError("");
     try {
@@ -372,6 +416,7 @@ export default function AllInMagazinSale({
     } catch (caught) {
       setAdministrationError(caught instanceof Error ? caught.message : "A kód ellenőrzése nem sikerült.");
     } finally {
+      administrationUnlockingRef.current = false;
       setAdministrationBusy(false);
     }
   }
@@ -1049,26 +1094,28 @@ export default function AllInMagazinSale({
               <button type="button" disabled={administrationBusy} onClick={() => setAdministrationAccessOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
             </header>
             <div className="px-5 py-5">
-              <p className="text-sm leading-relaxed text-white/62">A készlethez, bizonylatokhoz és egyéb kezelőmodulokhoz add meg újra a saját üzleti belépőkódodat.</p>
+              <p className="text-sm leading-relaxed text-white/62">Olvasd be a saját belépőkártyádat. A rendszer automatikusan megnyitja az adminisztrációt.</p>
               <label className="mt-4 block">
                 <span className="mb-2 block text-[10px] uppercase tracking-[0.12em] text-white/45">Belépőkód</span>
                 <div className="relative">
                   <KeyRound className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#8ee6e2]" size={19} />
                   <input
                     autoFocus
-                    type="password"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
+                    type="text"
+                    inputMode="text"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    spellCheck={false}
                     value={administrationCode}
                     onChange={(event) => setAdministrationCode(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === "Enter") void unlockAdministration(); }}
-                    placeholder="Saját belépőkód…"
+                    onKeyDown={(event) => { if (event.key === "Enter") void unlockAdministration(event.currentTarget.value); }}
+                    placeholder="Olvasd be a kártyát…"
                     className="h-14 w-full rounded-2xl border border-white/18 bg-[#273243] pl-12 pr-4 text-lg text-white outline-none placeholder:text-white/35 focus:border-[#72d8d4] focus:ring-4 focus:ring-[#2a8d8b]/16"
                   />
                 </div>
               </label>
               {administrationError ? <div className="mt-3 rounded-xl border border-rose-300/28 bg-rose-500/14 px-3 py-2.5 text-sm text-rose-50">{administrationError}</div> : null}
-              <div className="mt-3 rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/72">A feloldás 10 percig érvényes ezen a gépen. Az Eladáshoz gomb azonnal visszazárja.</div>
+              <div className="mt-3 rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/72">Beolvasás után automatikusan megnyílik. A feloldás 10 percig érvényes ezen a gépen.</div>
             </div>
             <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
               <button type="button" disabled={administrationBusy} onClick={() => setAdministrationAccessOpen(false)} className="inline-flex h-11 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">Mégse</button>
