@@ -15394,6 +15394,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function aifShopCustomerSaleHistoryResponse(row = {}) {
+    const rawLines = Array.isArray(row.lines) ? row.lines : [];
     return {
       id: String(row.id),
       saleNumber: row.sale_number || "",
@@ -15412,6 +15413,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       balanceDue: aifNumber(row.balance_due),
       lineCount: aifNumber(row.line_count),
       itemCount: aifNumber(row.item_count),
+      lines: rawLines.map((line) => ({
+        id: String(line.id || ""),
+        lineNo: aifNumber(line.lineNo ?? line.line_no),
+        variantId: line.variantId || line.variant_id ? String(line.variantId || line.variant_id) : null,
+        productTitle: line.productTitle || line.product_title || null,
+        productCode: line.productCode || line.product_code || null,
+        barcode: line.barcode || null,
+        brandName: line.brandName || line.brand_name || null,
+        categoryName: line.categoryName || line.category_name || null,
+        subcategoryName: line.subcategoryName || line.subcategory_name || null,
+        colorName: line.colorName || line.color_name || null,
+        size: line.size || null,
+        imageUrl: line.imageUrl || line.image_url || null,
+        quantity: aifNumber(line.quantity),
+        listPrice: aifNumber(line.listPrice ?? line.list_price),
+        unitPrice: aifNumber(line.unitPrice ?? line.unit_price),
+        discountAmount: aifNumber(line.discountAmount ?? line.discount_amount),
+        discountPercent: aifNumber(line.discountPercent ?? line.discount_percent),
+        lineTotal: aifNumber(line.lineTotal ?? line.line_total),
+      })),
     };
   }
 
@@ -16001,15 +16022,42 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            l.code AS location_code,
            l.name AS location_name,
            count(sl.id)::int AS line_count,
-           COALESCE(sum(sl.quantity),0)::int AS item_count
+           COALESCE(sum(sl.quantity),0)::int AS item_count,
+           COALESCE(
+             jsonb_agg(
+               jsonb_build_object(
+                 'id', sl.id::text,
+                 'lineNo', sl.line_no,
+                 'variantId', sl.variant_id::text,
+                 'productTitle', sl.product_title,
+                 'productCode', sl.product_code,
+                 'barcode', sl.barcode,
+                 'brandName', sl.brand_name,
+                 'categoryName', sl.category_name,
+                 'subcategoryName', sl.subcategory_name,
+                 'colorName', sl.color_name,
+                 'size', sl.size,
+                 'imageUrl', COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')),
+                 'quantity', sl.quantity,
+                 'listPrice', sl.list_price,
+                 'unitPrice', sl.unit_price,
+                 'discountAmount', sl.discount_amount,
+                 'discountPercent', sl.discount_percent,
+                 'lineTotal', sl.line_total
+               ) ORDER BY sl.line_no ASC, sl.id ASC
+             ) FILTER (WHERE sl.id IS NOT NULL),
+             '[]'::jsonb
+           ) AS lines
          FROM aif_shop_sales s
          LEFT JOIN aif_locations l ON l.id=s.location_id
          LEFT JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
+         LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
          WHERE s.customer_id=$1
+           AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$2::int
          GROUP BY s.id, l.id, l.code, l.name
          ORDER BY s.sold_at DESC, s.id DESC
-         LIMIT $2`,
-        [customer.id, salesLimit]
+         LIMIT $3`,
+        [customer.id, year, salesLimit]
       );
 
       const paymentsResult = await pool.query(
