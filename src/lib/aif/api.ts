@@ -2378,6 +2378,27 @@ export type AifShopCustomer = {
   updatedAt?: string | null;
 };
 
+export type AifShopCustomerSaleLineItem = {
+  id: string;
+  lineNo: number;
+  variantId?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  listPrice: number;
+  unitPrice: number;
+  discountAmount: number;
+  discountPercent: number;
+  lineTotal: number;
+};
+
 export type AifShopCustomerSaleHistoryItem = {
   id: string;
   saleNumber: string;
@@ -2396,6 +2417,7 @@ export type AifShopCustomerSaleHistoryItem = {
   balanceDue: number;
   lineCount: number;
   itemCount: number;
+  lines: AifShopCustomerSaleLineItem[];
 };
 
 export type AifShopCustomerPaymentAllocation = {
