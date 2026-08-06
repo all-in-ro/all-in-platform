@@ -16428,6 +16428,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
           OR COALESCE(m.model_code,'') ILIKE ${pattern}
+          OR COALESCE(m.gender,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
         )`);
@@ -16450,6 +16451,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            v.image_url,
            v.sell_price,
            m.model_code,
+           m.gender,
            COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
            b.name AS brand_name,
            c.name_ro AS category_name,
@@ -16489,6 +16491,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         brandName: row.brand_name || null,
         categoryName: row.category_name || null,
         subcategoryName: row.subcategory_name || null,
+        gender: row.gender || null,
         colorName: row.color_name || null,
         colorCode: row.color_code || null,
         size: row.size || null,
@@ -16539,6 +16542,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           OR COALESCE(m.title_ro,'') ILIKE ${pattern}
           OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
           OR COALESCE(m.model_code,'') ILIKE ${pattern}
+          OR COALESCE(m.gender,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
           OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
           OR COALESCE(v.color_name,'') ILIKE ${pattern}
@@ -16576,6 +16580,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              v.image_url,
              v.sell_price,
              m.model_code,
+             m.gender,
              COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
              b.name AS brand_name,
              c.name_ro AS category_name,
@@ -16619,6 +16624,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         brandName: row.brand_name || null,
         categoryName: row.category_name || null,
         subcategoryName: row.subcategory_name || null,
+        gender: row.gender || null,
         colorName: row.color_name || null,
         colorCode: row.color_code || null,
         size: row.size || null,
