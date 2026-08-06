@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
+import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
 
 
 type Props = {
@@ -43,12 +44,14 @@ const actions: ActionCard[] = [
     title: "Termék keresése",
     description: "Vonalkód, név, méret vagy termékkód alapján.",
     icon: Search,
+    primary: true,
   },
   {
     key: "stock",
     title: "Üzleti készlet",
     description: "A csíkszeredai üzlet elérhető készlete.",
     icon: Boxes,
+    primary: true,
   },
   {
     key: "reserved",
@@ -79,6 +82,7 @@ const actions: ActionCard[] = [
     title: "Napi összesítés",
     description: "Forgalom, darabszám és műszakzárás.",
     icon: BarChart3,
+    primary: true,
   },
   {
     key: "vacations",
@@ -138,6 +142,7 @@ export default function AllInMagazinCiuc({
   const [clientsOpen, setClientsOpen] = useState(false);
   const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
   const [vacationsOpen, setVacationsOpen] = useState(false);
+  const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
 
@@ -186,6 +191,11 @@ export default function AllInMagazinCiuc({
     if (action.key === "vacations") {
       setNotice("");
       setVacationsOpen(true);
+      return;
+    }
+    if (action.key === "search" || action.key === "stock" || action.key === "summary") {
+      setNotice("");
+      setShopOperationMode(action.key);
       return;
     }
     setNotice(`${action.title}: a modul a következő fejlesztési lépésben kerül bekötésre.`);
@@ -365,6 +375,14 @@ export default function AllInMagazinCiuc({
         locationName="Magazin - Miercurea Ciuc"
         apiBase={apiBase}
         onClose={() => setVacationsOpen(false)}
+      />
+      <AllInShopOperations
+        open={shopOperationMode !== null}
+        mode={shopOperationMode || "search"}
+        actor={actor}
+        locationCode="main_warehouse"
+        locationName="Magazin - Miercurea Ciuc"
+        onClose={() => setShopOperationMode(null)}
       />
     </main>
   );
