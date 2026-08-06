@@ -16515,6 +16515,354 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+
+  router.get("/shop-operations/stock", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const search = text(req.query.q || req.query.search);
+      const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 600)));
+      const args = [location.id];
+      const where = [
+        `s.location_id=$1`,
+        `COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) > 0`,
+        `COALESCE(v.status,'active')='active'`,
+        `COALESCE(m.status,'active')='active'`,
+      ];
+      if (search) {
+        args.push(`%${search}%`);
+        const pattern = `$${args.length}`;
+        where.push(`(
+          COALESCE(v.barcode,'') ILIKE ${pattern}
+          OR COALESCE(v.internal_sku,'') ILIKE ${pattern}
+          OR COALESCE(m.title_ro,'') ILIKE ${pattern}
+          OR COALESCE(m.shopify_title,'') ILIKE ${pattern}
+          OR COALESCE(m.model_code,'') ILIKE ${pattern}
+          OR COALESCE(sc.supplier_product_code,'') ILIKE ${pattern}
+          OR COALESCE(sc.supplier_variant_code,'') ILIKE ${pattern}
+          OR COALESCE(v.color_name,'') ILIKE ${pattern}
+          OR COALESCE(v.size,'') ILIKE ${pattern}
+        )`);
+      }
+      args.push(limit);
+
+      const [summaryResult, itemResult] = await Promise.all([
+        pool.query(
+          `SELECT
+             count(*) FILTER (WHERE COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0) > 0)::int AS variant_count,
+             COALESCE(sum(s.qty),0)::numeric AS total_qty,
+             COALESCE(sum(s.reserved_qty),0)::numeric AS reserved_qty,
+             COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0)),0)::numeric AS available_qty,
+             COALESCE(sum(GREATEST(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0),0) * COALESCE(v.sell_price,0)),0)::numeric AS retail_value,
+             count(*) FILTER (WHERE COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) BETWEEN 1 AND 2)::int AS low_stock_variants
+           FROM aif_stock s
+           JOIN aif_product_variants v ON v.id=s.variant_id
+           JOIN aif_product_models m ON m.id=v.model_id
+           WHERE s.location_id=$1
+             AND COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) > 0
+             AND COALESCE(v.status,'active')='active'
+             AND COALESCE(m.status,'active')='active'`,
+          [location.id]
+        ),
+        pool.query(
+          `SELECT
+             v.id AS variant_id,
+             v.internal_sku,
+             v.barcode,
+             v.size,
+             v.color_name,
+             v.color_code,
+             v.image_url,
+             v.sell_price,
+             m.model_code,
+             COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
+             b.name AS brand_name,
+             c.name_ro AS category_name,
+             COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+             sc.supplier_product_code,
+             s.qty,
+             s.reserved_qty,
+             (s.qty-s.reserved_qty) AS available_qty,
+             s.updated_at
+           FROM aif_stock s
+           JOIN aif_product_variants v ON v.id=s.variant_id
+           JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN aif_categories c ON c.id=m.category_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           LEFT JOIN LATERAL (
+             SELECT supplier_product_code, supplier_variant_code
+             FROM aif_variant_supplier_codes
+             WHERE variant_id=v.id AND COALESCE(is_active,true)=true
+             ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+             LIMIT 1
+           ) sc ON true
+           WHERE ${where.join(" AND ")}
+           ORDER BY
+             CASE WHEN COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0) BETWEEN 1 AND 2 THEN 0 ELSE 1 END,
+             lower(COALESCE(m.title_ro,m.shopify_title,m.model_code,'')) ASC,
+             lower(COALESCE(v.color_name,'')) ASC,
+             lower(COALESCE(v.size,'')) ASC
+           LIMIT $${args.length}`,
+          args
+        ),
+      ]);
+
+      const items = itemResult.rows.map((row) => ({
+        variantId: String(row.variant_id),
+        internalSku: row.internal_sku || null,
+        barcode: row.barcode || null,
+        productCode: row.supplier_product_code || row.model_code || row.internal_sku || null,
+        modelCode: row.model_code || null,
+        title: row.title || "Ismeretlen termék",
+        brandName: row.brand_name || null,
+        categoryName: row.category_name || null,
+        subcategoryName: row.subcategory_name || null,
+        colorName: row.color_name || null,
+        colorCode: row.color_code || null,
+        size: row.size || null,
+        imageUrl: row.image_url || null,
+        sellPrice: aifNumber(row.sell_price),
+        qty: aifNumber(row.qty),
+        reservedQty: aifNumber(row.reserved_qty),
+        availableQty: aifNumber(row.available_qty),
+        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+        lowStock: aifNumber(row.available_qty) > 0 && aifNumber(row.available_qty) <= 2,
+      }));
+      const summary = summaryResult.rows[0] || {};
+      res.json({
+        ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        summary: {
+          variantCount: aifNumber(summary.variant_count),
+          totalQty: aifNumber(summary.total_qty),
+          reservedQty: aifNumber(summary.reserved_qty),
+          availableQty: aifNumber(summary.available_qty),
+          retailValue: aifNumber(summary.retail_value),
+          lowStockVariants: aifNumber(summary.low_stock_variants),
+        },
+        items,
+        count: items.length,
+      });
+    } catch (error) {
+      console.error("AIF shop stock overview failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "Az üzleti készlet nem tölthető be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
+  router.get("/shop-operations/daily-summary", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const date = aifValidIsoDate(req.query.date, aifBucharestIsoDate());
+      const sessionRole = normCode(req.session?.role);
+      const employee = sessionRole === "shop"
+        ? actorFrom(req)
+        : text(req.query.employee || req.query.actor || actorFrom(req));
+      if (!employee) {
+        return res.status(400).json({ error: "Az eladó azonosítása nem sikerült." });
+      }
+
+      const baseArgs = [location.id, date, employee];
+      const salesFilter = `s.location_id=$1
+        AND s.status='completed'
+        AND s.sold_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND s.sold_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g'))
+            = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))`;
+
+      const [summaryResult, paymentsResult, productsResult, salesResult] = await Promise.all([
+        pool.query(
+          `WITH filtered_sales AS (
+             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+           ), line_totals AS (
+             SELECT sl.sale_id,
+                    COALESCE(sum(sl.quantity),0)::numeric AS item_count,
+                    count(*)::int AS line_count
+             FROM aif_shop_sale_lines sl
+             JOIN filtered_sales fs ON fs.id=sl.sale_id
+             GROUP BY sl.sale_id
+           )
+           SELECT
+             COALESCE(sum(fs.total),0)::numeric AS revenue,
+             COALESCE(sum(fs.subtotal),0)::numeric AS sales_before_discount,
+             count(*)::int AS transactions,
+             COALESCE(sum(lt.item_count),0)::numeric AS items_sold,
+             COALESCE(avg(fs.total),0)::numeric AS average_basket,
+             COALESCE(sum(fs.discount_total),0)::numeric AS discount_total,
+             COALESCE(sum(fs.paid_total),0)::numeric AS paid_total,
+             COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
+             count(*) FILTER (WHERE fs.balance_due > 0)::int AS unpaid_sales,
+             count(*) FILTER (WHERE fs.customer_id IS NOT NULL)::int AS customer_sales,
+             min(fs.sold_at) AS first_sale_at,
+             max(fs.sold_at) AS last_sale_at
+           FROM filtered_sales fs
+           LEFT JOIN line_totals lt ON lt.sale_id=fs.id`,
+          baseArgs
+        ),
+        pool.query(
+          `WITH filtered_sales AS (
+             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+           ), payment_rows AS (
+             SELECT p.method, COALESCE(sum(p.amount),0)::numeric AS amount,
+                    count(DISTINCT p.sale_id)::int AS transactions
+             FROM aif_shop_sale_payments p
+             JOIN filtered_sales fs ON fs.id=p.sale_id
+             WHERE p.method <> 'credit'
+             GROUP BY p.method
+             UNION ALL
+             SELECT 'credit'::text AS method,
+                    COALESCE(sum(fs.balance_due),0)::numeric AS amount,
+                    count(*) FILTER (WHERE fs.balance_due > 0)::int AS transactions
+             FROM filtered_sales fs
+             WHERE fs.balance_due > 0
+           )
+           SELECT method, sum(amount)::numeric AS amount, sum(transactions)::int AS transactions
+           FROM payment_rows
+           GROUP BY method
+           ORDER BY amount DESC`,
+          baseArgs
+        ),
+        pool.query(
+          `WITH filtered_sales AS (
+             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+           )
+           SELECT
+             COALESCE(sl.variant_id::text, sl.product_code, sl.product_title, sl.id::text) AS key,
+             COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS title,
+             max(sl.product_code) AS product_code,
+             max(sl.brand_name) AS brand_name,
+             max(sl.subcategory_name) AS subcategory_name,
+             max(sl.color_name) AS color_name,
+             max(sl.size) AS size,
+             max(COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,''))) AS image_url,
+             COALESCE(sum(sl.quantity),0)::numeric AS qty,
+             COALESCE(sum(sl.line_total),0)::numeric AS revenue,
+             COALESCE(sum(sl.discount_amount),0)::numeric AS discount_total,
+             count(DISTINCT sl.sale_id)::int AS transactions
+           FROM aif_shop_sale_lines sl
+           JOIN filtered_sales fs ON fs.id=sl.sale_id
+           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+           GROUP BY COALESCE(sl.variant_id::text, sl.product_code, sl.product_title, sl.id::text),
+                    COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék')
+           ORDER BY qty DESC, revenue DESC, title ASC
+           LIMIT 200`,
+          baseArgs
+        ),
+        pool.query(
+          `WITH filtered_sales AS (
+             SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
+           ), line_totals AS (
+             SELECT sale_id, count(*)::int AS line_count, COALESCE(sum(quantity),0)::int AS item_count
+             FROM aif_shop_sale_lines
+             GROUP BY sale_id
+           ), payment_labels AS (
+             SELECT p.sale_id,
+                    string_agg(DISTINCT CASE
+                      WHEN p.method='cash' THEN 'Készpénz'
+                      WHEN p.method='card' THEN 'Bankkártya'
+                      WHEN p.method='bank_transfer' THEN 'Átutalás'
+                      ELSE p.method
+                    END, ', ' ORDER BY CASE
+                      WHEN p.method='cash' THEN 'Készpénz'
+                      WHEN p.method='card' THEN 'Bankkártya'
+                      WHEN p.method='bank_transfer' THEN 'Átutalás'
+                      ELSE p.method
+                    END) AS payment_label
+             FROM aif_shop_sale_payments p
+             GROUP BY p.sale_id
+           )
+           SELECT
+             fs.id, fs.sale_number, fs.sold_at, fs.customer_name, fs.customer_phone,
+             fs.subtotal, fs.discount_total, fs.total, fs.paid_total, fs.balance_due,
+             fs.payment_status, fs.sale_type,
+             COALESCE(lt.line_count,0)::int AS line_count,
+             COALESCE(lt.item_count,0)::int AS item_count,
+             COALESCE(pl.payment_label, CASE WHEN fs.balance_due > 0 THEN 'Utólag fizet' ELSE 'Nincs adat' END) AS payment_label
+           FROM filtered_sales fs
+           LEFT JOIN line_totals lt ON lt.sale_id=fs.id
+           LEFT JOIN payment_labels pl ON pl.sale_id=fs.id
+           ORDER BY fs.sold_at DESC, fs.created_at DESC
+           LIMIT 200`,
+          baseArgs
+        ),
+      ]);
+
+      const summaryRow = summaryResult.rows[0] || {};
+      const payments = paymentsResult.rows.map((row) => ({
+        method: row.method,
+        label: aifPaymentMethodLabel(row.method),
+        amount: aifNumber(row.amount),
+        transactions: aifNumber(row.transactions),
+      }));
+      res.json({
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        date,
+        employee,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        summary: {
+          revenue: aifNumber(summaryRow.revenue),
+          salesBeforeDiscount: aifNumber(summaryRow.sales_before_discount),
+          transactions: aifNumber(summaryRow.transactions),
+          itemsSold: aifNumber(summaryRow.items_sold),
+          averageBasket: aifNumber(summaryRow.average_basket),
+          discountTotal: aifNumber(summaryRow.discount_total),
+          paidTotal: aifNumber(summaryRow.paid_total),
+          unpaidTotal: aifNumber(summaryRow.unpaid_total),
+          unpaidSales: aifNumber(summaryRow.unpaid_sales),
+          customerSales: aifNumber(summaryRow.customer_sales),
+          firstSaleAt: summaryRow.first_sale_at ? new Date(summaryRow.first_sale_at).toISOString() : null,
+          lastSaleAt: summaryRow.last_sale_at ? new Date(summaryRow.last_sale_at).toISOString() : null,
+        },
+        payments,
+        products: productsResult.rows.map((row) => ({
+          key: row.key,
+          title: row.title,
+          productCode: row.product_code || null,
+          brandName: row.brand_name || null,
+          subcategoryName: row.subcategory_name || null,
+          colorName: row.color_name || null,
+          size: row.size || null,
+          imageUrl: row.image_url || null,
+          qty: aifNumber(row.qty),
+          revenue: aifNumber(row.revenue),
+          discountTotal: aifNumber(row.discount_total),
+          transactions: aifNumber(row.transactions),
+        })),
+        sales: salesResult.rows.map((row) => ({
+          id: String(row.id),
+          saleNumber: row.sale_number,
+          soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+          customerName: row.customer_name || null,
+          customerPhone: row.customer_phone || null,
+          subtotal: aifNumber(row.subtotal),
+          discountTotal: aifNumber(row.discount_total),
+          total: aifNumber(row.total),
+          paidTotal: aifNumber(row.paid_total),
+          balanceDue: aifNumber(row.balance_due),
+          paymentStatus: row.payment_status,
+          saleType: row.sale_type,
+          lineCount: aifNumber(row.line_count),
+          itemCount: aifNumber(row.item_count),
+          paymentLabel: row.payment_label,
+        })),
+      });
+    } catch (error) {
+      console.error("AIF shop daily summary failed", error);
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A napi összesítés nem tölthető be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
   router.post("/shop-sales/complete", requireAuthed, async (req, res) => {
     const body = req.body || {};
     const linesInput = Array.isArray(body.lines) ? body.lines : [];
