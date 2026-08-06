@@ -46,6 +46,18 @@ function parseAccessCard(value: string): ParsedAccessCard | null {
   };
 }
 
+function normalizeShopAccessCode(value: string) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+  const parsed = parseAccessCard(normalized);
+  if (parsed) return { code: parsed.code, mode: parsed.mode as "csik" | "kezdi" | null };
+
+  const code = normalized.replace(/[^A-Z0-9]/g, "");
+  return code ? { code, mode: null as "csik" | "kezdi" | null } : null;
+}
+
 const LOGO_URL =
   "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo.png";
 
@@ -128,11 +140,30 @@ export default function Login({
   const selectedMeta = useMemo(() => (mode ? modeMeta[mode] : null), [mode]);
   const SelectedIcon = selectedMeta?.icon || Store;
 
+  const requestSession = useCallback(async (body: Record<string, unknown>) => {
+    const response = await fetch(`${api}/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(String(data?.error || data?.message || `HTTP ${response.status}`));
+    }
+    return data?.session as Session;
+  }, [api]);
+
   const loginWithMode = useCallback(async (targetMode: LoginMode, rawValue: string) => {
+    if (busy) return;
     setErr("");
-    const parsedCard = parseAccessCard(rawValue);
-    const effectiveMode: LoginMode = parsedCard?.mode || targetMode;
-    const value = (parsedCard?.code || rawValue).trim();
+    const normalized = normalizeShopAccessCode(rawValue);
+    const effectiveMode: LoginMode = targetMode === "admin" ? "admin" : normalized?.mode || targetMode;
+    const value = targetMode === "admin" ? rawValue.trim() : normalized?.code || "";
 
     if (!value) {
       setErr(effectiveMode === "admin" ? "Írd be az admin jelszót." : "Olvasd be a kártyát vagy írd be a belépőkódot.");
@@ -140,35 +171,17 @@ export default function Login({
     }
 
     setBusy(true);
-
     try {
-      const body =
+      const session = await requestSession(
         effectiveMode === "admin"
           ? { kind: "admin", password: value }
           : {
               kind: "shop",
               shopId: effectiveMode === "csik" ? "csikszereda" : "kezdivasarhely",
               code: value,
-            };
-
-      const response = await fetch(`${api}/auth/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(body),
-        credentials: "include",
-        cache: "no-store",
-      });
-
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(String(data?.error || data?.message || `HTTP ${response.status}`));
-      }
-
-      onLoggedIn(data.session);
+            },
+      );
+      onLoggedIn(session);
     } catch (error: any) {
       setErr(String(error?.message || error || "A belépés nem sikerült."));
     } finally {
@@ -176,53 +189,83 @@ export default function Login({
       setScannerActive(false);
       scanBufferRef.current = "";
     }
-  }, [api, onLoggedIn]);
+  }, [busy, onLoggedIn, requestSession]);
+
+  const loginScannedCard = useCallback(async (rawValue: string) => {
+    if (busy) return;
+    const normalized = normalizeShopAccessCode(rawValue);
+    if (!normalized || normalized.code.length < 4) {
+      setErr("A beolvasott kód nem felismerhető.");
+      setScannerActive(false);
+      return;
+    }
+
+    setBusy(true);
+    setErr("");
+    const candidates: Array<"csik" | "kezdi"> = normalized.mode
+      ? [normalized.mode]
+      : ["csik", "kezdi"];
+    let lastError: unknown = null;
+
+    try {
+      for (const candidate of candidates) {
+        try {
+          const session = await requestSession({
+            kind: "shop",
+            shopId: candidate === "csik" ? "csikszereda" : "kezdivasarhely",
+            code: normalized.code,
+          });
+          onLoggedIn(session);
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError || new Error("A beolvasott kód egyik üzlethez sem érvényes.");
+    } catch (error: any) {
+      setErr(String(error?.message || error || "A beolvasott kód egyik üzlethez sem érvényes."));
+    } finally {
+      setBusy(false);
+      setScannerActive(false);
+      scanBufferRef.current = "";
+    }
+  }, [busy, onLoggedIn, requestSession]);
 
   useEffect(() => {
     if (mode !== null || busy) return;
 
-    const resetBufferSoon = () => {
-      if (scanTimerRef.current !== null) {
-        window.clearTimeout(scanTimerRef.current);
-      }
-      scanTimerRef.current = window.setTimeout(() => {
-        scanBufferRef.current = "";
+    const finishScan = () => {
+      const scanned = scanBufferRef.current;
+      scanBufferRef.current = "";
+      scanTimerRef.current = null;
+      if (!scanned) {
         setScannerActive(false);
-        scanTimerRef.current = null;
-      }, 260);
+        return;
+      }
+      void loginScannedCard(scanned);
+    };
+
+    const scheduleAutomaticLogin = () => {
+      if (scanTimerRef.current !== null) window.clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = window.setTimeout(finishScan, 160);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.altKey || event.metaKey) return;
 
       if (event.key === "Enter" || event.key === "Tab") {
-        const scanned = scanBufferRef.current;
-        scanBufferRef.current = "";
-        setScannerActive(false);
-        if (scanTimerRef.current !== null) {
-          window.clearTimeout(scanTimerRef.current);
-          scanTimerRef.current = null;
-        }
-
-        if (!scanned) return;
-
-        const parsed = parseAccessCard(scanned);
-        if (!parsed) {
-          setErr("A beolvasott kártya formátuma nem felismerhető.");
-          return;
-        }
-
+        if (!scanBufferRef.current) return;
         event.preventDefault();
-        void loginWithMode(parsed.mode, parsed.code);
+        if (scanTimerRef.current !== null) window.clearTimeout(scanTimerRef.current);
+        finishScan();
         return;
       }
 
       if (event.key.length !== 1) return;
-
       scanBufferRef.current += event.key;
       setScannerActive(true);
       setErr("");
-      resetBufferSoon();
+      scheduleAutomaticLogin();
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -233,7 +276,18 @@ export default function Login({
         scanTimerRef.current = null;
       }
     };
-  }, [busy, loginWithMode, mode]);
+  }, [busy, loginScannedCard, mode]);
+
+  useEffect(() => {
+    if (!mode || mode === "admin" || busy) return;
+    const normalized = normalizeShopAccessCode(secret);
+    if (!normalized || normalized.code.length < 8) return;
+
+    const timer = window.setTimeout(() => {
+      void loginWithMode(mode, secret);
+    }, 160);
+    return () => window.clearTimeout(timer);
+  }, [busy, loginWithMode, mode, secret]);
 
   const chooseMode = (nextMode: LoginMode) => {
     setMode(nextMode);
@@ -358,7 +412,7 @@ export default function Login({
                   <div className="flex items-start gap-2.5">
                     <ShieldCheck className="mt-0.5 shrink-0 text-[#2a8d8b]" size={17} />
                     <p className="text-xs leading-relaxed text-slate-500">
-                      A kézi kódbevitel továbbra is használható. A kártya az üzletet és a belépőkódot együtt tartalmazza.
+                      A kézi kódbevitel megmarad. A kártya beolvasásakor a rendszer automatikusan megkeresi a megfelelő üzletet és beléptet.
                     </p>
                   </div>
                 </div>
@@ -390,6 +444,8 @@ export default function Login({
                         if (event.key === "Enter") void submit();
                       }}
                       autoComplete={mode === "admin" ? "current-password" : "off"}
+                      autoCapitalize="characters"
+                      spellCheck={false}
                       autoFocus
                     />
                   </div>
@@ -398,7 +454,7 @@ export default function Login({
                 {mode !== "admin" ? (
                   <div className="mt-3 flex items-center gap-2 rounded-xl border border-[#2a8d8b]/18 bg-[#edf8f7] px-3 py-2.5 text-xs text-slate-600">
                     <Barcode size={17} className="shrink-0 text-[#2a8d8b]" />
-                    A mező aktív. A vonalkódolvasó beolvassa a kártyát és Enterrel beléptet.
+                    A mező aktív. A kártya beolvasása után a rendszer automatikusan beléptet.
                   </div>
                 ) : null}
 
