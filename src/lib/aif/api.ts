@@ -2562,6 +2562,7 @@ export type AifShopSaleCatalogItem = {
   title: string;
   brandName?: string | null;
   categoryName?: string | null;
+  subcategoryName?: string | null;
   colorName?: string | null;
   colorCode?: string | null;
   size?: string | null;
@@ -2608,6 +2609,117 @@ export function apiAifShopSaleCatalog(options: {
   if (options.search?.trim()) q.set("q", options.search.trim());
   q.set("limit", String(options.limit || 60));
   return fetchAifJSON<AifShopSaleCatalogResponse>(`/shop-sales/catalog?${q.toString()}`);
+}
+
+
+
+export type AifShopStockOverviewItem = AifShopSaleCatalogItem & {
+  updatedAt?: string | null;
+  lowStock?: boolean;
+};
+
+export type AifShopStockOverviewResponse = {
+  ok: true;
+  location: { id: string; code: string; name: string };
+  summary: {
+    variantCount: number;
+    totalQty: number;
+    reservedQty: number;
+    availableQty: number;
+    retailValue: number;
+    lowStockVariants: number;
+  };
+  items: AifShopStockOverviewItem[];
+  count: number;
+};
+
+export function apiAifShopStockOverview(options: {
+  location: string;
+  search?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.search?.trim()) q.set("q", options.search.trim());
+  q.set("limit", String(options.limit || 600));
+  return fetchAifJSON<AifShopStockOverviewResponse>(`/shop-operations/stock?${q.toString()}`);
+}
+
+export type AifShopDailyPaymentItem = {
+  method: string;
+  label: string;
+  amount: number;
+  transactions: number;
+};
+
+export type AifShopDailyProductItem = {
+  key: string;
+  title: string;
+  productCode?: string | null;
+  brandName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  qty: number;
+  revenue: number;
+  discountTotal: number;
+  transactions: number;
+};
+
+export type AifShopDailySaleItem = {
+  id: string;
+  saleNumber: string;
+  soldAt?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  paidTotal: number;
+  balanceDue: number;
+  paymentStatus: string;
+  saleType: string;
+  lineCount: number;
+  itemCount: number;
+  paymentLabel: string;
+};
+
+export type AifShopDailySummaryResponse = {
+  ok: true;
+  generatedAt: string;
+  date: string;
+  employee: string;
+  location: { id: string; code: string; name: string };
+  summary: {
+    revenue: number;
+    salesBeforeDiscount: number;
+    transactions: number;
+    itemsSold: number;
+    averageBasket: number;
+    discountTotal: number;
+    paidTotal: number;
+    unpaidTotal: number;
+    unpaidSales: number;
+    customerSales: number;
+    firstSaleAt?: string | null;
+    lastSaleAt?: string | null;
+  };
+  payments: AifShopDailyPaymentItem[];
+  products: AifShopDailyProductItem[];
+  sales: AifShopDailySaleItem[];
+};
+
+export function apiAifShopDailySummary(options: {
+  location: string;
+  date?: string;
+  employee?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.date) q.set("date", options.date);
+  if (options.employee?.trim()) q.set("employee", options.employee.trim());
+  return fetchAifJSON<AifShopDailySummaryResponse>(`/shop-operations/daily-summary?${q.toString()}`);
 }
 
 export function apiAifCompleteShopSale(input: {
