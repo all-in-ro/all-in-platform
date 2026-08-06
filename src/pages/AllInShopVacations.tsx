@@ -6,6 +6,7 @@ import {
   CalendarClock,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -112,10 +113,23 @@ function statusLabel(status: VacationRequestStatus) {
 }
 
 function statusClass(status: VacationRequestStatus) {
-  if (status === "approved") return "border-emerald-300/35 bg-emerald-500/15 text-emerald-50";
-  if (status === "rejected") return "border-rose-300/35 bg-rose-500/15 text-rose-50";
-  if (status === "cancelled") return "border-white/15 bg-white/[0.05] text-white/55";
-  return "border-amber-200/35 bg-amber-500/14 text-amber-50";
+  if (status === "approved") return "border-[#9be9e5]/55 bg-[#208d8b] text-white";
+  if (status === "rejected") return "border-rose-100/55 bg-[#c90d22] text-white";
+  if (status === "cancelled") return "border-white/12 bg-black/10 text-white/46";
+  return "border-white/20 bg-white/[0.08] text-white/78";
+}
+
+function statusCardClass(status: VacationRequestStatus) {
+  if (status === "approved") {
+    return "border-[#9be9e5]/42 bg-[#208d8b]/26 shadow-[0_8px_22px_rgba(32,141,139,0.16)]";
+  }
+  if (status === "rejected") {
+    return "border-rose-200/58 bg-[#9f1022]/46 shadow-[0_8px_22px_rgba(185,15,30,0.20)]";
+  }
+  if (status === "cancelled") {
+    return "border-white/10 bg-[#2c3442] opacity-75";
+  }
+  return "border-white/16 bg-[#3a4352]";
 }
 
 function periodLabel(item: VacationRequestItem) {
@@ -169,6 +183,106 @@ function calendarCells(monthKey: string) {
 }
 
 const CALENDAR_WEEK_DAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"];
+
+
+function TouchYearControl({
+  value,
+  currentYear,
+  onChange,
+}: {
+  value: number;
+  currentYear: number;
+  onChange: (value: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const years = useMemo(() => {
+    const firstYear = 2025;
+    const lastYear = Math.max(firstYear, currentYear);
+    return Array.from({ length: lastYear - firstYear + 1 }, (_, index) => lastYear - index);
+  }, [currentYear]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex h-12 min-w-[112px] touch-manipulation items-center justify-center gap-3 rounded-2xl border border-white/24 bg-black/10 px-4 text-base text-white transition hover:bg-white/10 active:bg-[#237b79]"
+        aria-label={`Kiválasztott év: ${value}`}
+        aria-haspopup="dialog"
+      >
+        <span className="tabular-nums">{value}</span>
+        <ChevronDown size={19} className="text-white/70" />
+      </button>
+
+      {open && typeof document !== "undefined" ? createPortal(
+        <div
+          className="fixed inset-0 z-[430] grid place-items-center bg-slate-950/82 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setOpen(false);
+          }}
+        >
+          <section className="w-full max-w-[420px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_36px_120px_rgba(0,0,0,0.64)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#1f5f61] to-[#2a8d8b] px-4 py-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/25 bg-white/12">
+                  <CalendarDays size={22} />
+                </span>
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-white/60">Időszak</p>
+                  <h3 className="mt-1 text-lg">{value}</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl border border-white/22 bg-black/10 text-white active:bg-white/15"
+                aria-label="Évválasztó bezárása"
+              >
+                <X size={20} />
+              </button>
+            </header>
+
+            <div className="grid gap-2 p-4 sm:grid-cols-2">
+              {years.map((yearOption) => {
+                const selected = yearOption === value;
+                return (
+                  <button
+                    key={yearOption}
+                    type="button"
+                    onClick={() => {
+                      onChange(yearOption);
+                      setOpen(false);
+                    }}
+                    className={`min-h-16 touch-manipulation rounded-2xl border px-4 text-xl tabular-nums transition active:scale-[0.985] ${
+                      selected
+                        ? "border-[#b7f1ed]/65 bg-[#208d8b] text-white shadow-[0_8px_22px_rgba(32,141,139,0.22)]"
+                        : "border-white/14 bg-[#354153] text-white/78 hover:bg-[#3e4d63]"
+                    }`}
+                  >
+                    {yearOption}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
 
 function TouchDateControl({
   label,
@@ -534,22 +648,14 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <label className="flex h-10 items-center gap-2 rounded-xl border border-white/22 bg-black/10 px-3 text-xs">
-              Év
-              <select
-                value={year}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setYear(next);
-                  void loadOverview(next);
-                }}
-                className="h-8 rounded-lg border border-white/18 bg-[#24585c] px-2 text-xs text-white outline-none"
-              >
-                {Array.from({ length: 6 }, (_, index) => currentYear - index).map((value) => (
-                  <option key={value} value={value}>{value}</option>
-                ))}
-              </select>
-            </label>
+            <TouchYearControl
+              value={year}
+              currentYear={currentYear}
+              onChange={(next) => {
+                setYear(next);
+                void loadOverview(next);
+              }}
+            />
             <button
               type="button"
               onClick={onClose}
@@ -562,31 +668,31 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
           {unseenItems.length ? (
-            <div className="mb-4 rounded-[22px] border border-emerald-200/38 bg-gradient-to-r from-emerald-600/22 to-[#2a8d8b]/22 p-4 shadow-[0_12px_34px_rgba(16,185,129,0.12)]">
+            <div className="mb-4 rounded-[22px] border border-[#9be9e5]/35 bg-gradient-to-r from-[#208d8b]/28 to-[#174c55]/48 p-4 shadow-[0_12px_34px_rgba(32,141,139,0.14)]">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
-                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-200/30 bg-emerald-400/14 text-emerald-50"><BellRing size={21} /></span>
+                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#9be9e5]/32 bg-[#208d8b]/22 text-[#d7fffd]"><BellRing size={21} /></span>
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.14em] text-emerald-50/65">Új vezetői döntés</p>
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-[#d7fffd]/65">Új vezetői döntés</p>
                     <h3 className="mt-1 text-lg text-white">{unseenItems.length} szabadságkérésedet elbírálták</h3>
                     <div className="mt-2 space-y-1 text-sm text-white/72">
                       {unseenItems.slice(0, 3).map((item) => (
-                        <p key={item.id}>{periodLabel(item)} • <span className={item.status === "approved" ? "text-emerald-100" : "text-rose-100"}>{statusLabel(item.status)}</span>{item.decisionNote ? ` • ${item.decisionNote}` : ""}</p>
+                        <p key={item.id}>{periodLabel(item)} • <span className={item.status === "approved" ? "text-[#bdf8f5]" : "text-rose-100"}>{statusLabel(item.status)}</span>{item.decisionNote ? ` • ${item.decisionNote}` : ""}</p>
                       ))}
                     </div>
                   </div>
                 </div>
-                <button type="button" onClick={() => void markDecisionsSeen()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-200/35 bg-emerald-500/20 px-4 text-xs text-emerald-50 hover:bg-emerald-500/28"><CheckCircle2 size={16} /> Elolvastam</button>
+                <button type="button" onClick={() => void markDecisionsSeen()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/38 bg-[#208d8b]/28 px-4 text-xs text-[#e5fffd] hover:bg-[#208d8b]/42"><CheckCircle2 size={16} /> Elolvastam</button>
               </div>
             </div>
           ) : null}
 
           {error ? <div className="mb-4 rounded-2xl border border-rose-300/35 bg-rose-500/16 px-4 py-3 text-sm text-rose-50">{error}</div> : null}
-          {notice ? <div className="mb-4 rounded-2xl border border-emerald-300/30 bg-emerald-500/14 px-4 py-3 text-sm text-emerald-50">{notice}</div> : null}
+          {notice ? <div className="mb-4 rounded-2xl border border-[#9be9e5]/30 bg-[#208d8b]/16 px-4 py-3 text-sm text-[#e5fffd]">{notice}</div> : null}
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <div className="rounded-2xl border border-amber-200/24 bg-amber-500/10 p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-amber-100/60">Elbírálás alatt</p><p className="mt-2 text-2xl text-white">{summary.pending}</p></div>
-            <div className="rounded-2xl border border-emerald-300/24 bg-emerald-500/10 p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-emerald-100/60">Elfogadott kérelmek</p><p className="mt-2 text-2xl text-white">{summary.approved}</p></div>
+            <div className="rounded-2xl border border-white/16 bg-white/[0.06] p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-white/48">Elbírálás alatt</p><p className="mt-2 text-2xl text-white">{summary.pending}</p></div>
+            <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#208d8b]/16 p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-[#d7fffd]/62">Elfogadott kérelmek</p><p className="mt-2 text-2xl text-white">{summary.approved}</p></div>
             <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-[#d7fffd]/60">{year}. évi szabadság</p><p className="mt-2 text-2xl text-[#d7fffd]">{summary.vacationDays} nap</p></div>
             <div className="rounded-2xl border border-sky-200/20 bg-sky-500/9 p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-sky-100/60">Elkérések</p><p className="mt-2 text-2xl text-white">{summary.shortDays} nap</p></div>
             <div className="rounded-2xl border border-violet-200/20 bg-violet-500/9 p-3"><p className="text-[9px] uppercase tracking-[0.11em] text-violet-100/60">Elkért idő</p><p className="mt-2 text-2xl text-white">{summary.shortHours} óra</p></div>
@@ -674,13 +780,13 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
 
               <div className="mt-4 max-h-[520px] space-y-2 overflow-y-auto pr-1">
                 {loading ? <div className="flex min-h-[220px] items-center justify-center gap-2 text-white/50"><Loader2 className="animate-spin" size={18} /> Betöltés…</div> : overview?.items.length ? overview.items.map((item) => (
-                  <article key={item.id} className={`rounded-2xl border p-3 ${item.status === "pending" ? "border-amber-200/24 bg-amber-500/8" : "border-white/10 bg-[#293548]"}`}>
+                  <article key={item.id} className={`rounded-2xl border p-3 transition ${statusCardClass(item.status)}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full border px-2 py-1 text-[10px] ${statusClass(item.status)}`}>{statusLabel(item.status)}</span><span className="text-[10px] text-white/38">Beküldve: {formatDateTime(item.requestedAt)}</span></div>
                         <p className="mt-2 text-sm text-white">{item.kind === "vacation" ? "Szabadság" : "Órás elkérés"} • {periodLabel(item)}</p>
                         {item.note ? <p className="mt-1.5 text-xs leading-relaxed text-white/55"><MessageSquareText className="mr-1 inline" size={13} />{item.note}</p> : null}
-                        {item.decisionNote ? <p className={`mt-2 rounded-xl border px-3 py-2 text-xs ${item.status === "approved" ? "border-emerald-300/18 bg-emerald-500/8 text-emerald-50" : "border-rose-300/18 bg-rose-500/8 text-rose-50"}`}>Vezetői megjegyzés: {item.decisionNote}</p> : null}
+                        {item.decisionNote ? <p className={`mt-2 rounded-xl border px-3 py-2 text-xs ${item.status === "approved" ? "border-[#9be9e5]/28 bg-[#208d8b]/20 text-[#e5fffd]" : "border-rose-200/38 bg-[#c90d22]/28 text-rose-50"}`}>Vezetői megjegyzés: {item.decisionNote}</p> : null}
                         {item.decidedAt ? <p className="mt-1.5 text-[10px] text-white/38">Döntés: {formatDateTime(item.decidedAt)} • {item.decidedBy || "Vezető"}</p> : null}
                       </div>
                       {item.status === "pending" ? <button type="button" disabled={cancelBusyId === item.id} onClick={() => void cancelRequest(item.id)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300/35 bg-rose-500/12 px-2.5 text-[11px] text-rose-50 hover:bg-rose-500/20 disabled:opacity-50">{cancelBusyId === item.id ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />} Visszavonás</button> : null}
@@ -696,7 +802,7 @@ export default function AllInShopVacations({ open, actor, locationName, apiBase,
             <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {overview?.events.length ? overview.events.slice(0, 24).map((event) => (
                 <div key={event.id} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-                  <div className="flex items-center justify-between gap-2"><span className="text-sm text-white">{formatDate(event.day)}</span>{event.kind === "vacation" ? <CheckCircle2 size={16} className="text-emerald-300" /> : <Clock3 size={16} className="text-sky-300" />}</div>
+                  <div className="flex items-center justify-between gap-2"><span className="text-sm text-white">{formatDate(event.day)}</span>{event.kind === "vacation" ? <CheckCircle2 size={16} className="text-[#7bd7d4]" /> : <Clock3 size={16} className="text-sky-300" />}</div>
                   <p className="mt-1 text-xs text-white/52">{event.kind === "vacation" ? "Szabadság" : `${event.hoursOff || 0} óra elkérés`}</p>
                   {event.note ? <p className="mt-2 truncate text-[10px] text-white/38">{event.note}</p> : null}
                 </div>
