@@ -44,6 +44,7 @@ import {
   type AifShopCustomerSaleHistoryItem,
 } from "../lib/aif/api";
 
+
 type ClientMode = "search" | "new" | "edit" | "detail";
 
 type Props = {
