@@ -142,14 +142,10 @@ const CODE39_PATTERNS: Record<string, string> = {
 };
 
 function accessCardPayload(item: CodeItem) {
-  const rawCode = String(item.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (!rawCode) return "";
-  const shopPrefix = item.shopId === "csikszereda"
-    ? "C"
-    : item.shopId === "kezdivasarhely"
-      ? "K"
-      : "";
-  return shopPrefix ? `AIF-${shopPrefix}-${rawCode}` : "";
+  return String(item.code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
 }
 
 function code39Svg(value: string, height = 64) {
