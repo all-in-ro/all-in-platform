@@ -21,6 +21,7 @@ import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
 import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
 
+
 type Props = {
   apiBase?: string;
   actor?: string;
