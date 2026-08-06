@@ -2563,6 +2563,7 @@ export type AifShopSaleCatalogItem = {
   brandName?: string | null;
   categoryName?: string | null;
   subcategoryName?: string | null;
+  gender?: string | null;
   colorName?: string | null;
   colorCode?: string | null;
   size?: string | null;
