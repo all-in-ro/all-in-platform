@@ -33,6 +33,7 @@ import {
 
 export type AllInShopOperationMode = "search" | "stock" | "summary";
 
+
 type Props = {
   open: boolean;
   mode: AllInShopOperationMode;
