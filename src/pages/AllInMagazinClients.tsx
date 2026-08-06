@@ -15,7 +15,6 @@ import {
   MapPin,
   Phone,
   Pencil,
-  Receipt,
   Save,
   Search,
   ShoppingBag,
@@ -43,7 +42,6 @@ import {
   type AifShopCustomerPaymentMethod,
   type AifShopCustomerSaleHistoryItem,
 } from "../lib/aif/api";
-
 
 type ClientMode = "search" | "new" | "edit" | "detail";
 
@@ -1022,101 +1020,171 @@ export default function AllInMagazinClients({
                     </div>
                   ) : null}
 
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><History size={19} /></span>
-                          <div>
-                            <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Pénzmozgások</p>
-                            <h3 className="mt-1 text-base text-white">Befizetési előzmények</h3>
-                          </div>
+                  <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><ShoppingBag size={20} /></span>
+                        <div>
+                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Vásárolt termékek</p>
+                          <h3 className="mt-1 text-lg text-white">{detail.summary.year}. évi terméklista</h3>
                         </div>
-                        <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{detail.payments.length} bejegyzés</span>
                       </div>
-
-                      <div className="mt-3 max-h-[440px] space-y-2 overflow-y-auto pr-1">
-                        {detail.payments.length ? detail.payments.map((payment) => (
-                          <div key={payment.id} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm text-white">{paymentMethodLabel(payment.method)}</p>
-                                <p className="mt-1 text-[11px] text-white/45">{formatDateTime(payment.paidAt)} • {payment.actor || "–"}</p>
-                              </div>
-                              <p className="shrink-0 text-lg text-[#d7fffd]">+{formatMoney(payment.amount)}</p>
-                            </div>
-                            <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/55">
-                              {payment.locationName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{payment.locationName}</span> : null}
-                              {payment.reference ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Hiv.: {payment.reference}</span> : null}
-                            </div>
-                            {payment.note ? <p className="mt-2 text-xs leading-relaxed text-white/58">{payment.note}</p> : null}
-                            {payment.allocations.length ? (
-                              <div className="mt-2 space-y-1 border-t border-white/8 pt-2">
-                                {payment.allocations.map((allocation) => (
-                                  <div key={`${payment.id}-${allocation.saleId}`} className="flex items-center justify-between gap-3 text-[11px] text-white/52">
-                                    <span className="truncate">{allocation.saleNumber}</span>
-                                    <span className="shrink-0">{formatMoney(allocation.amount)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        )) : (
-                          <div className="flex min-h-[180px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42">
-                            <WalletCards size={30} />
-                            <p className="mt-2 text-sm">Még nincs külön tartozásbefizetés.</p>
-                          </div>
-                        )}
-                      </div>
-                    </section>
-
-                    <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><Receipt size={19} /></span>
-                          <div>
-                            <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Vásárlások</p>
-                            <h3 className="mt-1 text-base text-white">Eladási előzmények</h3>
-                          </div>
-                        </div>
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{detail.sales.length} bizonylat</span>
+                        <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2.5 py-1 text-[10px] text-[#d7fffd]">
+                          {detail.sales.reduce((sum, sale) => sum + (sale.lines?.length || 0), 0)} terméksor
+                        </span>
                       </div>
+                    </div>
 
-                      <div className="mt-3 max-h-[440px] space-y-2 overflow-y-auto pr-1">
-                        {detail.sales.length ? detail.sales.map((sale) => (
-                          <div key={sale.id} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="truncate text-sm text-white">{sale.saleNumber}</p>
-                                <p className="mt-1 text-[11px] text-white/45">{formatDateTime(sale.soldAt)} • {sale.locationName || "–"}</p>
-                              </div>
-                              <div className="flex shrink-0 items-center gap-2">
-                                <p className="text-lg text-white">{formatMoney(sale.total)}</p>
-                                <button
-                                  type="button"
-                                  onClick={() => setSaleDetachTarget(sale)}
-                                  className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-2.5 text-[11px] text-white shadow-[0_6px_14px_rgba(225,29,72,0.22)] hover:bg-rose-500"
-                                  title="Törlés a kliens vásárlási előzményeiből"
-                                >
-                                  <Trash2 size={14} /> Törlés
-                                </button>
-                              </div>
+                    <div className="mt-4 max-h-[640px] space-y-3 overflow-y-auto pr-1">
+                      {detail.sales.length ? detail.sales.map((sale) => (
+                        <article key={sale.id} className="overflow-hidden rounded-[22px] border border-white/12 bg-[#293548]">
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#303b4e] px-4 py-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm text-white">{sale.saleNumber}</p>
+                              <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/48">
+                                <span className="inline-flex items-center gap-1.5"><CalendarDays size={13} className="text-[#8ee6e2]" />{formatDateTime(sale.soldAt)}</span>
+                                <span>{sale.locationName || "–"}</span>
+                                {sale.actor ? <span>Eladó: {sale.actor}</span> : null}
+                              </p>
                             </div>
-                            <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
-                              <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 text-white/55">{sale.itemCount} db</span>
-                              <span className="rounded-lg border border-emerald-300/16 bg-emerald-500/8 px-2 py-1.5 text-emerald-50">Fizetve: {formatMoney(sale.paidTotal)}</span>
-                              <span className={`rounded-lg border px-2 py-1.5 ${numberValue(sale.balanceDue) > 0 ? "border-rose-300/22 bg-rose-500/12 text-rose-50" : "border-white/10 bg-black/10 text-white/55"}`}>Maradt: {formatMoney(sale.balanceDue)}</span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <div className="text-right">
+                                <p className="text-[10px] uppercase tracking-[0.08em] text-white/40">Bizonylat összege</p>
+                                <p className="mt-1 text-xl text-white tabular-nums">{formatMoney(sale.total)}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setSaleDetachTarget(sale)}
+                                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_14px_rgba(225,29,72,0.22)] hover:bg-rose-500"
+                                title="Törlés a kliens vásárlási előzményeiből"
+                              >
+                                <Trash2 size={14} /> Törlés
+                              </button>
                             </div>
                           </div>
-                        )) : (
-                          <div className="flex min-h-[180px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42">
-                            <ShoppingBag size={30} />
-                            <p className="mt-2 text-sm">Ehhez a klienshez még nincs eladás kapcsolva.</p>
+
+                          <div className="space-y-2 p-3">
+                            {sale.lines?.length ? sale.lines.map((line) => (
+                              <div
+                                key={line.id || `${sale.id}-${line.lineNo}`}
+                                className="grid grid-cols-[68px_minmax(0,1fr)] gap-3 rounded-2xl border border-white/10 bg-[#253144] p-3 sm:grid-cols-[68px_minmax(0,1fr)_minmax(210px,auto)] sm:items-center"
+                              >
+                                <span className="flex h-[68px] w-[68px] shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/12 bg-white/95">
+                                  {line.imageUrl ? (
+                                    <img src={line.imageUrl} alt={line.productTitle || "Termék"} className="h-full w-full object-contain" />
+                                  ) : (
+                                    <ShoppingBag size={26} className="text-[#526173]" />
+                                  )}
+                                </span>
+
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm text-white">{line.productTitle || "Névtelen termék"}</p>
+                                  <p className="mt-1 truncate text-[11px] text-white/50">
+                                    {[line.brandName, line.subcategoryName || line.categoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
+                                  </p>
+                                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-white/55">
+                                    <span className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/10 px-2 py-1"><CalendarDays size={11} />{formatDateTime(sale.soldAt)}</span>
+                                    {line.productCode ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Kód: {line.productCode}</span> : null}
+                                    {line.barcode ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Vonalkód: {line.barcode}</span> : null}
+                                  </div>
+                                </div>
+
+                                <div className="col-span-2 grid grid-cols-2 gap-2 sm:col-span-1 sm:min-w-[230px]">
+                                  <span className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-center">
+                                    <span className="block text-[9px] uppercase tracking-[0.08em] text-white/40">Darab</span>
+                                    <strong className="mt-1 block text-lg font-normal text-[#d7fffd]">{line.quantity} db</strong>
+                                  </span>
+                                  <span className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-right">
+                                    <span className="block text-[9px] uppercase tracking-[0.08em] text-white/40">Egységár</span>
+                                    <strong className="mt-1 block text-sm font-normal text-white">{formatMoney(line.unitPrice)}</strong>
+                                  </span>
+                                  {numberValue(line.discountPercent) > 0 ? (
+                                    <span className="rounded-xl border border-amber-200/20 bg-amber-400/10 px-3 py-2 text-center text-amber-50">
+                                      <span className="block text-[9px] uppercase tracking-[0.08em] text-amber-100/60">Kedvezmény</span>
+                                      <strong className="mt-1 block text-sm font-normal">{numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%</strong>
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-center text-white/48">
+                                      <span className="block text-[9px] uppercase tracking-[0.08em]">Kedvezmény</span>
+                                      <strong className="mt-1 block text-sm font-normal">0%</strong>
+                                    </span>
+                                  )}
+                                  <span className="rounded-xl border border-[#7bd7d4]/25 bg-[#2a8d8b]/14 px-3 py-2 text-right text-[#d7fffd]">
+                                    <span className="block text-[9px] uppercase tracking-[0.08em] text-[#d7fffd]/58">Sorösszeg</span>
+                                    <strong className="mt-1 block text-base font-normal">{formatMoney(line.lineTotal)}</strong>
+                                  </span>
+                                </div>
+                              </div>
+                            )) : (
+                              <div className="rounded-2xl border border-dashed border-white/12 px-4 py-6 text-center text-sm text-white/42">
+                                Ehhez a régi bizonylathoz nincs mentett terméksor.
+                              </div>
+                            )}
                           </div>
-                        )}
+
+                          <div className="grid grid-cols-3 gap-2 border-t border-white/10 bg-black/5 px-3 py-3 text-[10px]">
+                            <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1.5 text-white/55">{sale.itemCount} db összesen</span>
+                            <span className="rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1.5 text-[#d7fffd]">Fizetve: {formatMoney(sale.paidTotal)}</span>
+                            <span className={`rounded-lg border px-2 py-1.5 ${numberValue(sale.balanceDue) > 0 ? "border-rose-300/35 bg-rose-600 text-white" : "border-white/10 bg-black/10 text-white/55"}`}>Maradt: {formatMoney(sale.balanceDue)}</span>
+                          </div>
+                        </article>
+                      )) : (
+                        <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42">
+                          <ShoppingBag size={34} />
+                          <p className="mt-2 text-sm">Ebben az évben nincs a klienshez kapcsolt vásárlás.</p>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="rounded-[24px] border border-white/14 bg-[#374357] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#d7fffd]"><History size={19} /></span>
+                        <div>
+                          <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Pénzmozgások</p>
+                          <h3 className="mt-1 text-base text-white">Befizetési előzmények</h3>
+                        </div>
                       </div>
-                    </section>
-                  </div>
+                      <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{detail.payments.length} bejegyzés</span>
+                    </div>
+
+                    <div className="mt-3 grid max-h-[360px] gap-2 overflow-y-auto pr-1 lg:grid-cols-2">
+                      {detail.payments.length ? detail.payments.map((payment) => (
+                        <div key={payment.id} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm text-white">{paymentMethodLabel(payment.method)}</p>
+                              <p className="mt-1 text-[11px] text-white/45">{formatDateTime(payment.paidAt)} • {payment.actor || "–"}</p>
+                            </div>
+                            <p className="shrink-0 text-lg text-[#d7fffd]">+{formatMoney(payment.amount)}</p>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/55">
+                            {payment.locationName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{payment.locationName}</span> : null}
+                            {payment.reference ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">Hiv.: {payment.reference}</span> : null}
+                          </div>
+                          {payment.note ? <p className="mt-2 text-xs leading-relaxed text-white/58">{payment.note}</p> : null}
+                          {payment.allocations.length ? (
+                            <div className="mt-2 space-y-1 border-t border-white/8 pt-2">
+                              {payment.allocations.map((allocation) => (
+                                <div key={`${payment.id}-${allocation.saleId}`} className="flex items-center justify-between gap-3 text-[11px] text-white/52">
+                                  <span className="truncate">{allocation.saleNumber}</span>
+                                  <span className="shrink-0">{formatMoney(allocation.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      )) : (
+                        <div className="col-span-full flex min-h-[160px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-center text-white/42">
+                          <WalletCards size={30} />
+                          <p className="mt-2 text-sm">Még nincs külön tartozásbefizetés.</p>
+                        </div>
+                      )}
+                    </div>
+                  </section>
 
                   {detail.item.notes ? (
                     <div className="rounded-[20px] border border-white/12 bg-[#293548] p-4">
