@@ -6,6 +6,7 @@ import {
   Banknote,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   CreditCard,
   History,
   Landmark,
@@ -179,6 +180,7 @@ export default function AllInMagazinClients({
   const [selected, setSelected] = useState<AifShopCustomer | null>(null);
   const [detail, setDetail] = useState<AifShopCustomerDetail | null>(null);
   const [detailYear, setDetailYear] = useState(currentYear);
+  const [yearPickerOpen, setYearPickerOpen] = useState(false);
   const [draft, setDraft] = useState<CustomerDraft>(EMPTY_DRAFT);
   const [counties, setCounties] = useState<AifRomaniaCounty[]>([]);
   const [localities, setLocalities] = useState<AifRomaniaLocality[]>([]);
@@ -200,7 +202,7 @@ export default function AllInMagazinClients({
   const locationCode = useMemo(() => locationCodeFromName(locationName), [locationName]);
   const defaultCountyCode = useMemo(() => preferredCountyCode(locationName), [locationName]);
   const yearOptions = useMemo(
-    () => Array.from({ length: 6 }, (_, index) => currentYear - index),
+    () => Array.from({ length: Math.max(1, currentYear - 2025 + 1) }, (_, index) => currentYear - index),
     [currentYear],
   );
   const customerHasHistory = Boolean(
@@ -260,6 +262,7 @@ export default function AllInMagazinClients({
     setSelected(null);
     setDetail(null);
     setDetailYear(currentYear);
+    setYearPickerOpen(false);
     setError("");
     setSuccess("");
     setPaymentDraft(EMPTY_PAYMENT);
@@ -285,6 +288,10 @@ export default function AllInMagazinClients({
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (yearPickerOpen) {
+        setYearPickerOpen(false);
+        return;
+      }
       if (customerDeleteOpen) {
         if (!customerDeleting) setCustomerDeleteOpen(false);
         return;
@@ -309,7 +316,7 @@ export default function AllInMagazinClients({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, saleDetachTarget, saleDetaching]);
+  }, [customerDeleteOpen, customerDeleting, mode, onClose, open, saleDetachTarget, saleDetaching, yearPickerOpen]);
 
   async function loadCustomers(value = query) {
     setLoading(true);
@@ -352,6 +359,7 @@ export default function AllInMagazinClients({
     setPaymentDraft(EMPTY_PAYMENT);
     setSaleDetachTarget(null);
     setCustomerDeleteOpen(false);
+    setYearPickerOpen(false);
     paymentRequestKeyRef.current = "";
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }
@@ -365,6 +373,7 @@ export default function AllInMagazinClients({
     void loadLocalities(defaultCountyCode);
     if (!counties.length) void loadCountiesForForm();
     setCustomerDeleteOpen(false);
+    setYearPickerOpen(false);
     setError("");
     setSuccess("");
   }
@@ -702,16 +711,18 @@ export default function AllInMagazinClients({
                             {item.email ? <p className="flex items-center gap-2 truncate"><Mail size={13} className="text-[#8ee6e2]" />{item.email}</p> : null}
                             {customerAddressLabel(item) ? <p className="flex items-center gap-2 truncate"><MapPin size={13} className="text-[#8ee6e2]" />{customerAddressLabel(item)}</p> : null}
                           </div>
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-                            <span className="rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2.5 py-2 text-[#d7fffd]">
-                              Idén: {formatMoney(item.yearPurchaseTotal)}
+                          <div className="mt-3 grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-2">
+                            <span className="rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-3 py-2 text-[#d7fffd]">
+                              <span className="block text-[9px] uppercase tracking-[0.1em] text-[#d7fffd]/58">Idei vásárlás</span>
+                              <strong className="mt-1 block text-base font-normal tabular-nums">{formatMoney(item.yearPurchaseTotal)}</strong>
                             </span>
-                            <span className={`rounded-xl border px-2.5 py-2 ${
+                            <span className={`rounded-xl border px-3 py-2 ${
                               numberValue(item.openBalance) > 0
-                                ? "border-rose-300/30 bg-rose-500/14 text-rose-50"
+                                ? "border-red-300/80 bg-red-600 text-white shadow-[0_8px_20px_rgba(220,38,38,0.28)]"
                                 : "border-[#7bd7d4]/25 bg-[#2a8d8b]/14 text-[#d7fffd]"
                             }`}>
-                              Tartozás: {formatMoney(item.openBalance)}
+                              <span className="block text-[9px] uppercase tracking-[0.1em] opacity-75">Tartozás</span>
+                              <strong className="mt-1 block text-lg font-normal tabular-nums">{formatMoney(item.openBalance)}</strong>
                             </span>
                           </div>
                         </div>
@@ -839,21 +850,16 @@ export default function AllInMagazinClients({
                   >
                     <Trash2 size={15} /> Kliens törlése
                   </button>
-                  <label className="flex items-center gap-2 rounded-xl border border-white/14 bg-[#293548] px-3 py-1 text-xs text-white/65">
-                    <CalendarDays size={15} className="text-[#8ee6e2]" />
-                    Éves összesítés
-                    <select
-                      value={detailYear}
-                      onChange={(event) => {
-                        const year = Number(event.target.value);
-                        setDetailYear(year);
-                        if (selected) void loadCustomerDetail(selected.id, year);
-                      }}
-                      className="h-8 rounded-lg border border-white/14 bg-[#1f2937] px-2 text-xs text-white outline-none"
-                    >
-                      {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
-                    </select>
-                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setYearPickerOpen(true)}
+                    className="inline-flex h-11 min-w-[112px] touch-manipulation items-center justify-between gap-3 rounded-xl border border-white/16 bg-[#293548] px-3 text-sm text-white transition hover:border-[#72d8d4]/45 hover:bg-[#354153] active:bg-[#2a8d8b]"
+                    title="Éves összesítés"
+                  >
+                    <CalendarDays size={17} className="text-[#8ee6e2]" />
+                    <span className="text-base tabular-nums">{detailYear}</span>
+                    <ChevronDown size={17} className="text-white/55" />
+                  </button>
                 </div>
               </div>
 
@@ -881,24 +887,24 @@ export default function AllInMagazinClients({
                     <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       <div className="rounded-2xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 p-3">
                         <p className="text-[9px] uppercase tracking-[0.12em] text-[#d7fffd]/55">{detail.summary.year}. évi vásárlás</p>
-                        <p className="mt-2 text-2xl text-[#d7fffd]">{formatMoney(detail.summary.yearPurchaseTotal)}</p>
+                        <p className="mt-2 text-3xl text-[#d7fffd] tabular-nums">{formatMoney(detail.summary.yearPurchaseTotal)}</p>
                       </div>
                       <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                         <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Összes vásárlás</p>
-                        <p className="mt-2 text-2xl text-white">{formatMoney(detail.summary.lifetimePurchaseTotal)}</p>
+                        <p className="mt-2 text-3xl text-white tabular-nums">{formatMoney(detail.summary.lifetimePurchaseTotal)}</p>
                       </div>
-                      <div className={`rounded-2xl border p-3 ${
+                      <div className={`rounded-2xl border p-4 ${
                         numberValue(detail.summary.openBalance) > 0
-                          ? "border-rose-300/30 bg-rose-500/14"
-                          : "border-emerald-300/22 bg-emerald-500/10"
+                          ? "border-red-300/80 bg-red-600 text-white shadow-[0_12px_28px_rgba(220,38,38,0.30)]"
+                          : "border-[#7bd7d4]/30 bg-[#2a8d8b]/16 text-[#d7fffd]"
                       }`}>
-                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/52">Nyitott tartozás</p>
-                        <p className="mt-2 text-2xl text-white">{formatMoney(detail.summary.openBalance)}</p>
-                        <p className="mt-1 text-[10px] text-white/48">{detail.summary.openSales} nyitott vásárlás</p>
+                        <p className="text-[10px] uppercase tracking-[0.13em] opacity-75">Nyitott tartozás</p>
+                        <p className="mt-2 text-3xl tabular-nums sm:text-4xl">{formatMoney(detail.summary.openBalance)}</p>
+                        <p className="mt-1 text-xs opacity-70">{detail.summary.openSales} nyitott vásárlás</p>
                       </div>
                       <div className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                         <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Vásárlások száma</p>
-                        <p className="mt-2 text-2xl text-white">{detail.summary.saleCount}</p>
+                        <p className="mt-2 text-3xl text-white tabular-nums">{detail.summary.saleCount}</p>
                         <p className="mt-1 text-[10px] text-white/48">Utolsó: {formatDateTime(detail.summary.lastSaleAt)}</p>
                       </div>
                     </div>
@@ -1133,6 +1139,39 @@ export default function AllInMagazinClients({
           </button>
         </div>
       </div>
+
+      {yearPickerOpen ? (
+        <div
+          className="fixed inset-0 z-[292] grid place-items-center bg-slate-950/82 px-4 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.currentTarget === event.target) setYearPickerOpen(false); }}
+        >
+          <section className="w-full max-w-[460px] overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+            <header className="flex items-center justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#1e4f54] to-[#2a8d8b] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/25 bg-white/12"><CalendarDays size={21} /></span>
+                <div><p className="text-[10px] uppercase tracking-[0.14em] text-white/60">Éves összesítés</p><h3 className="mt-1 text-xl">Válassz évet</h3></div>
+              </div>
+              <button type="button" onClick={() => setYearPickerOpen(false)} className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-black/10 hover:bg-white/12"><X size={19} /></button>
+            </header>
+            <div className="grid grid-cols-2 gap-3 p-5">
+              {yearOptions.map((year) => (
+                <button
+                  key={year}
+                  type="button"
+                  onClick={() => {
+                    setDetailYear(year);
+                    setYearPickerOpen(false);
+                    if (selected) void loadCustomerDetail(selected.id, year);
+                  }}
+                  className={`min-h-16 touch-manipulation rounded-2xl border text-2xl tabular-nums transition active:scale-[0.98] ${year === detailYear ? "border-[#9be9e5]/60 bg-[#2a8d8b] text-white shadow-[0_10px_24px_rgba(42,141,139,0.24)]" : "border-white/14 bg-[#374357] text-white hover:border-[#72d8d4]/45 hover:bg-[#3f4c60]"}`}
+                >
+                  {year}
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {customerDeleteOpen && selected && detail ? (
         <div className="fixed inset-0 z-[285] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm">
