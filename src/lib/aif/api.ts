@@ -2832,6 +2832,10 @@ export type AifAdminShopEmployeeItem = {
 
 export type AifAdminShopRecentSale = {
   id: string;
+  lineId: string;
+  saleId: string;
+  lineNo: number;
+  variantId?: string | null;
   saleNumber: string;
   soldAt: string;
   actor: string;
@@ -2847,8 +2851,37 @@ export type AifAdminShopRecentSale = {
   balanceDue: number;
   itemCount: number;
   lineCount: number;
-  firstProductTitle?: string | null;
-  firstImageUrl?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  listPrice: number;
+  unitPrice: number;
+  lineDiscountAmount: number;
+  lineDiscountPercent: number;
+  lineTotal: number;
+};
+
+export type AifAdminShopSaleLineDeleteMode = "restore_stock" | "permanent";
+
+export type AifAdminShopSaleLineDeleteResult = {
+  ok: true;
+  mode: AifAdminShopSaleLineDeleteMode;
+  lineId: string;
+  saleId: string;
+  saleNumber: string;
+  saleDeleted: boolean;
+  stockRestored: boolean;
+  restoredQty: number;
+  remainingLineCount: number;
+  remainingItemCount: number;
+  remainingTotal: number;
 };
 
 export type AifAdminShopOverviewResponse = {
@@ -2896,6 +2929,18 @@ export type AifAdminShopOverviewResponse = {
     categories: string[];
   };
 };
+
+export function apiAifAdminDeleteShopSaleLine(
+  lineId: string,
+  mode: AifAdminShopSaleLineDeleteMode,
+) {
+  const q = new URLSearchParams();
+  q.set("mode", mode);
+  return fetchAifJSON<AifAdminShopSaleLineDeleteResult>(
+    `/admin-shops/sale-lines/${encodeURIComponent(lineId)}?${q.toString()}`,
+    { method: "DELETE" },
+  );
+}
 
 export function apiAifAdminShopOverview(options: {
   location: string;
