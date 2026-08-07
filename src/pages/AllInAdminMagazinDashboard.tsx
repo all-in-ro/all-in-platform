@@ -32,14 +32,20 @@ import {
   ShoppingBag,
   Store,
   Tags,
+  Trash2,
+  RotateCcw,
   TrendingUp,
   UserRound,
   WalletCards,
+  X,
 } from "lucide-react";
 import {
+  apiAifAdminDeleteShopSaleLine,
   apiAifAdminShopOverview,
   type AifAdminShopOverviewResponse,
   type AifAdminShopRankingItem,
+  type AifAdminShopRecentSale,
+  type AifAdminShopSaleLineDeleteMode,
 } from "../lib/aif/api";
 
 export type AllInAdminMagazinDashboardProps = {
@@ -661,6 +667,8 @@ export default function AllInAdminMagazinDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
+  const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
+  const [deleteSaving, setDeleteSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -693,6 +701,21 @@ export default function AllInAdminMagazinDashboard({
   function applyFilters() {
     setPreset("custom");
     setApplied({ ...draft });
+  }
+
+  async function deleteSaleLine(mode: AifAdminShopSaleLineDeleteMode) {
+    if (!deleteTarget || deleteSaving) return;
+    setDeleteSaving(true);
+    setError("");
+    try {
+      await apiAifAdminDeleteShopSaleLine(deleteTarget.lineId, mode);
+      setDeleteTarget(null);
+      await load();
+    } catch (deleteError: any) {
+      setError(deleteError?.message || "Az eladási sor törlése nem sikerült.");
+    } finally {
+      setDeleteSaving(false);
+    }
   }
 
   const summary = data?.summary;
@@ -1057,14 +1080,14 @@ export default function AllInAdminMagazinDashboard({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Eseménynapló</p>
-                <h2 className="mt-1 text-base">Legutóbbi eladások és nyitott fizetések</h2>
+                <h2 className="mt-1 text-base">Eladott termékek és nyitott fizetések</h2>
               </div>
               <span className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1 text-[10px] text-white/50">
                 {data?.recentSales.length || 0} sor
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1240px] border-collapse text-xs">
+              <table className="w-full min-w-[1480px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
                     <th className="px-3 py-3 text-left">Termék</th>
@@ -1077,40 +1100,57 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-right">Összeg</th>
                     <th className="px-3 py-3 text-right">Hátralévő</th>
                     <th className="px-3 py-3 text-center">Állapot</th>
+                    <th className="px-3 py-3 text-center">Művelet</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.recentSales || []).map((sale) => (
-                    <tr key={sale.id} className="border-t border-white/8 align-top hover:bg-white/[0.035]">
-                      <td className="min-w-[250px] px-3 py-3">
+                    <tr key={sale.lineId} className="border-t border-white/8 align-top hover:bg-white/[0.035]">
+                      <td className="min-w-[330px] px-3 py-3">
                         <div className="flex items-start gap-3">
                           <ProductThumb
-                            src={sale.firstImageUrl}
-                            alt={sale.firstProductTitle || sale.saleNumber}
+                            src={sale.imageUrl}
+                            alt={sale.productTitle || sale.saleNumber}
                           />
                           <div className="min-w-0 pt-0.5">
-                            <p className="max-w-[230px] truncate text-white" title={sale.firstProductTitle || "Nincs mentett termék"}>
-                              {sale.firstProductTitle || "Nincs mentett termék"}
+                            <p className="max-w-[300px] truncate text-white" title={sale.productTitle || "Nincs mentett termék"}>
+                              {sale.productTitle || "Nincs mentett termék"}
                             </p>
-                            <p className="mt-1 text-[10px] text-white/42">
-                              {sale.lineCount > 1 ? `+${sale.lineCount - 1} további tétel` : "1 tétel"}
+                            <p className="mt-1 max-w-[300px] truncate text-[10px] text-white/50" title={[sale.brandName, sale.subcategoryName, sale.colorName, sale.size].filter(Boolean).join(" • ")}>
+                              {[sale.brandName, sale.subcategoryName, sale.colorName, sale.size].filter(Boolean).join(" • ") || "–"}
+                            </p>
+                            <p className="mt-1 max-w-[300px] truncate text-[10px] text-[#9be9e5]/70" title={[sale.productCode, sale.barcode].filter(Boolean).join(" • ")}>
+                              {[sale.productCode ? `Kód: ${sale.productCode}` : "", sale.barcode ? `Vonalkód: ${sale.barcode}` : ""].filter(Boolean).join(" • ") || ""}
                             </p>
                           </div>
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
-                      <td className="px-3 py-3"><p className="text-white">{sale.saleNumber}</p><p className="mt-1 text-[10px] text-white/38">{saleTypeLabel(sale.saleType)}</p></td>
+                      <td className="px-3 py-3"><p className="text-white">{sale.saleNumber}</p><p className="mt-1 text-[10px] text-white/38">{sale.lineCount > 1 ? `${sale.lineCount} terméksor a bizonylaton` : "1 terméksor"}</p></td>
                       <td className="px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
                       <td className="px-3 py-3 text-center"><span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px]">{saleTypeLabel(sale.saleType)}</span></td>
-                      <td className="px-3 py-3 text-center">{integer(sale.itemCount)}</td>
-                      <td className="px-3 py-3 text-right text-amber-50">{money(sale.discountTotal)}</td>
-                      <td className="px-3 py-3 text-right">{money(sale.total)}</td>
+                      <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
+                      <td className="px-3 py-3 text-right text-amber-50">
+                        <p>{money(sale.lineDiscountAmount)}</p>
+                        {numberValue(sale.lineDiscountPercent) > 0 ? <p className="mt-1 text-[10px] text-amber-100/65">{numberValue(sale.lineDiscountPercent).toFixed(1)}%</p> : null}
+                      </td>
+                      <td className="px-3 py-3 text-right">{money(sale.lineTotal)}</td>
                       <td className="px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
                       <td className="px-3 py-3">
                         <div className="flex justify-center gap-1.5">
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
                         </div>
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(sale)}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-300/45 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 active:scale-[0.98]"
+                          title="Eladási sor törlése"
+                        >
+                          <Trash2 size={14} /> Törlés
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -1127,6 +1167,60 @@ export default function AllInAdminMagazinDashboard({
           </div>
         </section>
       </div>
+
+      {deleteTarget ? (
+        <div className="fixed inset-0 z-[320] grid place-items-center bg-slate-950/82 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-[620px] overflow-hidden rounded-[26px] border border-white/18 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4b2834] to-[#303a4c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/30 bg-rose-500/16 text-rose-50"><Trash2 size={20} /></span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-rose-100/60">Eladási sor törlése</p>
+                  <h3 className="mt-1 truncate text-xl text-white">{deleteTarget.productTitle || deleteTarget.saleNumber}</h3>
+                  <p className="mt-1 text-xs text-white/48">{dateTime(deleteTarget.soldAt)} • {deleteTarget.saleNumber} • {integer(deleteTarget.quantity)} db</p>
+                </div>
+              </div>
+              <button type="button" disabled={deleteSaving} onClick={() => setDeleteTarget(null)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
+            </header>
+
+            <div className="space-y-3 p-5">
+              <p className="text-sm text-white/78">Mit csináljon a rendszer a készlettel?</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={deleteSaving}
+                  onClick={() => void deleteSaleLine("restore_stock")}
+                  className="min-h-[126px] rounded-2xl border border-[#9be9e5]/45 bg-[#2a8d8b] p-4 text-left text-white transition hover:bg-[#319c99] active:scale-[0.99] disabled:opacity-55"
+                >
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/25 bg-black/10"><RotateCcw size={19} /></span>
+                  <strong className="mt-3 block text-base font-normal">Törlés + készlet visszaállítása</strong>
+                  <span className="mt-1 block text-xs leading-relaxed text-white/72">A sor törlődik, és {integer(deleteTarget.quantity)} db visszakerül a(z) {locationName} készletébe.</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={deleteSaving}
+                  onClick={() => void deleteSaleLine("permanent")}
+                  className="min-h-[126px] rounded-2xl border border-rose-300/55 bg-rose-600 p-4 text-left text-white transition hover:bg-rose-500 active:scale-[0.99] disabled:opacity-55"
+                >
+                  <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/25 bg-black/10"><Trash2 size={19} /></span>
+                  <strong className="mt-3 block text-base font-normal">Végleges törlés</strong>
+                  <span className="mt-1 block text-xs leading-relaxed text-white/76">A sor eltűnik az eladásokból, de a jelenlegi raktárkészlethez a rendszer nem nyúl.</span>
+                </button>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-[#273243] px-3 py-2.5 text-xs text-white/52">
+                Többtermékes bizonylatnál csak ez a terméksor törlődik. Ha ez az utolsó terméksor, maga a bizonylat is megszűnik.
+              </div>
+            </div>
+
+            <footer className="flex justify-end border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button type="button" disabled={deleteSaving} onClick={() => setDeleteTarget(null)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">
+                <X size={16} /> Mégse
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="fixed inset-0 z-[300] grid place-items-center bg-slate-950/28 backdrop-blur-[2px]">
