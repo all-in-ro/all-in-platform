@@ -1100,8 +1100,8 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-right">Összeg</th>
                     <th className="px-3 py-3 text-right">Hátralévő</th>
                     <th className="px-3 py-3 text-center">Állapot</th>
-                    <th className="sticky right-0 z-20 w-[112px] border-l border-white/10 bg-[#293548] px-3 py-3 text-center shadow-[-10px_0_18px_rgba(15,23,42,0.18)]">
-                      Művelet
+                    <th className="sticky right-0 z-20 w-[52px] border-l border-white/10 bg-[#293548] px-1.5 py-3 text-center shadow-[-8px_0_14px_rgba(15,23,42,0.16)]">
+                      <span className="sr-only">Művelet</span>
                     </th>
                   </tr>
                 </thead>
@@ -1144,14 +1144,15 @@ export default function AllInAdminMagazinDashboard({
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
                         </div>
                       </td>
-                      <td className="sticky right-0 z-10 w-[112px] border-l border-white/10 bg-[#344154] px-3 py-3 text-center shadow-[-10px_0_18px_rgba(15,23,42,0.18)] transition-colors group-hover:bg-[#39475a]">
+                      <td className="sticky right-0 z-10 w-[52px] border-l border-white/10 bg-[#344154] px-1.5 py-3 text-center shadow-[-8px_0_14px_rgba(15,23,42,0.16)] transition-colors group-hover:bg-[#39475a]">
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(sale)}
-                          className="inline-flex h-9 w-full min-w-[86px] items-center justify-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(225,29,72,0.24)] transition hover:bg-rose-500 active:scale-[0.98]"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/55 bg-rose-600 text-white shadow-[0_4px_12px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 active:scale-[0.96]"
                           title="Eladási sor törlése"
+                          aria-label="Eladási sor törlése"
                         >
-                          <Trash2 size={14} /> Törlés
+                          <Trash2 size={14} />
                         </button>
                       </td>
                     </tr>
