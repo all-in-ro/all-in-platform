@@ -1060,22 +1060,24 @@ export default function AllInAdminMagazinDashboardMobile({
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl border border-white/8 bg-[#263244] p-2.5 text-[10px]">
-                    <div className="min-w-0">
-                      <p className="text-white/38">Eladó</p>
-                      <p className="mt-0.5 truncate text-white/78">{sale.actor || "-"}</p>
+                  <div className="mt-3 overflow-hidden rounded-2xl border border-white/8 bg-[#263244] text-[10px]">
+                    <div className="flex min-w-0 items-center justify-between gap-4 px-3 py-2.5">
+                      <span className="shrink-0 text-white/42">Kliens</span>
+                      <span className={`min-w-0 flex-1 truncate text-right ${sale.customerName ? "text-white/86" : "text-white/48"}`}>
+                        {sale.customerName || "Nincs kliens"}
+                      </span>
                     </div>
-                    <div className="min-w-0 text-right">
-                      <p className="text-white/38">Bizonylat</p>
-                      <p className="mt-0.5 truncate text-white/78">{sale.saleNumber}</p>
+                    <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/7 px-3 py-2.5">
+                      <span className="shrink-0 text-white/42">Eladó</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-white/86">{sale.actor || "-"}</span>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-white/38">Kliens</p>
-                      <p className="mt-0.5 truncate text-white/62">{sale.customerName || "Nincs kliens"}</p>
+                    <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/7 px-3 py-2">
+                      <span className="shrink-0 text-white/34">Bizonylat</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-white/62">{sale.saleNumber}</span>
                     </div>
-                    <div className="min-w-0 text-right">
-                      <p className="text-white/38">Típus</p>
-                      <p className="mt-0.5 truncate text-white/62">{saleTypeLabel(sale.saleType)}</p>
+                    <div className="flex min-w-0 items-center justify-between gap-4 border-t border-white/7 px-3 py-2">
+                      <span className="shrink-0 text-white/34">Eladás típusa</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-white/62">{saleTypeLabel(sale.saleType)}</span>
                     </div>
                   </div>
 
