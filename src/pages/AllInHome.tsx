@@ -109,6 +109,30 @@ function navigate(hash: string) {
   window.location.hash = hash;
 }
 
+function useIsMobileMenu() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(max-width: 820px), (pointer: coarse) and (max-width: 920px)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 820px), (pointer: coarse) and (max-width: 920px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
+  return isMobile;
+}
+
 function ChildMenuButton({ item }: { item: MenuItem }) {
   const Icon = item.icon;
 
@@ -216,6 +240,7 @@ function MainMenuButton({
 }
 
 export default function AllInHome(props: { onLogout?: () => void }) {
+  const isMobileMenu = useIsMobileMenu();
   const [openGroup, setOpenGroup] = useState<GroupKey | null>(null);
   const [carsLevel, setCarsLevel] = useState<CarLevel>("ok");
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
@@ -306,14 +331,22 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         </header>
 
         <div className="space-y-2.5">
-          <MenuGroup
-            title="Üzletek"
-            count={shopItems.length}
-            icon={Store}
-            open={openGroup === "shops"}
-            onToggle={() => toggleGroup("shops")}
-            items={shopItems}
-          />
+          {isMobileMenu ? (
+            <MainMenuButton
+              label="Üzletek"
+              hash="#allinadminmagazinciuc"
+              icon={Store}
+            />
+          ) : (
+            <MenuGroup
+              title="Üzletek"
+              count={shopItems.length}
+              icon={Store}
+              open={openGroup === "shops"}
+              onToggle={() => toggleGroup("shops")}
+              items={shopItems}
+            />
+          )}
 
           <MenuGroup
             title="Raktár / Termékek"
