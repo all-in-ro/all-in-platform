@@ -15,6 +15,7 @@ import AllInMagazinCiucSale from "./pages/AllInMagazinCiucSale";
 import AllInMagazinTarguSale from "./pages/AllInMagazinTarguSale";
 import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
+import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
 
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
@@ -229,6 +230,7 @@ export default function App() {
   const api = useMemo(() => "/api", []);
   const warehouseMobile = useIsWarehouseMobile();
   const inventoryMobile = warehouseMobile;
+  const adminShopMobile = warehouseMobile;
 
   useEffect(() => {
     const onHash = () => setScreen(hashToScreen(window.location.hash || ""));
@@ -375,8 +377,30 @@ export default function App() {
       {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
       {screen.name === "magazinciucsale" && <AllInMagazinCiucSale {...(commonProps as any)} />}
       {screen.name === "magazintargusale" && <AllInMagazinTarguSale {...(commonProps as any)} />}
-      {screen.name === "adminmagazinciuc" && <AllInAdminMagazinCiuc {...(commonProps as any)} />}
-      {screen.name === "adminmagazintargu" && <AllInAdminMagazinTargu {...(commonProps as any)} />}
+      {screen.name === "adminmagazinciuc" && (adminShopMobile ? (
+        <AllInAdminMagazinDashboardMobile
+          actor={session.actor}
+          role={session.role}
+          locationCode="main_warehouse"
+          locationName="Magazin - Miercurea Ciuc"
+          cityName="Csíkszereda"
+          otherLocationCode="magazin_targu_secuiesc"
+          otherLocationName="Magazin - Târgu Secuiesc"
+          otherCityName="Kézdivásárhely"
+        />
+      ) : <AllInAdminMagazinCiuc {...(commonProps as any)} />)}
+      {screen.name === "adminmagazintargu" && (adminShopMobile ? (
+        <AllInAdminMagazinDashboardMobile
+          actor={session.actor}
+          role={session.role}
+          locationCode="magazin_targu_secuiesc"
+          locationName="Magazin - Târgu Secuiesc"
+          cityName="Kézdivásárhely"
+          otherLocationCode="main_warehouse"
+          otherLocationName="Magazin - Miercurea Ciuc"
+          otherCityName="Csíkszereda"
+        />
+      ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
       {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
