@@ -1100,12 +1100,14 @@ export default function AllInAdminMagazinDashboard({
                     <th className="px-3 py-3 text-right">Összeg</th>
                     <th className="px-3 py-3 text-right">Hátralévő</th>
                     <th className="px-3 py-3 text-center">Állapot</th>
-                    <th className="px-3 py-3 text-center">Művelet</th>
+                    <th className="sticky right-0 z-20 w-[112px] border-l border-white/10 bg-[#293548] px-3 py-3 text-center shadow-[-10px_0_18px_rgba(15,23,42,0.18)]">
+                      Művelet
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.recentSales || []).map((sale) => (
-                    <tr key={sale.lineId} className="border-t border-white/8 align-top hover:bg-white/[0.035]">
+                    <tr key={sale.lineId} className="group border-t border-white/8 align-top hover:bg-white/[0.035]">
                       <td className="min-w-[330px] px-3 py-3">
                         <div className="flex items-start gap-3">
                           <ProductThumb
@@ -1142,11 +1144,11 @@ export default function AllInAdminMagazinDashboard({
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-center">
+                      <td className="sticky right-0 z-10 w-[112px] border-l border-white/10 bg-[#344154] px-3 py-3 text-center shadow-[-10px_0_18px_rgba(15,23,42,0.18)] transition-colors group-hover:bg-[#39475a]">
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(sale)}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-300/45 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 active:scale-[0.98]"
+                          className="inline-flex h-9 w-full min-w-[86px] items-center justify-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_16px_rgba(225,29,72,0.24)] transition hover:bg-rose-500 active:scale-[0.98]"
                           title="Eladási sor törlése"
                         >
                           <Trash2 size={14} /> Törlés
