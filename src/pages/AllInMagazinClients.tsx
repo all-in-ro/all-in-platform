@@ -48,6 +48,7 @@ type ClientMode = "search" | "new" | "edit" | "detail";
 type Props = {
   open: boolean;
   initialMode?: "search" | "new";
+  locationCode?: string;
   locationName: string;
   onClose: () => void;
 };
@@ -177,6 +178,7 @@ function paymentMethodLabel(method: string) {
 export default function AllInMagazinClients({
   open,
   initialMode = "search",
+  locationCode: locationCodeProp,
   locationName,
   onClose,
 }: Props) {
@@ -207,7 +209,10 @@ export default function AllInMagazinClients({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const paymentRequestKeyRef = useRef("");
 
-  const locationCode = useMemo(() => locationCodeFromName(locationName), [locationName]);
+  const locationCode = useMemo(
+    () => locationCodeProp || locationCodeFromName(locationName),
+    [locationCodeProp, locationName],
+  );
   const defaultCountyCode = useMemo(() => preferredCountyCode(locationName), [locationName]);
   const yearOptions = useMemo(
     () => Array.from({ length: Math.max(1, currentYear - 2025 + 1) }, (_, index) => currentYear - index),
@@ -336,6 +341,7 @@ export default function AllInMagazinClients({
     setError("");
     try {
       const response = await apiAifListShopCustomers({
+        location: locationCode,
         search: value.trim(),
         limit: 100,
       });
@@ -351,7 +357,12 @@ export default function AllInMagazinClients({
     setDetailLoading(true);
     setError("");
     try {
-      const response = await apiAifGetShopCustomer(customerId, { year, salesLimit: 200, paymentsLimit: 200 });
+      const response = await apiAifGetShopCustomer(customerId, {
+        location: locationCode,
+        year,
+        salesLimit: 200,
+        paymentsLimit: 200,
+      });
       setDetail(response);
       setSelected(response.item);
       setItems((current) => current.map((item) => item.id === response.item.id ? response.item : item));
@@ -461,6 +472,7 @@ export default function AllInMagazinClients({
     setSuccess("");
     try {
       const input = {
+        location: locationCode,
         fullName,
         phone,
         email: draft.email.trim() || null,
@@ -503,7 +515,7 @@ export default function AllInMagazinClients({
     setError("");
     setSuccess("");
     try {
-      const response = await apiAifDeleteShopCustomer(selected.id);
+      const response = await apiAifDeleteShopCustomer(selected.id, { location: locationCode });
       const deletedName = selected.fullName;
       setItems((current) => current.filter((item) => item.id !== selected.id));
       setSelected(null);
@@ -572,7 +584,11 @@ export default function AllInMagazinClients({
     setError("");
     setSuccess("");
     try {
-      const response = await apiAifDetachShopCustomerSale(selected.id, saleDetachTarget.id);
+      const response = await apiAifDetachShopCustomerSale(
+        selected.id,
+        saleDetachTarget.id,
+        { location: locationCode },
+      );
       setSuccess(`${response.saleNumber} törölve a kliens vásárlási előzményeiből. Fennmaradó tartozás: ${formatMoney(response.openBalance)}.`);
       setSaleDetachTarget(null);
       await Promise.all([
