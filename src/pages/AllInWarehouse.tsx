@@ -2617,6 +2617,165 @@ const WAREHOUSE_LABEL_SHEET_CSS = `
 .aifWhPriceUnit { display:inline-block; font-size:7px; margin-left:2px; vertical-align:baseline; }
 `;
 
+const WAREHOUSE_ZEBRA_LABEL_CSS = `
+.aifWarehousePrintLabel.aifWhZebraLabel {
+  width:var(--aif-label-w);
+  height:var(--aif-label-h);
+  padding:1.7mm 2.1mm 1.55mm;
+  border-radius:1.6mm;
+  justify-content:flex-start;
+  gap:0;
+  font-family:Arial, Helvetica, sans-serif;
+}
+.aifWhZebraLabel .aifWhLabelCompany {
+  flex:0 0 auto;
+  margin:0 0 .55mm;
+  font-size:6.6px;
+  line-height:1;
+  letter-spacing:.085em;
+  color:#555;
+}
+.aifWhZebraLabel .aifWhLabelBrand {
+  flex:0 0 auto;
+  margin:0 0 .4mm;
+  font-size:6.8px;
+  line-height:1;
+  letter-spacing:.055em;
+  color:#333;
+}
+.aifWhZebraLabel .aifWhLabelTitle {
+  flex:0 0 5.1mm;
+  min-height:5.1mm;
+  max-height:5.1mm;
+  margin:0;
+  padding:0 .3mm;
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+  white-space:normal;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-size:9.6px;
+  font-weight:700;
+  line-height:1.08;
+  text-align:center;
+  color:#111;
+}
+.aifWhZebraLabel .aifWhLabelMeta {
+  flex:0 0 auto;
+  min-height:0;
+  margin:.35mm 0 .7mm;
+  font-size:7px;
+  line-height:1;
+  color:#111;
+}
+.aifWhZebraLabel .aifWhLabelMeta span {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:9mm;
+  height:3.2mm;
+  padding:0 1.2mm;
+  border:.18mm solid #444;
+  border-radius:1.6mm;
+  font-weight:700;
+}
+.aifWhZebraBarcodeArea {
+  flex:0 0 auto;
+  width:100%;
+  margin:0;
+  padding:0;
+}
+.aifWhZebraLabel .aifWhBarcodeSvgWrap {
+  width:100%;
+  height:9.4mm;
+  flex:0 0 9.4mm;
+  margin:0;
+  overflow:hidden;
+  display:flex;
+  align-items:stretch;
+  justify-content:center;
+}
+.aifWhZebraLabel .aifWhBarcodeSvgWrap svg {
+  display:block;
+  width:100%;
+  height:100%;
+  max-width:100%;
+  max-height:100%;
+}
+.aifWhZebraBarcodeText {
+  height:2.45mm;
+  margin:.2mm 0 .45mm;
+  overflow:hidden;
+  white-space:nowrap;
+  text-align:center;
+  font-family:"Courier New", monospace;
+  font-size:6.4px;
+  line-height:2.2mm;
+  letter-spacing:.045em;
+  color:#111;
+}
+.aifWhZebraInfo {
+  flex:0 0 auto;
+  min-height:5.7mm;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  padding:.45mm .4mm .35mm;
+  border-top:.16mm solid #d8d8d8;
+  border-bottom:.16mm solid #d8d8d8;
+}
+.aifWhZebraLabel .aifWhLabelDescription {
+  margin:0;
+  font-size:6.25px;
+  line-height:1.12;
+  color:#444;
+}
+.aifWhZebraLabel .aifWhLabelCategory {
+  margin:.28mm 0 0;
+  font-size:6.9px;
+  font-weight:700;
+  line-height:1.08;
+  color:#222;
+}
+.aifWhZebraLabel .aifWhLabelCode {
+  flex:0 0 auto;
+  margin:.55mm 0 0;
+  font-size:6.15px;
+  line-height:1.05;
+  color:#666;
+}
+.aifWhZebraLabel .aifWhLabelPrice {
+  flex:0 0 auto;
+  margin:auto 0 0;
+  padding:.75mm 0 0;
+  text-align:center;
+  line-height:.9;
+  border-top:.24mm solid #222;
+  color:#111;
+}
+.aifWhZebraLabel .aifWhPriceMajor {
+  font-size:22px;
+  font-weight:700;
+  letter-spacing:.02em;
+}
+.aifWhZebraLabel .aifWhPriceCents {
+  position:relative;
+  top:-.4em;
+  margin-left:1px;
+  font-size:10px;
+  font-weight:700;
+  vertical-align:baseline;
+}
+.aifWhZebraLabel .aifWhPriceUnit {
+  margin-left:3px;
+  font-size:6.7px;
+  font-weight:700;
+  letter-spacing:.04em;
+  vertical-align:baseline;
+}
+`;
+
 const WAREHOUSE_LABEL_APP_CSS = `
 .aifWarehouseLabelPrintRoot { display:none; }
 .aifWhLabelPreviewFrame {
@@ -2661,6 +2820,7 @@ const WAREHOUSE_LABEL_APP_CSS = `
   border-color:transparent;
 }
 ${WAREHOUSE_LABEL_SHEET_CSS}
+${WAREHOUSE_ZEBRA_LABEL_CSS}
 @media print {
   @page { size:210mm 297mm; margin:0; }
   html, body {
@@ -2853,6 +3013,66 @@ function warehouseLabelContentHtml(label: WarehouseLabelPrintItem, options: Ware
   return html.join("");
 }
 
+
+function warehouseZebraBarcodeBarsSvg(render: WarehouseBarcodeRender) {
+  if (!render?.ok || !render.svg) return "";
+  return String(render.svg)
+    .replace(/<text\b[^>]*>[\s\S]*?<\/text>/gi, "")
+    .replace(/viewBox="0 0 ([0-9.]+) ([0-9.]+)"/i, (_match, width, height) => {
+      const cleanHeight = Math.max(1, Number(height || 0) - 12);
+      return `viewBox="0 0 ${width} ${cleanHeight}"`;
+    });
+}
+
+function warehouseZebraProductCodeWithColor(label: WarehouseLabelPrintItem) {
+  return [label.productCode, label.color]
+    .map((value) => String(value || "").trim())
+    .filter((value) => value && value !== "-")
+    .filter((value, index, all) => all.findIndex((entry) => normalizeSearch(entry) === normalizeSearch(value)) === index)
+    .join(" - ");
+}
+
+function warehouseZebraLabelContentHtml(label: WarehouseLabelPrintItem, options: WarehouseLabelPrintDocumentOptions) {
+  const priceParts = labelPriceParts(label.price);
+  const productCodeWithColor = warehouseZebraProductCodeWithColor(label);
+  const barsSvg = warehouseZebraBarcodeBarsSvg(label.render);
+  const html: string[] = [];
+
+  if (options.labelContent.company && options.labelCompanyName) {
+    html.push(`<div class="aifWhLabelCompany">${labelEscapeHtml(labelCleanText(options.labelCompanyName, 48))}</div>`);
+  }
+  if (options.labelContent.brand && label.brand && label.brand !== "-") {
+    html.push(`<div class="aifWhLabelBrand">${labelEscapeHtml(labelCleanText(label.brand, 42))}</div>`);
+  }
+  if (options.labelContent.title) {
+    html.push(`<div class="aifWhLabelTitle">${labelEscapeHtml(labelCleanText(label.title || "Produs", 72))}</div>`);
+  }
+  if (options.labelContent.sizeColor && label.size && label.size !== "-") {
+    html.push(`<div class="aifWhLabelMeta"><span>${labelEscapeHtml(labelCleanText(label.size, 16))}</span></div>`);
+  }
+  if (options.labelContent.barcode) {
+    html.push(`<div class="aifWhZebraBarcodeArea"><div class="aifWhBarcodeSvgWrap">${barsSvg}</div><div class="aifWhZebraBarcodeText">${labelEscapeHtml(labelCleanText(label.barcode, 64))}</div></div>`);
+  }
+  if ((options.labelContent.description && label.description) || (options.labelContent.category && label.category && label.category !== "-")) {
+    html.push(`<div class="aifWhZebraInfo">`);
+    if (options.labelContent.description && label.description) {
+      html.push(`<div class="aifWhLabelDescription">${labelEscapeHtml(labelCleanText(label.description, 78))}</div>`);
+    }
+    if (options.labelContent.category && label.category && label.category !== "-") {
+      html.push(`<div class="aifWhLabelCategory">${labelEscapeHtml(labelCleanText(label.category, 34))}</div>`);
+    }
+    html.push(`</div>`);
+  }
+  if (options.labelContent.code && (productCodeWithColor || label.barcode)) {
+    html.push(`<div class="aifWhLabelCode">Cod: ${labelEscapeHtml(labelCleanText(productCodeWithColor || label.barcode, 56))}</div>`);
+  }
+  if (options.labelContent.price && priceParts.major) {
+    html.push(`<div class="aifWhLabelPrice"><span class="aifWhPriceMajor">${labelEscapeHtml(priceParts.major)}</span>${priceParts.cents ? `<span class="aifWhPriceCents">${labelEscapeHtml(priceParts.cents)}</span>` : ""}<span class="aifWhPriceUnit">${labelEscapeHtml(labelCleanText(options.labelUnitText || options.labelCurrency, 12))}</span></div>`);
+  }
+
+  return html.join("");
+}
+
 function warehouseLabelPrintStyleString(layout: WarehouseLabelPrintDocumentLayout) {
   return [
     `--aif-label-w:${layout.labelW}mm`,
@@ -2893,7 +3113,7 @@ function warehouseZebraLabelPrintDocumentHtml(
   const safeWidth = Math.max(20, Math.min(120, Number(labelW) || 40));
   const safeHeight = Math.max(15, Math.min(100, Number(labelH) || 46));
   const labelsHtml = labels
-    .map((label) => `<section class="aifWarehouseZebraPrintPage"><div class="aifWarehousePrintLabel ${options.labelShowBorder ? "" : "noBorder"}">${warehouseLabelContentHtml(label, options)}</div></section>`)
+    .map((label) => `<section class="aifWarehouseZebraPrintPage"><div class="aifWarehousePrintLabel aifWhZebraLabel ${options.labelShowBorder ? "" : "noBorder"}">${warehouseZebraLabelContentHtml(label, options)}</div></section>`)
     .join("");
   const rootStyle = `--aif-label-w:${safeWidth}mm;--aif-label-h:${safeHeight}mm`;
 
@@ -2930,6 +3150,7 @@ html, body {
 }
 .aifWarehouseZebraPrintPage:last-child { page-break-after:auto; break-after:auto; }
 ${WAREHOUSE_LABEL_SHEET_CSS}
+${WAREHOUSE_ZEBRA_LABEL_CSS}
 .aifWarehouseZebraPrintPage .aifWarehousePrintLabel {
   width:${safeWidth}mm;
   height:${safeHeight}mm;
@@ -9444,6 +9665,47 @@ export default function AllInWarehouse() {
     });
   }
 
+  function WarehouseZebraLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
+    const priceParts = labelPriceParts(label.price);
+    const productCodeWithColor = warehouseZebraProductCodeWithColor(label);
+    const barsSvg = warehouseZebraBarcodeBarsSvg(label.render);
+    const hasInfo = Boolean(
+      (labelContent.description && label.description) ||
+      (labelContent.category && label.category && label.category !== "-")
+    );
+
+    return (
+      <>
+        {labelContent.company && labelCompanyName && <div className="aifWhLabelCompany">{labelCleanText(labelCompanyName, 48)}</div>}
+        {labelContent.brand && label.brand && label.brand !== "-" && <div className="aifWhLabelBrand">{labelCleanText(label.brand, 42)}</div>}
+        {labelContent.title && <div className="aifWhLabelTitle">{labelCleanText(label.title || "Produs", 72)}</div>}
+        {labelContent.sizeColor && label.size && label.size !== "-" && (
+          <div className="aifWhLabelMeta"><span>{labelCleanText(label.size, 16)}</span></div>
+        )}
+        {labelContent.barcode && (
+          <div className="aifWhZebraBarcodeArea">
+            <div className="aifWhBarcodeSvgWrap" dangerouslySetInnerHTML={{ __html: barsSvg }} />
+            <div className="aifWhZebraBarcodeText">{labelCleanText(label.barcode, 64)}</div>
+          </div>
+        )}
+        {hasInfo && (
+          <div className="aifWhZebraInfo">
+            {labelContent.description && label.description && <div className="aifWhLabelDescription">{labelCleanText(label.description, 78)}</div>}
+            {labelContent.category && label.category && label.category !== "-" && <div className="aifWhLabelCategory">{labelCleanText(label.category, 34)}</div>}
+          </div>
+        )}
+        {labelContent.code && (productCodeWithColor || label.barcode) && <div className="aifWhLabelCode">Cod: {labelCleanText(productCodeWithColor || label.barcode, 56)}</div>}
+        {labelContent.price && priceParts.major && (
+          <div className="aifWhLabelPrice">
+            <span className="aifWhPriceMajor">{priceParts.major}</span>
+            {priceParts.cents && <span className="aifWhPriceCents">{priceParts.cents}</span>}
+            <span className="aifWhPriceUnit">{labelCleanText(labelUnitText || labelCurrency, 12)}</span>
+          </div>
+        )}
+      </>
+    );
+  }
+
   function WarehouseLabelContent({ label }: { label: WarehouseLabelPrintItem }) {
     const priceParts = labelPriceParts(label.price);
     const productCodeWithColor = [label.productCode, label.color]
@@ -12050,7 +12312,7 @@ export default function AllInWarehouse() {
                           style={{ width: `${labelW * zebraLabelPreviewScale}mm`, height: `${labelH * zebraLabelPreviewScale}mm` }}
                         >
                           <div
-                            className={`aifWarehousePrintLabel ${labelShowBorder ? "" : "noBorder"}`}
+                            className={`aifWarehousePrintLabel aifWhZebraLabel ${labelShowBorder ? "" : "noBorder"}`}
                             style={{
                               "--aif-label-w": `${labelW}mm`,
                               "--aif-label-h": `${labelH}mm`,
@@ -12061,7 +12323,7 @@ export default function AllInWarehouse() {
                               transformOrigin: "top left",
                             } as React.CSSProperties & Record<string, string>}
                           >
-                            <WarehouseLabelContent label={labelPrintItems[0]} />
+                            <WarehouseZebraLabelContent label={labelPrintItems[0]} />
                           </div>
                         </div>
                       </div>
