@@ -191,10 +191,10 @@ function sampleScore(values: string[], predicate: (value: string) => boolean): n
 }
 
 const RULES: FieldRule[] = [
-  { field: "barcode", label: FIELD_LABELS.barcode, aliases: ["barcode", "bar code", "ean", "ean13", "gtin", "cod bare", "codbare", "cod de bare", "vonalkod", "vonalkód"], sampleScore: (v) => sampleScore(v, isBarcodeLike) },
+  { field: "barcode", label: FIELD_LABELS.barcode, aliases: ["barcode", "bar code", "ean", "ean13", "gtin", "cod bare", "codbare", "cod de bare", "vonalkod", "vonalkód", "sku", "shopify sku"], sampleScore: (v) => sampleScore(v, isBarcodeLike) },
   { field: "brand", label: FIELD_LABELS.brand, aliases: ["brand", "marca", "márka", "manufacturer", "producator"] },
-  { field: "productCode", label: FIELD_LABELS.productCode, aliases: ["product code", "cod produs", "codprodus", "cod", "model", "style", "style code", "item", "item no", "article", "articol", "sku", "shopify sku", "cod model"] },
-  { field: "variantCode", label: FIELD_LABELS.variantCode, aliases: ["variant code", "cod varianta", "variant", "sku varianta", "size sku", "cod marime", "sku"] },
+  { field: "productCode", label: FIELD_LABELS.productCode, aliases: ["product code", "cod produs", "codprodus", "cod", "model", "style", "style code", "item", "item no", "article", "articol", "cod model"] },
+  { field: "variantCode", label: FIELD_LABELS.variantCode, aliases: ["variant code", "cod varianta", "variant", "sku varianta", "size sku", "cod marime"] },
   { field: "name", label: FIELD_LABELS.name, aliases: ["name", "product name", "denumire", "denumire produs", "nume", "descriere", "description", "megnevezes", "megnevezés", "termen nev", "termek nev", "termék név", "produs"] },
   { field: "colorCode", label: FIELD_LABELS.colorCode, aliases: ["color code", "colour code", "cod culoare", "cod culoare furnizor", "szin cod", "szin kod", "szín kód", "szinkod", "színkód", "culoare cod"] },
   { field: "colorName", label: FIELD_LABELS.colorName, aliases: ["color", "colour", "culoare", "nume culoare", "szin", "szín", "color name", "colour name", "szin nev", "szín név"], sampleScore: (v) => sampleScore(v, isColorLike) },
