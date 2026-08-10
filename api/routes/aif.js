@@ -1591,7 +1591,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawCategory = rawValueByHeaders(raw, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]);
     const rawSubcategory = rawValueByHeaders(raw, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALKATEGORIA", "ALKATEGÓRIA", "AL KATEGORIA", "AL-KATEGORIA"]);
     const rawDescription = rawValueByHeaders(raw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "LONG DESCRIPTION", "DESCRIPTION", "PRODUCT DESCRIPTION", "LEIRAS", "LEÍRÁS"]);
-    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR"]);
+    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU", "SHOPIFY SKU"]);
     const rawGender = rawValueByHeaders(raw, ["GEN", "GENDER", "SEX", "DEPT", "DEPARTMENT", "DEPARTMENT NAME"]);
     const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
     const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
@@ -7230,7 +7230,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
     const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
     const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "URL POZA", "LINK FOTO", "LINK POZA", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
-    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR"]);
+    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU", "SHOPIFY SKU"]);
     const stockRowsInput = Array.isArray(body.stockRows)
       ? body.stockRows
       : Array.isArray(body.stock_rows)
@@ -7318,7 +7318,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const rawMaterial = rawValueByHeaders(manualRaw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "TERMÉK ÖSSZETÉTELE", "TERMEK OSSZETETELE"]);
       const rawSeason = rawValueByHeaders(manualRaw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
       const rawImageUrl = rawValueByHeaders(manualRaw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTÓ", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "LINK FOTO", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
-      const rawBarcode = rawValueByHeaders(manualRaw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "COD BARE", "COD DE BARE", "EAN", "EAN13", "GTIN", "UPC", "VONALKOD", "VONALKÓD"]);
+      const rawBarcode = rawValueByHeaders(manualRaw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "COD BARE", "COD DE BARE", "EAN", "EAN13", "GTIN", "UPC", "VONALKOD", "VONALKÓD", "SKU", "SHOPIFY SKU"]);
       const rawBuyPrice = rawValueByHeaders(manualRaw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
       const rawSellPrice = rawValueByHeaders(manualRaw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
 
