@@ -6737,36 +6737,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          FROM aif_receptions r
          LEFT JOIN aif_suppliers s ON s.id=r.supplier_id
          WHERE r.id::text=$1
-         FOR UPDATE`,
+         FOR UPDATE OF r`,
         [targetReceptionId]
       );
       if (!target.rowCount) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Cél receptió nem található." });
       }
-      if (String(target.rows[0].status || "") === "cancelled") {
+      if (["committed", "cancelled"].includes(String(target.rows[0].status || ""))) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Törölt receptióba nem lehet sort áthelyezni." });
+        return res.status(400).json({ error: "Lezárt vagy törölt receptióba nem lehet sort áthelyezni." });
       }
-
-      // Lezárt receptió is lehet cél. Ilyenkor a korábbi, már készletre vett sorokhoz
-      // nem nyúlunk, csak újranyitjuk a receptiót és a mozgatott sornak külön nyitott
-      // import batch-et használunk / hozunk létre. Emberi rendszerben ez valahogy hasznosabb.
-      if (String(target.rows[0].status || "") === "committed") {
-        await client.query(
-          `UPDATE aif_receptions SET status='draft', updated_at=now() WHERE id=$1`,
-          [target.rows[0].id]
-        );
-      }
-
       let targetBatchId = null;
       const tb = await client.query(
-        `SELECT id
-         FROM aif_import_batches
-         WHERE reception_id=$1
-           AND status NOT IN ('committed','cancelled')
-         ORDER BY created_at DESC
-         LIMIT 1`,
+        `SELECT id FROM aif_import_batches WHERE reception_id=$1 AND status <> 'committed' ORDER BY created_at DESC LIMIT 1`,
         [target.rows[0].id]
       );
       if (tb.rowCount) targetBatchId = tb.rows[0].id;
@@ -6816,22 +6800,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       };
       await refreshBatch(row.source_batch_id);
       await refreshBatch(targetBatchId);
-
-      // A két receptió fejlécét/státuszát is újraszámoljuk, különben a lista úgy tenne,
-      // mintha semmi nem történt volna. Mert nyilván a számok maguktól nem olvassák a gondolatainkat.
-      if (row.source_reception_id) {
-        await refreshReceptionAfterImportHistoryDelete(client, row.source_reception_id);
-      }
-      await refreshReceptionAfterImportHistoryDelete(client, target.rows[0].id);
-
       await client.query("COMMIT");
-      res.json({
-        ok: true,
-        targetBatchId,
-        targetReceptionId: String(target.rows[0].id),
-        sourceReceptionId: row.source_reception_id ? String(row.source_reception_id) : null,
-        targetReceptionReopened: String(target.rows[0].status || "") === "committed",
-      });
+      res.json({ ok: true, targetBatchId });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF move import row failed", e);
