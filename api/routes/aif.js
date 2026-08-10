@@ -109,8 +109,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS locality_code text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS locality_name text NULL`);
         await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS postal_code text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_customers ADD COLUMN IF NOT EXISTS location_id uuid NULL REFERENCES aif_locations(id) ON DELETE RESTRICT`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_county_idx ON aif_shop_customers (county_code) WHERE county_code IS NOT NULL`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_locality_idx ON aif_shop_customers (locality_code) WHERE locality_code IS NOT NULL`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_location_active_idx
+          ON aif_shop_customers (location_id, is_active, lower(full_name))`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_customers_location_phone_idx
+          ON aif_shop_customers (location_id, lower(phone)) WHERE phone IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_ro_counties (
           code text PRIMARY KEY,
@@ -361,6 +366,102 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_events_sale_idx ON aif_shop_sale_events (sale_id, created_at ASC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_events_created_idx ON aif_shop_sale_events (created_at DESC)`);
+
+        // A régi, közös kliensállományt üzletenként szétválasztjuk.
+        // Ha ugyanaz a kliens mindkét üzletben vásárolt, külön kliensrekord készül,
+        // és minden eladás/befizetés annál az üzletnél marad, ahol ténylegesen történt.
+        await pool.query(`DO $$
+          DECLARE
+            customer_rec record;
+            location_rec record;
+            clone_id uuid;
+            first_location boolean;
+          BEGIN
+            FOR customer_rec IN
+              SELECT *
+              FROM aif_shop_customers
+              WHERE location_id IS NULL
+              ORDER BY created_at ASC, id ASC
+            LOOP
+              first_location := true;
+              FOR location_rec IN
+                SELECT location_id, max(last_at) AS last_at
+                FROM (
+                  SELECT s.location_id, max(s.sold_at) AS last_at
+                  FROM aif_shop_sales s
+                  WHERE s.customer_id=customer_rec.id
+                    AND s.location_id IS NOT NULL
+                  GROUP BY s.location_id
+                  UNION ALL
+                  SELECT p.location_id, max(p.paid_at) AS last_at
+                  FROM aif_shop_customer_payments p
+                  WHERE p.customer_id=customer_rec.id
+                    AND p.location_id IS NOT NULL
+                  GROUP BY p.location_id
+                ) usage_by_location
+                GROUP BY location_id
+                ORDER BY max(last_at) DESC NULLS LAST, location_id
+              LOOP
+                IF first_location THEN
+                  UPDATE aif_shop_customers
+                  SET location_id=location_rec.location_id,
+                      updated_at=now()
+                  WHERE id=customer_rec.id;
+                  first_location := false;
+                ELSE
+                  INSERT INTO aif_shop_customers (
+                    full_name, phone, email, address, city, notes, credit_limit, is_active,
+                    created_by, updated_by, created_at, updated_at,
+                    country_code, county_code, county_name, locality_code, locality_name, postal_code,
+                    location_id
+                  )
+                  SELECT
+                    full_name, phone, email, address, city, notes, credit_limit, is_active,
+                    created_by, updated_by, created_at, updated_at,
+                    country_code, county_code, county_name, locality_code, locality_name, postal_code,
+                    location_rec.location_id
+                  FROM aif_shop_customers
+                  WHERE id=customer_rec.id
+                  RETURNING id INTO clone_id;
+
+                  UPDATE aif_shop_sales
+                  SET customer_id=clone_id
+                  WHERE customer_id=customer_rec.id
+                    AND location_id=location_rec.location_id;
+
+                  UPDATE aif_shop_customer_payments
+                  SET customer_id=clone_id
+                  WHERE customer_id=customer_rec.id
+                    AND location_id=location_rec.location_id;
+                END IF;
+              END LOOP;
+            END LOOP;
+
+            // A befizetés klienskapcsolata kövesse a hozzá rendelt bizonylatot,
+            // ha az összes allokáció ugyanahhoz a szétválasztott klienshez tartozik.
+            UPDATE aif_shop_customer_payments p
+            SET customer_id=aligned.customer_id,
+                location_id=aligned.location_id
+            FROM (
+              SELECT
+                a.customer_payment_id,
+                min(s.customer_id::text)::uuid AS customer_id,
+                min(s.location_id::text)::uuid AS location_id
+              FROM aif_shop_customer_payment_allocations a
+              JOIN aif_shop_sales s ON s.id=a.sale_id
+              WHERE s.customer_id IS NOT NULL
+                AND s.location_id IS NOT NULL
+              GROUP BY a.customer_payment_id
+              HAVING count(DISTINCT s.customer_id)=1
+                 AND count(DISTINCT s.location_id)=1
+            ) aligned
+            WHERE p.id=aligned.customer_payment_id
+              AND (
+                p.customer_id IS DISTINCT FROM aligned.customer_id
+                OR p.location_id IS DISTINCT FROM aligned.location_id
+              );
+          END $$`);
+
         return true;
       })().catch((error) => {
         aifShopSalesSchemaPromise = null;
@@ -15357,6 +15458,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       localityCode: row.locality_code || null,
       localityName: row.locality_name || row.city || null,
       postalCode: row.postal_code || null,
+      locationId: row.location_id ? String(row.location_id) : null,
+      locationCode: row.location_code || null,
+      locationName: row.location_name || null,
       formattedAddress: [
         row.locality_name || row.city,
         row.county_name,
@@ -15462,10 +15566,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
-  async function aifLoadShopCustomerSnapshot(client, customerId, year) {
+  async function aifLoadShopCustomerSnapshot(client, customerId, year, locationId) {
     const result = await client.query(
       `SELECT
          c.*,
+         l.code AS location_code,
+         l.name AS location_name,
          COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0)::numeric AS open_balance,
          count(s.id) FILTER (WHERE s.status='completed' AND s.balance_due > 0)::int AS open_sales,
          count(s.id) FILTER (WHERE s.status='completed')::int AS sale_count,
@@ -15477,11 +15583,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          COALESCE(sum(s.paid_total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_paid_total,
          max(s.sold_at) FILTER (WHERE s.status='completed') AS last_sale_at
        FROM aif_shop_customers c
-       LEFT JOIN aif_shop_sales s ON s.customer_id=c.id
-       WHERE c.id::text=$1 AND c.is_active=true
-       GROUP BY c.id
+       JOIN aif_locations l ON l.id=c.location_id
+       LEFT JOIN aif_shop_sales s
+         ON s.customer_id=c.id
+        AND s.location_id=c.location_id
+       WHERE c.id::text=$1
+         AND c.is_active=true
+         AND c.location_id=$3
+       GROUP BY c.id, l.id, l.code, l.name
        LIMIT 1`,
-      [customerId, year]
+      [customerId, year, locationId]
     );
     return result.rows[0] || null;
   }
@@ -15645,21 +15756,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.get("/shop-customers", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
       const search = text(req.query.q || req.query.search);
       const limit = Math.min(150, Math.max(1, Number(req.query.limit || 60)));
-      const args = [];
-      const where = ["c.is_active=true"];
+      const args = [location.id];
+      const where = ["c.is_active=true", "c.location_id=$1"];
       if (search) {
         args.push(`%${search}%`);
+        const searchParam = `$${args.length}`;
         where.push(`(
-          c.full_name ILIKE $1
-          OR COALESCE(c.phone,'') ILIKE $1
-          OR COALESCE(c.email,'') ILIKE $1
-          OR COALESCE(c.address,'') ILIKE $1
-          OR COALESCE(c.city,'') ILIKE $1
-          OR COALESCE(c.county_name,'') ILIKE $1
-          OR COALESCE(c.locality_name,'') ILIKE $1
-          OR COALESCE(c.postal_code,'') ILIKE $1
+          c.full_name ILIKE ${searchParam}
+          OR COALESCE(c.phone,'') ILIKE ${searchParam}
+          OR COALESCE(c.email,'') ILIKE ${searchParam}
+          OR COALESCE(c.address,'') ILIKE ${searchParam}
+          OR COALESCE(c.city,'') ILIKE ${searchParam}
+          OR COALESCE(c.county_name,'') ILIKE ${searchParam}
+          OR COALESCE(c.locality_name,'') ILIKE ${searchParam}
+          OR COALESCE(c.postal_code,'') ILIKE ${searchParam}
         )`);
       }
       args.push(limit);
@@ -15667,6 +15780,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const result = await pool.query(
         `SELECT
            c.*,
+           l.code AS location_code,
+           l.name AS location_name,
            COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0)::numeric AS open_balance,
            count(s.id) FILTER (WHERE s.status='completed' AND s.balance_due > 0)::int AS open_sales,
            count(s.id) FILTER (WHERE s.status='completed')::int AS sale_count,
@@ -15678,9 +15793,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(sum(s.paid_total) FILTER (WHERE s.status='completed'),0)::numeric AS lifetime_paid_total,
            max(s.sold_at) FILTER (WHERE s.status='completed') AS last_sale_at
          FROM aif_shop_customers c
-         LEFT JOIN aif_shop_sales s ON s.customer_id=c.id
+         JOIN aif_locations l ON l.id=c.location_id
+         LEFT JOIN aif_shop_sales s
+           ON s.customer_id=c.id
+          AND s.location_id=c.location_id
          WHERE ${where.join(" AND ")}
-         GROUP BY c.id
+         GROUP BY c.id, l.id, l.code, l.name
          ORDER BY
            CASE WHEN COALESCE(sum(s.balance_due) FILTER (WHERE s.status='completed' AND s.balance_due > 0),0) > 0 THEN 0 ELSE 1 END,
            max(s.sold_at) DESC NULLS LAST,
@@ -15688,10 +15806,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LIMIT ${limitParam}`,
         args
       );
-      res.json({ ok: true, items: result.rows.map(aifShopCustomerResponse), count: result.rowCount });
+      res.json({
+        ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        items: result.rows.map(aifShopCustomerResponse),
+        count: result.rowCount,
+      });
     } catch (error) {
       console.error("AIF shop customers list failed", error);
-      res.status(500).json({ error: error?.message || "A kliensek nem tölthetők be." });
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kliensek nem tölthetők be.",
+        code: error?.code || null,
+      });
     }
   });
 
@@ -15710,14 +15837,27 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        const location = await aifResolveShopLocation(req, client, body.location);
         const geo = await aifResolveRomaniaCustomerGeo(client, body, { required: true });
         const existing = await client.query(
-          `SELECT id FROM aif_shop_customers
-           WHERE lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) = lower(regexp_replace($1,'[^0-9+]','','g'))
-           ORDER BY is_active DESC, updated_at DESC
+          `SELECT id
+           FROM aif_shop_customers c
+           WHERE lower(regexp_replace(COALESCE(c.phone,''),'[^0-9+]','','g')) =
+                 lower(regexp_replace($1,'[^0-9+]','','g'))
+             AND (
+               c.location_id=$2
+               OR (
+                 c.location_id IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM aif_shop_sales s WHERE s.customer_id=c.id)
+                 AND NOT EXISTS (SELECT 1 FROM aif_shop_customer_payments p WHERE p.customer_id=c.id)
+               )
+             )
+           ORDER BY CASE WHEN c.location_id=$2 THEN 0 ELSE 1 END,
+                    c.is_active DESC,
+                    c.updated_at DESC
            LIMIT 1
            FOR UPDATE`,
-          [phone]
+          [phone, location.id]
         );
         let row;
         let duplicate = false;
@@ -15737,33 +15877,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  locality_name=$11,
                  postal_code=COALESCE($12,postal_code),
                  notes=COALESCE($13,notes),
+                 location_id=$14,
                  is_active=true,
-                 updated_by=$14,
+                 updated_by=$15,
                  updated_at=now()
              WHERE id=$1
              RETURNING *`,
             [
               existing.rows[0].id, fullName, phone, email, address,
               geo.localityName, geo.countryCode, geo.countyCode, geo.countyName,
-              geo.localityCode, geo.localityName, geo.postalCode, notes, actorFrom(req),
+              geo.localityCode, geo.localityName, geo.postalCode, notes, location.id, actorFrom(req),
             ]
           );
-          row = updated.rows[0];
+          row = { ...updated.rows[0], location_code: location.code, location_name: location.name };
         } else {
           const created = await client.query(
             `INSERT INTO aif_shop_customers (
                full_name, phone, email, address, city,
                country_code, county_code, county_name, locality_code, locality_name, postal_code,
-               notes, created_by, updated_by
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+               notes, location_id, created_by, updated_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
              RETURNING *`,
             [
               fullName, phone, email, address, geo.localityName,
               geo.countryCode, geo.countyCode, geo.countyName, geo.localityCode, geo.localityName,
-              geo.postalCode, notes, actorFrom(req),
+              geo.postalCode, notes, location.id, actorFrom(req),
             ]
           );
-          row = created.rows[0];
+          row = { ...created.rows[0], location_code: location.code, location_name: location.name };
         }
         await client.query("COMMIT");
         res.json({ ok: true, duplicate, item: aifShopCustomerResponse(row) });
@@ -15792,20 +15933,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await ensureAifShopSalesSchema();
       await client.query("BEGIN");
 
+      const body = req.body || {};
+      const location = await aifResolveShopLocation(req, client, body.location);
       const current = await client.query(
         `SELECT *
          FROM aif_shop_customers
-         WHERE id::text=$1 AND is_active=true
+         WHERE id::text=$1
+           AND location_id=$2
+           AND is_active=true
          FOR UPDATE`,
-        [customerId]
+        [customerId, location.id]
       );
       if (!current.rowCount) {
-        const error = new Error("A kliens nem található vagy már törölve lett.");
+        const error = new Error("A kliens nem található ebben az üzletben, vagy már törölve lett.");
         error.statusCode = 404;
         throw error;
       }
 
-      const body = req.body || {};
       const fullName = text(body.fullName || body.full_name || body.name);
       const phone = text(body.phone);
       const email = emptyToNull(body.email);
@@ -15827,14 +15971,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT id, full_name
          FROM aif_shop_customers
          WHERE id<>$1
+           AND location_id=$2
            AND is_active=true
            AND lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) =
-               lower(regexp_replace($2,'[^0-9+]','','g'))
+               lower(regexp_replace($3,'[^0-9+]','','g'))
          LIMIT 1`,
-        [current.rows[0].id, phone]
+        [current.rows[0].id, location.id, phone]
       );
       if (phoneConflict.rowCount) {
-        const error = new Error(`Ez a telefonszám már egy másik aktív klienshez tartozik: ${phoneConflict.rows[0].full_name || "ismeretlen kliens"}.`);
+        const error = new Error(`Ez a telefonszám ebben az üzletben már egy másik aktív klienshez tartozik: ${phoneConflict.rows[0].full_name || "ismeretlen kliens"}.`);
         error.statusCode = 409;
         error.code = "shop_customer_phone_conflict";
         throw error;
@@ -15858,6 +16003,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              updated_by=$14,
              updated_at=now()
          WHERE id=$1
+           AND location_id=$15
          RETURNING *`,
         [
           current.rows[0].id,
@@ -15874,24 +16020,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           geo.postalCode,
           notes,
           actor,
+          location.id,
         ]
       );
 
-      // A klienshez kötött régi bizonylatok fejlécében is a friss név és telefonszám
-      // jelenjen meg. A pénzügyi és készletadatokhoz ez természetesen nem nyúl.
+      // Csak ennek az üzletnek a bizonylatfejléceit frissítjük.
       await client.query(
         `UPDATE aif_shop_sales
          SET customer_name=$2,
              customer_phone=$3,
              updated_at=now()
-         WHERE customer_id=$1`,
-        [current.rows[0].id, fullName, phone]
+         WHERE customer_id=$1
+           AND location_id=$4`,
+        [current.rows[0].id, fullName, phone, location.id]
       );
 
       const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
-      const snapshot = await aifLoadShopCustomerSnapshot(client, current.rows[0].id, currentYear);
+      const snapshot = await aifLoadShopCustomerSnapshot(client, current.rows[0].id, currentYear, location.id);
       await client.query("COMMIT");
-      res.json({ ok: true, item: aifShopCustomerResponse(snapshot || updated.rows[0]) });
+      res.json({ ok: true, item: aifShopCustomerResponse(snapshot || { ...updated.rows[0], location_code: location.code, location_name: location.name }) });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF shop customer update failed", error);
@@ -15913,26 +16060,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await ensureAifShopSalesSchema();
       await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, req.query.location);
 
       const result = await client.query(
         `SELECT
            c.*,
-           (SELECT count(*)::int FROM aif_shop_sales s WHERE s.customer_id=c.id) AS sales_count,
-           (SELECT count(*)::int FROM aif_shop_customer_payments p WHERE p.customer_id=c.id) AS payments_count,
+           (SELECT count(*)::int
+              FROM aif_shop_sales s
+             WHERE s.customer_id=c.id AND s.location_id=$2) AS sales_count,
+           (SELECT count(*)::int
+              FROM aif_shop_customer_payments p
+             WHERE p.customer_id=c.id AND p.location_id=$2) AS payments_count,
            COALESCE((
              SELECT sum(s.balance_due)
              FROM aif_shop_sales s
              WHERE s.customer_id=c.id
+               AND s.location_id=$2
                AND s.status='completed'
                AND s.balance_due > 0
            ),0)::numeric AS open_balance
          FROM aif_shop_customers c
-         WHERE c.id::text=$1 AND c.is_active=true
+         WHERE c.id::text=$1
+           AND c.location_id=$2
+           AND c.is_active=true
          FOR UPDATE`,
-        [customerId]
+        [customerId, location.id]
       );
       if (!result.rowCount) {
-        const error = new Error("A kliens nem található vagy már törölve lett.");
+        const error = new Error("A kliens nem található ebben az üzletben, vagy már törölve lett.");
         error.statusCode = 404;
         throw error;
       }
@@ -15957,13 +16112,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            SET is_active=false,
                updated_by=$2,
                updated_at=now()
-           WHERE id=$1`,
-          [customer.id, actor]
+           WHERE id=$1 AND location_id=$3`,
+          [customer.id, actor, location.id]
         );
       } else {
         try {
           await client.query("SAVEPOINT aif_delete_shop_customer");
-          await client.query(`DELETE FROM aif_shop_customers WHERE id=$1`, [customer.id]);
+          await client.query(
+            `DELETE FROM aif_shop_customers WHERE id=$1 AND location_id=$2`,
+            [customer.id, location.id]
+          );
           await client.query("RELEASE SAVEPOINT aif_delete_shop_customer");
         } catch (deleteError) {
           try { await client.query("ROLLBACK TO SAVEPOINT aif_delete_shop_customer"); } catch {}
@@ -15975,8 +16133,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              SET is_active=false,
                  updated_by=$2,
                  updated_at=now()
-             WHERE id=$1`,
-            [customer.id, actor]
+             WHERE id=$1 AND location_id=$3`,
+            [customer.id, actor, location.id]
           );
         }
       }
@@ -15986,6 +16144,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         ok: true,
         mode,
         id: String(customer.id),
+        location: { id: String(location.id), code: location.code, name: location.name },
         usage: { sales, payments, openBalance },
       });
     } catch (error) {
@@ -16005,6 +16164,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await ensureAifShopSalesSchema();
       const customerId = text(req.params.id);
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
       const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
       const requestedYear = Number(req.query.year || currentYear);
       const year = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100
@@ -16013,8 +16173,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const salesLimit = Math.min(500, Math.max(1, Number(req.query.salesLimit || req.query.sales_limit || 200)));
       const paymentsLimit = Math.min(500, Math.max(1, Number(req.query.paymentsLimit || req.query.payments_limit || 200)));
 
-      const customer = await aifLoadShopCustomerSnapshot(pool, customerId, year);
-      if (!customer) return res.status(404).json({ error: "A kliens nem található vagy inaktív." });
+      const customer = await aifLoadShopCustomerSnapshot(pool, customerId, year, location.id);
+      if (!customer) return res.status(404).json({ error: "A kliens nem található ebben az üzletben vagy inaktív." });
 
       const salesResult = await pool.query(
         `SELECT
@@ -16053,11 +16213,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
          LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
          WHERE s.customer_id=$1
-           AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$2::int
+           AND s.location_id=$2
+           AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
          GROUP BY s.id, l.id, l.code, l.name
          ORDER BY s.sold_at DESC, s.id DESC
-         LIMIT $3`,
-        [customer.id, year, salesLimit]
+         LIMIT $4`,
+        [customer.id, location.id, year, salesLimit]
       );
 
       const paymentsResult = await pool.query(
@@ -16083,15 +16244,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_shop_customer_payment_allocations a ON a.customer_payment_id=p.id
          LEFT JOIN aif_shop_sales s ON s.id=a.sale_id
          WHERE p.customer_id=$1
+           AND p.location_id=$2
          GROUP BY p.id, l.id, l.code, l.name
          ORDER BY p.paid_at DESC, p.id DESC
-         LIMIT $2`,
-        [customer.id, paymentsLimit]
+         LIMIT $3`,
+        [customer.id, location.id, paymentsLimit]
       );
 
       const item = aifShopCustomerResponse(customer);
       res.json({
         ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
         item,
         summary: {
           year,
@@ -16108,7 +16271,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     } catch (error) {
       console.error("AIF shop customer detail failed", error);
-      res.status(500).json({ error: error?.message || "A kliens adatlapja nem tölthető be." });
+      const status = Number(error?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kliens adatlapja nem tölthető be.",
+        code: error?.code || null,
+      });
     }
   });
 
@@ -16121,16 +16288,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       await ensureAifShopSalesSchema();
       await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, req.query.location);
 
       const customerResult = await client.query(
         `SELECT id, full_name, phone
          FROM aif_shop_customers
-         WHERE id::text=$1 AND is_active=true
+         WHERE id::text=$1
+           AND location_id=$2
+           AND is_active=true
          FOR UPDATE`,
-        [customerId]
+        [customerId, location.id]
       );
       if (!customerResult.rowCount) {
-        const error = new Error("A kliens nem található vagy inaktív.");
+        const error = new Error("A kliens nem található ebben az üzletben vagy inaktív.");
         error.statusCode = 404;
         throw error;
       }
@@ -16140,25 +16310,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT s.*, l.code AS location_code, l.name AS location_name
          FROM aif_shop_sales s
          JOIN aif_locations l ON l.id=s.location_id
-         WHERE s.id::text=$1 AND s.customer_id=$2
+         WHERE s.id::text=$1
+           AND s.customer_id=$2
+           AND s.location_id=$3
          FOR UPDATE OF s`,
-        [saleId, customer.id]
+        [saleId, customer.id, location.id]
       );
       if (!saleResult.rowCount) {
-        const error = new Error("Ez a vásárlás nem tartozik ehhez a klienshez, vagy már törölve lett tőle.");
+        const error = new Error("Ez a vásárlás nem tartozik ehhez a klienshez ebben az üzletben, vagy már törölve lett tőle.");
         error.statusCode = 404;
         throw error;
       }
       const sale = saleResult.rows[0];
-
-      if (normCode(req.session?.role) === "shop") {
-        const sessionLocation = await aifResolveShopLocation(req, client, sale.location_id);
-        if (String(sessionLocation.id) !== String(sale.location_id)) {
-          const error = new Error("Másik üzlet vásárlását ebből a munkamenetből nem lehet módosítani.");
-          error.statusCode = 403;
-          throw error;
-        }
-      }
 
       const allocations = await client.query(
         `SELECT count(*)::int AS count
@@ -16191,8 +16354,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              customer_phone=NULL,
              raw=COALESCE(raw,'{}'::jsonb) || jsonb_build_object('customerDetachment',$2::jsonb),
              updated_at=now()
-         WHERE id=$1`,
-        [sale.id, JSON.stringify(detachAudit)]
+         WHERE id=$1 AND location_id=$3`,
+        [sale.id, JSON.stringify(detachAudit), location.id]
       );
 
       await client.query(
@@ -16216,12 +16379,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
 
       await client.query(
-        `UPDATE aif_shop_customers SET updated_by=$2, updated_at=now() WHERE id=$1`,
-        [customer.id, actor]
+        `UPDATE aif_shop_customers
+         SET updated_by=$2, updated_at=now()
+         WHERE id=$1 AND location_id=$3`,
+        [customer.id, actor, location.id]
       );
 
       const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
-      const snapshot = await aifLoadShopCustomerSnapshot(client, customer.id, currentYear);
+      const snapshot = await aifLoadShopCustomerSnapshot(client, customer.id, currentYear, location.id);
       await client.query("COMMIT");
       res.json({
         ok: true,
@@ -16229,7 +16394,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         customerId: String(customer.id),
         saleId: String(sale.id),
         saleNumber: sale.sale_number,
-        item: aifShopCustomerResponse(snapshot || customer),
+        item: aifShopCustomerResponse(snapshot || { ...customer, location_id: location.id, location_code: location.code, location_name: location.name }),
         openBalance: aifNumber(snapshot?.open_balance),
       });
     } catch (error) {
@@ -16267,18 +16432,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const location = await aifResolveShopLocation(req, client, body.location);
 
       const duplicate = await client.query(
-        `SELECT id, customer_id FROM aif_shop_customer_payments WHERE client_request_id=$1 LIMIT 1`,
+        `SELECT id, customer_id, location_id
+         FROM aif_shop_customer_payments
+         WHERE client_request_id=$1
+         LIMIT 1`,
         [idempotencyKey]
       );
       if (duplicate.rowCount) {
-        if (String(duplicate.rows[0].customer_id) !== String(customerId)) {
-          const collision = new Error("Ez a befizetési azonosító már egy másik klienshez tartozik.");
+        if (
+          String(duplicate.rows[0].customer_id) !== String(customerId)
+          || String(duplicate.rows[0].location_id || "") !== String(location.id)
+        ) {
+          const collision = new Error("Ez a befizetési azonosító már egy másik klienshez vagy üzlethez tartozik.");
           collision.statusCode = 409;
           throw collision;
         }
         const payment = await aifLoadShopCustomerPayment(client, duplicate.rows[0].id);
         const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
-        const customer = await aifLoadShopCustomerSnapshot(client, customerId, currentYear);
+        const customer = await aifLoadShopCustomerSnapshot(client, customerId, currentYear, location.id);
         await client.query("COMMIT");
         return res.json({
           ok: true,
@@ -16290,8 +16461,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const customerLock = await client.query(
-        `SELECT id FROM aif_shop_customers WHERE id::text=$1 AND is_active=true FOR UPDATE`,
-        [customerId]
+        `SELECT id
+         FROM aif_shop_customers
+         WHERE id::text=$1
+           AND location_id=$2
+           AND is_active=true
+         FOR UPDATE`,
+        [customerId, location.id]
       );
       if (!customerLock.rowCount) {
         const error = new Error("A kliens nem található vagy inaktív.");
@@ -16303,11 +16479,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `SELECT id, sale_number, sold_at, total, paid_total, balance_due
          FROM aif_shop_sales
          WHERE customer_id=$1
+           AND location_id=$2
            AND status='completed'
            AND balance_due > 0
          ORDER BY sold_at ASC, id ASC
          FOR UPDATE`,
-        [customerLock.rows[0].id]
+        [customerLock.rows[0].id, location.id]
       );
       const openBalance = aifRoundMoney(
         openSales.rows.reduce((sum, sale) => sum + aifNumber(sale.balance_due), 0)
@@ -16423,13 +16600,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       await client.query(
-        `UPDATE aif_shop_customers SET updated_by=$2, updated_at=now() WHERE id=$1`,
-        [customerLock.rows[0].id, actorFrom(req)]
+        `UPDATE aif_shop_customers
+         SET updated_by=$2, updated_at=now()
+         WHERE id=$1 AND location_id=$3`,
+        [customerLock.rows[0].id, actorFrom(req), location.id]
       );
 
       const payment = await aifLoadShopCustomerPayment(client, paymentId);
       const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
-      const customer = await aifLoadShopCustomerSnapshot(client, customerId, currentYear);
+      const customer = await aifLoadShopCustomerSnapshot(client, customerId, currentYear, location.id);
       await client.query("COMMIT");
       res.json({
         ok: true,
@@ -17070,11 +17249,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       if (requestedCustomerId) {
         const customerResult = await client.query(
-          `SELECT * FROM aif_shop_customers WHERE id::text=$1 AND is_active=true FOR UPDATE`,
-          [requestedCustomerId]
+          `SELECT *
+           FROM aif_shop_customers
+           WHERE id::text=$1
+             AND location_id=$2
+             AND is_active=true
+           FOR UPDATE`,
+          [requestedCustomerId, location.id]
         );
         if (!customerResult.rowCount) {
-          const error = new Error("A kiválasztott kliens nem található vagy inaktív.");
+          const error = new Error("A kiválasztott kliens nem található ebben az üzletben vagy inaktív.");
           error.statusCode = 400;
           throw error;
         }
@@ -17082,12 +17266,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       } else if (customerName || customerPhone) {
         if (customerPhone) {
           const existingCustomer = await client.query(
-            `SELECT * FROM aif_shop_customers
-             WHERE lower(COALESCE(phone,''))=lower($1)
-             ORDER BY is_active DESC, updated_at DESC
+            `SELECT *
+             FROM aif_shop_customers c
+             WHERE lower(regexp_replace(COALESCE(c.phone,''),'[^0-9+]','','g')) =
+                   lower(regexp_replace($1,'[^0-9+]','','g'))
+               AND (
+                 c.location_id=$2
+                 OR (
+                   c.location_id IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM aif_shop_sales s WHERE s.customer_id=c.id)
+                   AND NOT EXISTS (SELECT 1 FROM aif_shop_customer_payments p WHERE p.customer_id=c.id)
+                 )
+               )
+             ORDER BY CASE WHEN c.location_id=$2 THEN 0 ELSE 1 END,
+                      c.is_active DESC,
+                      c.updated_at DESC
              LIMIT 1
              FOR UPDATE`,
-            [customerPhone]
+            [customerPhone, location.id]
           );
           if (existingCustomer.rowCount) {
             const updatedCustomer = await client.query(
@@ -17103,8 +17299,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                    locality_name=$10,
                    postal_code=COALESCE($11,postal_code),
                    notes=COALESCE($12,notes),
+                   location_id=$13,
                    is_active=true,
-                   updated_by=$13,
+                   updated_by=$14,
                    updated_at=now()
                WHERE id=$1
                RETURNING *`,
@@ -17112,7 +17309,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 existingCustomer.rows[0].id, customerName, customerEmail, customerAddress,
                 customerGeo.localityName, customerGeo.countryCode, customerGeo.countyCode,
                 customerGeo.countyName, customerGeo.localityCode, customerGeo.localityName,
-                customerGeo.postalCode, customerNote, actorFrom(req),
+                customerGeo.postalCode, customerNote, location.id, actorFrom(req),
               ]
             );
             customerRow = updatedCustomer.rows[0];
@@ -17123,14 +17320,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             `INSERT INTO aif_shop_customers (
                full_name, phone, email, address, city,
                country_code, county_code, county_name, locality_code, locality_name, postal_code,
-               notes, created_by, updated_by
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+               notes, location_id, created_by, updated_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
              RETURNING *`,
             [
               customerName, customerPhone || null, customerEmail, customerAddress,
               customerGeo.localityName, customerGeo.countryCode, customerGeo.countyCode,
               customerGeo.countyName, customerGeo.localityCode, customerGeo.localityName,
-              customerGeo.postalCode, customerNote, actorFrom(req),
+              customerGeo.postalCode, customerNote, location.id, actorFrom(req),
             ]
           );
           customerRow = createdCustomer.rows[0];
