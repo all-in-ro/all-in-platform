@@ -25,6 +25,42 @@ type ParsedAccessCard = {
   code: string;
 };
 
+class LoginRequestError extends Error {
+  status: number;
+  serverMessage: string;
+
+  constructor(status: number, serverMessage: string) {
+    super(serverMessage || `HTTP ${status}`);
+    this.name = "LoginRequestError";
+    this.status = status;
+    this.serverMessage = serverMessage;
+  }
+}
+
+function shopModeLabel(mode: "csik" | "kezdi") {
+  return mode === "csik" ? "csíkszeredai" : "kézdivásárhelyi";
+}
+
+function friendlyLoginError(error: unknown, targetMode: LoginMode) {
+  const status = error instanceof LoginRequestError ? error.status : 0;
+  const raw = String(error instanceof Error ? error.message : error || "").trim();
+  const normalized = raw.toLowerCase();
+
+  if (targetMode === "admin") {
+    if (status === 401 || status === 403 || normalized.includes("unauthor") || normalized.includes("invalid")) {
+      return "Hibás admin jelszó. Ellenőrizd, és próbáld újra.";
+    }
+    if (status >= 500) return "A belépési szolgáltatás most nem elérhető. Próbáld újra néhány másodperc múlva.";
+    return raw && !/^http\s+\d+$/i.test(raw) ? raw : "Az admin belépés nem sikerült.";
+  }
+
+  if (status === 401 || status === 403 || normalized.includes("unauthor") || normalized.includes("invalid")) {
+    return "Hibás vagy inaktív belépőkód ehhez az üzlethez. Ellenőrizd a kódot, és próbáld újra.";
+  }
+  if (status >= 500) return "A belépési szolgáltatás most nem elérhető. Próbáld újra néhány másodperc múlva.";
+  return raw && !/^http\s+\d+$/i.test(raw) ? raw : "A belépés nem sikerült. Ellenőrizd a kódot.";
+}
+
 function inferInitialModeFromHash(): Mode {
   const h = (typeof window !== "undefined" ? window.location.hash : "") || "";
   if (h === "#allinusers" || h === "#admin" || h === "#users") return "admin";
@@ -99,6 +135,16 @@ export default function Login({
   const [scannerActive, setScannerActive] = useState(false);
   const scanBufferRef = useRef("");
   const scanTimerRef = useRef<number | null>(null);
+  const secretInputRef = useRef<HTMLInputElement | null>(null);
+  const lastAutoSubmitRef = useRef("");
+
+  const focusSecretForRetry = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      secretInputRef.current?.focus();
+      secretInputRef.current?.select();
+    });
+  }, []);
 
   useEffect(() => {
     const onHash = () => {
@@ -115,6 +161,7 @@ export default function Login({
     setErr("");
     setBusy(false);
     scanBufferRef.current = "";
+    lastAutoSubmitRef.current = "";
 
     if (scanTimerRef.current !== null) {
       window.clearTimeout(scanTimerRef.current);
@@ -151,45 +198,85 @@ export default function Login({
       credentials: "include",
       cache: "no-store",
     });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(String(data?.error || data?.message || `HTTP ${response.status}`));
+
+    const rawBody = await response.text().catch(() => "");
+    let data: any = null;
+    if (rawBody) {
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        data = null;
+      }
     }
-    return data?.session as Session;
+
+    if (!response.ok) {
+      const serverMessage = String(
+        data?.error ||
+        data?.message ||
+        rawBody ||
+        `HTTP ${response.status}`
+      ).trim();
+      throw new LoginRequestError(response.status, serverMessage);
+    }
+
+    if (!data?.session) {
+      throw new LoginRequestError(response.status || 500, "A szerver nem adott vissza érvényes munkamenetet.");
+    }
+
+    return data.session as Session;
   }, [api]);
 
   const loginWithMode = useCallback(async (targetMode: LoginMode, rawValue: string) => {
     if (busy) return;
     setErr("");
-    const normalized = normalizeShopAccessCode(rawValue);
-    const effectiveMode: LoginMode = targetMode === "admin" ? "admin" : normalized?.mode || targetMode;
+
+    const normalized = targetMode === "admin" ? null : normalizeShopAccessCode(rawValue);
     const value = targetMode === "admin" ? rawValue.trim() : normalized?.code || "";
 
     if (!value) {
-      setErr(effectiveMode === "admin" ? "Írd be az admin jelszót." : "Olvasd be a kártyát vagy írd be a belépőkódot.");
+      setErr(targetMode === "admin" ? "Írd be az admin jelszót." : "Olvasd be a kártyát vagy írd be a belépőkódot.");
+      focusSecretForRetry();
+      return;
+    }
+
+    // Ha a kártya maga tartalmazza az üzletet, egy kiválasztott üzleti
+    // belépésnél nem váltunk át csendben a másik üzletre. Ez korábban azért
+    // volt zavaró, mert egy kézdis kód a csíkszeredai képernyőről is beléptetett.
+    if (
+      targetMode !== "admin" &&
+      normalized?.mode &&
+      normalized.mode !== targetMode
+    ) {
+      setErr(
+        `Ez a belépőkód nem a ${shopModeLabel(targetMode)} üzlethez tartozik. ` +
+        `A kód a ${shopModeLabel(normalized.mode)} üzlethez van kiadva.`
+      );
+      setScannerActive(false);
+      focusSecretForRetry();
       return;
     }
 
     setBusy(true);
     try {
       const session = await requestSession(
-        effectiveMode === "admin"
+        targetMode === "admin"
           ? { kind: "admin", password: value }
           : {
               kind: "shop",
-              shopId: effectiveMode === "csik" ? "csikszereda" : "kezdivasarhely",
+              shopId: targetMode === "csik" ? "csikszereda" : "kezdivasarhely",
               code: value,
             },
       );
       onLoggedIn(session);
-    } catch (error: any) {
-      setErr(String(error?.message || error || "A belépés nem sikerült."));
+    } catch (error: unknown) {
+      setErr(friendlyLoginError(error, targetMode));
+      focusSecretForRetry();
     } finally {
       setBusy(false);
       setScannerActive(false);
       scanBufferRef.current = "";
     }
-  }, [busy, onLoggedIn, requestSession]);
+  }, [busy, focusSecretForRetry, onLoggedIn, requestSession]);
 
   const loginScannedCard = useCallback(async (rawValue: string) => {
     if (busy) return;
@@ -222,8 +309,13 @@ export default function Login({
         }
       }
       throw lastError || new Error("A beolvasott kód egyik üzlethez sem érvényes.");
-    } catch (error: any) {
-      setErr(String(error?.message || error || "A beolvasott kód egyik üzlethez sem érvényes."));
+    } catch (error: unknown) {
+      const status = error instanceof LoginRequestError ? error.status : 0;
+      setErr(
+        status === 401 || status === 403
+          ? "A beolvasott kód hibás, inaktív vagy már nem használható."
+          : "A beolvasott kód egyik üzlethez sem érvényes."
+      );
     } finally {
       setBusy(false);
       setScannerActive(false);
@@ -283,7 +375,13 @@ export default function Login({
     const normalized = normalizeShopAccessCode(secret);
     if (!normalized || normalized.code.length < 8) return;
 
+    const submitKey = `${mode}:${normalized.mode || "raw"}:${normalized.code}`;
+    // Ugyanazt a hibás kódot egyszer próbáljuk automatikusan. A busy állapot
+    // visszaállása többé nem indít végtelen 401-es újrapróbálást.
+    if (lastAutoSubmitRef.current === submitKey) return;
+
     const timer = window.setTimeout(() => {
+      lastAutoSubmitRef.current = submitKey;
       void loginWithMode(mode, secret);
     }, 160);
     return () => window.clearTimeout(timer);
@@ -294,6 +392,7 @@ export default function Login({
     setSecret("");
     setErr("");
     scanBufferRef.current = "";
+    lastAutoSubmitRef.current = "";
   };
 
   const submit = async () => {
@@ -435,17 +534,28 @@ export default function Login({
                   <div className="relative">
                     <KeyRound className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input
-                      className="h-13 w-full rounded-2xl border border-slate-300 bg-white py-3 pl-12 pr-4 text-base font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#2a8d8b]/55 focus:ring-4 focus:ring-[#2a8d8b]/10"
+                      ref={secretInputRef}
+                      className={`h-13 w-full rounded-2xl border bg-white py-3 pl-12 pr-4 text-base font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:ring-4 ${
+                        err
+                          ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                          : "border-slate-300 focus:border-[#2a8d8b]/55 focus:ring-[#2a8d8b]/10"
+                      }`}
                       type={mode === "admin" ? "password" : "text"}
                       placeholder={selectedMeta?.placeholder}
                       value={secret}
-                      onChange={(event) => setSecret(event.target.value)}
+                      onChange={(event) => {
+                        lastAutoSubmitRef.current = "";
+                        setErr("");
+                        setSecret(event.target.value);
+                      }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") void submit();
                       }}
                       autoComplete={mode === "admin" ? "current-password" : "off"}
                       autoCapitalize="characters"
                       spellCheck={false}
+                      aria-invalid={Boolean(err)}
+                      aria-describedby={err ? "allin-login-error" : undefined}
                       autoFocus
                     />
                   </div>
@@ -458,13 +568,21 @@ export default function Login({
                   </div>
                 ) : null}
 
-                {err ? (
-                  <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-normal text-rose-700">
-                    {err}
-                  </div>
-                ) : null}
+                <div className="mt-3 min-h-[58px]" aria-live="polite">
+                  {err ? (
+                    <div
+                      id="allin-login-error"
+                      className="flex min-h-[58px] items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-normal leading-5 text-rose-700 shadow-[0_8px_20px_rgba(190,24,93,0.06)]"
+                    >
+                      <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-600">
+                        <Shield size={14} />
+                      </span>
+                      <span>{err}</span>
+                    </div>
+                  ) : null}
+                </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-3">
+                <div className="mt-3 grid grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={cancelToChooser}
