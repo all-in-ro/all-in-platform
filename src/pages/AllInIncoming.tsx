@@ -285,7 +285,7 @@ const IMAGE_URL_HEADER_ALIASES = [
   "IMAGE", "IMAGE URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "URL POZA", "URL POZĂ",
   "KÉP", "KEP", "KÉP URL", "KEP URL", "PICTURE", "PICTURE URL"
 ];
-const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "EAN-13", "COD EAN", "Cod EAN", "UPC", "SKU", "SHOPIFY SKU"];
+const BARCODE_HEADER_ALIASES = ["BARCODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "EAN-13", "COD EAN", "Cod EAN", "UPC", "GTIN", "COD BARE", "COD DE BARE"];
 const MATERIAL_HEADER_ALIASES = ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "ANYAG", "ÖSSZETÉTEL", "OSSZETETEL"];
 const TITLE_HEADER_ALIASES = ["ARTICOL", "ARTICLE", "DENUMIRE", "DENUMIRE PRODUS", "DENUMIRE_PRODUS", "NUME PRODUS", "PRODUCT NAME", "PRODUCT", "ITEM", "ITEM NAME", "TITLE", "NÉV", "NEV", "MEGNEVEZÉS", "MEGNEVEZES"];
 const PRODUCT_TYPE_HEADER_ALIASES = ["RODESCR", "RO DESCR", "RO_DESCR", "TIP PRODUS", "PRODUCT TYPE", "TERMÉKTÍPUS", "TERMEKTIPUS", "TYPE", "MODEL TYPE"];
@@ -1511,6 +1511,74 @@ function colorCodeKey(value: unknown) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+type AifImportBarcodeConflict = {
+  barcode: string;
+  rows: Array<{ rowNo: number | string; label: string; identity: string }>;
+};
+
+function importBarcodeIdentity(row: AifParsedRow) {
+  const normalized = (row?.normalized || {}) as Record<string, unknown>;
+  const productCode = firstNonEmptyText(
+    normalized.supplierProductCode,
+    normalized.productCode,
+    normalized.modelCode,
+    (row as any)?.supplier_product_code,
+    (row as any)?.product_code,
+    (row as any)?.model_code
+  );
+  const split = splitCodProdus(productCode);
+  const color = firstNonEmptyText(
+    split.colorCode,
+    normalized.supplierColorCode,
+    normalized.colorCode,
+    (row as any)?.supplier_color_code,
+    (row as any)?.color_code
+  );
+  const size = normalizeAifSizeValue(firstNonEmptyText(
+    normalized.supplierSize,
+    normalized.size,
+    (row as any)?.supplier_size,
+    (row as any)?.size
+  ));
+  const codeKey = normMatchKey(split.fullCode || productCode || split.modelCode);
+  const colorKey = normMatchKey(color);
+  const sizeKey = normMatchKey(size);
+  return {
+    key: `${codeKey}|${colorKey}|${sizeKey}`,
+    label: [split.fullCode || productCode || "kód nélkül", color || "szín nélkül", size || "méret nélkül"].join(" / "),
+  };
+}
+
+function findImportBarcodeConflicts(inputRows: AifParsedRow[]): AifImportBarcodeConflict[] {
+  const byBarcode = new Map<string, Map<string, Array<{ rowNo: number | string; label: string; identity: string }>>>();
+  inputRows.forEach((row, index) => {
+    const barcode = cleanIncomingBarcode((row?.normalized as any)?.barcode || (row as any)?.barcode);
+    if (!barcode) return;
+    const identity = importBarcodeIdentity(row);
+    const barcodeKey = incomingBarcodeLookupKey(barcode);
+    const identities = byBarcode.get(barcodeKey) || new Map();
+    const entries = identities.get(identity.key) || [];
+    entries.push({ rowNo: row.rowNo || index + 1, label: identity.label, identity: identity.key });
+    identities.set(identity.key, entries);
+    byBarcode.set(barcodeKey, identities);
+  });
+
+  const conflicts: AifImportBarcodeConflict[] = [];
+  for (const [barcode, identities] of byBarcode.entries()) {
+    if (identities.size <= 1) continue;
+    conflicts.push({ barcode, rows: Array.from(identities.values()).flat() });
+  }
+  return conflicts;
+}
+
+function importBarcodeConflictMessage(conflicts: AifImportBarcodeConflict[]) {
+  const first = conflicts[0];
+  if (!first) return "";
+  const examples = first.rows.slice(0, 4).map((row) => `${row.rowNo}. sor: ${row.label}`).join(" • ");
+  const more = conflicts.length > 1 ? ` További ütköző vonalkódok: ${conflicts.length - 1}.` : "";
+  return `Vonalkód ütközés: a ${first.barcode} több külön termékvariánshoz került. ${examples}.${more} Javítsd a vonalkód-oszlop társítását vagy a hibás sorokat mentés előtt.`;
+}
+
 export default function AllInIncoming(_props: Props) {
   const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locations, setLocations] = useState<AifLocation[]>([]);
@@ -1860,8 +1928,9 @@ export default function AllInIncoming(_props: Props) {
     const split = splitCodProdus(sourceProductCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
     if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
-    if (split.colorCode && !normalized.colorCode) normalized.colorCode = split.colorCode;
-    if (split.colorCode && !normalized.supplierColorCode) normalized.supplierColorCode = split.colorCode;
+    const suffixIsSupplierColor = /^\d{1,4}$/.test(String(split.colorCode || ""));
+    if (split.colorCode && (!normalized.colorCode || suffixIsSupplierColor)) normalized.colorCode = split.colorCode;
+    if (split.colorCode && (!normalized.supplierColorCode || suffixIsSupplierColor)) normalized.supplierColorCode = split.colorCode;
 
     const rawColorCode = rawValueByHeader(row, COLOR_CODE_HEADER_ALIASES);
     if (rawColorCode && !String(normalized.colorCode || "").trim()) normalized.colorCode = String(rawColorCode).trim();
@@ -2194,6 +2263,7 @@ export default function AllInIncoming(_props: Props) {
   const rowProblems = useMemo(() => rows.filter((r) => aifRowErrors(r, sizeTypes, brandSizeCodes).length > 0).length, [rows, sizeTypes, brandSizeCodes]);
   const approvedRowList = useMemo(() => rows.filter((row, index) => approvedRows[rowKey(row, index)]), [rows, approvedRows]);
   const approvedProblems = useMemo(() => approvedRowList.filter((r) => aifRowErrors(r, sizeTypes, brandSizeCodes).length > 0).length, [approvedRowList, sizeTypes, brandSizeCodes]);
+  const approvedBarcodeConflicts = useMemo(() => findImportBarcodeConflicts(approvedRowList), [approvedRowList]);
   const approvedCount = approvedRowList.length;
   const excludedCount = Math.max(0, rows.length - approvedCount);
   const approvedGoodsValue = useMemo(() => approvedRowList.reduce((sum, row) => {
@@ -2274,7 +2344,7 @@ export default function AllInIncoming(_props: Props) {
   const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white placeholder:text-red-100/60 shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
   const requiredSelectInput = (missing: boolean) => `${selectInput} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
   const disabledExchangeRateInput = "h-9 w-full cursor-not-allowed rounded-lg border border-white/14 bg-[#303b4e]/55 px-3 text-sm text-white/45 caret-transparent outline-none opacity-70 transition placeholder:text-transparent focus:border-white/14 focus:ring-0 [color-scheme:dark] font-normal";
-  const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && receptionReady);
+  const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && approvedBarcodeConflicts.length === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
     return workbench.columns.reduce((sum, c) => sum + c.warnings.length + (c.field !== "ignore" && c.confidence < 60 ? 1 : 0), 0) + workbench.warnings.length;
@@ -3317,7 +3387,12 @@ export default function AllInIncoming(_props: Props) {
       setWorkbenchOpen(true);
       setPreviewLimit(25);
       setApprovedRows({});
-      setMessage(`${normalizedRows.length} sor beolvasva előnézetre. Importáláshoz előbb jelöld ki a valóban használható sorokat.`);
+      const barcodeConflicts = findImportBarcodeConflicts(normalizedRows);
+      setMessage(
+        barcodeConflicts.length
+          ? `${normalizedRows.length} sor beolvasva. ${importBarcodeConflictMessage(barcodeConflicts)}`
+          : `${normalizedRows.length} sor beolvasva előnézetre. Importáláshoz előbb jelöld ki a valóban használható sorokat.`
+      );
     } catch (e: any) {
       setRows([]);
       setWorkbench(null);
@@ -3433,6 +3508,7 @@ export default function AllInIncoming(_props: Props) {
   async function performSaveDraft(sourceRows: AifParsedRow[], differenceMode?: InvoiceDifferenceMode) {
     const selectedRows = approvedRowsFrom(sourceRows);
     const selectedProblems = selectedRows.filter((row) => aifRowErrors(row, sizeTypes, brandSizeCodes).length > 0).length;
+    const selectedBarcodeConflicts = findImportBarcodeConflicts(selectedRows);
     const selectedGoodsValue = selectedRows.reduce((sum, row) => {
       const normalized = row.normalized || {};
       return sum + toNumber(normalized.qty) * toNumber(normalized.buyPrice);
@@ -3453,6 +3529,10 @@ export default function AllInIncoming(_props: Props) {
     }
     if (selectedProblems > 0) {
       setMessage("A kijelölt sorok között hibás vagy hiányos adat van. Javítás vagy kizárás után menthető.");
+      return;
+    }
+    if (selectedBarcodeConflicts.length) {
+      setMessage(importBarcodeConflictMessage(selectedBarcodeConflicts));
       return;
     }
 
@@ -3559,6 +3639,10 @@ export default function AllInIncoming(_props: Props) {
     }
     if (approvedProblems > 0) {
       setMessage("A kijelölt sorok között hibás vagy hiányos adat van. Javítás vagy kizárás után menthető.");
+      return;
+    }
+    if (approvedBarcodeConflicts.length) {
+      setMessage(importBarcodeConflictMessage(approvedBarcodeConflicts));
       return;
     }
     if (!receptionHeaderReady) {
