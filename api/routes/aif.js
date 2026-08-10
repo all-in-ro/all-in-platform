@@ -437,8 +437,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               END LOOP;
             END LOOP;
 
-            // A befizetés klienskapcsolata kövesse a hozzá rendelt bizonylatot,
-            // ha az összes allokáció ugyanahhoz a szétválasztott klienshez tartozik.
+            -- A befizetés klienskapcsolata kövesse a hozzá rendelt bizonylatot,
+            -- ha az összes allokáció ugyanahhoz a szétválasztott klienshez tartozik.
             UPDATE aif_shop_customer_payments p
             SET customer_id=aligned.customer_id,
                 location_id=aligned.location_id
