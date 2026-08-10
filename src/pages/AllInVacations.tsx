@@ -14,6 +14,7 @@ import {
   Clock3,
   History,
   MessageSquareText,
+  Pencil,
   Home,
   RefreshCw,
   Save,
@@ -541,9 +542,14 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [pendingRequestsBusy, setPendingRequestsBusy] = useState(false);
   const [pendingRequestsError, setPendingRequestsError] = useState("");
   const [decisionTarget, setDecisionTarget] = useState<VacationRequestItem | null>(null);
-  const [decisionMode, setDecisionMode] = useState<"approved" | "rejected">("approved");
+  const [decisionMode, setDecisionMode] = useState<"approved" | "rejected" | "edit">("approved");
   const [decisionNote, setDecisionNote] = useState("");
   const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionError, setDecisionError] = useState("");
+  const [requestEditDayFrom, setRequestEditDayFrom] = useState("");
+  const [requestEditDayTo, setRequestEditDayTo] = useState("");
+  const [requestEditHoursOff, setRequestEditHoursOff] = useState(4);
+  const [requestEditNote, setRequestEditNote] = useState("");
   const pendingByEmployee = useMemo(() => {
     const map = new Map<string, number>();
     for (const request of pendingRequests) {
@@ -552,6 +558,28 @@ export default function AllInVacations({ api }: { api?: string }) {
     }
     return map;
   }, [pendingRequests]);
+  const pendingRequestedByEmployee = useMemo(() => {
+    const map = new Map<string, { vacationWorkingDays: number; shortHours: number }>();
+    for (const request of pendingRequests) {
+      const key = empKey(request.employeeName);
+      const current = map.get(key) || { vacationWorkingDays: 0, shortHours: 0 };
+      if (request.kind === "vacation") {
+        current.vacationWorkingDays += countVacationPeriod(
+          request.dayFrom,
+          request.dayTo || request.dayFrom,
+          vacationSettings.workingDays,
+        ).workingDays;
+      } else {
+        current.shortHours += Number(request.hoursOff || 0);
+      }
+      map.set(key, current);
+    }
+    return map;
+  }, [pendingRequests, vacationSettings.workingDays]);
+  const selectedPendingRequests = useMemo(
+    () => pendingRequests.filter((request) => empKey(request.employeeName) === empKey(selected)),
+    [pendingRequests, selected],
+  );
   const [activityMonths, setActivityMonths] = useState<VacationActivityMonth[]>([]);
   const [activityMonthsBusy, setActivityMonthsBusy] = useState(false);
   const [archiveYearOpen, setArchiveYearOpen] = useState(false);
@@ -884,23 +912,115 @@ export default function AllInVacations({ api }: { api?: string }) {
     }
   };
 
-  const openRequestDecision = (request: VacationRequestItem, decision: "approved" | "rejected") => {
+  const openRequestDecision = (request: VacationRequestItem, decision: "approved" | "rejected" | "edit") => {
     setDecisionTarget(request);
     setDecisionMode(decision);
     setDecisionNote("");
+    setDecisionError("");
+    setRequestEditDayFrom(request.dayFrom || "");
+    setRequestEditDayTo(request.dayTo || request.dayFrom || "");
+    setRequestEditHoursOff(Number(request.hoursOff || 4));
+    setRequestEditNote(String(request.note || ""));
     setPendingRequestsError("");
+  };
+
+  const decisionPeriodPreview = useMemo(() => {
+    if (!decisionTarget || decisionTarget.kind !== "vacation") return null;
+    return countVacationPeriod(
+      requestEditDayFrom,
+      requestEditDayTo || requestEditDayFrom,
+      vacationSettings.workingDays,
+    );
+  }, [decisionTarget, requestEditDayFrom, requestEditDayTo, vacationSettings.workingDays]);
+
+  const decisionRequestChanged = useMemo(() => {
+    if (!decisionTarget) return false;
+    return requestEditDayFrom !== String(decisionTarget.dayFrom || "")
+      || requestEditDayTo !== String(decisionTarget.dayTo || decisionTarget.dayFrom || "")
+      || Number(requestEditHoursOff || 0) !== Number(decisionTarget.hoursOff || (decisionTarget.kind === "short" ? 4 : 0))
+      || requestEditNote.trim() !== String(decisionTarget.note || "").trim();
+  }, [decisionTarget, requestEditDayFrom, requestEditDayTo, requestEditHoursOff, requestEditNote]);
+
+  const persistPendingRequestEdits = async (target: VacationRequestItem) => {
+    const start = String(requestEditDayFrom || "").trim();
+    const end = String(requestEditDayTo || requestEditDayFrom || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) {
+      throw new Error("Ellenőrizd a módosított kezdő és záró dátumot.");
+    }
+    if (target.kind === "vacation") {
+      const preview = countVacationPeriod(start, end, vacationSettings.workingDays);
+      if (preview.workingDays <= 0) throw new Error("A módosított időszakban nincs elszámolható munkanap.");
+    } else {
+      const hours = Math.trunc(Number(requestEditHoursOff || 0));
+      if (!Number.isFinite(hours) || hours < 1 || hours > 12) {
+        throw new Error("Az órás elkérés 1 és 12 óra között lehet.");
+      }
+    }
+
+    if (!decisionRequestChanged) return target;
+
+    const response = await fetch(`${apiBase}/admin/vacations/requests/${encodeURIComponent(target.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        dayFrom: start,
+        dayTo: target.kind === "short" ? start : end,
+        hoursOff: target.kind === "short" ? Math.trunc(Number(requestEditHoursOff || 4)) : null,
+        note: requestEditNote.trim() || null,
+      }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
+    const updated = body?.item as VacationRequestItem | undefined;
+    if (!updated?.id) throw new Error("A módosított szabadságkérés nem érkezett vissza a szervertől.");
+    setPendingRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setDecisionTarget(updated);
+    return updated;
+  };
+
+  const savePendingRequestEdit = async () => {
+    if (!decisionTarget || decisionBusy) return;
+    setDecisionBusy(true);
+    setDecisionError("");
+    try {
+      const updated = await persistPendingRequestEdits(decisionTarget);
+      const preview = updated.kind === "vacation"
+        ? countVacationPeriod(updated.dayFrom, updated.dayTo || updated.dayFrom, vacationSettings.workingDays)
+        : null;
+      setDecisionTarget(null);
+      setPageNotice(
+        updated.kind === "vacation"
+          ? `${updated.employeeName} kérelme módosítva: ${updated.dayFrom} – ${updated.dayTo} • ${preview?.workingDays || 0} munkanap.`
+          : `${updated.employeeName} órás elkérése módosítva.`,
+      );
+      await fetchPendingRequests();
+    } catch (error: any) {
+      setDecisionError(String(error?.message || error || "A szabadságkérés módosítása nem sikerült."));
+    } finally {
+      setDecisionBusy(false);
+    }
   };
 
   const submitRequestDecision = async () => {
     if (!decisionTarget) return;
+    if (decisionMode === "edit") {
+      await savePendingRequestEdit();
+      return;
+    }
     if (decisionMode === "rejected" && !decisionNote.trim()) {
-      setPendingRequestsError("Elutasításnál rövid indoklást kell írni az alkalmazottnak.");
+      setDecisionError("Elutasításnál rövid indoklást kell írni az alkalmazottnak.");
       return;
     }
     setDecisionBusy(true);
-    setPendingRequestsError("");
+    setDecisionError("");
     try {
-      const response = await fetch(`${apiBase}/admin/vacations/requests/${encodeURIComponent(decisionTarget.id)}/decision`, {
+      let target = decisionTarget;
+      if (decisionMode === "approved" && decisionRequestChanged) {
+        target = await persistPendingRequestEdits(target);
+      }
+
+      const response = await fetch(`${apiBase}/admin/vacations/requests/${encodeURIComponent(target.id)}/decision`, {
         method: "POST",
         headers: { "content-type": "application/json", Accept: "application/json" },
         credentials: "include",
@@ -908,13 +1028,16 @@ export default function AllInVacations({ api }: { api?: string }) {
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
-      const employeeName = decisionTarget.employeeName;
+      const employeeName = target.employeeName;
+      const approvedPreview = target.kind === "vacation"
+        ? countVacationPeriod(target.dayFrom, target.dayTo || target.dayFrom, vacationSettings.workingDays)
+        : null;
       setDecisionTarget(null);
       setDecisionNote("");
       setPageNotice(
         decisionMode === "approved"
-          ? `${employeeName} szabadságkérése elfogadva és automatikusan bekerült a nyilvántartásba.`
-          : `${employeeName} szabadságkérése elutasítva. Az alkalmazott értesítést kap.`
+          ? `${employeeName} szabadságkérése elfogadva${approvedPreview ? ` • ${approvedPreview.workingDays} munkanap rögzítve` : ""}.`
+          : `${employeeName} szabadságkérése elutasítva. Az alkalmazott értesítést kap.`,
       );
       await fetchPendingRequests();
       if (selected && empKey(selected) === empKey(employeeName)) {
@@ -922,7 +1045,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       }
       if (summaryOpen) await fetchYearSummary(summaryYear);
     } catch (error: any) {
-      setPendingRequestsError(String(error?.message || error || "A szabadságkérés elbírálása nem sikerült."));
+      setDecisionError(String(error?.message || error || "A szabadságkérés elbírálása nem sikerült."));
     } finally {
       setDecisionBusy(false);
     }
@@ -1401,6 +1524,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               const balanceDays = employeeComp?.balanceDays ?? 0;
               const balanceHours = employeeComp?.balanceHours ?? 0;
               const pendingCount = pendingByEmployee.get(empKey(e.name)) || 0;
+              const pendingRequested = pendingRequestedByEmployee.get(empKey(e.name)) || { vacationWorkingDays: 0, shortHours: 0 };
 
               return (
                 <button
@@ -1437,7 +1561,13 @@ export default function AllInVacations({ api }: { api?: string }) {
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0">
                           <div className="truncate text-sm text-white">{e.name}</div>
-                          {pendingCount > 0 ? <span className="mt-1 inline-flex rounded-full border border-rose-100/45 bg-white/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-rose-50">{pendingCount} elbírálatlan kérés</span> : null}
+                          {pendingCount > 0 ? (
+                            <span className="mt-1 inline-flex flex-wrap items-center gap-x-1 rounded-full border border-rose-100/45 bg-white/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-rose-50">
+                              <span>{pendingCount} elbírálatlan kérés</span>
+                              {pendingRequested.vacationWorkingDays > 0 ? <span>• {pendingRequested.vacationWorkingDays} munkanap kérve</span> : null}
+                              {pendingRequested.shortHours > 0 ? <span>• {pendingRequested.shortHours} óra kérve</span> : null}
+                            </span>
+                          ) : null}
                         </div>
                         <ChevronRight
                           className={
@@ -1457,7 +1587,7 @@ export default function AllInVacations({ api }: { api?: string }) {
                   <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
                     <span className="rounded-lg border border-white/12 bg-white/[0.14] px-1.5 py-1.5 text-[10px] text-white/80">
                       <strong className="block text-xs font-normal text-white">{vacationDays}</strong>
-                      szab. nap
+                      rögz. szab.
                     </span>
                     <span className="rounded-lg border border-[#b7f1ed]/18 bg-[#174c55]/52 px-1.5 py-1.5 text-[10px] text-[#d7fffd]">
                       <strong className="block text-xs font-normal text-white">{shortDaysValue} / {shortHoursValue}</strong>
@@ -1641,6 +1771,44 @@ export default function AllInVacations({ api }: { api?: string }) {
           <div className="mt-2 text-xl text-white">{selectedComp.balanceDays}n / {selectedComp.balanceHours}ó</div>
         </div>
       </div>
+
+      {selectedPendingRequests.length ? (
+        <section className="overflow-hidden rounded-2xl border border-rose-200/34 bg-gradient-to-r from-[#6f1729] via-[#5b2431] to-[#3d3744] shadow-[0_12px_28px_rgba(127,16,35,0.18)]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100/12 px-4 py-3">
+            <div>
+              <div className="text-[9px] uppercase tracking-[0.14em] text-rose-100/58">Függő szabadságkérés</div>
+              <div className="mt-1 text-sm text-white">A kért teljes időszak, nem csak a kiválasztott hónap</div>
+            </div>
+            <span className="rounded-full border border-rose-100/28 bg-white/10 px-2.5 py-1 text-[10px] text-rose-50">{selectedPendingRequests.length} kérelem</span>
+          </div>
+          <div className="grid gap-2 p-3 sm:grid-cols-2">
+            {selectedPendingRequests.map((request) => {
+              const preview = request.kind === "vacation"
+                ? countVacationPeriod(request.dayFrom, request.dayTo || request.dayFrom, vacationSettings.workingDays)
+                : null;
+              return (
+                <button
+                  key={request.id}
+                  type="button"
+                  onClick={() => openRequestDecision(request, "edit")}
+                  className="rounded-2xl border border-white/12 bg-black/12 p-3 text-left transition hover:border-rose-100/32 hover:bg-black/18"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm text-white">{requestPeriodLabel(request)}</div>
+                      <div className="mt-1 text-[10px] text-white/48">{request.kind === "vacation" ? `${preview?.calendarDays || 0} naptári nap • ${preview?.excludedDays || 0} pihenőnap` : `${request.hoursOff || 0} óra`}</div>
+                    </div>
+                    <span className="rounded-xl border border-rose-100/24 bg-rose-500/18 px-2.5 py-1 text-sm text-white">
+                      {request.kind === "vacation" ? `${preview?.workingDays || 0} munkanap` : `${request.hoursOff || 0} óra`}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-1.5 text-[10px] text-rose-100/70"><Pencil className="h-3.5 w-3.5" /> Kattints a dátum javításához</div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <section id="vacation-new-entry" className={panel}>
         <div className={panelHead}>
@@ -2286,7 +2454,11 @@ export default function AllInVacations({ api }: { api?: string }) {
                 <div className="col-span-full flex min-h-[76px] items-center justify-center gap-2 rounded-xl border border-rose-100/14 bg-black/10 text-sm text-rose-50/72">
                   <RefreshCw className="h-4 w-4 animate-spin" /> Kérelmek betöltése…
                 </div>
-              ) : pendingRequests.map((request) => (
+              ) : pendingRequests.map((request) => {
+                const requestPreview = request.kind === "vacation"
+                  ? countVacationPeriod(request.dayFrom, request.dayTo || request.dayFrom, vacationSettings.workingDays)
+                  : null;
+                return (
                 <article
                   key={request.id}
                   className="grid gap-2 rounded-2xl border border-rose-100/18 bg-[#303746] px-3 py-2.5 shadow-[0_8px_20px_rgba(0,0,0,0.14)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
@@ -2332,6 +2504,18 @@ export default function AllInVacations({ api }: { api?: string }) {
                         {request.kind === "vacation" ? "Szabadság" : "Órás elkérés"}
                       </span>
                       <span className="text-sm text-white">{requestPeriodLabel(request)}</span>
+                      {request.kind === "vacation" ? (
+                        <>
+                          <span className="rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2 py-1 text-[10px] text-[#e5fffd]">
+                            {requestPreview?.workingDays || 0} munkanap összesen
+                          </span>
+                          <span className="text-[10px] text-white/42">
+                            {requestPreview?.calendarDays || 0} naptári nap • {requestPreview?.excludedDays || 0} pihenőnap kihagyva
+                          </span>
+                        </>
+                      ) : (
+                        <span className="rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2 py-1 text-[10px] text-[#e5fffd]">{request.hoursOff || 0} óra</span>
+                      )}
                       {request.note ? (
                         <span className="min-w-0 flex-1 truncate text-[11px] text-white/48" title={request.note}>
                           <MessageSquareText className="mr-1 inline h-3.5 w-3.5" />{request.note}
@@ -2340,7 +2524,14 @@ export default function AllInVacations({ api }: { api?: string }) {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 sm:w-[214px]">
+                  <div className="grid grid-cols-3 gap-2 sm:w-[326px]">
+                    <button
+                      type="button"
+                      onClick={() => openRequestDecision(request, "edit")}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-amber-200/28 bg-amber-400/10 px-3 text-[11px] text-amber-50 transition hover:bg-amber-400/18 active:scale-[0.98]"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Szerkesztés
+                    </button>
                     <button
                       type="button"
                       onClick={() => openRequestDecision(request, "rejected")}
@@ -2357,8 +2548,8 @@ export default function AllInVacations({ api }: { api?: string }) {
                     </button>
                   </div>
                 </article>
-              ))}
-            </div>
+                );
+              })}            </div>
           </section>
         ) : null}
 
@@ -2462,54 +2653,107 @@ export default function AllInVacations({ api }: { api?: string }) {
 
       {decisionTarget && (
         <div className="fixed inset-0 z-[136] grid place-items-center bg-slate-950/80 px-3 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !decisionBusy) setDecisionTarget(null); }}>
-          <section className={`w-full max-w-[620px] overflow-hidden rounded-[26px] border text-white shadow-[0_34px_110px_rgba(0,0,0,0.58)] ${decisionMode === "approved" ? "border-[#7bd7d4]/38 bg-[#344452]" : "border-rose-200/38 bg-[#4b3039]"}`}>
-            <header className={`flex items-start justify-between gap-3 border-b border-white/12 px-5 py-4 ${decisionMode === "approved" ? "bg-gradient-to-r from-[#1f6d62] to-[#2a8d8b]" : "bg-gradient-to-r from-[#8f1730] to-[#5c2230]"}`}>
+          <section className={`w-full max-w-[680px] overflow-hidden rounded-[26px] border text-white shadow-[0_34px_110px_rgba(0,0,0,0.58)] ${decisionMode === "approved" ? "border-[#7bd7d4]/38 bg-[#344452]" : decisionMode === "edit" ? "border-amber-200/34 bg-[#443f3a]" : "border-rose-200/38 bg-[#4b3039]"}`}>
+            <header className={`flex items-start justify-between gap-3 border-b border-white/12 px-5 py-4 ${decisionMode === "approved" ? "bg-gradient-to-r from-[#1f6d62] to-[#2a8d8b]" : decisionMode === "edit" ? "bg-gradient-to-r from-[#705925] to-[#4f4737]" : "bg-gradient-to-r from-[#8f1730] to-[#5c2230]"}`}>
               <div className="flex min-w-0 items-center gap-3">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/28 bg-white/12">
-                  {decisionMode === "approved" ? <ThumbsUp className="h-5 w-5" /> : <ThumbsDown className="h-5 w-5" />}
+                  {decisionMode === "approved" ? <ThumbsUp className="h-5 w-5" /> : decisionMode === "edit" ? <Pencil className="h-5 w-5" /> : <ThumbsDown className="h-5 w-5" />}
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-white/60">Szabadságkérés elbírálása</div>
-                  <div className="mt-1 truncate text-xl">{decisionMode === "approved" ? "Kérés elfogadása" : "Kérés elutasítása"}</div>
+                  <div className="text-[10px] uppercase tracking-[0.16em] text-white/60">Szabadságkérés kezelése</div>
+                  <div className="mt-1 truncate text-xl">{decisionMode === "approved" ? "Kérés ellenőrzése és elfogadása" : decisionMode === "edit" ? "Kérés szerkesztése" : "Kérés elutasítása"}</div>
                 </div>
               </div>
               <button type="button" disabled={decisionBusy} className={iconBtn} onClick={() => setDecisionTarget(null)}><X className="h-4 w-4" /></button>
             </header>
 
-            <div className="space-y-4 p-5">
+            <div className="max-h-[72vh] space-y-4 overflow-y-auto p-5">
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-2xl border border-white/12 bg-black/10 p-3">
                   <div className="text-[9px] uppercase tracking-[0.11em] text-white/42">Alkalmazott</div>
                   <div className="mt-2 text-lg text-white">{decisionTarget.employeeName}</div>
                 </div>
                 <div className="rounded-2xl border border-white/12 bg-black/10 p-3">
-                  <div className="text-[9px] uppercase tracking-[0.11em] text-white/42">Kért időszak</div>
+                  <div className="text-[9px] uppercase tracking-[0.11em] text-white/42">Eredetileg kért időszak</div>
                   <div className="mt-2 text-lg text-white">{requestPeriodLabel(decisionTarget)}</div>
                 </div>
               </div>
 
-              {decisionTarget.note ? (
+              {decisionMode !== "rejected" ? (
+                <div className="rounded-2xl border border-[#7bd7d4]/20 bg-[#263745] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[9px] uppercase tracking-[0.12em] text-white/42">Adminisztrátori korrekció</div>
+                      <div className="mt-1 text-sm text-white">Elfogadás előtt javíthatod a téves dátumot.</div>
+                    </div>
+                    {decisionRequestChanged ? <span className="rounded-full border border-amber-200/28 bg-amber-400/10 px-2.5 py-1 text-[10px] text-amber-50">Módosítva</span> : null}
+                  </div>
+
+                  {decisionTarget.kind === "vacation" ? (
+                    <>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                          Kezdő nap
+                          <input type="date" value={requestEditDayFrom} onChange={(event) => { const value = event.target.value; setRequestEditDayFrom(value); if (!requestEditDayTo || requestEditDayTo < value) setRequestEditDayTo(value); }} className={input} />
+                        </label>
+                        <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                          Utolsó szabadságnap
+                          <input type="date" value={requestEditDayTo} min={requestEditDayFrom || undefined} onChange={(event) => setRequestEditDayTo(event.target.value)} className={input} />
+                        </label>
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-[#7bd7d4]/22 bg-[#174c55]/52 p-3 text-center">
+                        <div><div className="text-[8px] uppercase tracking-[0.09em] text-white/42">Naptári nap</div><div className="mt-1 text-lg text-white">{decisionPeriodPreview?.calendarDays || 0}</div></div>
+                        <div><div className="text-[8px] uppercase tracking-[0.09em] text-[#d7fffd]/55">Munkanap</div><div className="mt-1 text-lg text-[#d7fffd]">{decisionPeriodPreview?.workingDays || 0}</div></div>
+                        <div><div className="text-[8px] uppercase tracking-[0.09em] text-white/42">Pihenőnap</div><div className="mt-1 text-lg text-white">{decisionPeriodPreview?.excludedDays || 0}</div></div>
+                      </div>
+                      <div className="mt-2 text-[10px] text-white/48">Munkanapok: {WEEK_DAYS.filter((item) => vacationSettings.workingDays.includes(item.id)).map((item) => item.label).join(", ")}.</div>
+                    </>
+                  ) : (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                        Dátum
+                        <input type="date" value={requestEditDayFrom} onChange={(event) => { setRequestEditDayFrom(event.target.value); setRequestEditDayTo(event.target.value); }} className={input} />
+                      </label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                        Óra
+                        <input type="number" min={1} max={12} value={requestEditHoursOff} onChange={(event) => setRequestEditHoursOff(Number(event.target.value))} className={input} />
+                      </label>
+                    </div>
+                  )}
+
+                  <label className="mt-3 grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                    Kérelem megjegyzése
+                    <input value={requestEditNote} onChange={(event) => setRequestEditNote(event.target.value)} placeholder="Opcionális" className={input} />
+                  </label>
+                </div>
+              ) : decisionTarget.note ? (
                 <div className="rounded-2xl border border-white/12 bg-black/10 px-4 py-3 text-sm leading-relaxed text-white/70">
                   <MessageSquareText className="mr-2 inline h-4 w-4" />{decisionTarget.note}
                 </div>
               ) : null}
 
-              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.11em] text-white/50">
-                {decisionMode === "approved" ? "Vezetői megjegyzés az alkalmazottnak" : "Elutasítás indoka *"}
-                <textarea
-                  autoFocus
-                  rows={4}
-                  value={decisionNote}
-                  onChange={(event) => setDecisionNote(event.target.value)}
-                  placeholder={decisionMode === "approved" ? "Opcionális, pl. jó pihenést…" : "Írd le röviden, miért nem elfogadható az időpont…"}
-                  className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/34 focus:border-[#72d8d4]"
-                />
-              </label>
+              {decisionMode !== "edit" ? (
+                <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.11em] text-white/50">
+                  {decisionMode === "approved" ? "Vezetői megjegyzés az alkalmazottnak" : "Elutasítás indoka *"}
+                  <textarea
+                    autoFocus={decisionMode === "rejected"}
+                    rows={3}
+                    value={decisionNote}
+                    onChange={(event) => setDecisionNote(event.target.value)}
+                    placeholder={decisionMode === "approved" ? "Opcionális, pl. jó pihenést…" : "Írd le röviden, miért nem elfogadható az időpont…"}
+                    className="resize-none rounded-xl border border-white/16 bg-[#273243] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/34 focus:border-[#72d8d4]"
+                  />
+                </label>
+              ) : null}
 
-              <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed ${decisionMode === "approved" ? "border-[#7bd7d4]/24 bg-[#2a8d8b]/10 text-[#e5fffd]" : "border-rose-200/24 bg-rose-500/10 text-rose-50"}`}>
+              {decisionError ? <div className="rounded-2xl border border-rose-200/30 bg-rose-500/14 px-4 py-3 text-sm text-rose-50">{decisionError}</div> : null}
+
+              <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed ${decisionMode === "approved" ? "border-[#7bd7d4]/24 bg-[#2a8d8b]/10 text-[#e5fffd]" : decisionMode === "edit" ? "border-amber-200/24 bg-amber-400/10 text-amber-50" : "border-rose-200/24 bg-rose-500/10 text-rose-50"}`}>
                 {decisionMode === "approved"
-                  ? "Elfogadáskor a szabadság vagy órás elkérés automatikusan bekerül a hivatalos nyilvántartásba, és az alkalmazott értesítést kap."
-                  : "Elutasításkor nem készül távolléti bejegyzés. Az alkalmazott az indoklással együtt látni fogja a döntést."}
+                  ? `Elfogadáskor a kijavított időszak kerül a nyilvántartásba. Jelenleg ${decisionTarget.kind === "vacation" ? `${decisionPeriodPreview?.workingDays || 0} munkanap` : `${requestEditHoursOff || 0} óra`} kerülne rögzítésre.`
+                  : decisionMode === "edit"
+                    ? "A módosítás a függő kérelmet javítja, de még nem fogadja el. Az eredeti kérés auditként megmarad a szerveren."
+                    : "Elutasításkor nem készül távolléti bejegyzés. Az alkalmazott az indoklással együtt látni fogja a döntést."}
               </div>
             </div>
 
@@ -2517,12 +2761,12 @@ export default function AllInVacations({ api }: { api?: string }) {
               <button type="button" disabled={decisionBusy} className={btnSoft} onClick={() => setDecisionTarget(null)}>Mégse</button>
               <button
                 type="button"
-                disabled={decisionBusy || (decisionMode === "rejected" && !decisionNote.trim())}
+                disabled={decisionBusy || (decisionMode === "rejected" && !decisionNote.trim()) || (decisionMode !== "rejected" && decisionTarget.kind === "vacation" && (decisionPeriodPreview?.workingDays || 0) <= 0)}
                 onClick={() => void submitRequestDecision()}
-                className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-5 text-sm text-white transition disabled:opacity-50 ${decisionMode === "approved" ? "border-[#9be9e5]/45 bg-[#208d8b] hover:bg-[#267f7d]" : "border-rose-200/45 bg-rose-600 hover:bg-rose-500"}`}
+                className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl border px-5 text-sm text-white transition disabled:opacity-50 ${decisionMode === "approved" ? "border-[#9be9e5]/45 bg-[#208d8b] hover:bg-[#267f7d]" : decisionMode === "edit" ? "border-amber-200/42 bg-[#8a6b25] hover:bg-[#9b792b]" : "border-rose-200/45 bg-rose-600 hover:bg-rose-500"}`}
               >
-                {decisionBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : decisionMode === "approved" ? <ThumbsUp className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
-                {decisionBusy ? "Mentés…" : decisionMode === "approved" ? "Elfogadás és rögzítés" : "Elutasítás"}
+                {decisionBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : decisionMode === "approved" ? <ThumbsUp className="h-4 w-4" /> : decisionMode === "edit" ? <Save className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
+                {decisionBusy ? "Mentés…" : decisionMode === "approved" ? "Elfogadás és rögzítés" : decisionMode === "edit" ? "Módosítás mentése" : "Elutasítás"}
               </button>
             </footer>
           </section>
