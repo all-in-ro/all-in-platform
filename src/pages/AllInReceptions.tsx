@@ -1538,21 +1538,22 @@ export default function AllInReceptions(_props: Props) {
   }
 
   async function openMoveReception(row: any) {
+    if (!detail) return;
     setMoveTarget(row);
-    setMoveToReceptionId("");
-    setMoveReceptionOptions([]);
+    setMoveToReceptionId(detail.item.id);
+    setMoveReceptionOptions([detail.item]);
     setMoveReceptionOptionsLoading(true);
     setMessage("");
     try {
       const r = await apiAifListReceptions({ limit: 200 });
-      setMoveReceptionOptions(
-        (r.items || []).filter((item) =>
-          item.id !== detail?.item?.id &&
-          !["committed", "cancelled"].includes(String(item.status || "").toLowerCase())
-        )
+      const otherOpen = (r.items || []).filter((item) =>
+        item.id !== detail.item.id &&
+        !["committed", "cancelled"].includes(String(item.status || "").toLowerCase())
       );
+      setMoveReceptionOptions([detail.item, ...otherOpen]);
     } catch (e: any) {
-      setMessage(e?.message || "A cél receptiók betöltése nem sikerült.");
+      setMoveReceptionOptions([detail.item]);
+      setMessage(e?.message || "A cél receptiók betöltése nem sikerült. Az aktuális receptióban továbbra is menthető a sor.");
     } finally {
       setMoveReceptionOptionsLoading(false);
     }
@@ -1563,6 +1564,16 @@ export default function AllInReceptions(_props: Props) {
     setBusy(true);
     setMessage("");
     try {
+      if (moveToReceptionId === detail.item.id) {
+        await apiAifUpdateImportRow(moveTarget.id, rowPayload(moveTarget));
+        setMoveTarget(null);
+        setMoveToReceptionId("");
+        await reloadDetail(detail.item.id);
+        await load();
+        setMessage("Terméksor mentve az aktuális receptióban.");
+        return;
+      }
+
       await apiAifMoveImportRow(moveTarget.id, moveToReceptionId);
       setMoveTarget(null);
       setMoveToReceptionId("");
@@ -1570,7 +1581,9 @@ export default function AllInReceptions(_props: Props) {
       await load();
       setMessage("Terméksor áthelyezve.");
     } catch (e: any) {
-      setMessage(e?.message || "A terméksor áthelyezése nem sikerült.");
+      setMessage(e?.message || (moveToReceptionId === detail.item.id
+        ? "A terméksor mentése nem sikerült."
+        : "A terméksor áthelyezése nem sikerült."));
     } finally {
       setBusy(false);
     }
@@ -2205,22 +2218,25 @@ export default function AllInReceptions(_props: Props) {
         <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-2xl border border-white/24 bg-[#404a5b] p-4 shadow-2xl">
             <h2 className="text-base text-white font-normal">Terméksor áthelyezése</h2>
-            <p className="mt-2 text-sm text-white/76">Csak még nem készletre vett sor helyezhető át másik nyitott receptióba.</p>
+            <p className="mt-2 text-sm text-white/76">Mentheted az aktuális receptióban, vagy áthelyezheted egy másik nyitott receptióba.</p>
             <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
               {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)} • S/N/COD: {cell((moveTarget as any).sn_cod || (moveTarget.normalized || {}).snCod || (moveTarget.normalized || {}).sn_cod)}
             </div>
             <label className={`${label} mt-3`}>
               Cél receptió
               <select className={select} value={moveToReceptionId} onChange={(e) => setMoveToReceptionId(e.target.value)} disabled={moveReceptionOptionsLoading}>
-                <option value="">{moveReceptionOptionsLoading ? "Receptiók betöltése..." : moveReceptionOptions.length ? "Válassz receptiót" : "Nincs másik nyitott receptió"}</option>
                 {moveReceptionOptions.map((r) => (
-                  <option key={r.id} value={r.id}>{cell(r.invoice_number)} • {cell(r.supplier_name)} • {dateText(r.reception_date)}</option>
+                  <option key={r.id} value={r.id}>
+                    {cell(r.invoice_number)} • {cell(r.supplier_name)} • {dateText(r.reception_date)}{r.id === detail.item.id ? " • Jelenlegi" : ""}
+                  </option>
                 ))}
               </select>
             </label>
             <div className="mt-4 flex justify-end gap-2">
               <button className={neutralBtn} onClick={() => setMoveTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
-              <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId} type="button"><MoveRight size={15} /> Áthelyezés</button>
+              <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId} type="button">
+                {moveToReceptionId === detail.item.id ? <><Save size={15} /> Mentés</> : <><MoveRight size={15} /> Áthelyezés</>}
+              </button>
             </div>
           </div>
         </div>
