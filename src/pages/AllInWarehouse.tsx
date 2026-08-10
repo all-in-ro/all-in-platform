@@ -1331,34 +1331,10 @@ type WarehouseZxingBrowserGlobal = {
   BrowserMultiFormatOneDReader?: new () => WarehouseZxingReader;
 };
 
-type WarehouseBrowserPrintDevice = {
-  name?: string;
-  uid?: string;
-  connection?: string;
-  deviceType?: string;
-  provider?: string;
-  version?: string;
-  send?: (data: string, success?: () => void, error?: (error: unknown) => void) => void;
-};
-
-type WarehouseBrowserPrintGlobal = {
-  getDefaultDevice?: (
-    type: string,
-    success: (device?: WarehouseBrowserPrintDevice | null) => void,
-    error?: (error: unknown) => void,
-  ) => void;
-  getLocalDevices?: (
-    success: (devices?: WarehouseBrowserPrintDevice[]) => void,
-    error?: (error: unknown) => void,
-    type?: string,
-  ) => void;
-};
-
 declare global {
   interface Window {
     BarcodeDetector?: WarehouseBarcodeDetectorConstructor;
     ZXingBrowser?: WarehouseZxingBrowserGlobal;
-    BrowserPrint?: WarehouseBrowserPrintGlobal;
   }
 }
 
@@ -2452,6 +2428,8 @@ type WarehouseLabelContentKey =
   | "code"
   | "price";
 
+type WarehouseLabelPrintMode = "a4" | "zebra";
+
 type WarehouseLabelTemplate = {
   name: string;
   labelWidth: string;
@@ -2518,6 +2496,25 @@ const WAREHOUSE_LABEL_CONTENT_OPTIONS: { key: WarehouseLabelContentKey; label: s
   { key: "code", label: "Termékkód / színkód", hint: "A termékkód után a gyártói színkód jelenik meg." },
   { key: "price", label: "Ár", hint: "Nagy árrész a címke alján." },
 ];
+
+function readWarehouseLabelPrintMode(): WarehouseLabelPrintMode {
+  if (typeof window === "undefined") return "zebra";
+  try {
+    const raw = String(window.localStorage.getItem("aifWarehouseLabelPrintMode") || "").trim().toLowerCase();
+    return raw === "a4" ? "a4" : "zebra";
+  } catch {
+    return "zebra";
+  }
+}
+
+function saveWarehouseLabelPrintMode(mode: WarehouseLabelPrintMode) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem("aifWarehouseLabelPrintMode", mode);
+  } catch {
+    // Kényelmi beállítás, a nyomtatás ettől még működik.
+  }
+}
 
 function readWarehouseLabelTemplates(): WarehouseLabelTemplate[] {
   if (typeof window === "undefined") return [];
@@ -2887,272 +2884,77 @@ function warehouseLabelPrintDocumentHtml(
   return `<!doctype html><html><head><meta charset="utf-8" /><title>${labelEscapeHtml("AllInFashion címke nyomtatás")}</title><style>${WAREHOUSE_LABEL_PRINT_DOCUMENT_CSS}</style></head><body><div class="aifWarehouseLabelPrintRoot" style="${rootStyle}">${pagesHtml}</div></body></html>`;
 }
 
+function warehouseZebraLabelPrintDocumentHtml(
+  labels: WarehouseLabelPrintItem[],
+  options: WarehouseLabelPrintDocumentOptions,
+  labelW: number,
+  labelH: number,
+) {
+  const safeWidth = Math.max(20, Math.min(120, Number(labelW) || 40));
+  const safeHeight = Math.max(15, Math.min(100, Number(labelH) || 46));
+  const labelsHtml = labels
+    .map((label) => `<section class="aifWarehouseZebraPrintPage"><div class="aifWarehousePrintLabel ${options.labelShowBorder ? "" : "noBorder"}">${warehouseLabelContentHtml(label, options)}</div></section>`)
+    .join("");
+  const rootStyle = `--aif-label-w:${safeWidth}mm;--aif-label-h:${safeHeight}mm`;
 
-type WarehouseLabelPrintMode = "a4" | "zebra";
-
-type WarehouseZebraZplOptions = {
-  labelWidthMm: number;
-  labelHeightMm: number;
-  offsetXDots: number;
-  offsetYDots: number;
-  speed: number;
-  labelContent: Record<WarehouseLabelContentKey, boolean>;
-  companyName: string;
-  unitText: string;
-};
-
-const WAREHOUSE_ZEBRA_DOTS_PER_MM = 8; // GC420t: 203 dpi ≈ 8 dot/mm.
-const WAREHOUSE_ZEBRA_SCRIPT_PATHS = [
-  "/zebra/BrowserPrint.min.js",
-  "/zebra/BrowserPrint.js",
-  "/BrowserPrint.min.js",
-];
-let warehouseBrowserPrintLoadPromise: Promise<WarehouseBrowserPrintGlobal | null> | null = null;
-
-function warehouseZebraSafeText(input: unknown, max = 96) {
-  return String(input ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[șş]/gi, (value) => value === value.toUpperCase() ? "S" : "s")
-    .replace(/[țţ]/gi, (value) => value === value.toUpperCase() ? "T" : "t")
-    .replace(/[ăâ]/gi, (value) => value === value.toUpperCase() ? "A" : "a")
-    .replace(/[î]/gi, (value) => value === value.toUpperCase() ? "I" : "i")
-    .replace(/[őöóòô]/gi, (value) => value === value.toUpperCase() ? "O" : "o")
-    .replace(/[űüúùû]/gi, (value) => value === value.toUpperCase() ? "U" : "u")
-    .replace(/[éèê]/gi, (value) => value === value.toUpperCase() ? "E" : "e")
-    .replace(/[áà]/gi, (value) => value === value.toUpperCase() ? "A" : "a")
-    .replace(/[íì]/gi, (value) => value === value.toUpperCase() ? "I" : "i")
-    .replace(/[\^~]/g, " ")
-    .replace(/[^\x20-\x7E]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+  return `<!doctype html><html><head><meta charset="utf-8" /><title>${labelEscapeHtml("AllInFashion Zebra címke nyomtatás")}</title><style>
+@page { size:${safeWidth}mm ${safeHeight}mm; margin:0; }
+html, body {
+  width:${safeWidth}mm;
+  margin:0 !important;
+  padding:0 !important;
+  background:#fff !important;
+  color:#111;
+  overflow:visible;
 }
-
-function warehouseZebraDeviceKey(device?: WarehouseBrowserPrintDevice | null) {
-  return firstWarehouseText(device?.uid, device?.name, device?.connection, device?.provider);
+* { box-sizing:border-box; }
+.aifWarehouseZebraPrintRoot {
+  width:${safeWidth}mm;
+  margin:0;
+  padding:0;
+  background:#fff;
+  color:#111;
 }
-
-function warehouseZebraDeviceLabel(device?: WarehouseBrowserPrintDevice | null) {
-  if (!device) return "Nincs kiválasztva";
-  const name = firstWarehouseText(device.name, "Zebra nyomtató");
-  const connection = firstWarehouseText(device.connection, device.provider);
-  return connection ? `${name} • ${connection}` : name;
+.aifWarehouseZebraPrintPage {
+  width:${safeWidth}mm;
+  height:${safeHeight}mm;
+  min-width:${safeWidth}mm;
+  min-height:${safeHeight}mm;
+  margin:0;
+  padding:0;
+  overflow:hidden;
+  display:block;
+  page-break-after:always;
+  break-after:page;
+  background:#fff;
 }
-
-function warehouseZebraErrorText(error: unknown) {
-  if (!error) return "Ismeretlen Browser Print hiba.";
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
+.aifWarehouseZebraPrintPage:last-child { page-break-after:auto; break-after:auto; }
+${WAREHOUSE_LABEL_SHEET_CSS}
+.aifWarehouseZebraPrintPage .aifWarehousePrintLabel {
+  width:${safeWidth}mm;
+  height:${safeHeight}mm;
+  min-width:${safeWidth}mm;
+  min-height:${safeHeight}mm;
+  margin:0;
+}
+@media print {
+  html, body, .aifWarehouseZebraPrintRoot {
+    width:${safeWidth}mm !important;
+    margin:0 !important;
+    padding:0 !important;
+    background:#fff !important;
+  }
+  .aifWarehouseZebraPrintPage {
+    width:${safeWidth}mm !important;
+    height:${safeHeight}mm !important;
+    min-width:${safeWidth}mm !important;
+    min-height:${safeHeight}mm !important;
+    margin:0 !important;
+    padding:0 !important;
+    overflow:hidden !important;
   }
 }
-
-async function loadWarehouseBrowserPrintLibrary() {
-  if (typeof window === "undefined" || typeof document === "undefined") return null;
-  if (window.BrowserPrint?.getDefaultDevice) return window.BrowserPrint;
-  if (warehouseBrowserPrintLoadPromise) return warehouseBrowserPrintLoadPromise;
-
-  warehouseBrowserPrintLoadPromise = (async () => {
-    const envUrl = firstWarehouseText((import.meta as any)?.env?.VITE_ZEBRA_BROWSER_PRINT_JS);
-    const candidates = Array.from(new Set([envUrl, ...WAREHOUSE_ZEBRA_SCRIPT_PATHS].filter(Boolean)));
-
-    for (const src of candidates) {
-      if (window.BrowserPrint?.getDefaultDevice) return window.BrowserPrint;
-      const existing = Array.from(document.querySelectorAll<HTMLScriptElement>("script[data-aif-browser-print]")).find((node) => node.dataset.aifBrowserPrint === src) || null;
-      if (existing) {
-        await new Promise<void>((resolve) => {
-          if (existing.dataset.loaded === "true") return resolve();
-          const done = () => resolve();
-          existing.addEventListener("load", done, { once: true });
-          existing.addEventListener("error", done, { once: true });
-          window.setTimeout(done, 1600);
-        });
-        if (window.BrowserPrint?.getDefaultDevice) return window.BrowserPrint;
-        continue;
-      }
-
-      await new Promise<void>((resolve) => {
-        const script = document.createElement("script");
-        script.src = src;
-        script.async = true;
-        script.dataset.aifBrowserPrint = src;
-        const done = () => resolve();
-        script.onload = () => { script.dataset.loaded = "true"; done(); };
-        script.onerror = done;
-        document.head.appendChild(script);
-        window.setTimeout(done, 1800);
-      });
-      if (window.BrowserPrint?.getDefaultDevice) return window.BrowserPrint;
-    }
-    return window.BrowserPrint || null;
-  })();
-
-  const result = await warehouseBrowserPrintLoadPromise;
-  if (!result) warehouseBrowserPrintLoadPromise = null;
-  return result;
-}
-
-function warehouseBrowserPrintDefaultDevice(browserPrint: WarehouseBrowserPrintGlobal) {
-  return new Promise<WarehouseBrowserPrintDevice | null>((resolve, reject) => {
-    if (typeof browserPrint.getDefaultDevice !== "function") {
-      reject(new Error("A Browser Print JavaScript könyvtárból hiányzik a getDefaultDevice()."));
-      return;
-    }
-    let finished = false;
-    const timer = window.setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      reject(new Error("A Zebra Browser Print nem válaszolt időben."));
-    }, 7000);
-    browserPrint.getDefaultDevice(
-      "printer",
-      (device) => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timer);
-        resolve(device || null);
-      },
-      (error) => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timer);
-        reject(new Error(warehouseZebraErrorText(error)));
-      },
-    );
-  });
-}
-
-function warehouseBrowserPrintLocalDevices(browserPrint: WarehouseBrowserPrintGlobal) {
-  return new Promise<WarehouseBrowserPrintDevice[]>((resolve) => {
-    if (typeof browserPrint.getLocalDevices !== "function") {
-      resolve([]);
-      return;
-    }
-    let finished = false;
-    const timer = window.setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      resolve([]);
-    }, 7000);
-    browserPrint.getLocalDevices(
-      (devices) => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timer);
-        resolve(Array.isArray(devices) ? devices : []);
-      },
-      () => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timer);
-        resolve([]);
-      },
-      "printer",
-    );
-  });
-}
-
-function warehouseBrowserPrintSend(device: WarehouseBrowserPrintDevice, zpl: string) {
-  return new Promise<void>((resolve, reject) => {
-    if (typeof device?.send !== "function") {
-      reject(new Error("A kiválasztott Zebra eszköz nem támogatja a send() műveletet."));
-      return;
-    }
-    let finished = false;
-    const timer = window.setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      reject(new Error("A nyomtatási feladat nem kapott visszajelzést a Zebra Browser Printtől."));
-    }, 20000);
-    device.send(
-      zpl,
-      () => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timer);
-        resolve();
-      },
-      (error) => {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timer);
-        reject(new Error(warehouseZebraErrorText(error)));
-      },
-    );
-  });
-}
-
-function warehouseZebraLabelZpl(label: WarehouseLabelPrintItem, options: WarehouseZebraZplOptions) {
-  const widthDots = Math.max(160, Math.round(options.labelWidthMm * WAREHOUSE_ZEBRA_DOTS_PER_MM));
-  const heightDots = Math.max(120, Math.round(options.labelHeightMm * WAREHOUSE_ZEBRA_DOTS_PER_MM));
-  const baseWidth = 320;
-  const baseHeight = 368;
-  const scale = Math.min(widthDots / baseWidth, heightDots / baseHeight);
-  const sx = (value: number) => Math.round(value * scale);
-  const sy = (value: number) => Math.round(value * scale);
-  const xOffset = Math.trunc(options.offsetXDots || 0);
-  const yOffset = Math.trunc(options.offsetYDots || 0);
-  const left = Math.max(0, sx(8) + xOffset);
-  const usableWidth = Math.max(100, widthDots - left - Math.max(0, sx(8) - xOffset));
-  const lines: string[] = [
-    "^XA",
-    `^PW${widthDots}`,
-    `^LL${heightDots}`,
-    `^PR${Math.max(2, Math.min(4, Math.round(options.speed || 3)))}`,
-    "^LH0,0",
-  ];
-
-  const textLine = (y: number, text: unknown, fontH: number, maxLines = 1) => {
-    const safe = warehouseZebraSafeText(text, maxLines > 1 ? 92 : 70);
-    if (!safe) return;
-    const h = Math.max(8, sy(fontH));
-    const w = Math.max(7, Math.round(h * 0.74));
-    lines.push(`^FO${left},${Math.max(0, sy(y) + yOffset)}^A0N,${h},${w}^FB${usableWidth},${maxLines},${sy(1)},C,0^FD${safe}^FS`);
-  };
-
-  if (options.labelContent.company && options.companyName) textLine(7, options.companyName, 12, 1);
-  if (options.labelContent.brand && label.brand && label.brand !== "-") textLine(22, label.brand, 12, 1);
-  if (options.labelContent.title) textLine(options.labelContent.brand ? 38 : 27, label.title || "Produs", 18, 2);
-  if (options.labelContent.sizeColor && label.size && label.size !== "-") textLine(76, `Marime: ${label.size}`, 14, 1);
-
-  if (options.labelContent.barcode && label.barcode) {
-    const barcode = warehouseZebraSafeText(label.barcode, 64).replace(/\s+/g, "");
-    const moduleWidth = barcode.length <= 20 ? 2 : 1;
-    const barHeight = Math.max(38, sy(68));
-    const barcodeY = Math.max(0, sy(96) + yOffset);
-    lines.push(`^FO${left},${barcodeY}^BY${moduleWidth},2,${barHeight}^BCN,${barHeight},Y,N,N,A^FD${barcode}^FS`);
-  }
-
-  if (options.labelContent.description && label.description) textLine(210, label.description, 10, 1);
-  if (options.labelContent.category && label.category && label.category !== "-") textLine(225, label.category.toUpperCase(), 11, 1);
-
-  const productCodeWithColor = [label.productCode, label.color]
-    .map((value) => String(value || "").trim())
-    .filter((value) => value && value !== "-")
-    .filter((value, index, all) => all.findIndex((entry) => normalizeSearch(entry) === normalizeSearch(value)) === index)
-    .join(" - ");
-  if (options.labelContent.code && (productCodeWithColor || label.barcode)) {
-    textLine(241, `Cod: ${productCodeWithColor || label.barcode}`, 10, 1);
-  }
-
-  if (options.labelContent.price && String(label.price || "").trim()) {
-    const price = priceNumber(label.price);
-    const priceText = price === null
-      ? `${warehouseZebraSafeText(label.price, 18)} ${warehouseZebraSafeText(options.unitText, 8)}`
-      : `${price.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${warehouseZebraSafeText(options.unitText, 8)}`;
-    textLine(278, priceText, 34, 1);
-  }
-
-  lines.push("^PQ1,0,1,N", "^XZ");
-  return lines.join("\n");
-}
-
-function warehouseZebraPrintJob(labels: WarehouseLabelPrintItem[], options: WarehouseZebraZplOptions) {
-  return labels.map((label) => warehouseZebraLabelZpl(label, options)).join("\n");
+</style></head><body><div class="aifWarehouseZebraPrintRoot" style="${rootStyle}">${labelsHtml}</div></body></html>`;
 }
 
 function warehouseTransferDateTime(input: Date | string | number = new Date()) {
@@ -5708,6 +5510,7 @@ export default function AllInWarehouse() {
   const [warehouseTransferToast, setWarehouseTransferToast] = useState<WarehouseTransferToastState | null>(null);
   const warehouseTransferToastTimerRef = useRef<number | null>(null);
   const [labelComposerOpen, setLabelComposerOpen] = useState(false);
+  const [labelPrintMode, setLabelPrintMode] = useState<WarehouseLabelPrintMode>(() => readWarehouseLabelPrintMode());
   const [labelCopies, setLabelCopies] = useState<Record<string, string>>({});
   const [labelWidth, setLabelWidth] = useState("40");
   const [labelHeight, setLabelHeight] = useState("46");
@@ -5722,16 +5525,6 @@ export default function AllInWarehouse() {
   const [labelContent, setLabelContent] = useState<Record<WarehouseLabelContentKey, boolean>>(WAREHOUSE_LABEL_DEFAULT_CONTENT);
   const [labelTemplateName, setLabelTemplateName] = useState("Standard 40x46");
   const [labelTemplates, setLabelTemplates] = useState<WarehouseLabelTemplate[]>(() => readWarehouseLabelTemplates());
-  const [labelPrintMode, setLabelPrintMode] = useState<WarehouseLabelPrintMode>("a4");
-  const [zebraPrinters, setZebraPrinters] = useState<WarehouseBrowserPrintDevice[]>([]);
-  const [zebraPrinter, setZebraPrinter] = useState<WarehouseBrowserPrintDevice | null>(null);
-  const [zebraPrinterBusy, setZebraPrinterBusy] = useState(false);
-  const [zebraPrintBusy, setZebraPrintBusy] = useState(false);
-  const [zebraStatus, setZebraStatus] = useState("A Zebra mód első megnyitásakor megkeressük a helyi nyomtatót.");
-  const [zebraOffsetX, setZebraOffsetX] = useState("0");
-  const [zebraOffsetY, setZebraOffsetY] = useState("0");
-  const [zebraSpeed, setZebraSpeed] = useState("3");
-  const zebraDetectAttemptedRef = useRef(false);
   const labelPreviewFrameRef = useRef<HTMLDivElement | null>(null);
   const [labelPreviewScale, setLabelPreviewScale] = useState(0.58);
   const [labelDetailMap, setLabelDetailMap] = useState<Record<string, DetailResponse>>({});
@@ -9413,7 +9206,11 @@ export default function AllInWarehouse() {
   }
 
   useEffect(() => {
-    if (!labelComposerOpen || labelPrintMode !== "a4") return;
+    saveWarehouseLabelPrintMode(labelPrintMode);
+  }, [labelPrintMode]);
+
+  useEffect(() => {
+    if (!labelComposerOpen) return;
     const frame = labelPreviewFrameRef.current;
     if (!frame) return;
 
@@ -9436,7 +9233,7 @@ export default function AllInWarehouse() {
       observer?.disconnect();
       window.removeEventListener("resize", updatePreviewScale);
     };
-  }, [labelComposerOpen, labelPrintMode]);
+  }, [labelComposerOpen]);
 
   function updateLabelCopies(id: string, value: string) {
     const qty = labelInt(value, 1, 0, 999);
@@ -9565,126 +9362,13 @@ export default function AllInWarehouse() {
     "--aif-label-preview-h": `${297 * labelPreviewScale}mm`,
   } as React.CSSProperties & Record<string, string>;
 
+  const zebraLabelPreviewScale = useMemo(() => {
+    const widthPx = labelW * 96 / 25.4;
+    const heightPx = labelH * 96 / 25.4;
+    return Math.max(0.8, Math.min(1.85, 330 / Math.max(1, widthPx), 360 / Math.max(1, heightPx)));
+  }, [labelW, labelH]);
 
-  const zebraZplOptions = useMemo<WarehouseZebraZplOptions>(() => ({
-    labelWidthMm: labelW,
-    labelHeightMm: labelH,
-    offsetXDots: Math.max(-80, Math.min(80, Math.trunc(n(zebraOffsetX)))),
-    offsetYDots: Math.max(-80, Math.min(80, Math.trunc(n(zebraOffsetY)))),
-    speed: Math.max(2, Math.min(4, Math.trunc(n(zebraSpeed)) || 3)),
-    labelContent,
-    companyName: labelCompanyName,
-    unitText: labelUnitText || labelCurrency,
-  }), [labelW, labelH, zebraOffsetX, zebraOffsetY, zebraSpeed, labelContent, labelCompanyName, labelUnitText, labelCurrency]);
-
-  const zebraPrinterKey = warehouseZebraDeviceKey(zebraPrinter);
-
-  async function refreshZebraPrinters() {
-    if (zebraPrinterBusy) return zebraPrinter;
-    setZebraPrinterBusy(true);
-    setZebraStatus("Zebra Browser Print és helyi nyomtatók keresése…");
-    try {
-      const browserPrint = await loadWarehouseBrowserPrintLibrary();
-      if (!browserPrint?.getDefaultDevice) {
-        throw new Error("A Browser Print JavaScript Library nincs betöltve. Tedd az official Zebra BrowserPrint JavaScript fájlt public/zebra/BrowserPrint.min.js néven a projektbe, és a gépen fusson a Zebra Browser Print alkalmazás.");
-      }
-      const [defaultDevice, localDevices] = await Promise.all([
-        warehouseBrowserPrintDefaultDevice(browserPrint).catch(() => null),
-        warehouseBrowserPrintLocalDevices(browserPrint),
-      ]);
-      const unique = new Map<string, WarehouseBrowserPrintDevice>();
-      for (const device of [defaultDevice, ...localDevices]) {
-        const key = warehouseZebraDeviceKey(device);
-        if (device && key && typeof device.send === "function") unique.set(key, device);
-      }
-      const devices = Array.from(unique.values());
-      setZebraPrinters(devices);
-      const currentKey = warehouseZebraDeviceKey(zebraPrinter);
-      const next = devices.find((device) => warehouseZebraDeviceKey(device) === currentKey)
-        || (defaultDevice && devices.find((device) => warehouseZebraDeviceKey(device) === warehouseZebraDeviceKey(defaultDevice)))
-        || devices[0]
-        || null;
-      setZebraPrinter(next);
-      setZebraStatus(next
-        ? `Kapcsolható nyomtató: ${warehouseZebraDeviceLabel(next)}.`
-        : "A Browser Print fut, de nem talált helyi Zebra nyomtatót. Ellenőrizd az USB-kábelt, drivert és a Browser Print Managed Devices listáját.");
-      return next;
-    } catch (error: any) {
-      setZebraPrinters([]);
-      setZebraPrinter(null);
-      setZebraStatus(error?.message || warehouseZebraErrorText(error));
-      return null;
-    } finally {
-      zebraDetectAttemptedRef.current = true;
-      setZebraPrinterBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!labelComposerOpen || labelPrintMode !== "zebra" || zebraDetectAttemptedRef.current) return;
-    void refreshZebraPrinters();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labelComposerOpen, labelPrintMode]);
-
-  async function sendZebraLabels(labels: WarehouseLabelPrintItem[], kind: "test" | "all") {
-    if (!labels.length) {
-      setMessage("Nincs Zebra címke a nyomtatási feladathoz.");
-      return;
-    }
-    if (labelInvalidRows.length) {
-      const first = labelInvalidRows[0];
-      setMessage(`${labelInvalidRows.length} termék címkéje nem nyomtatható, mert nincs mentett, érvényes bárkód. Első: ${first.title || first.id}.`);
-      return;
-    }
-    let target = zebraPrinter;
-    if (!target?.send) {
-      target = await refreshZebraPrinters();
-      if (!target?.send) {
-        setMessage("Nincs kiválasztott Zebra nyomtató. Nyomd meg a Nyomtató keresése gombot, majd válaszd ki a GC420t-t.");
-        return;
-      }
-    }
-
-    setZebraPrintBusy(true);
-    try {
-      const chunkSize = kind === "test" ? 1 : 24;
-      for (let index = 0; index < labels.length; index += chunkSize) {
-        const chunk = labels.slice(index, index + chunkSize);
-        const zpl = warehouseZebraPrintJob(chunk, zebraZplOptions);
-        setZebraStatus(kind === "test"
-          ? `Teszt címke küldése: ${warehouseZebraDeviceLabel(target)}…`
-          : `Nyomtatás: ${Math.min(index + chunk.length, labels.length)} / ${labels.length} címke…`);
-        await warehouseBrowserPrintSend(target, zpl);
-      }
-      setZebraStatus(kind === "test"
-        ? `Teszt címke elküldve: ${warehouseZebraDeviceLabel(target)}.`
-        : `${labels.length} címke elküldve a ${warehouseZebraDeviceLabel(target)} nyomtatóra.`);
-      setMessage(kind === "test"
-        ? "Zebra tesztcímke elküldve. Ellenőrizd a fizikai címkén a pozíciót és a vonalkód olvashatóságát."
-        : `${labels.length} Zebra címke nyomtatási feladata elküldve.`);
-    } catch (error: any) {
-      const msg = error?.message || warehouseZebraErrorText(error);
-      setZebraStatus(`Nyomtatási hiba: ${msg}`);
-      setMessage(`Zebra nyomtatási hiba: ${msg}`);
-    } finally {
-      setZebraPrintBusy(false);
-    }
-  }
-
-  function printZebraTestLabel() {
-    const first = labelPrintItems[0];
-    if (!first) {
-      setMessage("Nincs tesztelhető címke.");
-      return;
-    }
-    void sendZebraLabels([first], "test");
-  }
-
-  function printGeneratedZebraLabels() {
-    void sendZebraLabels(labelPrintItems, "all");
-  }
-
-  function printGeneratedLabels() {
+  function printGeneratedLabels(options: { testOnly?: boolean } = {}) {
     if (!labelPrintItems.length) {
       setMessage("Nincs nyomtatható címke. Állíts be legalább egy példányt.");
       return;
@@ -9697,19 +9381,31 @@ export default function AllInWarehouse() {
       return;
     }
 
-    const printHtml = warehouseLabelPrintDocumentHtml(
-      labelPrintPages,
-      { labelContent, labelCompanyName, labelCurrency, labelUnitText, labelShowBorder },
-      { labelW, labelH, labelColCount, labelRowCount, labelMarginXmm, labelMarginYmm, labelGapXmm, labelGapYmm },
-    );
+    const printItems = options.testOnly ? labelPrintItems.slice(0, 1) : labelPrintItems;
+    const printHtml = labelPrintMode === "zebra"
+      ? warehouseZebraLabelPrintDocumentHtml(
+          printItems,
+          { labelContent, labelCompanyName, labelCurrency, labelUnitText, labelShowBorder },
+          labelW,
+          labelH,
+        )
+      : warehouseLabelPrintDocumentHtml(
+          (() => {
+            const pages: WarehouseLabelPrintItem[][] = [];
+            for (let i = 0; i < printItems.length; i += labelsPerPage) pages.push(printItems.slice(i, i + labelsPerPage));
+            return pages;
+          })(),
+          { labelContent, labelCompanyName, labelCurrency, labelUnitText, labelShowBorder },
+          { labelW, labelH, labelColCount, labelRowCount, labelMarginXmm, labelMarginYmm, labelGapXmm, labelGapYmm },
+        );
 
     const iframe = document.createElement("iframe");
     iframe.setAttribute("aria-hidden", "true");
     iframe.style.position = "fixed";
     iframe.style.left = "-10000px";
     iframe.style.top = "0";
-    iframe.style.width = "210mm";
-    iframe.style.height = "297mm";
+    iframe.style.width = labelPrintMode === "zebra" ? `${labelW}mm` : "210mm";
+    iframe.style.height = labelPrintMode === "zebra" ? `${labelH}mm` : "297mm";
     iframe.style.border = "0";
     iframe.style.opacity = "0";
     iframe.style.pointerEvents = "none";
@@ -12161,39 +11857,43 @@ export default function AllInWarehouse() {
               </div>
               <div className="flex flex-wrap justify-end gap-2">
                 <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><ArrowLeft size={15} /> Vissza</button>
-                {labelPrintMode === "a4" ? (
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={printGeneratedLabels} disabled={!labelPrintReady} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Barcode size={15} /> Nyomtatás A4</button>
-                ) : (
-                  <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={printGeneratedZebraLabels} disabled={!labelPrintReady || zebraPrintBusy || !zebraPrinter} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : !zebraPrinter ? "Előbb keresd meg és válaszd ki a Zebra nyomtatót." : ""} type="button"><Printer size={15} /> {zebraPrintBusy ? "Nyomtatás…" : `Nyomtatás Zebra (${labelPrintItems.length})`}</button>
-                )}
+                {labelPrintMode === "zebra" ? (
+                  <button className={btnSoft} onClick={() => printGeneratedLabels({ testOnly: true })} disabled={!labelPrintReady} title={labelInvalidRows.length ? "A teszthez is minden termékhez mentett, egyedi bárkód kell." : "Egyetlen 40×46 mm-es tesztcímke nyomtatása"} type="button"><Printer size={15} /> Teszt 1 címke</button>
+                ) : null}
+                <button className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal" onClick={() => printGeneratedLabels()} disabled={!labelPrintReady} title={labelInvalidRows.length ? "A nyomtatáshoz minden termékhez mentett, egyedi bárkód kell." : ""} type="button"><Printer size={15} /> {labelPrintMode === "zebra" ? `Nyomtatás Zebra (${labelPrintItems.length})` : "Nyomtatás A4"}</button>
                 <button className={btnSoft} onClick={() => setLabelComposerOpen(false)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
 
             <div className="space-y-4 p-4">
-              <div className="grid gap-3 rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] p-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
-                <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/14 bg-[#293548] p-1">
-                  <button
-                    type="button"
-                    className={`h-9 rounded-lg px-3 text-xs transition ${labelPrintMode === "a4" ? "bg-[#2a8d8b] text-white" : "text-white/58 hover:bg-white/[0.07] hover:text-white"}`}
-                    onClick={() => setLabelPrintMode("a4")}
-                  >
-                    A4 ív
-                  </button>
-                  <button
-                    type="button"
-                    className={`h-9 rounded-lg px-3 text-xs transition ${labelPrintMode === "zebra" ? "bg-[#2a8d8b] text-white" : "text-white/58 hover:bg-white/[0.07] hover:text-white"}`}
-                    onClick={() => setLabelPrintMode("zebra")}
-                  >
-                    Zebra GC420t
-                  </button>
-                </div>
-                <div className="text-xs leading-relaxed text-[#d7fffd]">
-                  {labelPrintMode === "a4"
-                    ? "A címkék egy közös A4-es ívre kerülnek. Az eddigi A4-es nyomtatás változatlanul megmaradt."
-                    : "A Zebra módban minden példány külön 40 × 46 mm-es címkeként, natív ZPL + Code128 formában megy közvetlenül a helyi Zebra nyomtatóra. Nincs A4, nincs böngészős méretezési cirkusz."}
-                </div>
+              <div className="grid gap-2 rounded-2xl border border-white/12 bg-[#354153] p-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setLabelPrintMode("a4")}
+                  className={`flex min-h-[58px] items-center gap-3 rounded-xl border px-3 text-left transition ${labelPrintMode === "a4" ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,.18)]" : "border-white/12 bg-[#303a4c] text-white/66 hover:bg-[#3b4759]"}`}
+                >
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10"><FileText size={17} /></span>
+                  <span><strong className="block text-sm font-normal">A4 ív</strong><span className="mt-0.5 block text-[10px] text-white/52">Több címke egy 210 × 297 mm-es lapon</span></span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLabelPrintMode("zebra")}
+                  className={`flex min-h-[58px] items-center gap-3 rounded-xl border px-3 text-left transition ${labelPrintMode === "zebra" ? "border-[#7bd7d4]/60 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,.18)]" : "border-white/12 bg-[#303a4c] text-white/66 hover:bg-[#3b4759]"}`}
+                >
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10"><Printer size={17} /></span>
+                  <span><strong className="block text-sm font-normal">Zebra GC420t</strong><span className="mt-0.5 block text-[10px] text-white/52">1 címke = 1 nyomtatási oldal, Windows driverrel</span></span>
+                </button>
               </div>
+
+              {labelPrintMode === "zebra" ? (
+                <div className="rounded-xl border border-[#7bd7d4]/35 bg-[#173f49] px-3 py-2.5 text-xs leading-relaxed text-[#d7fffd]">
+                  <strong className="font-normal text-white">Zebra mód:</strong> a rendszer minden címkét külön, pontosan <span className="text-white">{labelW} × {labelH} mm</span>-es nyomtatási oldalra tesz. A Windowsban válaszd a <span className="text-white">Zebra GC420t</span> nyomtatót, papírméretnek ugyanezt a méretet, méretezésnek <span className="text-white">100% / Actual size</span>, margónak <span className="text-white">0</span>, a fejléc/lábléc pedig legyen kikapcsolva. Browser Print nem kell.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-[#2a8d8b]/30 bg-[#203f49] px-3 py-2 text-xs leading-relaxed text-[#d7fffd]">
+                  A címkék egy közös A4-es ívre kerülnek egymás után. Nyomtatás csak a termékhez adatbázisban elmentett bárkóddal lehetséges, így ugyanaz a kód marad a raktárban, a címkén és később a Shopify-kapcsolatban is.
+                </div>
+              )}
 
               <section className="grid gap-4 lg:grid-cols-[0.9fr,1.1fr]">
                 <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
@@ -12228,95 +11928,61 @@ export default function AllInWarehouse() {
                 </div>
 
                 <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
-                  {labelPrintMode === "a4" ? (
-                    <>
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm text-white">Méret, kiosztás és sablon</p>
-                        <span className="rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
-                          {labelColCount} oszlop × {labelRowCount} sor • {labelsPerPage} címke / oldal • {Math.max(1, labelPrintPages.length)} oldal
-                        </span>
-                      </div>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-white">{labelPrintMode === "zebra" ? "Zebra címkeméret és sablon" : "Méret, kiosztás és sablon"}</p>
+                    <span className="rounded-full border border-white/12 bg-white/[0.08] px-2.5 py-1 text-xs text-white/70">
+                      {labelPrintMode === "zebra"
+                        ? `${labelW} × ${labelH} mm • 1 címke / oldal • ${labelPrintItems.length} oldal`
+                        : `${labelColCount} oszlop × ${labelRowCount} sor • ${labelsPerPage} címke / oldal • ${Math.max(1, labelPrintPages.length)} oldal`}
+                    </span>
+                  </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        <label className={`${label} min-w-0`}>Gyors sablon
-                          <select className={`${select} w-full min-w-0`} onChange={(e) => applyWarehouseLabelPreset(e.target.value)} defaultValue="40x46">
-                            {WAREHOUSE_LABEL_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-                          </select>
-                        </label>
-                        <label className={`${label} min-w-0`}>Címke szélesség mm<input className={`${input} w-full min-w-0`} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} inputMode="decimal" /></label>
-                        <label className={`${label} min-w-0`}>Címke magasság mm<input className={`${input} w-full min-w-0`} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} inputMode="decimal" /></label>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <label className={`${label} min-w-0`}>{labelPrintMode === "zebra" ? "Gyors címkeméret" : "Gyors sablon"}
+                      <select className={`${select} w-full min-w-0`} onChange={(e) => applyWarehouseLabelPreset(e.target.value)} defaultValue="40x46">
+                        {WAREHOUSE_LABEL_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{labelPrintMode === "zebra" ? `${preset.width} × ${preset.height} mm` : preset.name}</option>)}
+                      </select>
+                    </label>
+                    <label className={`${label} min-w-0`}>Címke szélesség mm<input className={`${input} w-full min-w-0`} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} inputMode="decimal" /></label>
+                    <label className={`${label} min-w-0`}>Címke magasság mm<input className={`${input} w-full min-w-0`} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} inputMode="decimal" /></label>
+                    {labelPrintMode === "a4" ? (
+                      <>
                         <label className={`${label} min-w-0`}>Oszlop / A4<input className={`${input} w-full min-w-0`} value={labelCols} onChange={(e) => setLabelCols(e.target.value)} inputMode="numeric" /></label>
                         <label className={`${label} min-w-0`}>Sor / A4<input className={`${input} w-full min-w-0`} value={labelRows} onChange={(e) => setLabelRows(e.target.value)} inputMode="numeric" /></label>
                         <label className={`${label} min-w-0`}>Margó bal-jobb mm<input className={`${input} w-full min-w-0`} value={labelMarginX} onChange={(e) => setLabelMarginX(e.target.value)} inputMode="decimal" /></label>
                         <label className={`${label} min-w-0`}>Margó fent-lent mm<input className={`${input} w-full min-w-0`} value={labelMarginY} onChange={(e) => setLabelMarginY(e.target.value)} inputMode="decimal" /></label>
-                        <label className={`${label} min-w-0`}>Cég neve a címkén<input className={`${input} w-full min-w-0`} value={labelCompanyName} onChange={(e) => setLabelCompanyName(e.target.value)} placeholder={WAREHOUSE_LABEL_COMPANY} /></label>
-                        <label className={`${label} min-w-0`}>Pénznem
-                          <select className={`${select} w-full min-w-0`} value={labelCurrency} onChange={(e) => { setLabelCurrency(e.target.value); if (!labelUnitText.trim() || labelUnitText === labelCurrency) setLabelUnitText(e.target.value); }}>
-                            <option value="RON">RON</option><option value="EUR">EUR</option><option value="USD">USD</option><option value="HUF">HUF</option>
-                          </select>
-                        </label>
-                        <label className={`${label} min-w-0`}>Ár melletti egység<input className={`${input} w-full min-w-0`} value={labelUnitText} onChange={(e) => setLabelUnitText(e.target.value)} placeholder="RON" /></label>
-                        <label className={`${label} min-w-0`}>Sablon neve<input className={`${input} w-full min-w-0`} value={labelTemplateName} onChange={(e) => setLabelTemplateName(e.target.value)} placeholder="Standard 40x46" /></label>
-                        <label className={`${label} min-w-0`}>Mentett sablon
-                          <select className={`${select} w-full min-w-0`} value="" onChange={(e) => loadWarehouseLabelTemplate(e.target.value)}><option value="">Betöltés</option>{labelTemplates.map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}</select>
-                        </label>
+                      </>
+                    ) : (
+                      <div className="sm:col-span-2 lg:col-span-3 rounded-xl border border-[#7bd7d4]/22 bg-[#174c55]/45 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]">
+                        <span className="text-white">GC420t beállítás:</span> a nyomtató driverében a média mérete legyen pontosan <span className="text-white">{labelW} × {labelH} mm</span>. A Zebra saját gap érzékelése lépteti a tekercset, ezért itt nincs A4-es oszlop, sor vagy margó.
                       </div>
+                    )}
+                    <label className={`${label} min-w-0`}>Cég neve a címkén<input className={`${input} w-full min-w-0`} value={labelCompanyName} onChange={(e) => setLabelCompanyName(e.target.value)} placeholder={WAREHOUSE_LABEL_COMPANY} /></label>
+                    <label className={`${label} min-w-0`}>Pénznem
+                      <select className={`${select} w-full min-w-0`} value={labelCurrency} onChange={(e) => { setLabelCurrency(e.target.value); if (!labelUnitText.trim() || labelUnitText === labelCurrency) setLabelUnitText(e.target.value); }}>
+                        <option value="RON">RON</option>
+                        <option value="EUR">EUR</option>
+                        <option value="USD">USD</option>
+                        <option value="HUF">HUF</option>
+                      </select>
+                    </label>
+                    <label className={`${label} min-w-0`}>Ár melletti egység<input className={`${input} w-full min-w-0`} value={labelUnitText} onChange={(e) => setLabelUnitText(e.target.value)} placeholder="RON" /></label>
+                    <label className={`${label} min-w-0`}>Sablon neve<input className={`${input} w-full min-w-0`} value={labelTemplateName} onChange={(e) => setLabelTemplateName(e.target.value)} placeholder="Standard 40x46" /></label>
+                    <label className={`${label} min-w-0`}>Mentett sablon
+                      <select className={`${select} w-full min-w-0`} value="" onChange={(e) => loadWarehouseLabelTemplate(e.target.value)}>
+                        <option value="">Betöltés</option>
+                        {labelTemplates.map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
 
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                        <label className="inline-flex items-center gap-2 text-xs text-white/72"><input className={selectBox} type="checkbox" checked={labelShowBorder} onChange={(e) => setLabelShowBorder(e.target.checked)} />Címke keret nyomtatása</label>
-                        <button className={btnSoft} type="button" onClick={saveCurrentWarehouseLabelTemplate}><Save size={14} /> Sablon mentése</button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="text-sm text-white">Zebra GC420t • tekercses címke</p>
-                          <p className="mt-1 text-[11px] text-white/48">203 dpi • 8 dot/mm • 1 termékpéldány = 1 fizikai címke</p>
-                        </div>
-                        <span className={`rounded-full border px-2.5 py-1 text-xs ${zebraPrinter ? "border-emerald-200/35 bg-emerald-500/12 text-emerald-50" : "border-amber-200/30 bg-amber-400/10 text-amber-50"}`}>
-                          {zebraPrinter ? "Nyomtató kész" : "Nincs nyomtató"}
-                        </span>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        <label className={`${label} min-w-0`}>Címke szélesség mm<input className={`${input} w-full min-w-0`} value={labelWidth} onChange={(e) => setLabelWidth(e.target.value)} inputMode="decimal" /></label>
-                        <label className={`${label} min-w-0`}>Címke magasság mm<input className={`${input} w-full min-w-0`} value={labelHeight} onChange={(e) => setLabelHeight(e.target.value)} inputMode="decimal" /></label>
-                        <label className={`${label} min-w-0`}>Nyomtatási sebesség
-                          <select className={`${select} w-full min-w-0`} value={zebraSpeed} onChange={(e) => setZebraSpeed(e.target.value)}><option value="2">2 ips • lassú / biztos</option><option value="3">3 ips • normál</option><option value="4">4 ips • gyors</option></select>
-                        </label>
-                        <label className={`${label} min-w-0`}>Vízszintes korrekció (dot)<input className={`${input} w-full min-w-0`} type="number" min={-80} max={80} value={zebraOffsetX} onChange={(e) => setZebraOffsetX(e.target.value)} /></label>
-                        <label className={`${label} min-w-0`}>Függőleges korrekció (dot)<input className={`${input} w-full min-w-0`} type="number" min={-80} max={80} value={zebraOffsetY} onChange={(e) => setZebraOffsetY(e.target.value)} /></label>
-                        <label className={`${label} min-w-0`}>Cég neve a címkén<input className={`${input} w-full min-w-0`} value={labelCompanyName} onChange={(e) => setLabelCompanyName(e.target.value)} placeholder={WAREHOUSE_LABEL_COMPANY} /></label>
-                        <label className={`${label} min-w-0`}>Pénznem
-                          <select className={`${select} w-full min-w-0`} value={labelCurrency} onChange={(e) => { setLabelCurrency(e.target.value); if (!labelUnitText.trim() || labelUnitText === labelCurrency) setLabelUnitText(e.target.value); }}><option value="RON">RON</option><option value="EUR">EUR</option><option value="USD">USD</option><option value="HUF">HUF</option></select>
-                        </label>
-                        <label className={`${label} min-w-0`}>Ár melletti egység<input className={`${input} w-full min-w-0`} value={labelUnitText} onChange={(e) => setLabelUnitText(e.target.value)} placeholder="RON" /></label>
-                        <label className={`${label} min-w-0 sm:col-span-2 lg:col-span-1`}>Zebra nyomtató
-                          <select
-                            className={`${select} w-full min-w-0`}
-                            value={zebraPrinterKey}
-                            onChange={(e) => setZebraPrinter(zebraPrinters.find((device) => warehouseZebraDeviceKey(device) === e.target.value) || null)}
-                          >
-                            <option value="">Válassz nyomtatót</option>
-                            {zebraPrinters.map((device) => <option key={warehouseZebraDeviceKey(device)} value={warehouseZebraDeviceKey(device)}>{warehouseZebraDeviceLabel(device)}</option>)}
-                          </select>
-                        </label>
-                      </div>
-
-                      <div className={`mt-3 rounded-xl border px-3 py-2 text-[11px] leading-relaxed ${zebraPrinter ? "border-emerald-200/22 bg-emerald-500/8 text-emerald-50/82" : "border-amber-200/22 bg-amber-400/8 text-amber-50/82"}`}>
-                        {zebraStatus}
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-[10px] leading-relaxed text-white/45">Első beállítás: Zebra driver + Zebra Browser Print alkalmazás a PC-n, az official BrowserPrint JS pedig <span className="text-[#d7fffd]">public/zebra/BrowserPrint.min.js</span>.</div>
-                        <div className="flex flex-wrap gap-2">
-                          <button className={btnSoft} type="button" onClick={() => void refreshZebraPrinters()} disabled={zebraPrinterBusy || zebraPrintBusy}><RefreshCw size={14} className={zebraPrinterBusy ? "animate-spin" : ""} /> Nyomtató keresése</button>
-                          <button className={btnSoft} type="button" onClick={printZebraTestLabel} disabled={!labelPrintReady || !zebraPrinter || zebraPrintBusy}><Printer size={14} /> Teszt címke</button>
-                        </div>
-                      </div>
-                    </>
-                  )}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <label className="inline-flex items-center gap-2 text-xs text-white/72">
+                      <input className={selectBox} type="checkbox" checked={labelShowBorder} onChange={(e) => setLabelShowBorder(e.target.checked)} />
+                      Címke keret nyomtatása
+                    </label>
+                    <button className={btnSoft} type="button" onClick={saveCurrentWarehouseLabelTemplate}><Save size={14} /> Sablon mentése</button>
+                  </div>
                 </div>
               </section>
 
@@ -12373,11 +12039,33 @@ export default function AllInWarehouse() {
 
                 <div className="rounded-xl border border-white/12 bg-[#3f4959] p-3">
                   <div className="mb-3 flex items-center justify-between gap-2">
-                    <p className="text-sm text-white">{labelPrintMode === "a4" ? "Első oldal előnézet" : "Zebra címke előnézet"}</p>
-                    <span className="text-xs text-white/55">{labelPrintMode === "a4" ? `${Math.min(labelPrintItems.length, labelsPerPage)} / ${labelPrintItems.length} címke` : `${labelW} × ${labelH} mm • 203 dpi`}</span>
+                    <p className="text-sm text-white">{labelPrintMode === "zebra" ? "Zebra címke előnézet" : "Első oldal előnézet"}</p>
+                    <span className="text-xs text-white/55">{labelPrintMode === "zebra" ? `${labelW} × ${labelH} mm` : `${Math.min(labelPrintItems.length, labelsPerPage)} / ${labelPrintItems.length} címke`}</span>
                   </div>
                   {labelPrintItems.length ? (
-                    labelPrintMode === "a4" ? (
+                    labelPrintMode === "zebra" ? (
+                      <div className="flex min-h-[360px] items-start justify-center overflow-auto rounded-[14px] border border-white/14 bg-[#2f394a] p-5">
+                        <div
+                          className="relative shrink-0 bg-[#f1f3f6] shadow-[0_14px_34px_rgba(0,0,0,.32)]"
+                          style={{ width: `${labelW * zebraLabelPreviewScale}mm`, height: `${labelH * zebraLabelPreviewScale}mm` }}
+                        >
+                          <div
+                            className={`aifWarehousePrintLabel ${labelShowBorder ? "" : "noBorder"}`}
+                            style={{
+                              "--aif-label-w": `${labelW}mm`,
+                              "--aif-label-h": `${labelH}mm`,
+                              position: "absolute",
+                              left: 0,
+                              top: 0,
+                              transform: `scale(${zebraLabelPreviewScale})`,
+                              transformOrigin: "top left",
+                            } as React.CSSProperties & Record<string, string>}
+                          >
+                            <WarehouseLabelContent label={labelPrintItems[0]} />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
                       <div ref={labelPreviewFrameRef} className="aifWhLabelPreviewFrame" style={labelPrintStyle}>
                         <div className="aifWhLabelPreviewPageBox">
                           <div className="aifWarehouseLabelPrintPage">
@@ -12387,25 +12075,6 @@ export default function AllInWarehouse() {
                               </div>
                             ))}
                           </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid min-h-[420px] place-items-center rounded-2xl border border-white/12 bg-[#2f394a] p-5">
-                        <div className="text-center">
-                          <div className="mx-auto overflow-hidden rounded-xl bg-white text-black shadow-[0_18px_45px_rgba(0,0,0,.35)]" style={{ width: `${Math.max(240, Math.min(360, labelW * 7.2))}px`, aspectRatio: `${labelW} / ${labelH}` }}>
-                            <div className="flex h-full flex-col justify-center px-3 py-2 font-[Arial]">
-                              {labelContent.company && labelCompanyName ? <div className="truncate text-[9px] uppercase tracking-[0.08em] text-slate-700">{labelCompanyName}</div> : null}
-                              {labelContent.brand && labelPrintItems[0].brand !== "-" ? <div className="mt-1 truncate text-[9px] uppercase">{labelPrintItems[0].brand}</div> : null}
-                              {labelContent.title ? <div className="mt-1 line-clamp-2 text-[12px] leading-tight">{labelPrintItems[0].title}</div> : null}
-                              {labelContent.sizeColor && labelPrintItems[0].size !== "-" ? <div className="mt-1 text-[10px]">Méret: {labelPrintItems[0].size}</div> : null}
-                              {labelContent.barcode ? <div className="mt-1 h-[78px] w-full overflow-hidden" dangerouslySetInnerHTML={{ __html: labelPrintItems[0].render.ok ? labelPrintItems[0].render.svg : "" }} /> : null}
-                              {labelContent.description && labelPrintItems[0].description ? <div className="truncate text-[8px]">{labelPrintItems[0].description}</div> : null}
-                              {labelContent.category && labelPrintItems[0].category !== "-" ? <div className="truncate text-[8px] uppercase">{labelPrintItems[0].category}</div> : null}
-                              {labelContent.code ? <div className="truncate text-[8px] text-slate-600">Cod: {[labelPrintItems[0].productCode, labelPrintItems[0].color].filter((value) => value && value !== "-").join(" - ")}</div> : null}
-                              {labelContent.price && labelPrintItems[0].price ? <div className="mt-1 text-[24px] leading-none">{money(labelPrintItems[0].price)} <span className="text-[9px]">{labelUnitText || labelCurrency}</span></div> : null}
-                            </div>
-                          </div>
-                          <div className="mt-3 text-[11px] text-white/48">A Zebra nyomtatási kód natív ZPL-t használ; ez az előnézet az elrendezést mutatja, a fizikai tesztcímke az utolsó szó.</div>
                         </div>
                       </div>
                     )
