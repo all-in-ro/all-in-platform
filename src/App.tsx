@@ -17,6 +17,7 @@ import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
 import AllInAdminClients from "./pages/AllInAdminClients";
+import AllInAdminClientsMobile from "./pages/AllInAdminClientsMobile";
 
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
@@ -31,7 +32,6 @@ import AllInVacations from "./pages/AllInVacations";
 import AllInUsers from "./pages/AllInUsers";
 import AllInCars from "./pages/AllInCars";
 import AllInCarExpenses from "./pages/AllInCarExpenses";
-
 
 type ShopId = "csikszereda" | "kezdivasarhely";
 type ScreenName =
@@ -241,6 +241,7 @@ export default function App() {
   const warehouseMobile = useIsWarehouseMobile();
   const inventoryMobile = warehouseMobile;
   const adminShopMobile = warehouseMobile;
+  const adminClientsMobile = warehouseMobile;
 
   useEffect(() => {
     const onHash = () => setScreen(hashToScreen(window.location.hash || ""));
@@ -411,7 +412,11 @@ export default function App() {
           otherCityName="Csíkszereda"
         />
       ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
-      {screen.name === "adminclients" && <AllInAdminClients actor={session.actor} role={session.role} />}
+      {screen.name === "adminclients" && (adminClientsMobile ? (
+        <AllInAdminClientsMobile actor={session.actor} role={session.role} />
+      ) : (
+        <AllInAdminClients actor={session.actor} role={session.role} />
+      ))}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
       {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
