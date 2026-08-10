@@ -1156,9 +1156,84 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const split = splitBrandProductCode(normalized.supplierProductCode || normalized.productCode || normalized.modelCode);
     if (split.fullCode) normalized.supplierProductCode = normalized.supplierProductCode || split.fullCode;
     if (split.modelCode && (!normalized.modelCode || String(normalized.modelCode) === String(split.fullCode))) normalized.modelCode = split.modelCode;
-    if (split.colorCode && !normalized.colorCode) normalized.colorCode = split.colorCode;
-    if (split.colorCode && !normalized.supplierColorCode) normalized.supplierColorCode = split.colorCode;
+    const suffixIsSupplierColor = /^\d{1,4}$/.test(String(split.colorCode || ""));
+    if (split.colorCode && (!normalized.colorCode || suffixIsSupplierColor)) normalized.colorCode = split.colorCode;
+    if (split.colorCode && (!normalized.supplierColorCode || suffixIsSupplierColor)) normalized.supplierColorCode = split.colorCode;
     return normalized;
+  }
+
+  function importBarcodeIdentity(normalized = {}, row = {}) {
+    const productCode = emptyToNull(
+      normalized.supplierProductCode || normalized.supplier_product_code || normalized.productCode || normalized.product_code ||
+      row.supplier_product_code || row.product_code || normalized.modelCode || normalized.model_code
+    );
+    const split = splitBrandProductCode(productCode);
+    const color = text(split.colorCode || normalized.supplierColorCode || normalized.supplier_color_code || normalized.colorCode || normalized.color_code || row.supplier_color_code || "");
+    const size = text(normalized.supplierSize || normalized.supplier_size || normalized.size || row.supplier_size || "");
+    const code = text(split.fullCode || productCode || split.modelCode || normalized.modelCode || normalized.model_code || "");
+    return {
+      key: `${normCode(code)}|${normCode(color)}|${normCode(size)}`,
+      label: [code || "kód nélkül", color || "szín nélkül", size || "méret nélkül"].join(" / "),
+    };
+  }
+
+  function importBarcodeValue(normalized = {}, row = {}) {
+    return text(normalized.barcode || normalized.ean || normalized.ean13 || normalized.supplierBarcode || normalized.supplier_barcode || row.barcode || "");
+  }
+
+  function importBarcodeConflictError(barcode, firstRow, nextRow) {
+    const error = new Error(`A(z) ${barcode} vonalkód több külön termékvariánshoz került az importban (${firstRow.label} ↔ ${nextRow.label}). Javítsd a vonalkód-oszlop társítását vagy a hibás sort.`);
+    error.statusCode = 409;
+    error.code = "import_barcode_conflict";
+    error.barcode = barcode;
+    error.firstRowNo = firstRow.rowNo || null;
+    error.rowNo = nextRow.rowNo || null;
+    return error;
+  }
+
+  function assertNoConflictingImportBarcodes(rows = []) {
+    const seen = new Map();
+    for (const source of rows || []) {
+      const normalized = source?.normalized || source || {};
+      const barcode = importBarcodeValue(normalized, source || {});
+      if (!barcode) continue;
+      const barcodeKey = barcode.toLowerCase();
+      const identity = importBarcodeIdentity(normalized, source || {});
+      const current = {
+        identity: identity.key,
+        label: identity.label,
+        rowNo: source?.rowNo || source?.row_no || null,
+      };
+      const previous = seen.get(barcodeKey);
+      if (previous && previous.identity !== current.identity) {
+        throw importBarcodeConflictError(barcode, previous, current);
+      }
+      if (!previous) seen.set(barcodeKey, current);
+    }
+  }
+
+  async function assertImportBarcodeCompatibleWithBatch(client, batchId, nr) {
+    const barcode = importBarcodeValue(nr?.normalized || {}, nr || {});
+    if (!barcode) return;
+    const incomingIdentity = importBarcodeIdentity(nr.normalized || {}, nr || {});
+    const existing = await client.query(
+      `SELECT id, row_no, supplier_product_code, supplier_color_code, supplier_size, normalized
+       FROM aif_import_rows
+       WHERE batch_id=$1
+         AND status <> 'ignored'
+         AND lower(btrim(COALESCE(normalized->>'barcode','')))=lower(btrim($2))
+       ORDER BY row_no ASC, id ASC`,
+      [batchId, barcode]
+    );
+    for (const row of existing.rows || []) {
+      const identity = importBarcodeIdentity(row.normalized || {}, row);
+      if (identity.key === incomingIdentity.key) continue;
+      throw importBarcodeConflictError(
+        barcode,
+        { rowNo: row.row_no, label: identity.label },
+        { rowNo: nr.rowNo || null, label: incomingIdentity.label }
+      );
+    }
   }
 
   function actorFrom(req) {
@@ -1516,7 +1591,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawCategory = rawValueByHeaders(raw, ["CATEGORIE", "CATEGORY", "CATEGORIA", "CATEGORIE PRODUS", "PRODUCT CATEGORY"]);
     const rawSubcategory = rawValueByHeaders(raw, ["SUBCATEGORIE", "SUB CATEGORY", "SUBCATEGORY", "ALCATEGORIE", "ALKATEGORIA", "ALKATEGÓRIA", "AL KATEGORIA", "AL-KATEGORIA"]);
     const rawDescription = rawValueByHeaders(raw, ["DESCRIERE", "DESCRIERE PRODUS", "DESCRIERE LUNGA", "DESCRIERE LUNGĂ", "LONG DESCRIPTION", "DESCRIPTION", "PRODUCT DESCRIPTION", "LEIRAS", "LEÍRÁS"]);
-    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU"]);
+    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR"]);
     const rawGender = rawValueByHeaders(raw, ["GEN", "GENDER", "SEX", "DEPT", "DEPARTMENT", "DEPARTMENT NAME"]);
     const rawMaterial = rawValueByHeaders(raw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC"]);
     const rawSeason = rawValueByHeaders(raw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
@@ -5338,6 +5413,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         normalizedRows.push(nr);
       }
 
+      assertNoConflictingImportBarcodes(normalizedRows);
+
       await client.query("BEGIN");
       await ensureSnCodSchema(client);
 
@@ -6032,6 +6109,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
         applyReceptionSellPricePolicyToNormalized(nr.normalized, receptionPricing);
         applySalesTvaSettingsToNormalized(nr.normalized, salesTvaSettings);
+        await assertImportBarcodeCompatibleWithBatch(client, batchId, nr);
         if (nr.errors.length) chunkErrorCount++;
         const buyPriceRon = nr.normalized.buyPrice == null || !Number.isFinite(exchangeRate)
           ? null
@@ -7152,7 +7230,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawBuyPrice = rawValueByHeaders(raw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
     const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
     const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "URL POZA", "LINK FOTO", "LINK POZA", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
-    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU"]);
+    const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR"]);
     const stockRowsInput = Array.isArray(body.stockRows)
       ? body.stockRows
       : Array.isArray(body.stock_rows)
@@ -7240,7 +7318,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const rawMaterial = rawValueByHeaders(manualRaw, ["COMPOZITIE", "COMPOZIȚIE", "COMPOSITION", "MATERIAL", "MATERIAL COMPOSITION", "FABRIC", "TERMÉK ÖSSZETÉTELE", "TERMEK OSSZETETELE"]);
       const rawSeason = rawValueByHeaders(manualRaw, ["COLECTIE", "COLECȚIE", "COLLECTION", "SEZON", "SEASON"]);
       const rawImageUrl = rawValueByHeaders(manualRaw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTÓ", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "LINK FOTO", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
-      const rawBarcode = rawValueByHeaders(manualRaw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "COD BARE", "COD DE BARE", "EAN", "EAN13", "GTIN", "UPC", "VONALKOD", "VONALKÓD", "SKU"]);
+      const rawBarcode = rawValueByHeaders(manualRaw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "COD BARE", "COD DE BARE", "EAN", "EAN13", "GTIN", "UPC", "VONALKOD", "VONALKÓD"]);
       const rawBuyPrice = rawValueByHeaders(manualRaw, ["PRET DE ACHIZITIE", "PREȚ DE ACHIZIȚIE", "PRET ACHIZITIE", "PRET ACHIZIȚIE", "PURCHASE PRICE", "BUY PRICE", "VETELAR", "VÉTELÁR"]);
       const rawSellPrice = rawValueByHeaders(manualRaw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
 
