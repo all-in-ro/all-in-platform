@@ -15,8 +15,10 @@ import {
   BarChart3,
   Boxes,
   CalendarDays,
-  CheckCircle2,
+  Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   Clock3,
   CreditCard,
@@ -354,14 +356,12 @@ function SmartSelect({
                   <span className="min-w-0 flex-1 truncate" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}>
                     {option.label}
                   </span>
-                  <span
-                    className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition ${
-                      active
-                        ? "border-white/36 bg-white/12 text-white"
-                        : "border-white/8 bg-black/5 text-transparent group-hover/item:border-white/14"
-                    }`}
-                  >
-                    <CheckCircle2 size={13} />
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center">
+                    {active ? (
+                      <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#d8fffd] text-[#176b69] shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
+                        <Check size={17} strokeWidth={2.8} />
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               );
@@ -372,6 +372,265 @@ function SmartSelect({
       )}
     </div>
   );
+}
+
+
+const HU_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+] as const;
+const HU_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function isoDateParts(value?: string | null) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return null;
+  return { year, month, day, date };
+}
+
+function isoFromUtcDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function huDateLabel(value?: string | null) {
+  const parsed = isoDateParts(value);
+  if (!parsed) return "Dátum választása";
+  return `${parsed.year}. ${String(parsed.month).padStart(2, "0")}. ${String(parsed.day).padStart(2, "0")}.`;
+}
+
+function HungarianDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const parsed = isoDateParts(value);
+  const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const todayIso = localIsoDate(new Date());
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = 8;
+    const width = Math.min(336, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const estimatedHeight = 382;
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
+    if (openUpward) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    } else {
+      setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = isoDateParts(value);
+    if (current) {
+      setViewYear(current.year);
+      setViewMonth(current.month - 1);
+    }
+    updatePosition();
+
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const firstOfMonth = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (firstOfMonth.getUTCDay() + 6) % 7;
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart);
+    day.setUTCDate(gridStart.getUTCDate() + index);
+    return day;
+  });
+
+  function shiftMonth(delta: number) {
+    const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+    setViewYear(next.getUTCFullYear());
+    setViewMonth(next.getUTCMonth());
+  }
+
+  function chooseDate(iso: string) {
+    onChange(iso);
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <CalendarDays size={16} className="shrink-0 text-[#8fe9e5]" />
+          <span className="truncate tracking-[0.02em]">{huDateLabel(value)}</span>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position && createPortal(
+        <div
+          ref={menuRef}
+          role="dialog"
+          aria-label={`${ariaLabel} naptár`}
+          className="overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl"
+          style={{
+            position: "fixed",
+            zIndex: 940,
+            left: position.left,
+            width: position.width,
+            top: position.top,
+            bottom: position.bottom,
+          }}
+        >
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button
+              type="button"
+              onClick={() => shiftMonth(-1)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
+              aria-label="Előző hónap"
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <div className="text-center">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p>
+              <p className="mt-0.5 text-sm font-medium text-white">{viewYear}. {HU_MONTHS[viewMonth]}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => shiftMonth(1)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
+              aria-label="Következő hónap"
+            >
+              <ChevronRight size={17} />
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-7 gap-1">
+            {HU_WEEKDAYS.map((day, index) => (
+              <div
+                key={day}
+                className={`py-1 text-center text-[10px] font-medium uppercase tracking-[0.05em] ${index >= 5 ? "text-rose-100/55" : "text-[#cffffd]/60"}`}
+              >
+                {day}
+              </div>
+            ))}
+
+            {days.map((day) => {
+              const iso = isoFromUtcDate(day);
+              const inMonth = day.getUTCMonth() === viewMonth;
+              const selected = iso === value;
+              const today = iso === todayIso;
+              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+              return (
+                <button
+                  key={iso}
+                  type="button"
+                  onClick={() => chooseDate(iso)}
+                  className={`relative flex h-9 items-center justify-center rounded-lg border text-xs transition ${
+                    selected
+                      ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] font-semibold text-white shadow-[0_6px_16px_rgba(42,141,139,0.30)]"
+                      : inMonth
+                        ? weekend
+                          ? "border-transparent bg-white/[0.025] text-rose-50/72 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                          : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                        : "border-transparent text-white/24 hover:bg-white/[0.04] hover:text-white/48"
+                  }`}
+                >
+                  {day.getUTCDate()}
+                  {today && !selected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
+            <span className="text-[10px] text-white/40">A hét hétfővel kezdődik.</span>
+            <button
+              type="button"
+              onClick={() => chooseDate(todayIso)}
+              className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] transition hover:bg-[#2a8d8b]/32"
+            >
+              <CalendarDays size={13} /> Ma
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+
+function adminSaleDeleteMessage(error: any) {
+  const code = String(error?.code || "");
+  if (code === "sale_line_has_customer_payment_allocations" || code === "sale_line_has_linked_customer_payment") {
+    return "Ehhez az eladáshoz már kliens-tartozásbefizetés kapcsolódik. A rendszer pénzügyi védelem miatt nem engedi vakon törölni, mert a kliens befizetési előzménye is sérülne.";
+  }
+  if (code === "sale_line_restore_requires_completed_sale") {
+    return "Ehhez a sorhoz készlet-visszaállítás nem használható, mert az eladás nincs lezárt állapotban. Próbáld a készletmódosítás nélküli végleges törlést.";
+  }
+  if (code === "sale_line_variant_missing") {
+    return "Ehhez a régi eladási sorhoz nincs biztonságosan visszaállítható termékváltozat. Készlet-visszaállítás helyett csak végleges törlés használható.";
+  }
+  if (Number(error?.status || error?.statusCode) === 403) {
+    return "A jelenlegi munkamenet nem jogosult erre a törlésre. Lépj be adminisztrátorként, majd próbáld újra.";
+  }
+  if (Number(error?.status || error?.statusCode) === 404) {
+    return "Az eladási sor nem található, vagy már korábban törölték. Frissítsd az oldalt.";
+  }
+  return String(error?.message || error || "Az eladási sor törlése nem sikerült.");
 }
 
 
@@ -903,6 +1162,7 @@ export default function AllInAdminMagazinDashboard({
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -939,14 +1199,20 @@ export default function AllInAdminMagazinDashboard({
 
   async function deleteSaleLine(mode: AifAdminShopSaleLineDeleteMode) {
     if (!deleteTarget || deleteSaving) return;
+    if (!deleteTarget.lineId) {
+      setDeleteError("Ehhez az eladási sorhoz a szerver nem küldött sorazonosítót. Frissítsd az oldalt; ha megmarad, a backend overview válaszát kell javítani.");
+      return;
+    }
     setDeleteSaving(true);
+    setDeleteError("");
     setError("");
     try {
       await apiAifAdminDeleteShopSaleLine(deleteTarget.lineId, mode);
       setDeleteTarget(null);
+      setDeleteError("");
       await load();
-    } catch (deleteError: any) {
-      setError(deleteError?.message || "Az eladási sor törlése nem sikerült.");
+    } catch (deleteFailure: any) {
+      setDeleteError(adminSaleDeleteMessage(deleteFailure));
     } finally {
       setDeleteSaving(false);
     }
@@ -1079,14 +1345,30 @@ export default function AllInAdminMagazinDashboard({
 
           <div className="mt-4 space-y-2.5">
             <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[170px_170px_minmax(190px,1fr)_minmax(190px,1fr)_minmax(190px,1fr)]">
-              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-                Ettől
-                <input className={inputClass} type="date" value={draft.from} onChange={(event) => setDraft({ ...draft, from: event.target.value })} />
-              </label>
-              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
-                Eddig
-                <input className={inputClass} type="date" value={draft.to} onChange={(event) => setDraft({ ...draft, to: event.target.value })} />
-              </label>
+              <div className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                <span>Ettől</span>
+                <HungarianDatePicker
+                  value={draft.from}
+                  ariaLabel="Kezdő dátum"
+                  onChange={(value) => setDraft((current) => ({
+                    ...current,
+                    from: value,
+                    to: current.to && current.to < value ? value : current.to,
+                  }))}
+                />
+              </div>
+              <div className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                <span>Eddig</span>
+                <HungarianDatePicker
+                  value={draft.to}
+                  ariaLabel="Záró dátum"
+                  onChange={(value) => setDraft((current) => ({
+                    ...current,
+                    to: value,
+                    from: current.from && current.from > value ? value : current.from,
+                  }))}
+                />
+              </div>
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Eladó
                 <SmartSelect
@@ -1427,7 +1709,10 @@ export default function AllInAdminMagazinDashboard({
                         <SaleRowActionMenu
                           sale={sale}
                           onReceipt={setReceiptTarget}
-                          onDelete={setDeleteTarget}
+                          onDelete={(sale) => {
+                            setDeleteError("");
+                            setDeleteTarget(sale);
+                          }}
                         />
                       </td>
                     </tr>
@@ -1588,7 +1873,7 @@ export default function AllInAdminMagazinDashboard({
                   <p className="mt-1 text-xs text-white/48">{dateTime(deleteTarget.soldAt)} • {deleteTarget.saleNumber} • {integer(deleteTarget.quantity)} db</p>
                 </div>
               </div>
-              <button type="button" disabled={deleteSaving} onClick={() => setDeleteTarget(null)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
+              <button type="button" disabled={deleteSaving} onClick={() => { setDeleteTarget(null); setDeleteError(""); }} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white hover:bg-white/[0.1] disabled:opacity-50"><X size={18} /></button>
             </header>
 
             <div className="space-y-3 p-5">
@@ -1619,10 +1904,21 @@ export default function AllInAdminMagazinDashboard({
               <div className="rounded-xl border border-white/10 bg-[#273243] px-3 py-2.5 text-xs text-white/52">
                 Többtermékes bizonylatnál csak ez a terméksor törlődik. Ha ez az utolsó terméksor, maga a bizonylat is megszűnik.
               </div>
+              {deleteError ? (
+                <div className="rounded-xl border border-rose-300/35 bg-rose-600/18 px-3 py-3 text-sm leading-5 text-rose-50">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle size={17} className="mt-0.5 shrink-0 text-rose-200" />
+                    <div>
+                      <p className="font-medium text-white">A törlés most nem hajtható végre</p>
+                      <p className="mt-1 text-xs leading-5 text-rose-50/82">{deleteError}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <footer className="flex justify-end border-t border-white/12 bg-[#293548] px-5 py-4">
-              <button type="button" disabled={deleteSaving} onClick={() => setDeleteTarget(null)} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">
+              <button type="button" disabled={deleteSaving} onClick={() => { setDeleteTarget(null); setDeleteError(""); }} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.1] disabled:opacity-50">
                 <X size={16} /> Mégse
               </button>
             </footer>
