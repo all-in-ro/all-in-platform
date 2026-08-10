@@ -217,25 +217,74 @@ function formatMonthRangeLabel(monthFrom: string, monthTo: string) {
   return `${formatMonthLabel(range.from)} – ${formatMonthLabel(range.to)}`;
 }
 
-function mergeVacationSummaryRows(groups: SummaryRow[][]): SummaryRow[] {
-  const map = new Map<string, SummaryRow>();
-  for (const rows of groups) {
-    for (const row of rows || []) {
-      const key = empKey(row.employeeName);
-      if (!key) continue;
-      const current = map.get(key) || {
-        employeeName: row.employeeName,
-        vacationDays: 0,
-        shortDays: 0,
-        shortHours: 0,
-      };
-      current.vacationDays += Number(row.vacationDays || 0);
-      current.shortDays += Number(row.shortDays || 0);
-      current.shortHours += Number(row.shortHours || 0);
-      map.set(key, current);
+function isoWeekdayForDay(day: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ""))) return null;
+  const date = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const jsDay = date.getUTCDay();
+  return jsDay === 0 ? 7 : jsDay;
+}
+
+function normalizeTimeEvents(rows: TimeEvent[], workingDays: number[]): TimeEvent[] {
+  const enabledDays = new Set(
+    (workingDays?.length ? workingDays : [1, 2, 3, 4, 5])
+      .map(Number)
+      .filter((day) => Number.isInteger(day) && day >= 1 && day <= 7)
+  );
+  const unique = new Map<string, TimeEvent>();
+
+  for (const row of rows || []) {
+    const employeeName = String(row?.employeeName || "").trim().replace(/\s+/g, " ");
+    const day = String(row?.day || "").slice(0, 10);
+    const kind = row?.kind;
+    if (!employeeName || !/^\d{4}-\d{2}-\d{2}$/.test(day) || (kind !== "vacation" && kind !== "short")) continue;
+
+    // A szabadságkártyák ugyanazt a központi munkanap-beállítást kövessék,
+    // mint a mentés. Régi vagy hibás hétvégi sor ne növelje a napok számát.
+    if (kind === "vacation") {
+      const isoDay = isoWeekdayForDay(day);
+      if (isoDay == null || !enabledDays.has(isoDay)) continue;
     }
+
+    const normalized: TimeEvent = { ...row, employeeName, day };
+    const key = `${empKey(employeeName)}__${day}__${kind}`;
+    const current = unique.get(key);
+    if (!current) {
+      unique.set(key, normalized);
+      continue;
+    }
+
+    // Elvileg az adatbázis egyedi kulcsa kizárja a duplát. Ha régi adatból mégis
+    // maradt kettő, a frissebb sort tartjuk meg, nem számoljuk kétszer ugyanazt a napot.
+    const currentTime = current.createdAt ? new Date(current.createdAt).getTime() : 0;
+    const nextTime = normalized.createdAt ? new Date(normalized.createdAt).getTime() : 0;
+    if (nextTime >= currentTime) unique.set(key, normalized);
   }
-  return Array.from(map.values()).sort((a, b) => a.employeeName.localeCompare(b.employeeName, "hu", { sensitivity: "base" }));
+
+  return Array.from(unique.values());
+}
+
+function summarizeTimeEvents(rows: TimeEvent[], workingDays: number[]): SummaryRow[] {
+  const summary = new Map<string, SummaryRow>();
+  for (const row of normalizeTimeEvents(rows, workingDays)) {
+    const key = empKey(row.employeeName);
+    if (!key) continue;
+    const current = summary.get(key) || {
+      employeeName: row.employeeName,
+      vacationDays: 0,
+      shortDays: 0,
+      shortHours: 0,
+    };
+    if (row.kind === "vacation") current.vacationDays += 1;
+    if (row.kind === "short") {
+      current.shortDays += 1;
+      current.shortHours += Number(row.hoursOff || 0);
+    }
+    summary.set(key, current);
+  }
+  return Array.from(summary.values()).sort((a, b) =>
+    a.employeeName.localeCompare(b.employeeName, "hu", { sensitivity: "base" })
+  );
 }
 
 function mergeVacationCompSummaryRows(groups: CompSummaryRow[][]): CompSummaryRow[] {
@@ -397,6 +446,9 @@ export default function AllInVacations({ api }: { api?: string }) {
   const [listBusy, setListBusy] = useState(false);
   const listRequestIdRef = useRef(0);
   const activityMonthsRequestIdRef = useRef(0);
+  // A közös időszakot csak az első sikeres betöltés állíthatja be automatikusan.
+  // Dolgozóváltáskor tilos odébb húzni a teljes lista mérési időszakát.
+  const rangeInitializedRef = useRef(false);
 
   // Mobile UI state
   const [mobilePane, setMobilePane] = useState<"employees" | "details">("employees");
@@ -548,6 +600,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const changeArchiveYear = (nextYear: number) => {
     if (!Number.isFinite(nextYear)) return;
+    rangeInitializedRef.current = true;
     const months = activityMonths
       .filter((item) => String(item.month || "").startsWith(`${nextYear}-`))
       .slice()
@@ -563,6 +616,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const changeArchiveMonthFrom = (nextMonth: string) => {
     if (!/^\d{4}-\d{2}$/.test(nextMonth)) return;
+    rangeInitializedRef.current = true;
     setMonthFrom(nextMonth);
     if (nextMonth > monthTo) setMonthTo(nextMonth);
     setArchiveFromMonthOpen(false);
@@ -570,6 +624,7 @@ export default function AllInVacations({ api }: { api?: string }) {
 
   const changeArchiveMonthTo = (nextMonth: string) => {
     if (!/^\d{4}-\d{2}$/.test(nextMonth)) return;
+    rangeInitializedRef.current = true;
     setMonthTo(nextMonth);
     if (nextMonth < monthFrom) setMonthFrom(nextMonth);
     setArchiveToMonthOpen(false);
@@ -717,7 +772,9 @@ export default function AllInVacations({ api }: { api?: string }) {
         .sort((a, b) => String(a.month || "").localeCompare(String(b.month || "")));
       setActivityMonths(orderedItems);
 
-      if (!orderedItems.length) return;
+      // A gyorshónapok dolgozónként változhatnak, a teljes oldal időszaka viszont közös.
+      // Ez volt a csúszkáló 5 → 6 → 7 napos kijelzés fő oka.
+      if (!orderedItems.length || !options.resetRange || rangeInitializedRef.current) return;
 
       const latestYear = Number(String(orderedItems[orderedItems.length - 1].month).slice(0, 4));
       const currentYear = Number(String(monthFrom || "").slice(0, 4));
@@ -743,6 +800,7 @@ export default function AllInVacations({ api }: { api?: string }) {
         setMonthFrom(targetYearItems[0].month);
         setMonthTo(targetYearItems[targetYearItems.length - 1].month);
       }
+      rangeInitializedRef.current = true;
     } catch (error: any) {
       if (requestId !== activityMonthsRequestIdRef.current) return;
       setListErr(String(error?.message || error || "A szabadságos hónapok nem tölthetők be."));
@@ -928,56 +986,51 @@ export default function AllInVacations({ api }: { api?: string }) {
     try {
       if (!rangeMonths.length) throw new Error("A kiválasztott hónaptartomány hibás.");
 
+      // Hónaponként egyetlen, közös választ kérünk le. Ebből készül egyszerre
+      // az alkalmazotti lista és a kiválasztott dolgozó részlete, így a kettő
+      // többé nem tud két eltérő pillanatból származó adatot mutatni.
       const monthResults = await Promise.all(
         rangeMonths.map(async (currentMonth) => {
-          const sumUrl = `${apiBase}/admin/vacations?month=${encodeURIComponent(currentMonth)}`;
-          const itemUrl = emp
-            ? `${apiBase}/admin/vacations?month=${encodeURIComponent(currentMonth)}&employee=${encodeURIComponent(emp)}`
-            : "";
-
-          const [summaryResponse, itemResponse] = await Promise.all([
-            fetch(sumUrl, { credentials: "include", cache: "no-store" }),
-            itemUrl ? fetch(itemUrl, { credentials: "include", cache: "no-store" }) : Promise.resolve(null),
-          ]);
-
-          const summaryBody = await summaryResponse.json().catch(() => null);
-          if (!summaryResponse.ok) {
-            throw new Error(String(summaryBody?.error || summaryBody?.message || `HTTP ${summaryResponse.status}`));
+          const response = await fetch(
+            `${apiBase}/admin/vacations?month=${encodeURIComponent(currentMonth)}`,
+            { credentials: "include", cache: "no-store" }
+          );
+          const body = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(String(body?.error || body?.message || `HTTP ${response.status}`));
           }
-
-          let itemBody: any = null;
-          if (itemResponse) {
-            itemBody = await itemResponse.json().catch(() => null);
-            if (!itemResponse.ok) {
-              throw new Error(String(itemBody?.error || itemBody?.message || `HTTP ${itemResponse.status}`));
-            }
-          }
-
           return {
-            summary: Array.isArray(summaryBody?.summary) ? summaryBody.summary as SummaryRow[] : [],
-            compSummary: Array.isArray(summaryBody?.compSummary) ? summaryBody.compSummary as CompSummaryRow[] : [],
-            items: Array.isArray(itemBody?.items) ? itemBody.items as TimeEvent[] : [],
-            compItems: Array.isArray(itemBody?.compItems) ? itemBody.compItems as CompEvent[] : [],
+            items: Array.isArray(body?.items) ? body.items as TimeEvent[] : [],
+            compItems: Array.isArray(body?.compItems) ? body.compItems as CompEvent[] : [],
+            compSummary: Array.isArray(body?.compSummary) ? body.compSummary as CompSummaryRow[] : [],
           };
         })
       );
 
       if (requestId !== listRequestIdRef.current) return;
 
-      setSummary(mergeVacationSummaryRows(monthResults.map((result) => result.summary)));
+      const allTimeItems = normalizeTimeEvents(
+        monthResults.flatMap((result) => result.items),
+        vacationSettings.workingDays
+      ).sort((a, b) => {
+        const byDay = String(b.day || "").localeCompare(String(a.day || ""));
+        return byDay || a.employeeName.localeCompare(b.employeeName, "hu", { sensitivity: "base" });
+      });
+
+      const allCompItems = monthResults
+        .flatMap((result) => result.compItems)
+        .filter((item, index, all) =>
+          all.findIndex((candidate) => String(candidate.id) === String(item.id)) === index
+        )
+        .sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")));
+
+      setSummary(summarizeTimeEvents(allTimeItems, vacationSettings.workingDays));
       setCompSummary(mergeVacationCompSummaryRows(monthResults.map((result) => result.compSummary)));
 
       if (emp) {
-        const mergedItems = monthResults
-          .flatMap((result) => result.items)
-          .filter((item, index, all) => all.findIndex((candidate) => String(candidate.id) === String(item.id)) === index)
-          .sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")));
-        const mergedCompItems = monthResults
-          .flatMap((result) => result.compItems)
-          .filter((item, index, all) => all.findIndex((candidate) => String(candidate.id) === String(item.id)) === index)
-          .sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")));
-        setItems(mergedItems);
-        setCompItems(mergedCompItems);
+        const employeeKey = empKey(emp);
+        setItems(allTimeItems.filter((item) => empKey(item.employeeName) === employeeKey));
+        setCompItems(allCompItems.filter((item) => empKey(item.employeeName) === employeeKey));
       } else {
         setItems([]);
         setCompItems([]);
@@ -1006,7 +1059,7 @@ export default function AllInVacations({ api }: { api?: string }) {
       setActivityMonths([]);
       return;
     }
-    void fetchActivityMonths(selected, { resetRange: true });
+    void fetchActivityMonths(selected, { resetRange: !rangeInitializedRef.current });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, apiBase]);
 
@@ -1014,12 +1067,13 @@ export default function AllInVacations({ api }: { api?: string }) {
     if (!monthFrom || !monthTo) return;
     void fetchList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthFrom, monthTo, selected, apiBase]);
+  }, [monthFrom, monthTo, selected, apiBase, vacationSettings.workingDays.join(",")]);
 
   const selectedSummary = useMemo(() => {
-    const s = summary.find((x) => empKey(x.employeeName) === empKey(selected));
+    const s = summarizeTimeEvents(items, vacationSettings.workingDays)
+      .find((row) => empKey(row.employeeName) === empKey(selected));
     return s || { employeeName: selected, vacationDays: 0, shortDays: 0, shortHours: 0 };
-  }, [summary, selected]);
+  }, [items, selected, vacationSettings.workingDays]);
 
   const selectedComp = useMemo(() => {
     const s = compSummary.find((x) => empKey(x.employeeName) === empKey(selected));
@@ -1556,6 +1610,7 @@ export default function AllInVacations({ api }: { api?: string }) {
               type="button"
               className={`rounded-xl border px-3 py-2 text-left text-xs transition ${item.month >= monthFrom && item.month <= monthTo ? "border-white/55 bg-white text-[#236d6b]" : "border-[#b7f1ed]/24 bg-[#2a8d8b]/28 text-[#e5fffd] hover:bg-[#2a8d8b]/45"}`}
               onClick={() => {
+                rangeInitializedRef.current = true;
                 setMonthFrom(item.month);
                 setMonthTo(item.month);
               }}
