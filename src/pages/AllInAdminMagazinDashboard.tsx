@@ -423,10 +423,11 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
               setOpen(false);
               onReceipt(sale);
             }}
-            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs text-white/86 transition hover:bg-[#34465d]"
+            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs transition hover:bg-[#34465d]"
+            style={{ color: "#ffffff" }}
           >
             <ReceiptText size={15} className="shrink-0 text-[#9be9e5]" />
-            <span>Bizonylat</span>
+            <span style={{ color: "#ffffff" }}>Bizonylat</span>
           </button>
 
           <div className="my-1 border-t border-white/9" />
@@ -438,10 +439,11 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
               setOpen(false);
               onDelete(sale);
             }}
-            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs text-rose-100 transition hover:bg-rose-500/18"
+            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs transition hover:bg-rose-500/18"
+            style={{ color: "#ff6478" }}
           >
-            <Trash2 size={15} className="shrink-0" />
-            <span>Törlés</span>
+            <Trash2 size={15} className="shrink-0" style={{ color: "#ff6478" }} />
+            <span style={{ color: "#ff6478" }}>Törlés</span>
           </button>
         </div>,
         document.body,
