@@ -1546,12 +1546,13 @@ export default function AllInReceptions(_props: Props) {
     setMessage("");
     try {
       const r = await apiAifListReceptions({ limit: 200 });
-      const otherOpen = (r.items || []).filter((item) =>
-        item.id !== detail.item.id &&
-        !["committed", "cancelled"].includes(String(item.status || "").toLowerCase())
+      const available = (r.items || []).filter(
+        (item) => String(item.status || "").toLowerCase() !== "cancelled"
       );
-      setMoveReceptionOptions(otherOpen);
-      if (otherOpen.length === 1) setMoveToReceptionId(otherOpen[0].id);
+      setMoveReceptionOptions(available);
+
+      const targets = available.filter((item) => item.id !== detail.item.id);
+      if (targets.length === 1) setMoveToReceptionId(targets[0].id);
     } catch (e: any) {
       setMoveReceptionOptions([]);
       setMessage(e?.message || "A cél receptiók betöltése nem sikerült.");
@@ -2207,44 +2208,36 @@ export default function AllInReceptions(_props: Props) {
         <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-2xl border border-white/24 bg-[#404a5b] p-4 shadow-2xl">
             <h2 className="text-base text-white font-normal">Terméksor áthelyezése</h2>
-            <p className="mt-2 text-sm text-white/76">Csak még nem készletre vett sor helyezhető át másik nyitott receptióba.</p>
+            <p className="mt-2 text-sm text-white/76">
+              Még nem készletre vett sor másik receptióba helyezhető. Ha a cél receptió már le volt zárva, az áthelyezéskor újranyílik.
+            </p>
             <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
               {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)} • S/N/COD: {cell((moveTarget as any).sn_cod || (moveTarget.normalized || {}).snCod || (moveTarget.normalized || {}).sn_cod)}
             </div>
-            <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5 text-xs text-white/85">
-              <span className="text-white/55">Jelenlegi receptió:</span> {cell(detail.item.invoice_number)} • {cell(detail.item.supplier_name)} • {dateText(detail.item.reception_date)}
-            </div>
             <label className={`${label} mt-3`}>
               Cél receptió
-              <select className={select} value={moveToReceptionId} onChange={(e) => setMoveToReceptionId(e.target.value)} disabled={moveReceptionOptionsLoading || moveReceptionOptions.length === 0}>
-                <option value="">{moveReceptionOptionsLoading ? "Betöltés..." : moveReceptionOptions.length ? "Válassz receptiót" : "Nincs másik nyitott receptió"}</option>
-                {moveReceptionOptions.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {cell(r.invoice_number)} • {cell(r.supplier_name)} • {dateText(r.reception_date)}
-                  </option>
-                ))}
-              </select>
+              <SmartSelect
+                value={moveToReceptionId}
+                onChange={setMoveToReceptionId}
+                disabled={moveReceptionOptionsLoading}
+                placeholder={moveReceptionOptionsLoading ? "Betöltés..." : "Válassz receptiót"}
+                options={moveReceptionOptions.map((r) => {
+                  const isCurrent = r.id === detail.item.id;
+                  const currentStatus = String(r.status || "").toLowerCase();
+                  const stateLabel = isCurrent
+                    ? "Jelenlegi"
+                    : currentStatus === "committed"
+                      ? "Készletre véve • újranyílik"
+                      : statusText(r.status);
+                  return {
+                    value: r.id,
+                    disabled: isCurrent,
+                    label: `${cell(r.invoice_number)} • ${cell(r.supplier_name)} • ${dateText(r.reception_date)} • ${stateLabel}`,
+                  };
+                })}
+              />
             </label>
-            {(!moveReceptionOptionsLoading && moveReceptionOptions.length === 0) && (
-              <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/8 px-3 py-2.5 text-xs text-amber-100/90">
-                Nincs másik nyitott receptió. Nyiss egy új bevételezést, utána célként azonnal meg fog jelenni itt.
-              </div>
-            )}
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              {(!moveReceptionOptionsLoading && moveReceptionOptions.length === 0) && (
-                <button
-                  className={primaryBtn}
-                  onClick={() => {
-                    try { window.sessionStorage.setItem(OPEN_RECEPTION_HANDOFF_KEY, detail.item.id); } catch {}
-                    setMoveTarget(null);
-                    window.location.hash = "#allinincoming";
-                  }}
-                  disabled={busy}
-                  type="button"
-                >
-                  <FileText size={15} /> Új bevételezés
-                </button>
-              )}
               <button className={neutralBtn} onClick={() => setMoveTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
               <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId} type="button">
                 <MoveRight size={15} /> Áthelyezés
