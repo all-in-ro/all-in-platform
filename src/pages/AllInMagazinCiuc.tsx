@@ -366,6 +366,7 @@ export default function AllInMagazinCiuc({
       <AllInMagazinClients
         open={clientsOpen}
         initialMode={clientsInitialMode}
+        locationCode="main_warehouse"
         locationName="Magazin - Miercurea Ciuc"
         onClose={() => setClientsOpen(false)}
       />
