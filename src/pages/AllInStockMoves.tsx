@@ -501,62 +501,34 @@ function HungarianDatePicker({
   ariaLabel: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   const parsed = isoDateParts(value);
   const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const todayIso = dateInputValue(startOfToday());
 
-  const updatePosition = useCallback(() => {
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const edge = 10;
-    const gap = 8;
-    const width = Math.min(336, window.innerWidth - edge * 2);
-    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
-    const estimatedHeight = 382;
-    const roomBelow = window.innerHeight - rect.bottom - edge;
-    const roomAbove = rect.top - edge;
-    const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
-    if (openUpward) {
-      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
-    } else {
-      setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
-    }
-  }, []);
-
   useEffect(() => {
     if (!open) return;
+
     const current = isoDateParts(value);
     if (current) {
       setViewYear(current.year);
       setViewMonth(current.month - 1);
     }
-    updatePosition();
 
-    const outside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
-      setOpen(false);
-    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
-    const reposition = () => updatePosition();
-    document.addEventListener("mousedown", outside, true);
+
     window.addEventListener("keydown", escape, true);
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", reposition, true);
     return () => {
-      document.removeEventListener("mousedown", outside, true);
+      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", escape, true);
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
     };
-  }, [open, updatePosition, value]);
+  }, [open, value]);
 
   const firstOfMonth = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
   const mondayOffset = (firstOfMonth.getUTCDay() + 6) % 7;
@@ -582,15 +554,11 @@ function HungarianDatePicker({
   return (
     <>
       <button
-        ref={triggerRef}
         type="button"
         aria-label={ariaLabel}
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => {
-          if (!open) updatePosition();
-          setOpen((current) => !current);
-        }}
+        onClick={() => setOpen((current) => !current)}
         className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition ${
           open
             ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
@@ -604,95 +572,108 @@ function HungarianDatePicker({
         <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {open && position && createPortal(
+      {open && typeof document !== "undefined" ? createPortal(
         <div
-          ref={menuRef}
-          role="dialog"
-          aria-label={`${ariaLabel} naptár`}
-          className="overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl"
-          style={{
-            position: "fixed",
-            zIndex: 940,
-            left: position.left,
-            width: position.width,
-            top: position.top,
-            bottom: position.bottom,
+          className="fixed inset-0 z-[940] grid place-items-center bg-slate-950/38 p-4 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setOpen(false);
           }}
         >
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
-            <button
-              type="button"
-              onClick={() => shiftMonth(-1)}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
-              aria-label="Előző hónap"
-            >
-              <ChevronLeft size={17} />
-            </button>
-            <div className="text-center">
-              <p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p>
-              <p className="mt-0.5 text-sm font-medium text-white">{viewYear}. {HU_MONTHS[viewMonth]}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => shiftMonth(1)}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
-              aria-label="Következő hónap"
-            >
-              <ChevronRight size={17} />
-            </button>
-          </div>
-
-          <div className="mt-3 grid grid-cols-7 gap-1">
-            {HU_WEEKDAYS.map((day, index) => (
-              <div
-                key={day}
-                className={`py-1 text-center text-[10px] font-medium uppercase tracking-[0.05em] ${index >= 5 ? "text-rose-100/55" : "text-[#cffffd]/60"}`}
+          <div
+            role="dialog"
+            aria-label={`${ariaLabel} naptár`}
+            className="w-full max-w-[356px] overflow-hidden rounded-[22px] border border-[#8ce7e2]/48 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_34px_95px_rgba(2,6,23,0.82)] ring-1 ring-white/[0.04] backdrop-blur-xl"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+              <button
+                type="button"
+                onClick={() => shiftMonth(-1)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
+                aria-label="Előző hónap"
               >
-                {day}
-              </div>
-            ))}
+                <ChevronLeft size={17} />
+              </button>
 
-            {days.map((day) => {
-              const iso = isoFromUtcDate(day);
-              const inMonth = day.getUTCMonth() === viewMonth;
-              const selected = iso === value;
-              const today = iso === todayIso;
-              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
-              return (
-                <button
-                  key={iso}
-                  type="button"
-                  onClick={() => chooseDate(iso)}
-                  className={`relative flex h-9 items-center justify-center rounded-lg border text-xs transition ${
-                    selected
-                      ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] font-semibold text-white shadow-[0_6px_16px_rgba(42,141,139,0.30)]"
-                      : inMonth
-                        ? weekend
-                          ? "border-transparent bg-white/[0.025] text-rose-50/72 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
-                          : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
-                        : "border-transparent text-white/24 hover:bg-white/[0.04] hover:text-white/48"
+              <div className="min-w-0 text-center">
+                <p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p>
+                <p className="mt-0.5 truncate text-[15px] font-medium text-white">{viewYear}. {HU_MONTHS[viewMonth]}</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => shiftMonth(1)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white"
+                aria-label="Következő hónap"
+              >
+                <ChevronRight size={17} />
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-7 gap-1">
+              {HU_WEEKDAYS.map((day, index) => (
+                <div
+                  key={day}
+                  className={`py-1 text-center text-[10px] font-medium uppercase tracking-[0.05em] ${
+                    index >= 5 ? "text-rose-100/55" : "text-[#cffffd]/60"
                   }`}
                 >
-                  {day.getUTCDate()}
-                  {today && !selected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
-                </button>
-              );
-            })}
-          </div>
+                  {day}
+                </div>
+              ))}
 
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
-            <span className="text-[10px] text-white/40">A hét hétfővel kezdődik.</span>
-            <button
-              type="button"
-              onClick={() => chooseDate(todayIso)}
-              className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] transition hover:bg-[#2a8d8b]/32"
-            >
-              <CalendarDays size={13} /> Ma
-            </button>
+              {days.map((day) => {
+                const iso = isoFromUtcDate(day);
+                const inMonth = day.getUTCMonth() === viewMonth;
+                const selected = iso === value;
+                const today = iso === todayIso;
+                const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+
+                return (
+                  <button
+                    key={iso}
+                    type="button"
+                    onClick={() => chooseDate(iso)}
+                    className={`relative flex h-10 items-center justify-center rounded-lg border text-xs transition ${
+                      selected
+                        ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] font-semibold text-white shadow-[0_7px_18px_rgba(42,141,139,0.32)]"
+                        : inMonth
+                          ? weekend
+                            ? "border-transparent bg-white/[0.025] text-rose-50/72 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                            : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                          : "border-transparent text-white/24 hover:bg-white/[0.04] hover:text-white/48"
+                    }`}
+                  >
+                    {day.getUTCDate()}
+                    {today && !selected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
+              <span className="text-[10px] text-white/40">Hétfővel kezdődik</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/12 bg-white/[0.04] px-3 text-[11px] text-white/72 transition hover:bg-white/[0.08] hover:text-white"
+                >
+                  <X size={13} /> Bezárás
+                </button>
+                <button
+                  type="button"
+                  onClick={() => chooseDate(todayIso)}
+                  className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] transition hover:bg-[#2a8d8b]/32"
+                >
+                  <CalendarDays size={13} /> Ma
+                </button>
+              </div>
+            </div>
           </div>
         </div>,
         document.body,
-      )}
+      ) : null}
     </>
   );
 }
