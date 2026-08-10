@@ -62,11 +62,11 @@ export type AllInAdminMagazinDashboardProps = {
 type SelectOption = { value: string; label: string };
 type PeriodPreset = "today" | "yesterday" | "last7" | "month" | "lastMonth" | "custom";
 
-const card = "rounded-[22px] border border-white/16 bg-[#344154] shadow-[0_14px_34px_rgba(15,23,42,0.18)]";
+const card = "rounded-[22px] border border-white/16 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] shadow-[0_16px_36px_rgba(15,23,42,0.20)]";
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
-const primaryButton = `${button} border-[#8ce7e2]/40 bg-[#2a8d8b] hover:bg-[#319c99]`;
-const neutralButton = `${button} border-white/18 bg-[#3d495b] hover:bg-[#465467]`;
-const inputClass = "h-10 min-w-0 w-full rounded-xl border border-white/18 bg-[#2d394b] px-3 text-sm font-normal text-white outline-none placeholder:text-white/38 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
+const primaryButton = `${button} border-[#9be9e5]/48 bg-gradient-to-r from-[#238985] to-[#2a9a96] shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:brightness-110`;
+const neutralButton = `${button} border-white/18 bg-[#3a475a]/90 hover:border-[#8ce7e2]/28 hover:bg-[#445369]`;
+const inputClass = "h-11 min-w-0 w-full rounded-[13px] border border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] px-3 text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 transition hover:border-white/28 focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
 
 function localIsoDate(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -206,19 +206,34 @@ function SmartSelect({
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, 240), window.innerWidth - 16);
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-    const roomBelow = window.innerHeight - rect.bottom;
-    if (roomBelow < 260 && rect.top > roomBelow) {
-      setPosition({ left, width, bottom: Math.max(8, window.innerHeight - rect.top + 6) });
+    const edge = 10;
+    const gap = 8;
+    const desiredHeight = Math.min(350, 58 + Math.max(1, options.length) * 46);
+    const width = Math.min(Math.max(rect.width, 250), window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < Math.min(desiredHeight, 240) && roomAbove > roomBelow;
+
+    if (openUpward) {
+      setPosition({
+        left,
+        width,
+        bottom: Math.max(edge, window.innerHeight - rect.top + gap),
+      });
     } else {
-      setPosition({ left, width, top: rect.bottom + 6 });
+      setPosition({
+        left,
+        width,
+        top: Math.min(window.innerHeight - edge, rect.bottom + gap),
+      });
     }
-  }, []);
+  }, [options.length]);
 
   useEffect(() => {
     if (!open) return;
     updatePosition();
+
     const outside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
@@ -228,6 +243,7 @@ function SmartSelect({
       if (event.key === "Escape") setOpen(false);
     };
     const reposition = () => updatePosition();
+
     document.addEventListener("mousedown", outside, true);
     window.addEventListener("keydown", escape, true);
     window.addEventListener("resize", reposition);
@@ -245,48 +261,108 @@ function SmartSelect({
       <button
         ref={triggerRef}
         type="button"
-        className="flex h-10 min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-xl border border-white/18 bg-[#2d394b] px-3 text-left text-sm font-normal text-white outline-none transition hover:bg-[#344256] focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/15"
+        className={`group flex h-11 min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/35 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
         onClick={() => {
           if (!open) updatePosition();
           setOpen((current) => !current);
         }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
-        <span title={selected?.label || placeholder} className={selected ? "min-w-0 flex-1 truncate text-white" : "min-w-0 flex-1 truncate text-white/42"}>
-          {selected?.label || placeholder}
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full transition ${
+              open
+                ? "bg-[#8ff4ee] shadow-[0_0_12px_rgba(123,215,212,0.9)]"
+                : value
+                  ? "bg-[#63d8d3]"
+                  : "bg-white/28"
+            }`}
+          />
+          <span
+            title={selected?.label || placeholder}
+            className="min-w-0 flex-1 truncate"
+            style={{ color: selected?.label ? "#ffffff" : "rgba(255,255,255,0.55)" }}
+          >
+            {selected?.label || placeholder}
+          </span>
         </span>
-        <ChevronDown size={14} className={`shrink-0 text-white/52 transition ${open ? "rotate-180" : ""}`} />
+        <span
+          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${
+            open
+              ? "border-[#9be9e5]/48 bg-[#2a8d8b]/34 text-[#d7fffd]"
+              : "border-white/10 bg-white/[0.035] text-white/62 group-hover:border-[#7bd7d4]/25 group-hover:text-white"
+          }`}
+        >
+          <ChevronDown size={14} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
       </button>
 
       {open && position && createPortal(
         <div
           ref={menuRef}
-          className="overflow-hidden rounded-xl border border-[#7bd7d4]/40 bg-[#253449] p-1 shadow-[0_22px_54px_rgba(2,6,23,0.65)]"
+          className="overflow-hidden rounded-[18px] border border-[#7bd7d4]/42 bg-[#202c3d]/[0.99] p-2 shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
           style={{
             position: "fixed",
-            zIndex: 500,
+            zIndex: 900,
             left: position.left,
             width: position.width,
             top: position.top,
             bottom: position.bottom,
+            color: "#ffffff",
           }}
+          role="listbox"
         >
-          <div className="max-h-64 overflow-y-auto">
+          <div className="mb-1.5 flex items-center justify-between gap-3 px-2 py-1.5">
+            <span className="text-[9px] uppercase tracking-[0.16em]" style={{ color: "rgba(215,255,253,0.64)" }}>
+              Válassz
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[9px]" style={{ color: "rgba(255,255,255,0.52)" }}>
+              {options.length} lehetőség
+            </span>
+          </div>
+
+          <div className="max-h-[310px] space-y-1 overflow-y-auto pr-0.5">
             {options.map((option) => {
               const active = option.value === value;
               return (
                 <button
                   key={option.value || "__all"}
                   type="button"
-                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-normal transition ${
-                    active ? "bg-[#2a8d8b] text-white" : "bg-[#344154] text-white/78 hover:bg-[#435168]"
+                  className={`group/item flex min-h-10 w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left text-sm font-normal transition ${
+                    active
+                      ? "border-[#8ce7e2]/44 bg-gradient-to-r from-[#2a8d8b] to-[#287b82] shadow-[0_8px_18px_rgba(42,141,139,0.18)]"
+                      : "border-transparent bg-[#2e3b4f] hover:border-white/10 hover:bg-[#3a4a61]"
                   }`}
+                  style={{ color: "#ffffff" }}
                   onClick={() => {
                     onChange(option.value);
                     setOpen(false);
                   }}
+                  role="option"
+                  aria-selected={active}
                 >
-                  <span className="truncate">{option.label}</span>
-                  <CheckCircle2 size={13} className={active ? "opacity-100" : "opacity-0"} />
+                  <span
+                    className={`h-6 w-1 shrink-0 rounded-full transition ${
+                      active ? "bg-[#bff8f5]" : "bg-white/0 group-hover/item:bg-white/18"
+                    }`}
+                  />
+                  <span className="min-w-0 flex-1 truncate" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}>
+                    {option.label}
+                  </span>
+                  <span
+                    className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition ${
+                      active
+                        ? "border-white/36 bg-white/12 text-white"
+                        : "border-white/8 bg-black/5 text-transparent group-hover/item:border-white/14"
+                    }`}
+                  >
+                    <CheckCircle2 size={13} />
+                  </span>
                 </button>
               );
             })}
@@ -580,24 +656,26 @@ function MetricCard({
       : tone === "warning"
         ? "border-amber-200/24 bg-gradient-to-br from-[#5a5039] to-[#3d4452]"
         : tone === "success"
-          ? "border-emerald-200/30 bg-gradient-to-br from-[#227a64] via-[#256a60] to-[#344154]"
+          ? "border-emerald-200/32 bg-gradient-to-br from-[#1f7b68] via-[#256c64] to-[#334357]"
           : tone === "accent"
-            ? "border-[#8ce7e2]/30 bg-gradient-to-br from-[#2d626a] via-[#345866] to-[#344154]"
-            : "border-white/16 bg-gradient-to-br from-[#3c495c] to-[#344154]";
-  const baseClass = `min-w-0 rounded-[20px] border p-3.5 text-left shadow-[0_12px_30px_rgba(15,23,42,0.16)] ${toneClass}`;
+            ? "border-[#8ce7e2]/34 bg-gradient-to-br from-[#286874] via-[#315c6b] to-[#344154]"
+            : "border-white/16 bg-gradient-to-br from-[#405067] via-[#38465a] to-[#303b4d]";
+  const baseClass = `relative min-w-0 overflow-hidden rounded-[20px] border p-3.5 text-left shadow-[0_14px_32px_rgba(15,23,42,0.18)] ${toneClass}`;
 
   const content = (
     <>
-      <div className="flex min-w-0 items-start justify-between gap-2.5">
+      <span className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#a8f5f1]/45 to-transparent" />
+      <span className="pointer-events-none absolute -right-10 -top-12 h-28 w-28 rounded-full bg-[#7bd7d4]/[0.075] blur-2xl" />
+      <div className="relative flex min-w-0 items-start justify-between gap-2.5">
         <div className="min-w-0">
           <p className="text-[9px] uppercase tracking-[0.14em] text-white/60">{title}</p>
-          <p className="mt-2 whitespace-nowrap text-[clamp(1rem,1.3vw,1.38rem)] leading-tight tracking-tight text-white">{value}</p>
+          <p className="mt-2 whitespace-nowrap text-[clamp(1.05rem,1.35vw,1.44rem)] font-medium leading-tight tracking-tight text-white">{value}</p>
         </div>
-        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/26 bg-white/[0.08] text-[#d8fffd]">
+        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#baf7f3]/32 bg-[#d7fffd]/[0.075] text-[#d8fffd] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
           <Icon size={17} />
         </span>
       </div>
-      <div className="mt-2.5 flex min-w-0 items-center justify-between gap-2">
+      <div className="relative mt-2.5 flex min-w-0 items-center justify-between gap-2">
         <span className="min-w-0 truncate text-[10px] text-white/58" title={hint}>{hint}</span>
         <span className="flex shrink-0 items-center gap-1.5">
           {actionLabel ? (
@@ -924,9 +1002,17 @@ export default function AllInAdminMagazinDashboard({
     : 0;
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-[#5f6b7b] via-[#566171] to-[#485361] p-3 text-white sm:p-4 lg:p-6">
+    <main
+      className="min-h-screen bg-[#4e5969] p-3 text-white sm:p-4 lg:p-6"
+      style={{
+        backgroundImage:
+          "radial-gradient(circle at 14% 8%, rgba(42,141,139,0.18), transparent 24%), radial-gradient(circle at 88% 12%, rgba(104,221,216,0.08), transparent 22%), linear-gradient(135deg, #5c6878 0%, #535f70 42%, #46515f 100%)",
+      }}
+    >
       <div className="mx-auto max-w-[1580px] space-y-3.5">
-        <header className="rounded-[26px] border border-white/20 bg-[#2f3b4f] px-4 py-4 shadow-[0_20px_55px_rgba(15,23,42,0.28)] sm:px-5">
+        <header className="relative overflow-hidden rounded-[28px] border border-[#9be9e5]/20 bg-gradient-to-r from-[#263448] via-[#2f3b4f] to-[#294a51] px-4 py-4 shadow-[0_22px_62px_rgba(15,23,42,0.30)] sm:px-5">
+          <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#bff8f5]/60 to-transparent" />
+          <span className="pointer-events-none absolute -right-16 -top-20 h-44 w-44 rounded-full bg-[#7bd7d4]/[0.08] blur-3xl" />
           <div className="flex flex-wrap items-center gap-4">
             <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/38 bg-[#2a8d8b]/22 text-[#cffffd]">
               <Store size={28} />
@@ -958,7 +1044,7 @@ export default function AllInAdminMagazinDashboard({
           </div>
         </header>
 
-        <section className={`${card} overflow-visible p-4`}>
+        <section className={`${card} overflow-visible border-[#9be9e5]/20 bg-gradient-to-br from-[#37475c] via-[#334154] to-[#2d394b] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.20)]`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Filter size={17} className="text-[#8ee6e2]" />
@@ -981,8 +1067,8 @@ export default function AllInAdminMagazinDashboard({
                   onClick={() => applyPreset(value as PeriodPreset)}
                   className={`h-8 rounded-lg border px-3 text-[11px] transition ${
                     preset === value
-                      ? "border-[#8ce7e2]/45 bg-[#2a8d8b] text-white"
-                      : "border-white/14 bg-white/[0.05] text-white/58 hover:bg-white/[0.09]"
+                      ? "border-[#a8f5f1]/55 bg-gradient-to-r from-[#238985] to-[#2a9a96] text-white shadow-[0_6px_16px_rgba(42,141,139,0.22)]"
+                      : "border-white/14 bg-[#2d394b]/72 text-white/70 hover:border-[#7bd7d4]/28 hover:bg-[#39475c]"
                   }`}
                 >
                   {label}
