@@ -6744,9 +6744,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Cél receptió nem található." });
       }
-      if (["committed", "cancelled"].includes(String(target.rows[0].status || ""))) {
+      const targetWasCommitted = String(target.rows[0].status || "") === "committed";
+      if (String(target.rows[0].status || "") === "cancelled") {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Lezárt vagy törölt receptióba nem lehet sort áthelyezni." });
+        return res.status(400).json({ error: "Törölt receptióba nem lehet sort áthelyezni." });
       }
       let targetBatchId = null;
       const tb = await client.query(
@@ -6800,8 +6801,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       };
       await refreshBatch(row.source_batch_id);
       await refreshBatch(targetBatchId);
+
+      // A lezárt cél receptió az új, még nem készletre vett sor miatt újra Vázlat lesz.
+      // A korábban készletre vett sorok és készletmozgások változatlanok maradnak.
+      await refreshReceptionAfterImportHistoryDelete(client, row.source_reception_id);
+      await refreshReceptionAfterImportHistoryDelete(client, target.rows[0].id);
+
       await client.query("COMMIT");
-      res.json({ ok: true, targetBatchId });
+      res.json({ ok: true, targetBatchId, targetReceptionId: target.rows[0].id, reopenedTarget: targetWasCommitted });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF move import row failed", e);
