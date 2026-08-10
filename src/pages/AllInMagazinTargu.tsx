@@ -366,6 +366,7 @@ export default function AllInMagazinTargu({
       <AllInMagazinClients
         open={clientsOpen}
         initialMode={clientsInitialMode}
+        locationCode="magazin_targu_secuiesc"
         locationName="Magazin - Târgu Secuiesc"
         onClose={() => setClientsOpen(false)}
       />
