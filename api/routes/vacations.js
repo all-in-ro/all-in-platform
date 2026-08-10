@@ -317,6 +317,13 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
           lower(employee_name), kind, day_from, day_to, COALESCE(hours_off,0)
         )
         WHERE status='pending';
+
+      ALTER TABLE allin_time_off_requests
+        ADD COLUMN IF NOT EXISTS admin_edited_at timestamptz NULL;
+      ALTER TABLE allin_time_off_requests
+        ADD COLUMN IF NOT EXISTS admin_edited_by text NULL;
+      ALTER TABLE allin_time_off_requests
+        ADD COLUMN IF NOT EXISTS original_request jsonb NULL;
     `);
     const settings = await loadVacationSettings();
     await cleanupDisabledVacationRows(settings.workingDays);
@@ -403,6 +410,9 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
       decidedBy: row.decidedBy || row.decided_by || null,
       decisionNote: row.decisionNote || row.decision_note || null,
       employeeSeenAt: row.employeeSeenAt || row.employee_seen_at || null,
+      adminEditedAt: row.adminEditedAt || row.admin_edited_at || null,
+      adminEditedBy: row.adminEditedBy || row.admin_edited_by || null,
+      originalRequest: row.originalRequest || row.original_request || null,
     };
   }
 
@@ -549,7 +559,9 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
                 hours_off AS "hoursOff", note, status,
                 requested_at AS "requestedAt", requested_by AS "requestedBy",
                 decided_at AS "decidedAt", decided_by AS "decidedBy",
-                decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
+                decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt",
+                admin_edited_at AS "adminEditedAt", admin_edited_by AS "adminEditedBy",
+                original_request AS "originalRequest"
          FROM allin_time_off_requests
          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
          ORDER BY CASE WHEN status='pending' THEN 0 ELSE 1 END, requested_at DESC
@@ -560,6 +572,108 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
     } catch (error) {
       console.error("vacation requests list failed", error);
       res.status(500).json({ error: "A szabadságkérelmek nem tölthetők be." });
+    }
+  });
+
+  // PATCH /api/admin/vacations/requests/:id
+  // Admin can correct a still-pending request before making the final decision.
+  // The original values are kept once in original_request for audit.
+  router.patch("/requests/:id", requireAdminOrSecret, express.json(), async (req, res) => {
+    const id = norm(req.params.id);
+    const client = await pool.connect();
+    try {
+      await ensureTables();
+      await client.query("BEGIN");
+      const currentResult = await client.query(
+        `SELECT * FROM allin_time_off_requests WHERE id=$1::uuid FOR UPDATE`,
+        [id]
+      );
+      if (!currentResult.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "A szabadságkérés nem található." });
+      }
+      const current = currentResult.rows[0];
+      if (current.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Csak függő szabadságkérés szerkeszthető." });
+      }
+
+      const mergedBody = {
+        kind: current.kind,
+        dayFrom: req.body?.dayFrom ?? req.body?.day_from ?? dateOnly(current.day_from),
+        dayTo: req.body?.dayTo ?? req.body?.day_to ?? dateOnly(current.day_to),
+        hoursOff: req.body?.hoursOff ?? req.body?.hours_off ?? current.hours_off,
+        note: Object.prototype.hasOwnProperty.call(req.body || {}, "note") ? req.body.note : current.note,
+      };
+      if (current.kind === "short") mergedBody.dayTo = mergedBody.dayFrom;
+      const parsed = validateTimeOffRequestBody(mergedBody);
+      if (parsed.error) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: parsed.error });
+      }
+
+      const settings = await loadVacationSettings();
+      let period = null;
+      if (current.kind === "vacation") {
+        period = periodInfo(parsed.dayFrom, parsed.dayTo, settings.workingDays);
+        if (period.workingDays <= 0) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "A módosított időszakban nincs elszámolható munkanap." });
+        }
+      }
+
+      const editedBy = String(req.session?.actor || req.session?.role || "ADMIN");
+      const updated = await client.query(
+        `UPDATE allin_time_off_requests
+         SET day_from=$2::date,
+             day_to=$3::date,
+             hours_off=$4,
+             note=$5,
+             original_request=COALESCE(
+               original_request,
+               jsonb_build_object(
+                 'dayFrom', day_from::text,
+                 'dayTo', day_to::text,
+                 'hoursOff', hours_off,
+                 'note', note,
+                 'capturedAt', now()
+               )
+             ),
+             admin_edited_at=now(),
+             admin_edited_by=$6,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING id, employee_name AS "employeeName", shop_id AS "shopId", kind,
+                   day_from::text AS "dayFrom", day_to::text AS "dayTo",
+                   hours_off AS "hoursOff", note, status,
+                   requested_at AS "requestedAt", requested_by AS "requestedBy",
+                   decided_at AS "decidedAt", decided_by AS "decidedBy",
+                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt",
+                   admin_edited_at AS "adminEditedAt", admin_edited_by AS "adminEditedBy",
+                   original_request AS "originalRequest"`,
+        [current.id, parsed.dayFrom, parsed.dayTo, parsed.hoursOff, parsed.note, editedBy]
+      );
+
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        item: requestRow(updated.rows[0]),
+        period: period ? {
+          calendarDays: period.calendarDays,
+          workingDays: period.workingDays,
+          excludedDays: period.excludedDays,
+          workingDaysConfig: settings.workingDays,
+        } : null,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("vacation request admin update failed", error);
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "Erre az időszakra már van másik függő kérés ennél a dolgozónál." });
+      }
+      res.status(500).json({ error: error?.message || "A szabadságkérés módosítása nem sikerült." });
+    } finally {
+      client.release();
     }
   });
 
@@ -659,7 +773,9 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
                    hours_off AS "hoursOff", note, status,
                    requested_at AS "requestedAt", requested_by AS "requestedBy",
                    decided_at AS "decidedAt", decided_by AS "decidedBy",
-                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"`,
+                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt",
+                   admin_edited_at AS "adminEditedAt", admin_edited_by AS "adminEditedBy",
+                   original_request AS "originalRequest"`,
         [request.id, decision, decidedBy, decisionNote, createdEventIds]
       );
       await client.query("COMMIT");
@@ -689,7 +805,9 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
                   hours_off AS "hoursOff", note, status,
                   requested_at AS "requestedAt", requested_by AS "requestedBy",
                   decided_at AS "decidedAt", decided_by AS "decidedBy",
-                  decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
+                  decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt",
+                admin_edited_at AS "adminEditedAt", admin_edited_by AS "adminEditedBy",
+                original_request AS "originalRequest"
            FROM allin_time_off_requests
            WHERE lower(btrim(employee_name))=lower(btrim($1))
              AND day_from < $3::date AND day_to >= $2::date
@@ -762,7 +880,9 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
                 hours_off AS "hoursOff", note, status,
                 requested_at AS "requestedAt", requested_by AS "requestedBy",
                 decided_at AS "decidedAt", decided_by AS "decidedBy",
-                decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"
+                decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt",
+                admin_edited_at AS "adminEditedAt", admin_edited_by AS "adminEditedBy",
+                original_request AS "originalRequest"
          FROM allin_time_off_requests
          WHERE lower(btrim(employee_name))=lower(btrim($1))
            AND kind=$2 AND day_from=$3::date AND day_to=$4::date
@@ -786,7 +906,9 @@ export default function createVacationsRouter({ pool, requireAuthed, requireAdmi
                    hours_off AS "hoursOff", note, status,
                    requested_at AS "requestedAt", requested_by AS "requestedBy",
                    decided_at AS "decidedAt", decided_by AS "decidedBy",
-                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt"`,
+                   decision_note AS "decisionNote", employee_seen_at AS "employeeSeenAt",
+                   admin_edited_at AS "adminEditedAt", admin_edited_by AS "adminEditedBy",
+                   original_request AS "originalRequest"`,
         [id, employeeName, shopId, parsed.kind, parsed.dayFrom, parsed.dayTo, parsed.hoursOff, parsed.note]
       );
       res.json({ ok: true, item: requestRow(inserted.rows[0]) });
