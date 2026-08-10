@@ -3004,4 +3004,171 @@ export function apiAifAdminShopOverview(options: {
   if (options.search?.trim()) q.set("search", options.search.trim());
   return fetchAifJSON<AifAdminShopOverviewResponse>(`/admin-shops/overview?${q.toString()}`);
 }
+export type AifAdminCustomerActivityFilter = "all" | "buyers" | "inactive" | "repeat" | "debt";
+export type AifAdminCustomerSort = "revenue" | "transactions" | "items" | "average" | "debt" | "last_sale" | "name";
+
+export type AifAdminCustomerSellerBreakdown = {
+  actor: string;
+  revenue: number;
+  transactions: number;
+  itemsSold: number;
+  discountTotal: number;
+  balanceDue: number;
+  share: number;
+  lastSaleAt?: string | null;
+};
+
+export type AifAdminCustomerStoreBreakdown = {
+  customerId: string;
+  locationId: string;
+  locationCode?: string | null;
+  locationName?: string | null;
+  revenue: number;
+  transactions: number;
+  itemsSold: number;
+  paidTotal: number;
+  periodBalanceDue: number;
+  currentOpenBalance: number;
+  lastSaleAt?: string | null;
+};
+
+export type AifAdminCustomerOverviewItem = {
+  key: string;
+  id: string;
+  customerIds: string[];
+  fullName: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  note?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  combined: boolean;
+  storeCount: number;
+  stores: AifAdminCustomerStoreBreakdown[];
+  periodRevenue: number;
+  periodTransactions: number;
+  periodItemsSold: number;
+  periodSalesBeforeDiscount: number;
+  periodDiscountTotal: number;
+  periodPaidTotal: number;
+  periodBalanceDue: number;
+  periodAverageBasket: number;
+  periodFirstSaleAt?: string | null;
+  periodLastSaleAt?: string | null;
+  currentOpenBalance: number;
+  currentOpenSales: number;
+  lifetimeTransactions: number;
+  lifetimePurchaseTotal: number;
+  lifetimePaidTotal: number;
+  firstSaleAt?: string | null;
+  lastSaleAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  employees: AifAdminCustomerSellerBreakdown[];
+};
+
+export type AifAdminCustomerStoreSummary = {
+  id: string;
+  code: string;
+  name: string;
+  customerCount: number;
+  activeCustomers: number;
+  inactiveCustomers: number;
+  transactions: number;
+  itemsSold: number;
+  revenue: number;
+  paidTotal: number;
+  periodBalanceDue: number;
+  currentOpenBalance: number;
+  share: number;
+  averageCustomerValue: number;
+  averageBasket: number;
+};
+
+export type AifAdminCustomerEmployeeSummary = {
+  actor: string;
+  revenue: number;
+  transactions: number;
+  itemsSold: number;
+  discountTotal: number;
+  balanceDue: number;
+  customers: number;
+  storeCount: number;
+  averageBasket: number;
+  lastSaleAt?: string | null;
+};
+
+export type AifAdminCustomersOverviewResponse = {
+  ok: true;
+  generatedAt: string;
+  period: {
+    year: number;
+    from: string;
+    to: string;
+  };
+  scope: {
+    location: string;
+    locationName: string;
+    employee?: string | null;
+    search?: string | null;
+    activity: AifAdminCustomerActivityFilter;
+    sort: AifAdminCustomerSort;
+    topTen: boolean;
+    combineStores: boolean;
+  };
+  summary: {
+    customerCount: number;
+    uniqueCustomerCount: number;
+    buyingCustomers: number;
+    inactiveCustomers: number;
+    repeatCustomers: number;
+    newCustomers: number;
+    transactions: number;
+    itemsSold: number;
+    revenue: number;
+    salesBeforeDiscount: number;
+    discountTotal: number;
+    paidTotal: number;
+    periodBalanceDue: number;
+    currentOpenBalance: number;
+    averageCustomerValue: number;
+    averageBasket: number;
+  };
+  stores: AifAdminCustomerStoreSummary[];
+  employees: AifAdminCustomerEmployeeSummary[];
+  customers: AifAdminCustomerOverviewItem[];
+  count: number;
+  totalFilteredCustomers: number;
+  filterOptions: {
+    years: number[];
+    employees: string[];
+    locations: Array<{ id: string; code: string; name: string }>;
+  };
+};
+
+export function apiAifAdminCustomersOverview(options?: {
+  year?: number;
+  location?: "all" | string;
+  employee?: string;
+  search?: string;
+  activity?: AifAdminCustomerActivityFilter;
+  sort?: AifAdminCustomerSort;
+  topTen?: boolean;
+  combineStores?: boolean;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (options?.year) q.set("year", String(options.year));
+  q.set("location", options?.location || "all");
+  if (options?.employee?.trim()) q.set("employee", options.employee.trim());
+  if (options?.search?.trim()) q.set("search", options.search.trim());
+  if (options?.activity && options.activity !== "all") q.set("activity", options.activity);
+  if (options?.sort) q.set("sort", options.sort);
+  if (options?.topTen) q.set("top10", "1");
+  if (options?.combineStores === false) q.set("combineStores", "0");
+  if (options?.limit) q.set("limit", String(options.limit));
+  return fetchAifJSON<AifAdminCustomersOverviewResponse>(`/admin-shops/customers-overview?${q.toString()}`);
+}
 
