@@ -32,6 +32,7 @@ import AllInUsers from "./pages/AllInUsers";
 import AllInCars from "./pages/AllInCars";
 import AllInCarExpenses from "./pages/AllInCarExpenses";
 
+
 type ShopId = "csikszereda" | "kezdivasarhely";
 type ScreenName =
   | "login"
