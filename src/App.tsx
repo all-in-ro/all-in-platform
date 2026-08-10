@@ -16,6 +16,7 @@ import AllInMagazinTarguSale from "./pages/AllInMagazinTarguSale";
 import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
+import AllInAdminClients from "./pages/AllInAdminClients";
 
 import AllInReserved from "./pages/AllInReserved";
 import AllInStockMoves from "./pages/AllInStockMoves";
@@ -41,6 +42,7 @@ type ScreenName =
   | "magazintargusale"
   | "adminmagazinciuc"
   | "adminmagazintargu"
+  | "adminclients"
   | "incoming"
   | "orders"
   | "shopifyorders"
@@ -113,6 +115,13 @@ function hashToScreen(rawHash: string): Screen {
     key === "allin-admin-magazin-targu" ||
     key === "admin-shop-targu"
   ) return { name: "adminmagazintargu" };
+  if (
+    key === "adminclients" ||
+    key === "allinadminclients" ||
+    key === "allin-admin-clients" ||
+    key === "allinclients" ||
+    key === "kliensek"
+  ) return { name: "adminclients" };
   if (key === "incoming") return { name: "incoming" };
   if (key === "orders") return { name: "orders" };
   if (key === "shopifyorders" || key === "shopify-orders" || key === "webshoporders" || key === "webshop-orders") return { name: "shopifyorders" };
@@ -401,6 +410,7 @@ export default function App() {
           otherCityName="Csíkszereda"
         />
       ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
+      {screen.name === "adminclients" && <AllInAdminClients actor={session.actor} role={session.role} />}
       {screen.name === "incoming" && <AllInIncoming {...(commonProps as any)} />}
       {screen.name === "orders" && <AllInOrderHistory {...(commonProps as any)} />}
       {screen.name === "shopifyorders" && <AllInShopifyOrders {...(commonProps as any)} />}
