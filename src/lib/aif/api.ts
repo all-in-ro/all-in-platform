@@ -702,6 +702,18 @@ export type AifVariantHistoryResponse = {
 
 const AIF_BASE = "/api/aif";
 
+function inferAifShopLocationFromBrowser() {
+  if (typeof window === "undefined") return "";
+  const hash = String(window.location.hash || "").toLowerCase();
+  if (hash.includes("targu") || hash.includes("kezdi")) return "magazin_targu_secuiesc";
+  if (hash.includes("ciuc")) return "main_warehouse";
+  return "";
+}
+
+function aifShopCustomerLocation(explicit?: string | null) {
+  return String(explicit || "").trim() || inferAifShopLocationFromBrowser();
+}
+
 async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const requestHeaders = new Headers(init?.headers || {});
   if (!requestHeaders.has("Content-Type")) {
@@ -2363,6 +2375,9 @@ export type AifShopCustomer = {
   localityCode?: string | null;
   localityName?: string | null;
   postalCode?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
   formattedAddress?: string | null;
   notes?: string | null;
   creditLimit: number;
@@ -2470,18 +2485,27 @@ export type AifShopCustomerPaymentResult = {
   openBalance: number;
 };
 
-export function apiAifListShopCustomers(options?: { search?: string; limit?: number }) {
+export function apiAifListShopCustomers(options?: { location?: string; search?: string; limit?: number }) {
   const q = new URLSearchParams();
+  const location = aifShopCustomerLocation(options?.location);
+  if (location) q.set("location", location);
   if (options?.search?.trim()) q.set("q", options.search.trim());
   q.set("limit", String(options?.limit || 60));
-  return fetchAifJSON<{ ok: true; items: AifShopCustomer[]; count: number }>(`/shop-customers?${q.toString()}`);
+  return fetchAifJSON<{
+    ok: true;
+    location?: { id: string; code: string; name: string };
+    items: AifShopCustomer[];
+    count: number;
+  }>(`/shop-customers?${q.toString()}`);
 }
 
 export function apiAifGetShopCustomer(
   id: string,
-  options?: { year?: number; salesLimit?: number; paymentsLimit?: number },
+  options?: { location?: string; year?: number; salesLimit?: number; paymentsLimit?: number },
 ) {
   const q = new URLSearchParams();
+  const location = aifShopCustomerLocation(options?.location);
+  if (location) q.set("location", location);
   if (options?.year) q.set("year", String(options.year));
   if (options?.salesLimit) q.set("salesLimit", String(options.salesLimit));
   if (options?.paymentsLimit) q.set("paymentsLimit", String(options.paymentsLimit));
@@ -2490,6 +2514,7 @@ export function apiAifGetShopCustomer(
 }
 
 export type AifShopCustomerInput = {
+  location?: string;
   fullName: string;
   phone: string;
   email?: string | null;
@@ -2503,18 +2528,20 @@ export type AifShopCustomerInput = {
 };
 
 export function apiAifCreateShopCustomer(input: AifShopCustomerInput) {
+  const location = aifShopCustomerLocation(input.location);
   return fetchAifJSON<{ ok: true; duplicate?: boolean; item: AifShopCustomer }>("/shop-customers", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify(location ? { ...input, location } : input),
   });
 }
 
 export function apiAifUpdateShopCustomer(id: string, input: AifShopCustomerInput) {
+  const location = aifShopCustomerLocation(input.location);
   return fetchAifJSON<{ ok: true; item: AifShopCustomer }>(
     `/shop-customers/${encodeURIComponent(id)}`,
     {
       method: "PATCH",
-      body: JSON.stringify(input),
+      body: JSON.stringify(location ? { ...input, location } : input),
     },
   );
 }
@@ -2530,9 +2557,13 @@ export type AifShopCustomerDeleteResult = {
   };
 };
 
-export function apiAifDeleteShopCustomer(id: string) {
+export function apiAifDeleteShopCustomer(id: string, options?: { location?: string }) {
+  const q = new URLSearchParams();
+  const location = aifShopCustomerLocation(options?.location);
+  if (location) q.set("location", location);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<AifShopCustomerDeleteResult>(
-    `/shop-customers/${encodeURIComponent(id)}`,
+    `/shop-customers/${encodeURIComponent(id)}${suffix}`,
     { method: "DELETE" },
   );
 }
@@ -2568,9 +2599,17 @@ export type AifShopCustomerSaleDetachResult = {
   openBalance: number;
 };
 
-export function apiAifDetachShopCustomerSale(customerId: string, saleId: string) {
+export function apiAifDetachShopCustomerSale(
+  customerId: string,
+  saleId: string,
+  options?: { location?: string },
+) {
+  const q = new URLSearchParams();
+  const location = aifShopCustomerLocation(options?.location);
+  if (location) q.set("location", location);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
   return fetchAifJSON<AifShopCustomerSaleDetachResult>(
-    `/shop-customers/${encodeURIComponent(customerId)}/sales/${encodeURIComponent(saleId)}`,
+    `/shop-customers/${encodeURIComponent(customerId)}/sales/${encodeURIComponent(saleId)}${suffix}`,
     { method: "DELETE" },
   );
 }
