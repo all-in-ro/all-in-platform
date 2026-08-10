@@ -48,6 +48,7 @@ type MenuItem = {
 const shopItems: MenuItem[] = [
   { label: "Csíkszereda", hash: "#allinadminmagazinciuc", icon: BarChart3 },
   { label: "Kézdivásárhely", hash: "#allinadminmagazintargu", icon: BarChart3 },
+  { label: "Kliensek", hash: "#allinadminclients", icon: Users },
 ];
 
 const warehouseItems: MenuItem[] = [
@@ -332,11 +333,18 @@ export default function AllInHome(props: { onLogout?: () => void }) {
 
         <div className="space-y-2.5">
           {isMobileMenu ? (
-            <MainMenuButton
-              label="Üzletek"
-              hash="#allinadminmagazinciuc"
-              icon={Store}
-            />
+            <>
+              <MainMenuButton
+                label="Üzletek"
+                hash="#allinadminmagazinciuc"
+                icon={Store}
+              />
+              <MainMenuButton
+                label="Kliensek"
+                hash="#allinadminclients"
+                icon={Users}
+              />
+            </>
           ) : (
             <MenuGroup
               title="Üzletek"
