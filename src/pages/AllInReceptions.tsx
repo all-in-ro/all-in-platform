@@ -1200,6 +1200,8 @@ export default function AllInReceptions(_props: Props) {
   const [rowStatusFilter, setRowStatusFilter] = useState("all");
   const [moveTarget, setMoveTarget] = useState<any | null>(null);
   const [moveToReceptionId, setMoveToReceptionId] = useState("");
+  const [moveReceptionOptions, setMoveReceptionOptions] = useState<AifReceptionSummary[]>([]);
+  const [moveReceptionOptionsLoading, setMoveReceptionOptionsLoading] = useState(false);
   const [savingHeader, setSavingHeader] = useState(false);
   const [savingRows, setSavingRows] = useState(false);
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
@@ -1532,6 +1534,27 @@ export default function AllInReceptions(_props: Props) {
       setMessage(e?.message || "A receptió fejadatai nem menthetők.");
     } finally {
       setSavingHeader(false);
+    }
+  }
+
+  async function openMoveReception(row: any) {
+    setMoveTarget(row);
+    setMoveToReceptionId("");
+    setMoveReceptionOptions([]);
+    setMoveReceptionOptionsLoading(true);
+    setMessage("");
+    try {
+      const r = await apiAifListReceptions({ limit: 200 });
+      setMoveReceptionOptions(
+        (r.items || []).filter((item) =>
+          item.id !== detail?.item?.id &&
+          !["committed", "cancelled"].includes(String(item.status || "").toLowerCase())
+        )
+      );
+    } catch (e: any) {
+      setMessage(e?.message || "A cél receptiók betöltése nem sikerült.");
+    } finally {
+      setMoveReceptionOptionsLoading(false);
     }
   }
 
@@ -2091,7 +2114,7 @@ export default function AllInReceptions(_props: Props) {
                           <span className={`${rowRead} flex-col items-end justify-center leading-tight`}><span>{money(sellPriceRonPreview, "RON")}</span><span className="text-[9px] text-white/40">{salesTvaShort(salesTvaSettings)}</span></span>
                           <div className="flex items-center justify-center gap-1">
                             <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title={savingRowId === r.id ? "Mentés folyamatban" : "Sor mentése"}><Save size={14} /></button>
-                            <button className={rowNeutralBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés másik receptióba"><MoveRight size={14} /></button>
+                            <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés másik receptióba"><MoveRight size={14} /></button>
                             <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Sor kihagyása"><X size={14} /></button>
                           </div>
                         </div>
@@ -2118,7 +2141,7 @@ export default function AllInReceptions(_props: Props) {
                           <span className={rowStatusPill}>{statusText(r.status)}</span>
                           <div className="ml-auto flex gap-1">
                             <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
-                            <button className={rowNeutralBtn} onClick={() => { setMoveTarget(r); setMoveToReceptionId(""); }} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
+                            <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
                             <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Kihagy"><X size={14} /></button>
                           </div>
                         </div>
@@ -2188,16 +2211,16 @@ export default function AllInReceptions(_props: Props) {
             </div>
             <label className={`${label} mt-3`}>
               Cél receptió
-              <select className={select} value={moveToReceptionId} onChange={(e) => setMoveToReceptionId(e.target.value)}>
-                <option value="">Válassz receptiót</option>
-                {items.filter((r) => r.id !== detail.item.id && r.status !== "committed" && r.status !== "cancelled").map((r) => (
+              <select className={select} value={moveToReceptionId} onChange={(e) => setMoveToReceptionId(e.target.value)} disabled={moveReceptionOptionsLoading}>
+                <option value="">{moveReceptionOptionsLoading ? "Receptiók betöltése..." : moveReceptionOptions.length ? "Válassz receptiót" : "Nincs másik nyitott receptió"}</option>
+                {moveReceptionOptions.map((r) => (
                   <option key={r.id} value={r.id}>{cell(r.invoice_number)} • {cell(r.supplier_name)} • {dateText(r.reception_date)}</option>
                 ))}
               </select>
             </label>
             <div className="mt-4 flex justify-end gap-2">
               <button className={neutralBtn} onClick={() => setMoveTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
-              <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || !moveToReceptionId} type="button"><MoveRight size={15} /> Áthelyezés</button>
+              <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId} type="button"><MoveRight size={15} /> Áthelyezés</button>
             </div>
           </div>
         </div>
