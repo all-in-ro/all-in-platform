@@ -1562,10 +1562,8 @@ export default function AllInVacations({ api }: { api?: string }) {
                         <div className="min-w-0">
                           <div className="truncate text-sm text-white">{e.name}</div>
                           {pendingCount > 0 ? (
-                            <span className="mt-1 inline-flex flex-wrap items-center gap-x-1 rounded-full border border-rose-100/45 bg-white/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-rose-50">
-                              <span>{pendingCount} elbírálatlan kérés</span>
-                              {pendingRequested.vacationWorkingDays > 0 ? <span>• {pendingRequested.vacationWorkingDays} munkanap kérve</span> : null}
-                              {pendingRequested.shortHours > 0 ? <span>• {pendingRequested.shortHours} óra kérve</span> : null}
+                            <span className="mt-1 inline-flex rounded-full border border-rose-100/45 bg-white/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.08em] text-rose-50">
+                              {pendingCount} elbírálatlan kérés
                             </span>
                           ) : null}
                         </div>
@@ -1584,7 +1582,30 @@ export default function AllInVacations({ api }: { api?: string }) {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
+                  {pendingCount > 0 ? (
+                    <div className="mt-3 rounded-xl border border-rose-100/36 bg-white/[0.13] px-3 py-2.5">
+                      <div className="flex items-end justify-between gap-3">
+                        <div>
+                          <div className="text-[9px] uppercase tracking-[0.14em] text-rose-50/72">Most ezt kéri</div>
+                          {pendingRequested.vacationWorkingDays > 0 ? (
+                            <div className="mt-0.5 flex items-baseline gap-1.5 text-white">
+                              <strong className="text-2xl font-medium leading-none">{pendingRequested.vacationWorkingDays}</strong>
+                              <span className="text-xs uppercase tracking-[0.08em] text-rose-50/82">munkanap szabadság</span>
+                            </div>
+                          ) : null}
+                          {pendingRequested.shortHours > 0 ? (
+                            <div className="mt-1 flex items-baseline gap-1.5 text-white">
+                              <strong className="text-xl font-medium leading-none">{pendingRequested.shortHours}</strong>
+                              <span className="text-xs uppercase tracking-[0.08em] text-rose-50/82">óra elkérés</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <CalendarRange className="h-6 w-6 shrink-0 text-rose-50/72" />
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-2.5 grid grid-cols-3 gap-1.5 text-center">
                     <span className="rounded-lg border border-white/12 bg-white/[0.14] px-1.5 py-1.5 text-[10px] text-white/80">
                       <strong className="block text-xs font-normal text-white">{vacationDays}</strong>
                       rögz. szab.
@@ -1793,16 +1814,20 @@ export default function AllInVacations({ api }: { api?: string }) {
                   onClick={() => openRequestDecision(request, "edit")}
                   className="rounded-2xl border border-white/12 bg-black/12 p-3 text-left transition hover:border-rose-100/32 hover:bg-black/18"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm text-white">{requestPeriodLabel(request)}</div>
-                      <div className="mt-1 text-[10px] text-white/48">{request.kind === "vacation" ? `${preview?.calendarDays || 0} naptári nap • ${preview?.excludedDays || 0} pihenőnap` : `${request.hoursOff || 0} óra`}</div>
+                  <div className="grid gap-3 sm:grid-cols-[145px_minmax(0,1fr)] sm:items-center">
+                    <div className="rounded-xl border border-rose-100/28 bg-gradient-to-br from-[#a90f2b] to-[#741326] px-3 py-3 text-center">
+                      <div className="text-[8px] uppercase tracking-[0.15em] text-rose-50/70">{request.kind === "vacation" ? "Kért szabadság" : "Kért elkérés"}</div>
+                      <div className="mt-1 flex items-baseline justify-center gap-1.5 text-white">
+                        <strong className="text-3xl font-medium leading-none">{request.kind === "vacation" ? (preview?.workingDays || 0) : (request.hoursOff || 0)}</strong>
+                        <span className="text-[11px] uppercase tracking-[0.08em] text-rose-50/86">{request.kind === "vacation" ? "munkanap" : "óra"}</span>
+                      </div>
                     </div>
-                    <span className="rounded-xl border border-rose-100/24 bg-rose-500/18 px-2.5 py-1 text-sm text-white">
-                      {request.kind === "vacation" ? `${preview?.workingDays || 0} munkanap` : `${request.hoursOff || 0} óra`}
-                    </span>
+                    <div className="min-w-0">
+                      <div className="text-base font-medium text-white">{requestPeriodLabel(request)}</div>
+                      <div className="mt-1 text-[10px] text-white/48">{request.kind === "vacation" ? `${preview?.calendarDays || 0} naptári nap • ${preview?.excludedDays || 0} pihenőnap kihagyva` : `${request.hoursOff || 0} óra`}</div>
+                      <div className="mt-2 flex items-center gap-1.5 text-[10px] text-rose-100/70"><Pencil className="h-3.5 w-3.5" /> Kattints a dátum javításához</div>
+                    </div>
                   </div>
-                  <div className="mt-2 flex items-center gap-1.5 text-[10px] text-rose-100/70"><Pencil className="h-3.5 w-3.5" /> Kattints a dátum javításához</div>
                 </button>
               );
             })}
@@ -2499,28 +2524,33 @@ export default function AllInVacations({ api }: { api?: string }) {
                       </div>
                     </div>
 
-                    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-white/8 bg-black/10 px-2.5 py-2">
-                      <span className="rounded-lg border border-rose-200/20 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-50">
-                        {request.kind === "vacation" ? "Szabadság" : "Órás elkérés"}
-                      </span>
-                      <span className="text-sm text-white">{requestPeriodLabel(request)}</span>
-                      {request.kind === "vacation" ? (
-                        <>
-                          <span className="rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2 py-1 text-[10px] text-[#e5fffd]">
-                            {requestPreview?.workingDays || 0} munkanap összesen
+                    <div className="mt-2 grid min-w-0 gap-2 sm:grid-cols-[150px_minmax(0,1fr)]">
+                      <div className="rounded-xl border border-rose-100/34 bg-gradient-to-br from-[#a90f2b] to-[#741326] px-3 py-2.5 text-center shadow-[0_8px_20px_rgba(150,15,43,0.20)]">
+                        <div className="text-[8px] uppercase tracking-[0.16em] text-rose-50/72">{request.kind === "vacation" ? "Kért szabadság" : "Kért elkérés"}</div>
+                        <div className="mt-1 flex items-baseline justify-center gap-1.5 text-white">
+                          <strong className="text-3xl font-medium leading-none">{request.kind === "vacation" ? (requestPreview?.workingDays || 0) : (request.hoursOff || 0)}</strong>
+                          <span className="text-[11px] uppercase tracking-[0.08em] text-rose-50/86">{request.kind === "vacation" ? "munkanap" : "óra"}</span>
+                        </div>
+                      </div>
+
+                      <div className="min-w-0 rounded-xl border border-white/8 bg-black/10 px-3 py-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-lg border border-rose-200/20 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-50">
+                            {request.kind === "vacation" ? "Szabadság" : "Órás elkérés"}
                           </span>
-                          <span className="text-[10px] text-white/42">
+                          <span className="text-base font-medium text-white">{requestPeriodLabel(request)}</span>
+                        </div>
+                        {request.kind === "vacation" ? (
+                          <div className="mt-1.5 text-[10px] text-white/48">
                             {requestPreview?.calendarDays || 0} naptári nap • {requestPreview?.excludedDays || 0} pihenőnap kihagyva
-                          </span>
-                        </>
-                      ) : (
-                        <span className="rounded-lg border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2 py-1 text-[10px] text-[#e5fffd]">{request.hoursOff || 0} óra</span>
-                      )}
-                      {request.note ? (
-                        <span className="min-w-0 flex-1 truncate text-[11px] text-white/48" title={request.note}>
-                          <MessageSquareText className="mr-1 inline h-3.5 w-3.5" />{request.note}
-                        </span>
-                      ) : null}
+                          </div>
+                        ) : null}
+                        {request.note ? (
+                          <div className="mt-1.5 truncate text-[11px] text-white/48" title={request.note}>
+                            <MessageSquareText className="mr-1 inline h-3.5 w-3.5" />{request.note}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
 
