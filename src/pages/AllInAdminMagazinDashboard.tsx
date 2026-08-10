@@ -24,6 +24,7 @@ import {
   Home,
   Layers3,
   Loader2,
+  MoreVertical,
   PackageCheck,
   Percent,
   ReceiptText,
@@ -294,6 +295,158 @@ function SmartSelect({
         document.body,
       )}
     </div>
+  );
+}
+
+
+type SaleRowActionMenuProps = {
+  sale: AifAdminShopRecentSale;
+  onReceipt: (sale: AifAdminShopRecentSale) => void;
+  onDelete: (sale: AifAdminShopRecentSale) => void;
+};
+
+function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+    width: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 8;
+    const gap = 7;
+    const width = Math.min(190, window.innerWidth - edge * 2);
+    const menuHeight = menuRef.current?.offsetHeight || 96;
+    const roomBelow = window.innerHeight - rect.bottom;
+    const roomAbove = rect.top;
+    const openUpward = roomBelow < menuHeight + gap + edge && roomAbove > roomBelow;
+    const left = Math.max(
+      edge,
+      Math.min(rect.right - width, window.innerWidth - width - edge),
+    );
+
+    if (openUpward) {
+      setPosition({
+        left,
+        width,
+        bottom: Math.max(edge, window.innerHeight - rect.top + gap),
+      });
+      return;
+    }
+
+    setPosition({
+      left,
+      width,
+      top: Math.max(
+        edge,
+        Math.min(rect.bottom + gap, window.innerHeight - menuHeight - edge),
+      ),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+
+    updatePosition();
+
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+
+    document.addEventListener("pointerdown", closeOutside, true);
+    window.addEventListener("keydown", closeWithEscape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside, true);
+      window.removeEventListener("keydown", closeWithEscape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-white transition active:scale-[0.96] ${
+          open
+            ? "border-[#8ce7e2]/50 bg-[#2a8d8b]"
+            : "border-white/16 bg-white/[0.045] hover:border-white/30 hover:bg-white/[0.09]"
+        }`}
+        title="Műveletek"
+        aria-label="Eladási sor műveletei"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <MoreVertical size={16} />
+      </button>
+
+      {open && position && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={`${sale.saleNumber} műveletei`}
+          className="overflow-hidden rounded-xl border border-[#7bd7d4]/38 bg-[#253449] p-1.5 shadow-[0_18px_46px_rgba(2,6,23,0.62)]"
+          style={{
+            position: "fixed",
+            zIndex: 760,
+            left: position.left,
+            width: position.width,
+            top: position.top,
+            bottom: position.bottom,
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onReceipt(sale);
+            }}
+            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs text-white/86 transition hover:bg-[#34465d]"
+          >
+            <ReceiptText size={15} className="shrink-0 text-[#9be9e5]" />
+            <span>Bizonylat</span>
+          </button>
+
+          <div className="my-1 border-t border-white/9" />
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDelete(sale);
+            }}
+            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs text-rose-100 transition hover:bg-rose-500/18"
+          >
+            <Trash2 size={15} className="shrink-0" />
+            <span>Törlés</span>
+          </button>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -667,6 +820,7 @@ export default function AllInAdminMagazinDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
+  const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
 
@@ -717,6 +871,45 @@ export default function AllInAdminMagazinDashboard({
       setDeleteSaving(false);
     }
   }
+
+  const receiptLines = useMemo(() => {
+    if (!receiptTarget) return [] as AifAdminShopRecentSale[];
+    const matching = (data?.recentSales || []).filter(
+      (sale) => sale.saleNumber === receiptTarget.saleNumber,
+    );
+    return matching.length ? matching : [receiptTarget];
+  }, [data?.recentSales, receiptTarget]);
+  const receiptVisibleQty = receiptLines.reduce(
+    (sum, line) => sum + numberValue(line.quantity),
+    0,
+  );
+  const receiptVisibleDiscount = receiptLines.reduce(
+    (sum, line) => sum + numberValue(line.lineDiscountAmount),
+    0,
+  );
+  const receiptVisibleTotal = receiptLines.reduce(
+    (sum, line) => sum + numberValue(line.lineTotal),
+    0,
+  );
+  const receiptHiddenLines = receiptTarget
+    ? Math.max(0, numberValue(receiptTarget.lineCount) - receiptLines.length)
+    : 0;
+
+  useEffect(() => {
+    if (!receiptTarget) return;
+
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setReceiptTarget(null);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeWithEscape, true);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeWithEscape, true);
+    };
+  }, [receiptTarget]);
 
   const summary = data?.summary;
   const previous = data?.previousSummary;
@@ -1087,73 +1280,67 @@ export default function AllInAdminMagazinDashboard({
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1480px] border-collapse text-xs">
+              <table className="w-full min-w-[1180px] border-collapse text-xs">
                 <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
                   <tr>
                     <th className="px-3 py-3 text-left">Termék</th>
-                    <th className="px-3 py-3 text-left">Időpont</th>
-                    <th className="px-3 py-3 text-left">Bizonylat</th>
+                    <th className="whitespace-nowrap px-3 py-3 text-left">Időpont</th>
                     <th className="px-3 py-3 text-left">Eladó / kliens</th>
                     <th className="px-3 py-3 text-center">Típus</th>
                     <th className="px-3 py-3 text-center">Darab</th>
                     <th className="px-3 py-3 text-right">Kedvezmény</th>
                     <th className="px-3 py-3 text-right">Összeg</th>
                     <th className="px-3 py-3 text-right">Hátralévő</th>
-                    <th className="px-3 py-3 text-center">Állapot</th>
-                    <th className="sticky right-0 z-20 w-[52px] border-l border-white/10 bg-[#293548] px-1.5 py-3 text-center shadow-[-8px_0_14px_rgba(15,23,42,0.16)]">
-                      <span className="sr-only">Művelet</span>
+                    <th className="min-w-[132px] px-2 py-3 text-center">Állapot</th>
+                    <th className="sticky right-0 z-20 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#293548] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)]">
+                      <span className="sr-only">Műveletek</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.recentSales || []).map((sale) => (
                     <tr key={sale.lineId} className="group border-t border-white/8 align-top hover:bg-white/[0.035]">
-                      <td className="min-w-[330px] px-3 py-3">
+                      <td className="min-w-[300px] px-3 py-3">
                         <div className="flex items-start gap-3">
                           <ProductThumb
                             src={sale.imageUrl}
                             alt={sale.productTitle || sale.saleNumber}
                           />
                           <div className="min-w-0 pt-0.5">
-                            <p className="max-w-[300px] truncate text-white" title={sale.productTitle || "Nincs mentett termék"}>
+                            <p className="max-w-[275px] truncate text-white" title={sale.productTitle || "Nincs mentett termék"}>
                               {sale.productTitle || "Nincs mentett termék"}
                             </p>
-                            <p className="mt-1 max-w-[300px] truncate text-[10px] text-white/50" title={[sale.brandName, sale.subcategoryName, sale.colorName, sale.size].filter(Boolean).join(" • ")}>
+                            <p className="mt-1 max-w-[275px] truncate text-[10px] text-white/50" title={[sale.brandName, sale.subcategoryName, sale.colorName, sale.size].filter(Boolean).join(" • ")}>
                               {[sale.brandName, sale.subcategoryName, sale.colorName, sale.size].filter(Boolean).join(" • ") || "–"}
                             </p>
-                            <p className="mt-1 max-w-[300px] truncate text-[10px] text-[#9be9e5]/70" title={[sale.productCode, sale.barcode].filter(Boolean).join(" • ")}>
+                            <p className="mt-1 max-w-[275px] truncate text-[10px] text-[#9be9e5]/70" title={[sale.productCode, sale.barcode].filter(Boolean).join(" • ")}>
                               {[sale.productCode ? `Kód: ${sale.productCode}` : "", sale.barcode ? `Vonalkód: ${sale.barcode}` : ""].filter(Boolean).join(" • ") || ""}
                             </p>
                           </div>
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-white/62">{dateTime(sale.soldAt)}</td>
-                      <td className="px-3 py-3"><p className="text-white">{sale.saleNumber}</p><p className="mt-1 text-[10px] text-white/38">{sale.lineCount > 1 ? `${sale.lineCount} terméksor a bizonylaton` : "1 terméksor"}</p></td>
-                      <td className="px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
+                      <td className="min-w-[145px] px-3 py-3"><p>{sale.actor || "-"}</p><p className="mt-1 text-[10px] text-white/42">{sale.customerName || "Nincs kliens megadva"}</p></td>
                       <td className="px-3 py-3 text-center"><span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px]">{saleTypeLabel(sale.saleType)}</span></td>
                       <td className="px-3 py-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1.5 text-[#d5fffd]">{integer(sale.quantity)}</span></td>
                       <td className="px-3 py-3 text-right text-amber-50">
                         <p>{money(sale.lineDiscountAmount)}</p>
                         {numberValue(sale.lineDiscountPercent) > 0 ? <p className="mt-1 text-[10px] text-amber-100/65">{numberValue(sale.lineDiscountPercent).toFixed(1)}%</p> : null}
                       </td>
-                      <td className="px-3 py-3 text-right">{money(sale.lineTotal)}</td>
-                      <td className="px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
-                      <td className="px-3 py-3">
+                      <td className="whitespace-nowrap px-3 py-3 text-right">{money(sale.lineTotal)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right text-rose-50">{money(sale.balanceDue)}</td>
+                      <td className="min-w-[132px] px-2 py-3">
                         <div className="flex justify-center gap-1.5">
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
                           <span className={`rounded-full border px-2 py-1 text-[10px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
                         </div>
                       </td>
-                      <td className="sticky right-0 z-10 w-[52px] border-l border-white/10 bg-[#344154] px-1.5 py-3 text-center shadow-[-8px_0_14px_rgba(15,23,42,0.16)] transition-colors group-hover:bg-[#39475a]">
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(sale)}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/55 bg-rose-600 text-white shadow-[0_4px_12px_rgba(225,29,72,0.22)] transition hover:bg-rose-500 active:scale-[0.96]"
-                          title="Eladási sor törlése"
-                          aria-label="Eladási sor törlése"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                      <td className="sticky right-0 z-10 w-[46px] min-w-[46px] max-w-[46px] border-l border-white/8 bg-[#344154] px-1 py-3 text-center shadow-[-6px_0_12px_rgba(15,23,42,0.12)] transition-colors group-hover:bg-[#39475a]">
+                        <SaleRowActionMenu
+                          sale={sale}
+                          onReceipt={setReceiptTarget}
+                          onDelete={setDeleteTarget}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -1170,6 +1357,136 @@ export default function AllInAdminMagazinDashboard({
           </div>
         </section>
       </div>
+
+      {receiptTarget ? (
+        <div
+          className="fixed inset-0 z-[310] grid place-items-center bg-slate-950/82 px-4 py-6 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setReceiptTarget(null);
+          }}
+        >
+          <section className="flex max-h-[90vh] w-full max-w-[860px] flex-col overflow-hidden rounded-[26px] border border-[#9be9e5]/28 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/22 text-[#d7fffd]">
+                  <ReceiptText size={20} />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">Eladási bizonylat</p>
+                  <h3 className="mt-1 truncate text-xl text-white">{receiptTarget.saleNumber}</h3>
+                  <p className="mt-1 text-xs text-white/48">{dateTime(receiptTarget.soldAt)} • {locationName}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReceiptTarget(null)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] text-white transition hover:bg-white/[0.1]"
+                aria-label="Bizonylat bezárása"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  ["Eladó", receiptTarget.actor || "-"],
+                  ["Kliens", receiptTarget.customerName || "Nincs kliens"],
+                  ["Eladás típusa", saleTypeLabel(receiptTarget.saleType)],
+                  ["Fizetés", paymentLabel(receiptTarget.paymentStatus)],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="min-w-0 rounded-xl border border-white/10 bg-[#293548] px-3 py-2.5">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">{String(label)}</p>
+                    <p className="mt-1 truncate text-sm text-white/84" title={String(value)}>{String(value)}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusBadge(receiptTarget.status)}`}>
+                  {saleStatusLabel(receiptTarget.status)}
+                </span>
+                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${paymentBadge(receiptTarget.paymentStatus)}`}>
+                  {paymentLabel(receiptTarget.paymentStatus)}
+                </span>
+              </div>
+
+              <section className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-[#293548]">
+                <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Tételek</p>
+                    <p className="mt-0.5 text-sm text-white">{receiptLines.length} terméksor • {integer(receiptVisibleQty)} db</p>
+                  </div>
+                  <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/50">
+                    {money(receiptVisibleTotal)}
+                  </span>
+                </div>
+
+                <div className="divide-y divide-white/8">
+                  {receiptLines.map((line, index) => (
+                    <div key={`${line.lineId}-${index}`} className="flex items-start gap-3 px-4 py-3">
+                      <ProductThumb src={line.imageUrl} alt={line.productTitle || line.saleNumber} />
+                      <div className="min-w-0 flex-1 pt-0.5">
+                        <p className="truncate text-sm text-white" title={line.productTitle || "Nincs mentett termék"}>
+                          {line.productTitle || "Nincs mentett termék"}
+                        </p>
+                        <p className="mt-1 truncate text-[10px] text-white/45" title={[line.brandName, line.subcategoryName, line.colorName, line.size].filter(Boolean).join(" • ")}>
+                          {[line.brandName, line.subcategoryName, line.colorName, line.size].filter(Boolean).join(" • ") || "–"}
+                        </p>
+                        <p className="mt-1 truncate text-[10px] text-[#9be9e5]/65">
+                          {[line.productCode ? `Kód: ${line.productCode}` : "", line.barcode ? `Vonalkód: ${line.barcode}` : ""].filter(Boolean).join(" • ")}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <span className="inline-flex min-w-10 justify-center rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1 text-[11px] text-[#d5fffd]">{integer(line.quantity)} db</span>
+                        <p className="mt-2 text-sm text-white">{money(line.lineTotal)}</p>
+                        {numberValue(line.lineDiscountAmount) > 0 ? (
+                          <p className="mt-1 text-[10px] text-amber-100/66">Kedvezmény: {money(line.lineDiscountAmount)}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {receiptHiddenLines > 0 ? (
+                <div className="mt-3 rounded-xl border border-amber-200/24 bg-amber-400/10 px-3 py-2.5 text-xs text-amber-50/82">
+                  A jelenlegi szűrés miatt még {integer(receiptHiddenLines)} bizonylatsor nincs benne ebben az előnézetben.
+                </div>
+              ) : null}
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {[
+                  ["Látható darab", `${integer(receiptVisibleQty)} db`, "text-white"],
+                  ["Kedvezmény", money(receiptVisibleDiscount), "text-amber-50"],
+                  ["Látható összeg", money(receiptVisibleTotal), "text-[#d7fffd]"],
+                ].map(([label, value, tone]) => (
+                  <div key={String(label)} className="rounded-xl border border-white/10 bg-[#293548] px-3 py-2.5">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">{String(label)}</p>
+                    <p className={`mt-1 text-sm ${String(tone)}`}>{String(value)}</p>
+                  </div>
+                ))}
+              </div>
+
+              {numberValue(receiptTarget.balanceDue) > 0 ? (
+                <div className="mt-3 rounded-xl border border-rose-200/24 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50">
+                  Hátralévő összeg: <strong className="font-normal">{money(receiptTarget.balanceDue)}</strong>
+                </div>
+              ) : null}
+            </div>
+
+            <footer className="flex justify-end border-t border-white/12 bg-[#293548] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setReceiptTarget(null)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white transition hover:bg-white/[0.1]"
+              >
+                <X size={16} /> Bezárás
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {deleteTarget ? (
         <div className="fixed inset-0 z-[320] grid place-items-center bg-slate-950/82 px-4 backdrop-blur-sm">
