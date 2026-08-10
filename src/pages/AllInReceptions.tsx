@@ -2225,7 +2225,26 @@ export default function AllInReceptions(_props: Props) {
                 ))}
               </select>
             </label>
-            <div className="mt-4 flex justify-end gap-2">
+            {(!moveReceptionOptionsLoading && moveReceptionOptions.length === 0) && (
+              <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/8 px-3 py-2.5 text-xs text-amber-100/90">
+                Nincs másik nyitott receptió. Nyiss egy új bevételezést, utána célként azonnal meg fog jelenni itt.
+              </div>
+            )}
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              {(!moveReceptionOptionsLoading && moveReceptionOptions.length === 0) && (
+                <button
+                  className={primaryBtn}
+                  onClick={() => {
+                    try { window.sessionStorage.setItem(OPEN_RECEPTION_HANDOFF_KEY, detail.item.id); } catch {}
+                    setMoveTarget(null);
+                    window.location.hash = "#allinincoming";
+                  }}
+                  disabled={busy}
+                  type="button"
+                >
+                  <FileText size={15} /> Új bevételezés
+                </button>
+              )}
               <button className={neutralBtn} onClick={() => setMoveTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
               <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId} type="button">
                 <MoveRight size={15} /> Áthelyezés
