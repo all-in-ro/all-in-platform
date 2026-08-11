@@ -21,6 +21,8 @@ import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
 import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
 import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
+import AllInShopReturns from "./AllInShopReturns";
+import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 
 
 type Props = {
@@ -69,8 +71,9 @@ const actions: ActionCard[] = [
   {
     key: "returns",
     title: "Visszáru",
-    description: "Vevői visszáru és cserefolyamat.",
+    description: "Vevői visszáru, üzletközi árfeloldás és cserefolyamat.",
     icon: RotateCcw,
+    primary: true,
   },
   {
     key: "receipts",
@@ -143,6 +146,7 @@ export default function AllInMagazinCiuc({
   const [clientsOpen, setClientsOpen] = useState(false);
   const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
   const [vacationsOpen, setVacationsOpen] = useState(false);
+  const [returnsOpen, setReturnsOpen] = useState(false);
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
@@ -192,6 +196,11 @@ export default function AllInMagazinCiuc({
     if (action.key === "vacations") {
       setNotice("");
       setVacationsOpen(true);
+      return;
+    }
+    if (action.key === "returns") {
+      setNotice("");
+      setReturnsOpen(true);
       return;
     }
     if (action.key === "search" || action.key === "stock" || action.key === "summary") {
@@ -386,6 +395,17 @@ export default function AllInMagazinCiuc({
         locationCode="main_warehouse"
         locationName="Magazin - Miercurea Ciuc"
         onClose={() => setShopOperationMode(null)}
+      />
+      <AllInShopReturns
+        open={returnsOpen}
+        actor={actor}
+        locationCode="main_warehouse"
+        locationName="Magazin - Miercurea Ciuc"
+        onClose={() => setReturnsOpen(false)}
+      />
+      <AllInReturnAuthorizationInbox
+        locationCode="main_warehouse"
+        locationName="Magazin - Miercurea Ciuc"
       />
       <AllInShiftHandoverInbox
         actor={actor}
