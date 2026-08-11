@@ -1561,19 +1561,28 @@ export default function AllInReceptions(_props: Props) {
     }
   }
 
-  async function moveRowToReception() {
+  async function moveRowToReception(commitAfterMove = false) {
     if (!detail || !moveTarget || !moveToReceptionId) return;
+    const sourceReceptionId = detail.item.id;
     setBusy(true);
     setMessage("");
     try {
-      await apiAifMoveImportRow(moveTarget.id, moveToReceptionId);
+      const result = await apiAifMoveImportRow(moveTarget.id, moveToReceptionId, { commitAfterMove });
       setMoveTarget(null);
       setMoveToReceptionId("");
-      await reloadDetail(detail.item.id);
+      await reloadDetail(sourceReceptionId);
       await load();
-      setMessage("Terméksor áthelyezve.");
+      setMessage(
+        result.committedAfterMove
+          ? "Terméksor áthelyezve és készletre véve. A forrás és a cél receptió állapota újraszámolva."
+          : "Terméksor áthelyezve. A cél receptió addig Vázlat marad, amíg a sort készletre nem veszed."
+      );
     } catch (e: any) {
-      setMessage(e?.message || "A terméksor áthelyezése nem sikerült.");
+      setMessage(
+        e?.message || (commitAfterMove
+          ? "Az áthelyezés és készletre vétel nem sikerült. A rendszer az egész műveletet visszavonta."
+          : "A terméksor áthelyezése nem sikerült.")
+      );
     } finally {
       setBusy(false);
     }
@@ -2209,7 +2218,7 @@ export default function AllInReceptions(_props: Props) {
           <div className="w-full max-w-lg rounded-2xl border border-white/24 bg-[#404a5b] p-4 shadow-2xl">
             <h2 className="text-base text-white font-normal">Terméksor áthelyezése</h2>
             <p className="mt-2 text-sm text-white/76">
-              Még nem készletre vett sor másik receptióba helyezhető. Ha a cél receptió már le volt zárva, az áthelyezéskor újranyílik.
+              A sima áthelyezés a cél receptiót Vázlat állapotba teszi. Az „Áthelyezés + készletre vétel” egyetlen biztonságos műveletben átteszi és rögtön készletre veszi a sort; ha bármi hibázik, az áthelyezés is visszavonódik.
             </p>
             <div className="mt-2 rounded-xl border border-white/12 bg-[#354153] p-2.5 text-xs text-white">
               {cell((moveTarget.normalized || {}).titleRo)} • {cell(moveTarget.supplier_product_code || (moveTarget.normalized || {}).supplierProductCode)} • S/N/COD: {cell((moveTarget as any).sn_cod || (moveTarget.normalized || {}).snCod || (moveTarget.normalized || {}).sn_cod)}
@@ -2237,10 +2246,28 @@ export default function AllInReceptions(_props: Props) {
                 })}
               />
             </label>
+            <div className="mt-3 rounded-xl border border-amber-200/25 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-50">
+              Ha csak áthelyezed, a „Vázlat” állapot a még nyitott sorral együtt a cél receptióra kerül. Mindkettő csak akkor lesz lezárt, amikor a sor készletre került vagy ki lett hagyva.
+            </div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button className={neutralBtn} onClick={() => setMoveTarget(null)} disabled={busy} type="button"><X size={15} /> Mégse</button>
-              <button className={primaryBtn} onClick={moveRowToReception} disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId} type="button">
-                <MoveRight size={15} /> Áthelyezés
+              <button
+                className={neutralBtn}
+                onClick={() => moveRowToReception(false)}
+                disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId}
+                type="button"
+                title="Csak áthelyezi a sort; a cél receptió Vázlat lesz."
+              >
+                <MoveRight size={15} /> Csak áthelyezés
+              </button>
+              <button
+                className={primaryBtn}
+                onClick={() => moveRowToReception(true)}
+                disabled={busy || moveReceptionOptionsLoading || !moveToReceptionId}
+                type="button"
+                title="Áthelyezés és készletre vétel egy tranzakcióban. Hiba esetén semmi nem mozdul el."
+              >
+                <CheckCircle size={15} /> Áthelyezés + készletre vétel
               </button>
             </div>
           </div>
