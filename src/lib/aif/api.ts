@@ -2888,6 +2888,73 @@ export type AifShopShiftHandoverPreview = {
   day?: AifShopShiftSnapshot | null;
 };
 
+export type AifShopDayClosure = {
+  id: string;
+  date?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  actor: string;
+  expectedCash: number;
+  countedCash: number;
+  cashDifference: number;
+  note?: string | null;
+  snapshot?: Record<string, unknown> | null;
+  closedAt?: string | null;
+  createdAt?: string | null;
+};
+
+export type AifShopCashMovementType = "manager_handover" | "bank_deposit";
+export type AifShopCashMovementStatus = "pending" | "confirmed" | "rejected" | "cancelled" | string;
+
+export type AifShopCashMovement = {
+  id: string;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  type: AifShopCashMovementType | string;
+  status: AifShopCashMovementStatus;
+  amount: number;
+  requestedBy: string;
+  requestedAt?: string | null;
+  reference?: string | null;
+  note?: string | null;
+  confirmedBy?: string | null;
+  confirmedAt?: string | null;
+  effectiveAt?: string | null;
+  rejectedBy?: string | null;
+  rejectedAt?: string | null;
+  cancelledBy?: string | null;
+  cancelledAt?: string | null;
+  createdAt?: string | null;
+};
+
+export type AifShopCashBalance = {
+  at: string;
+  baselineType: "day_closure" | "shift_handover" | "day_start" | string;
+  baselineAt?: string | null;
+  baselineCash: number;
+  saleCash: number;
+  customerCash: number;
+  exchangeCash: number;
+  confirmedOut: number;
+  pendingOut: number;
+  pendingCount: number;
+  availableCash: number;
+  closure?: AifShopDayClosure | null;
+};
+
+export type AifShopCashOverview = {
+  ok: true;
+  generatedAt: string;
+  location: { id: string; code: string; name: string };
+  balance: AifShopCashBalance;
+  pendingManagerHandovers: AifShopCashMovement[];
+  movements: AifShopCashMovement[];
+  closures: AifShopDayClosure[];
+  todayClosure?: AifShopDayClosure | null;
+};
+
 export type AifShopShiftDayOverview = {
   ok: true;
   generatedAt: string;
@@ -2896,7 +2963,9 @@ export type AifShopShiftDayOverview = {
   totals: AifShopShiftSnapshot;
   employees: AifShopShiftDayEmployee[];
   handovers: AifShopShiftHandover[];
-  handoverPreview?: AifShopShiftHandoverPreview | null;
+  handoverPreview?: (AifShopShiftHandoverPreview & { cashBalance?: AifShopCashBalance | null }) | null;
+  dayClosure?: AifShopDayClosure | null;
+  cashBalance?: AifShopCashBalance | null;
 };
 
 export function apiAifShopShiftEmployees(options: { location: string }) {
@@ -2953,6 +3022,65 @@ export function apiAifAcceptShopShiftHandover(
 export function apiAifCancelShopShiftHandover(id: string) {
   return fetchAifJSON<{ ok: true; item: AifShopShiftHandover }>(
     `/shop-shifts/handovers/${encodeURIComponent(id)}/cancel`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function apiAifShopCashOverview(options: { location: string; limit?: number }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.limit) q.set("limit", String(options.limit));
+  return fetchAifJSON<AifShopCashOverview>(`/shop-cash/overview?${q.toString()}`);
+}
+
+export function apiAifCloseShopDay(input: {
+  location: string;
+  countedCash: number;
+  note?: string | null;
+}) {
+  return fetchAifJSON<{ ok: true; item: AifShopDayClosure }>("/shop-shifts/day-close", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifCreateShopCashMovement(input: {
+  location: string;
+  type: AifShopCashMovementType;
+  amount: number;
+  reference?: string | null;
+  note?: string | null;
+  idempotencyKey: string;
+}) {
+  return fetchAifJSON<{
+    ok: true;
+    duplicate?: boolean;
+    item: AifShopCashMovement;
+    balance?: AifShopCashBalance;
+  }>("/shop-cash/movements", {
+    method: "POST",
+    headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifConfirmShopCashMovement(id: string) {
+  return fetchAifJSON<{ ok: true; item: AifShopCashMovement; balance?: AifShopCashBalance }>(
+    `/shop-cash/movements/${encodeURIComponent(id)}/confirm`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export function apiAifRejectShopCashMovement(id: string, note?: string | null) {
+  return fetchAifJSON<{ ok: true; item: AifShopCashMovement }>(
+    `/shop-cash/movements/${encodeURIComponent(id)}/reject`,
+    { method: "POST", body: JSON.stringify({ note: note || null }) },
+  );
+}
+
+export function apiAifCancelShopCashMovement(id: string) {
+  return fetchAifJSON<{ ok: true; item: AifShopCashMovement }>(
+    `/shop-cash/movements/${encodeURIComponent(id)}/cancel`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
