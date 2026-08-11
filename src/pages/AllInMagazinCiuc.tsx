@@ -23,6 +23,9 @@ import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOpe
 import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
 import AllInShopReturns from "./AllInShopReturns";
 import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
+import AllInShopReservations from "./AllInShopReservations";
+import AllInShopIncoming from "./AllInShopIncoming";
+
 
 type Props = {
   apiBase?: string;
@@ -58,14 +61,16 @@ const actions: ActionCard[] = [
   {
     key: "reserved",
     title: "Félretett termékek",
-    description: "Foglalások, átvételek és lejáró félretételek.",
+    description: "Klienshez kötött foglalások, lejáratok és átvételek.",
     icon: PackageSearch,
+    primary: true,
   },
   {
     key: "transfers",
     title: "Beérkező áru",
-    description: "Központi átadások és átvételre váró csomagok.",
+    description: "Lezárt Avizok tételes átvétele és havi beérkezési előzmény.",
     icon: Truck,
+    primary: true,
   },
   {
     key: "returns",
@@ -146,6 +151,8 @@ export default function AllInMagazinCiuc({
   const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
   const [vacationsOpen, setVacationsOpen] = useState(false);
   const [returnsOpen, setReturnsOpen] = useState(false);
+  const [reservationsOpen, setReservationsOpen] = useState(false);
+  const [incomingOpen, setIncomingOpen] = useState(false);
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
@@ -200,6 +207,16 @@ export default function AllInMagazinCiuc({
     if (action.key === "returns") {
       setNotice("");
       setReturnsOpen(true);
+      return;
+    }
+    if (action.key === "reserved") {
+      setNotice("");
+      setReservationsOpen(true);
+      return;
+    }
+    if (action.key === "transfers") {
+      setNotice("");
+      setIncomingOpen(true);
       return;
     }
     if (action.key === "search" || action.key === "stock" || action.key === "summary") {
@@ -394,6 +411,20 @@ export default function AllInMagazinCiuc({
         locationCode="main_warehouse"
         locationName="Magazin - Miercurea Ciuc"
         onClose={() => setShopOperationMode(null)}
+      />
+      <AllInShopReservations
+        open={reservationsOpen}
+        actor={actor}
+        locationCode="main_warehouse"
+        locationName="Magazin - Miercurea Ciuc"
+        onClose={() => setReservationsOpen(false)}
+      />
+      <AllInShopIncoming
+        open={incomingOpen}
+        actor={actor}
+        locationCode="main_warehouse"
+        locationName="Magazin - Miercurea Ciuc"
+        onClose={() => setIncomingOpen(false)}
       />
       <AllInShopReturns
         open={returnsOpen}
