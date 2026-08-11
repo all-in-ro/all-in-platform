@@ -404,6 +404,56 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_shift_handovers_one_pending_per_location_uq
           ON aif_shop_shift_handovers (location_id) WHERE status='pending'`);
 
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_day_closures (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          work_date date NOT NULL,
+          actor text NOT NULL,
+          expected_cash numeric(14,2) NOT NULL DEFAULT 0,
+          counted_cash numeric(14,2) NOT NULL DEFAULT 0,
+          cash_difference numeric(14,2) NOT NULL DEFAULT 0,
+          note text NULL,
+          snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+          closed_at timestamptz NOT NULL DEFAULT now(),
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (location_id, work_date)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_day_closures_location_date_idx
+          ON aif_shop_day_closures (location_id, work_date DESC, closed_at DESC)`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_cash_movements (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          movement_type text NOT NULL CHECK (movement_type IN ('manager_handover','bank_deposit')),
+          status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','confirmed','rejected','cancelled')),
+          amount numeric(14,2) NOT NULL CHECK (amount > 0),
+          requested_by text NOT NULL,
+          requested_at timestamptz NOT NULL DEFAULT now(),
+          reference text NULL,
+          note text NULL,
+          confirmed_by text NULL,
+          confirmed_at timestamptz NULL,
+          effective_at timestamptz NULL,
+          rejected_by text NULL,
+          rejected_at timestamptz NULL,
+          cancelled_by text NULL,
+          cancelled_at timestamptz NULL,
+          client_request_id text NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_cash_movements_request_uq
+          ON aif_shop_cash_movements (client_request_id) WHERE client_request_id IS NOT NULL`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_cash_movements_one_pending_manager_uq
+          ON aif_shop_cash_movements (location_id)
+          WHERE movement_type='manager_handover' AND status='pending'`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_cash_movements_location_created_idx
+          ON aif_shop_cash_movements (location_id, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_cash_movements_pending_idx
+          ON aif_shop_cash_movements (status, movement_type, created_at DESC)`);
+
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_return_authorizations (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           sale_line_id uuid NOT NULL REFERENCES aif_shop_sale_lines(id) ON DELETE CASCADE,
@@ -16020,6 +16070,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND p.paid_at >= $2::timestamptz
              AND p.paid_at < $3::timestamptz
              AND p.method <> 'credit'
+             AND p.customer_payment_id IS NULL
              ${actorSalePaymentFilter}
            GROUP BY p.method
          ), credit AS (
@@ -16132,6 +16183,180 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+
+  function aifDayClosureResponse(row = {}) {
+    const snapshot = row.snapshot && typeof row.snapshot === "object" ? row.snapshot : {};
+    return {
+      id: String(row.id || ""),
+      date: row.work_date ? String(row.work_date).slice(0, 10) : null,
+      locationId: row.location_id ? String(row.location_id) : null,
+      locationCode: row.location_code || null,
+      locationName: row.location_name || null,
+      actor: row.actor || "",
+      expectedCash: aifRoundMoney(row.expected_cash),
+      countedCash: aifRoundMoney(row.counted_cash),
+      cashDifference: aifRoundMoney(row.cash_difference),
+      note: row.note || null,
+      snapshot,
+      closedAt: row.closed_at ? new Date(row.closed_at).toISOString() : null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    };
+  }
+
+  function aifCashMovementResponse(row = {}) {
+    return {
+      id: String(row.id || ""),
+      locationId: row.location_id ? String(row.location_id) : null,
+      locationCode: row.location_code || null,
+      locationName: row.location_name || null,
+      type: row.movement_type || "",
+      status: row.status || "pending",
+      amount: aifRoundMoney(row.amount),
+      requestedBy: row.requested_by || "",
+      requestedAt: row.requested_at ? new Date(row.requested_at).toISOString() : null,
+      reference: row.reference || null,
+      note: row.note || null,
+      confirmedBy: row.confirmed_by || null,
+      confirmedAt: row.confirmed_at ? new Date(row.confirmed_at).toISOString() : null,
+      effectiveAt: row.effective_at ? new Date(row.effective_at).toISOString() : null,
+      rejectedBy: row.rejected_by || null,
+      rejectedAt: row.rejected_at ? new Date(row.rejected_at).toISOString() : null,
+      cancelledBy: row.cancelled_by || null,
+      cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    };
+  }
+
+  async function aifShopCashBalanceAt(client, { locationId, at = new Date() }) {
+    const atValue = at instanceof Date ? at : new Date(at || Date.now());
+    if (Number.isNaN(atValue.getTime())) {
+      const error = new Error("Érvénytelen kassza-időpont.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const closureResult = await client.query(
+      `SELECT c.*
+       FROM aif_shop_day_closures c
+       WHERE c.location_id=$1
+         AND c.closed_at <= $2::timestamptz
+       ORDER BY c.closed_at DESC, c.id DESC
+       LIMIT 1`,
+      [locationId, atValue]
+    );
+
+    let baselineAt = null;
+    let baselineCash = 0;
+    let baselineType = "day_start";
+    let baselineClosure = null;
+
+    if (closureResult.rowCount) {
+      baselineClosure = closureResult.rows[0];
+      baselineAt = baselineClosure.closed_at;
+      baselineCash = aifRoundMoney(baselineClosure.counted_cash);
+      baselineType = "day_closure";
+    } else {
+      const acceptedHandover = await client.query(
+        `SELECT *
+         FROM aif_shop_shift_handovers
+         WHERE location_id=$1
+           AND status='accepted'
+           AND COALESCE(accepted_at, cutoff_at, created_at) <= $2::timestamptz
+         ORDER BY COALESCE(accepted_at, cutoff_at, created_at) DESC, id DESC
+         LIMIT 1`,
+        [locationId, atValue]
+      );
+      if (acceptedHandover.rowCount) {
+        const handover = acceptedHandover.rows[0];
+        baselineAt = handover.accepted_at || handover.cutoff_at || handover.created_at;
+        baselineCash = aifRoundMoney(handover.counted_cash ?? handover.expected_cash);
+        baselineType = "shift_handover";
+      } else {
+        const dayStart = await client.query(
+          `SELECT (
+             (($1::timestamptz AT TIME ZONE 'Europe/Bucharest')::date)::timestamp
+             AT TIME ZONE 'Europe/Bucharest'
+           ) AS day_start`,
+          [atValue]
+        );
+        baselineAt = dayStart.rows[0]?.day_start || atValue;
+      }
+    }
+
+    const [saleCashResult, customerCashResult, exchangeCashResult, confirmedOutResult, pendingOutResult] = await Promise.all([
+      client.query(
+        `SELECT COALESCE(sum(p.amount),0)::numeric AS amount
+         FROM aif_shop_sale_payments p
+         JOIN aif_shop_sales s ON s.id=p.sale_id
+         WHERE s.location_id=$1
+           AND s.status='completed'
+           AND p.method='cash'
+           AND p.customer_payment_id IS NULL
+           AND p.paid_at >= $2::timestamptz
+           AND p.paid_at < $3::timestamptz`,
+        [locationId, baselineAt, atValue]
+      ),
+      client.query(
+        `SELECT COALESCE(sum(cp.amount),0)::numeric AS amount
+         FROM aif_shop_customer_payments cp
+         WHERE cp.location_id=$1
+           AND cp.method='cash'
+           AND cp.paid_at >= $2::timestamptz
+           AND cp.paid_at < $3::timestamptz`,
+        [locationId, baselineAt, atValue]
+      ),
+      client.query(
+        `SELECT COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount
+         FROM aif_shop_exchange_settlements es
+         WHERE es.location_id=$1
+           AND es.method='cash'
+           AND es.created_at >= $2::timestamptz
+           AND es.created_at < $3::timestamptz`,
+        [locationId, baselineAt, atValue]
+      ),
+      client.query(
+        `SELECT COALESCE(sum(m.amount),0)::numeric AS amount
+         FROM aif_shop_cash_movements m
+         WHERE m.location_id=$1
+           AND m.status='confirmed'
+           AND m.effective_at IS NOT NULL
+           AND m.effective_at >= $2::timestamptz
+           AND m.effective_at < $3::timestamptz`,
+        [locationId, baselineAt, atValue]
+      ),
+      client.query(
+        `SELECT COALESCE(sum(m.amount),0)::numeric AS amount, count(*)::int AS count
+         FROM aif_shop_cash_movements m
+         WHERE m.location_id=$1
+           AND m.status='pending'
+           AND m.requested_at < $2::timestamptz`,
+        [locationId, atValue]
+      ),
+    ]);
+
+    const saleCash = aifRoundMoney(saleCashResult.rows[0]?.amount);
+    const customerCash = aifRoundMoney(customerCashResult.rows[0]?.amount);
+    const exchangeCash = aifRoundMoney(exchangeCashResult.rows[0]?.amount);
+    const confirmedOut = aifRoundMoney(confirmedOutResult.rows[0]?.amount);
+    const pendingOut = aifRoundMoney(pendingOutResult.rows[0]?.amount);
+    const availableCash = aifRoundMoney(baselineCash + saleCash + customerCash + exchangeCash - confirmedOut);
+
+    return {
+      at: atValue.toISOString(),
+      baselineType,
+      baselineAt: baselineAt ? new Date(baselineAt).toISOString() : null,
+      baselineCash,
+      saleCash,
+      customerCash,
+      exchangeCash,
+      confirmedOut,
+      pendingOut,
+      pendingCount: aifNumber(pendingOutResult.rows[0]?.count),
+      availableCash,
+      closure: baselineClosure ? aifDayClosureResponse(baselineClosure) : null,
+    };
+  }
+
   async function aifAssertNoPendingShopShiftHandover(client, locationId, actor) {
     const employee = text(actor);
     const result = await client.query(
@@ -16145,7 +16370,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       [locationId]
     );
     const handover = result.rows[0];
-    if (!handover) return;
+
+    if (!handover) {
+      const closed = await client.query(
+        `SELECT id, work_date, actor, closed_at
+         FROM aif_shop_day_closures
+         WHERE location_id=$1
+           AND work_date=(now() AT TIME ZONE 'Europe/Bucharest')::date
+         LIMIT 1`,
+        [locationId]
+      );
+      if (!closed.rowCount) return;
+      const closure = closed.rows[0];
+      const error = new Error(
+        `A mai kasszát ${closure.actor || "az utolsó műszak"} már lezárta. Új eladás, befizetés vagy csere csak a következő üzleti napon rögzíthető.`
+      );
+      error.statusCode = 409;
+      error.code = "shop_day_closed";
+      error.dayClosureId = String(closure.id);
+      throw error;
+    }
 
     const isIncoming = employee && aifEmployeeKey(handover.to_actor) === aifEmployeeKey(employee);
     const isOutgoing = employee && aifEmployeeKey(handover.from_actor) === aifEmployeeKey(employee);
@@ -17802,7 +18046,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         names.push(name);
       }
 
-      const [totals, employeeSnapshots, handoversResult, latestActivityResult] = await Promise.all([
+      const [totals, employeeSnapshots, handoversResult, latestActivityResult, dayClosureResult] = await Promise.all([
         aifShopShiftSnapshot(pool, { locationId: location.id, fromAt: bounds.start, toAt: until }),
         Promise.all(names.map(async (name) => ({ name, ...(await aifShopShiftSnapshot(pool, { locationId: location.id, fromAt: bounds.start, toAt: until, actor: name })) }))),
         pool.query(
@@ -17843,9 +18087,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            LIMIT 1`,
           [location.id, bounds.start, until]
         ),
+        pool.query(
+          `SELECT c.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_day_closures c
+           JOIN aif_locations l ON l.id=c.location_id
+           WHERE c.location_id=$1 AND c.work_date=$2::date
+           LIMIT 1`,
+          [location.id, date]
+        ),
       ]);
 
       const handoverRows = handoversResult.rows || [];
+      const dayClosure = dayClosureResult.rows[0] || null;
+      const cashBalance = await aifShopCashBalanceAt(pool, { locationId: location.id, at: until });
       let handoverPreview = null;
       if (date === today) {
         const requester = actorFrom(req);
@@ -17875,10 +18129,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           canCreate = false;
           reason = `${pendingRow.from_actor} → ${pendingRow.to_actor} műszakátadás már folyamatban van.`;
         }
+        if (dayClosure) {
+          canCreate = false;
+          reason = `A mai kasszát ${dayClosure.actor || "az utolsó műszak"} már lezárta.`;
+        }
         const currentShift = canCreate
           ? await aifShopShiftSnapshot(pool, { locationId: location.id, fromAt: shiftStart, toAt: until, actor: requester })
           : null;
         const newCashDuringShift = aifRoundMoney(currentShift?.receipts?.cash?.amount || 0);
+        const openingBalance = canCreate
+          ? await aifShopCashBalanceAt(pool, { locationId: location.id, at: shiftStart })
+          : null;
+        const cutoffBalance = canCreate
+          ? await aifShopCashBalanceAt(pool, { locationId: location.id, at: until })
+          : null;
+        if (openingBalance) openingCash = aifRoundMoney(openingBalance.availableCash);
         handoverPreview = {
           canCreate,
           reason,
@@ -17887,7 +18152,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           cutoffAt: until ? new Date(until).toISOString() : null,
           openingCash,
           newCashDuringShift,
-          expectedCash: aifRoundMoney(openingCash + newCashDuringShift),
+          expectedCash: aifRoundMoney(cutoffBalance?.availableCash ?? openingCash + newCashDuringShift),
+          cashBalance: cutoffBalance,
           shift: currentShift,
           day: totals,
         };
@@ -17902,6 +18168,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         employees: employeeSnapshots,
         handovers: handoverRows.map(aifShiftHandoverResponse),
         handoverPreview,
+        dayClosure: dayClosure ? aifDayClosureResponse(dayClosure) : null,
+        cashBalance,
       });
     } catch (error) {
       console.error("AIF shift day overview failed", error);
@@ -17973,6 +18241,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LIMIT 1`,
         [location.id, workDate]
       );
+      const closedDay = await client.query(
+        `SELECT id, actor, closed_at
+         FROM aif_shop_day_closures
+         WHERE location_id=$1 AND work_date=$2::date
+         LIMIT 1`,
+        [location.id, workDate]
+      );
+      if (closedDay.rowCount) {
+        const error = new Error(`A mai kasszát ${closedDay.rows[0].actor || "az utolsó műszak"} már lezárta.`);
+        error.statusCode = 409;
+        error.code = "shop_day_closed";
+        throw error;
+      }
       if (latestAccepted.rowCount && aifEmployeeKey(latestAccepted.rows[0].to_actor) !== aifEmployeeKey(senderActor)) {
         const error = new Error(`A rendszer szerint jelenleg ${latestAccepted.rows[0].to_actor} műszaka aktív. Előbb az ő műszakát kell átadni.`);
         error.statusCode = 409;
@@ -18015,18 +18296,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const cutoffResult = await client.query(`SELECT now() AS cutoff`);
       const cutoff = cutoffResult.rows[0].cutoff;
       const shiftStart = latestAccepted.rows[0]?.accepted_at || bounds.start;
-      const previousCash = latestAccepted.rowCount
-        ? aifRoundMoney(latestAccepted.rows[0].counted_cash ?? latestAccepted.rows[0].expected_cash)
-        : 0;
 
-      const [shiftSnapshot, daySnapshot] = await Promise.all([
+      const [shiftSnapshot, daySnapshot, openingBalance, cutoffBalance] = await Promise.all([
         aifShopShiftSnapshot(client, { locationId: location.id, fromAt: shiftStart, toAt: cutoff, actor: senderActor }),
         aifShopShiftSnapshot(client, { locationId: location.id, fromAt: bounds.start, toAt: cutoff }),
+        aifShopCashBalanceAt(client, { locationId: location.id, at: shiftStart }),
+        aifShopCashBalanceAt(client, { locationId: location.id, at: cutoff }),
       ]);
+      const previousCash = aifRoundMoney(openingBalance.availableCash);
       const newCashDuringShift = aifRoundMoney(shiftSnapshot.receipts?.cash?.amount || 0);
-      const expectedCash = aifRoundMoney(previousCash + newCashDuringShift);
+      const expectedCash = aifRoundMoney(cutoffBalance.availableCash);
       const snapshot = {
-        version: 1,
+        version: 2,
         createdAt: new Date(cutoff).toISOString(),
         workDate,
         fromActor: senderActor,
@@ -18034,6 +18315,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         openingCash: previousCash,
         newCashDuringShift,
         expectedCash,
+        cashBalance: cutoffBalance,
         shift: shiftSnapshot,
         day: daySnapshot,
       };
@@ -18190,6 +18472,524 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       console.error("AIF cancel shift handover failed", error);
       const status = Number(error?.statusCode || 500);
       return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A műszakátadás visszavonása nem sikerült.", code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
+  router.get("/shop-cash/overview", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const limit = Math.min(250, Math.max(10, Number(req.query.limit || 120)));
+      const now = new Date();
+      const balance = await aifShopCashBalanceAt(pool, { locationId: location.id, at: now });
+      const [movementsResult, closuresResult, todayClosureResult] = await Promise.all([
+        pool.query(
+          `SELECT m.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_cash_movements m
+           JOIN aif_locations l ON l.id=m.location_id
+           WHERE m.location_id=$1
+           ORDER BY m.created_at DESC, m.id DESC
+           LIMIT $2`,
+          [location.id, limit]
+        ),
+        pool.query(
+          `SELECT c.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_day_closures c
+           JOIN aif_locations l ON l.id=c.location_id
+           WHERE c.location_id=$1
+           ORDER BY c.work_date DESC, c.closed_at DESC
+           LIMIT 60`,
+          [location.id]
+        ),
+        pool.query(
+          `SELECT c.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_day_closures c
+           JOIN aif_locations l ON l.id=c.location_id
+           WHERE c.location_id=$1
+             AND c.work_date=(now() AT TIME ZONE 'Europe/Bucharest')::date
+           LIMIT 1`,
+          [location.id]
+        ),
+      ]);
+      const movements = movementsResult.rows.map(aifCashMovementResponse);
+      return res.json({
+        ok: true,
+        generatedAt: now.toISOString(),
+        location: { id: String(location.id), code: location.code, name: location.name },
+        balance,
+        pendingManagerHandovers: movements.filter((item) => item.type === "manager_handover" && item.status === "pending"),
+        movements,
+        closures: closuresResult.rows.map(aifDayClosureResponse),
+        todayClosure: todayClosureResult.rowCount ? aifDayClosureResponse(todayClosureResult.rows[0]) : null,
+      });
+    } catch (error) {
+      console.error("AIF shop cash overview failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kassza naplója nem tölthető be.",
+        code: error?.code || null,
+      });
+    }
+  });
+
+  router.post("/shop-shifts/day-close", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const countedCash = toMoney(body.countedCash ?? body.counted_cash ?? body.cash);
+    const note = emptyToNull(body.note);
+    if (countedCash === null || countedCash < 0) {
+      return res.status(400).json({ error: "Add meg a megszámolt záró készpénzt." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, body.location);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+
+      const workDate = aifBucharestIsoDate();
+      const actor = actorFrom(req);
+      const isAdmin = normCode(req.session?.role) === "admin";
+      const existing = await client.query(
+        `SELECT c.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_day_closures c
+         JOIN aif_locations l ON l.id=c.location_id
+         WHERE c.location_id=$1 AND c.work_date=$2::date
+         FOR UPDATE OF c`,
+        [location.id, workDate]
+      );
+      if (existing.rowCount) {
+        const error = new Error("A mai kassza már le van zárva.");
+        error.statusCode = 409;
+        error.code = "shop_day_already_closed";
+        error.item = aifDayClosureResponse(existing.rows[0]);
+        throw error;
+      }
+
+      const pendingHandover = await client.query(
+        `SELECT from_actor, to_actor
+         FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND status='pending'
+         LIMIT 1`,
+        [location.id]
+      );
+      if (pendingHandover.rowCount) {
+        const row = pendingHandover.rows[0];
+        const error = new Error(`${row.from_actor} → ${row.to_actor} műszakátadás még folyamatban van. Előbb ezt kell lezárni.`);
+        error.statusCode = 409;
+        error.code = "shift_handover_location_pending";
+        throw error;
+      }
+
+      const bounds = await aifShopDayBounds(client, workDate);
+      const latestAccepted = await client.query(
+        `SELECT *
+         FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND work_date=$2::date AND status='accepted'
+         ORDER BY accepted_at DESC NULLS LAST, created_at DESC
+         LIMIT 1`,
+        [location.id, workDate]
+      );
+
+      const latestActivity = await client.query(
+        `SELECT actor
+         FROM (
+           SELECT btrim(s.actor) AS actor, s.sold_at AS happened_at
+           FROM aif_shop_sales s
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND s.sold_at >= $2::timestamptz
+             AND s.sold_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+           UNION ALL
+           SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
+           FROM aif_shop_customer_payments cp
+           WHERE cp.location_id=$1
+             AND cp.paid_at >= $2::timestamptz
+             AND cp.paid_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+           UNION ALL
+           SELECT btrim(es.actor) AS actor, es.created_at AS happened_at
+           FROM aif_shop_exchange_settlements es
+           WHERE es.location_id=$1
+             AND es.created_at >= $2::timestamptz
+             AND es.created_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(es.actor,'')),'') IS NOT NULL
+         ) activity
+         ORDER BY happened_at DESC
+         LIMIT 1`,
+        [location.id, bounds.start, bounds.end]
+      );
+
+      if (!isAdmin) {
+        if (latestAccepted.rowCount) {
+          const activeActor = text(latestAccepted.rows[0].to_actor);
+          if (activeActor && aifEmployeeKey(activeActor) !== aifEmployeeKey(actor)) {
+            const error = new Error(`A rendszer szerint jelenleg ${activeActor} az aktív műszak. A napi kasszát neki kell lezárnia.`);
+            error.statusCode = 409;
+            error.code = "shop_day_close_wrong_employee";
+            throw error;
+          }
+        } else {
+          const activeActor = text(latestActivity.rows[0]?.actor);
+          if (activeActor && aifEmployeeKey(activeActor) !== aifEmployeeKey(actor)) {
+            const error = new Error(`A mai utolsó üzleti művelet ${activeActor} nevéhez tartozik. A napi kasszát neki kell lezárnia.`);
+            error.statusCode = 409;
+            error.code = "shop_day_close_wrong_employee";
+            throw error;
+          }
+        }
+      }
+
+      const cutoffResult = await client.query(`SELECT now() AS cutoff`);
+      const cutoff = cutoffResult.rows[0].cutoff;
+      const cashBalance = await aifShopCashBalanceAt(client, { locationId: location.id, at: cutoff });
+      const expectedCash = aifRoundMoney(cashBalance.availableCash);
+      const counted = aifRoundMoney(countedCash);
+      const difference = aifRoundMoney(counted - expectedCash);
+
+      if (Math.abs(difference) >= 0.01) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: `A záró kassza nem egyezik. Rendszer szerint: ${expectedCash.toFixed(2)} RON, megszámolva: ${counted.toFixed(2)} RON, eltérés: ${difference.toFixed(2)} RON.`,
+          code: "shop_day_close_cash_mismatch",
+          expectedCash,
+          countedCash: counted,
+          difference,
+          cashBalance,
+        });
+      }
+
+      const shiftStart = latestAccepted.rows[0]?.accepted_at || latestAccepted.rows[0]?.cutoff_at || bounds.start;
+      const [shiftSnapshot, daySnapshot] = await Promise.all([
+        aifShopShiftSnapshot(client, { locationId: location.id, fromAt: shiftStart, toAt: cutoff, actor: isAdmin ? null : actor }),
+        aifShopShiftSnapshot(client, { locationId: location.id, fromAt: bounds.start, toAt: cutoff }),
+      ]);
+      const snapshot = {
+        version: 1,
+        workDate,
+        closedAt: new Date(cutoff).toISOString(),
+        actor,
+        expectedCash,
+        countedCash: counted,
+        cashDifference: difference,
+        cashBalance,
+        shift: shiftSnapshot,
+        day: daySnapshot,
+      };
+
+      const created = await client.query(
+        `INSERT INTO aif_shop_day_closures (
+           location_id, work_date, actor, expected_cash, counted_cash, cash_difference,
+           note, snapshot, closed_at
+         ) VALUES ($1,$2::date,$3,$4,$5,$6,$7,$8::jsonb,$9)
+         RETURNING *`,
+        [location.id, workDate, actor, expectedCash, counted, difference, note, JSON.stringify(snapshot), cutoff]
+      );
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        item: aifDayClosureResponse({ ...created.rows[0], location_code: location.code, location_name: location.name }),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF shop day close failed", error);
+      const status = Number(error?.statusCode || (error?.code === "23505" ? 409 : 500));
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A napi kassza lezárása nem sikerült.",
+        code: error?.code || null,
+        item: error?.item || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shop-cash/movements", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const rawType = normCode(body.type || body.movementType || body.movement_type);
+    const movementType = ["manager", "boss", "manager_handover", "fonok", "főnök"].includes(rawType)
+      ? "manager_handover"
+      : ["bank", "bank_deposit", "deposit", "befizetes", "befizetés"].includes(rawType)
+        ? "bank_deposit"
+        : "";
+    const amountRaw = toMoney(body.amount);
+    const reference = emptyToNull(body.reference || body.referenceNumber || body.reference_number);
+    const note = emptyToNull(body.note);
+    const idempotencyKey = text(req.get("Idempotency-Key") || body.idempotencyKey || body.idempotency_key).slice(0, 200);
+
+    if (!movementType) return res.status(400).json({ error: "Válaszd ki, hogy főnöki átadás vagy bankbefizetés történt." });
+    if (amountRaw === null || amountRaw <= 0) return res.status(400).json({ error: "Az összeg legyen nagyobb nullánál." });
+    if (movementType === "bank_deposit" && !reference) {
+      return res.status(400).json({ error: "Bankbefizetésnél a referencia / bizonylatszám kötelező." });
+    }
+    if (!idempotencyKey) return res.status(400).json({ error: "Hiányzik a kasszamozgás biztonsági azonosítója." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, body.location);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_cash:${location.id}`]);
+
+      const duplicate = await client.query(
+        `SELECT m.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_cash_movements m
+         JOIN aif_locations l ON l.id=m.location_id
+         WHERE m.client_request_id=$1
+         LIMIT 1`,
+        [idempotencyKey]
+      );
+      if (duplicate.rowCount) {
+        await client.query("COMMIT");
+        return res.json({ ok: true, duplicate: true, item: aifCashMovementResponse(duplicate.rows[0]) });
+      }
+
+      const amount = aifRoundMoney(amountRaw);
+      const balance = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
+      if (amount - aifRoundMoney(balance.availableCash) > 0.005) {
+        const error = new Error(`Nincs ennyi igazolt készpénz az üzletben. Jelenlegi rendszer szerinti kassza: ${aifRoundMoney(balance.availableCash).toFixed(2)} RON.`);
+        error.statusCode = 409;
+        error.code = "shop_cash_amount_exceeds_balance";
+        throw error;
+      }
+
+      if (movementType === "manager_handover") {
+        const pending = await client.query(
+          `SELECT requested_by, amount
+           FROM aif_shop_cash_movements
+           WHERE location_id=$1 AND movement_type='manager_handover' AND status='pending'
+           LIMIT 1`,
+          [location.id]
+        );
+        if (pending.rowCount) {
+          const error = new Error(`Már van függő főnöki pénzátadás (${pending.rows[0].requested_by}, ${aifRoundMoney(pending.rows[0].amount).toFixed(2)} RON). Előbb azt kell visszaigazolni vagy visszavonni.`);
+          error.statusCode = 409;
+          error.code = "shop_cash_manager_handover_pending";
+          throw error;
+        }
+      }
+
+      const requester = actorFrom(req);
+      const status = movementType === "bank_deposit" ? "confirmed" : "pending";
+      const created = await client.query(
+        `INSERT INTO aif_shop_cash_movements (
+           location_id, movement_type, status, amount, requested_by, requested_at,
+           reference, note, confirmed_by, confirmed_at, effective_at,
+           client_request_id, raw
+         ) VALUES (
+           $1,$2,$3,$4,$5,now(),$6,$7,
+           CASE WHEN $3='confirmed' THEN $5 ELSE NULL END,
+           CASE WHEN $3='confirmed' THEN now() ELSE NULL END,
+           CASE WHEN $3='confirmed' THEN now() ELSE NULL END,
+           $8,$9::jsonb
+         )
+         RETURNING *`,
+        [
+          location.id,
+          movementType,
+          status,
+          amount,
+          requester,
+          reference,
+          note,
+          idempotencyKey,
+          JSON.stringify({ source: "shop_cash", movementType, requestedBy: requester }),
+        ]
+      );
+      const item = aifCashMovementResponse({ ...created.rows[0], location_code: location.code, location_name: location.name });
+      const updatedBalance = await aifShopCashBalanceAt(client, { locationId: location.id, at: new Date() });
+      await client.query("COMMIT");
+      return res.json({ ok: true, item, balance: updatedBalance });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF create shop cash movement failed", error);
+      const status = Number(error?.statusCode || (error?.code === "23505" ? 409 : 500));
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A kasszamozgás rögzítése nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shop-cash/movements/:id/confirm", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const movementResult = await client.query(
+        `SELECT m.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_cash_movements m
+         JOIN aif_locations l ON l.id=m.location_id
+         WHERE m.id::text=$1
+         FOR UPDATE OF m`,
+        [id]
+      );
+      if (!movementResult.rowCount) {
+        const error = new Error("A pénzátadás nem található.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const movement = movementResult.rows[0];
+      if (movement.movement_type !== "manager_handover") {
+        const error = new Error("Csak a főnöknek átadott készpénzt kell külön visszaigazolni.");
+        error.statusCode = 409;
+        throw error;
+      }
+      if (movement.status !== "pending") {
+        const error = new Error("Ez a pénzátadás már nem függőben van.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_cash:${movement.location_id}`]);
+      const balance = await aifShopCashBalanceAt(client, { locationId: movement.location_id, at: new Date() });
+      if (aifRoundMoney(movement.amount) - aifRoundMoney(balance.availableCash) > 0.005) {
+        const error = new Error(`A visszaigazolás előtt a kasszaegyenleg megváltozott. Jelenleg ${aifRoundMoney(balance.availableCash).toFixed(2)} RON igazolt készpénz van.`);
+        error.statusCode = 409;
+        error.code = "shop_cash_balance_changed";
+        throw error;
+      }
+
+      const adminActor = actorFrom(req);
+      const updated = await client.query(
+        `UPDATE aif_shop_cash_movements
+         SET status='confirmed', confirmed_by=$2, confirmed_at=now(), effective_at=now(), updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [movement.id, adminActor]
+      );
+      const updatedBalance = await aifShopCashBalanceAt(client, { locationId: movement.location_id, at: new Date() });
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        item: aifCashMovementResponse({ ...updated.rows[0], location_code: movement.location_code, location_name: movement.location_name }),
+        balance: updatedBalance,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF confirm manager cash handover failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A főnöki pénzátadás visszaigazolása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shop-cash/movements/:id/reject", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const note = emptyToNull(req.body?.note);
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const movementResult = await client.query(
+        `SELECT m.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_cash_movements m
+         JOIN aif_locations l ON l.id=m.location_id
+         WHERE m.id::text=$1
+         FOR UPDATE OF m`,
+        [id]
+      );
+      if (!movementResult.rowCount) {
+        const error = new Error("A pénzátadás nem található.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const movement = movementResult.rows[0];
+      if (movement.status !== "pending" || movement.movement_type !== "manager_handover") {
+        const error = new Error("Csak függő főnöki pénzátadás utasítható el.");
+        error.statusCode = 409;
+        throw error;
+      }
+      const adminActor = actorFrom(req);
+      const updated = await client.query(
+        `UPDATE aif_shop_cash_movements
+         SET status='rejected', rejected_by=$2, rejected_at=now(),
+             note=COALESCE($3,note), updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [movement.id, adminActor, note]
+      );
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        item: aifCashMovementResponse({ ...updated.rows[0], location_code: movement.location_code, location_name: movement.location_name }),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF reject manager cash handover failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A főnöki pénzátadás elutasítása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shop-cash/movements/:id/cancel", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const movementResult = await client.query(
+        `SELECT m.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_cash_movements m
+         JOIN aif_locations l ON l.id=m.location_id
+         WHERE m.id::text=$1
+         FOR UPDATE OF m`,
+        [id]
+      );
+      if (!movementResult.rowCount) {
+        const error = new Error("A pénzátadás nem található.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const movement = movementResult.rows[0];
+      if (movement.status !== "pending") {
+        const error = new Error("Csak függő pénzátadás vonható vissza.");
+        error.statusCode = 409;
+        throw error;
+      }
+      const actor = actorFrom(req);
+      const isAdmin = normCode(req.session?.role) === "admin";
+      if (!isAdmin && aifEmployeeKey(actor) !== aifEmployeeKey(movement.requested_by)) {
+        const error = new Error(`Ezt a pénzátadást ${movement.requested_by} vagy adminisztrátor vonhatja vissza.`);
+        error.statusCode = 403;
+        throw error;
+      }
+      const updated = await client.query(
+        `UPDATE aif_shop_cash_movements
+         SET status='cancelled', cancelled_by=$2, cancelled_at=now(), updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [movement.id, actor]
+      );
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        item: aifCashMovementResponse({ ...updated.rows[0], location_code: movement.location_code, location_name: movement.location_name }),
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF cancel manager cash handover failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A pénzátadás visszavonása nem sikerült.",
+        code: error?.code || null,
+      });
     } finally {
       client.release();
     }
