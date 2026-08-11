@@ -2805,6 +2805,156 @@ export function apiAifShopDailySummary(options: {
   return fetchAifJSON<AifShopDailySummaryResponse>(`/shop-operations/daily-summary?${q.toString()}`);
 }
 
+export type AifShopShiftPaymentItem = {
+  method: string;
+  label: string;
+  amount: number;
+  salesAmount: number;
+  customerPaymentAmount: number;
+  transactions: number;
+  customerPaymentTransactions: number;
+};
+
+export type AifShopShiftSnapshot = {
+  fromAt?: string | null;
+  toAt?: string | null;
+  actor?: string | null;
+  revenue: number;
+  salesBeforeDiscount: number;
+  transactions: number;
+  itemsSold: number;
+  averageBasket: number;
+  discountTotal: number;
+  paidTotal: number;
+  unpaidTotal: number;
+  unpaidSales: number;
+  customerSales: number;
+  firstSaleAt?: string | null;
+  lastSaleAt?: string | null;
+  payments: AifShopShiftPaymentItem[];
+  receipts: Record<string, AifShopShiftPaymentItem>;
+};
+
+export type AifShopShiftHandover = {
+  id: string;
+  status: "pending" | "accepted" | "cancelled" | string;
+  date?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  fromActor: string;
+  toActor: string;
+  shiftStartAt?: string | null;
+  cutoffAt?: string | null;
+  expectedCash: number;
+  countedCash?: number | null;
+  cashDifference?: number | null;
+  note?: string | null;
+  acceptanceNote?: string | null;
+  snapshot: {
+    version?: number;
+    createdAt?: string | null;
+    workDate?: string | null;
+    fromActor?: string | null;
+    toActor?: string | null;
+    openingCash?: number;
+    newCashDuringShift?: number;
+    expectedCash?: number;
+    shift?: AifShopShiftSnapshot;
+    day?: AifShopShiftSnapshot;
+    [key: string]: unknown;
+  };
+  createdAt?: string | null;
+  acceptedAt?: string | null;
+  acceptedBy?: string | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+};
+
+export type AifShopShiftDayEmployee = AifShopShiftSnapshot & { name: string };
+
+export type AifShopShiftHandoverPreview = {
+  canCreate: boolean;
+  reason?: string | null;
+  fromActor?: string | null;
+  shiftStartAt?: string | null;
+  cutoffAt?: string | null;
+  openingCash: number;
+  newCashDuringShift: number;
+  expectedCash: number;
+  shift?: AifShopShiftSnapshot | null;
+  day?: AifShopShiftSnapshot | null;
+};
+
+export type AifShopShiftDayOverview = {
+  ok: true;
+  generatedAt: string;
+  date: string;
+  location: { id: string; code: string; name: string };
+  totals: AifShopShiftSnapshot;
+  employees: AifShopShiftDayEmployee[];
+  handovers: AifShopShiftHandover[];
+  handoverPreview?: AifShopShiftHandoverPreview | null;
+};
+
+export function apiAifShopShiftEmployees(options: { location: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    items: Array<{ name: string; current?: boolean }>;
+  }>(`/shop-shifts/employees?${q.toString()}`);
+}
+
+export function apiAifShopShiftPending(options: { location: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  return fetchAifJSON<{
+    ok: true;
+    actor: string;
+    location: { id: string; code: string; name: string };
+    incoming: AifShopShiftHandover | null;
+    outgoing: AifShopShiftHandover | null;
+    items: AifShopShiftHandover[];
+  }>(`/shop-shifts/pending?${q.toString()}`);
+}
+
+export function apiAifShopShiftDayOverview(options: { location: string; date?: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.date) q.set("date", options.date);
+  return fetchAifJSON<AifShopShiftDayOverview>(`/shop-shifts/day-overview?${q.toString()}`);
+}
+
+export function apiAifCreateShopShiftHandover(input: {
+  location: string;
+  toActor: string;
+  note?: string | null;
+}) {
+  return fetchAifJSON<{ ok: true; item: AifShopShiftHandover }>("/shop-shifts/handovers", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifAcceptShopShiftHandover(
+  id: string,
+  input: { countedCash: number; note?: string | null },
+) {
+  return fetchAifJSON<{ ok: true; item: AifShopShiftHandover }>(
+    `/shop-shifts/handovers/${encodeURIComponent(id)}/accept`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function apiAifCancelShopShiftHandover(id: string) {
+  return fetchAifJSON<{ ok: true; item: AifShopShiftHandover }>(
+    `/shop-shifts/handovers/${encodeURIComponent(id)}/cancel`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
 export function apiAifCompleteShopSale(input: {
   location: string;
   paymentMethod: AifShopSalePaymentMethod;
