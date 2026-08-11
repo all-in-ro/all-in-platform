@@ -2811,8 +2811,10 @@ export type AifShopShiftPaymentItem = {
   amount: number;
   salesAmount: number;
   customerPaymentAmount: number;
+  exchangeAmount?: number;
   transactions: number;
   customerPaymentTransactions: number;
+  exchangeTransactions?: number;
 };
 
 export type AifShopShiftSnapshot = {
@@ -2953,6 +2955,209 @@ export function apiAifCancelShopShiftHandover(id: string) {
     `/shop-shifts/handovers/${encodeURIComponent(id)}/cancel`,
     { method: "POST", body: JSON.stringify({}) },
   );
+}
+
+export type AifShopReturnSaleMatch = {
+  saleLineId: string;
+  saleId: string;
+  saleNumber: string;
+  soldAt?: string | null;
+  saleLocation: { id: string; code: string; name: string };
+  sameStore: boolean;
+  priceVisible: boolean;
+  actor?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  paymentStatus?: string | null;
+  balanceDue?: number | null;
+  eligible?: boolean;
+  quantity: number;
+  returnedQty: number;
+  remainingQty: number;
+  product: {
+    variantId?: string | null;
+    title: string;
+    productCode?: string | null;
+    barcode?: string | null;
+    brandName?: string | null;
+    colorName?: string | null;
+    size?: string | null;
+    imageUrl?: string | null;
+  };
+  listPrice?: number | null;
+  unitPrice?: number | null;
+  discountAmount?: number | null;
+  discountPercent?: number | null;
+  lineTotal?: number | null;
+};
+
+export type AifShopReturnAuthorizationRequest = {
+  id: string;
+  status: string;
+  expiresAt?: string | null;
+  sourceLocation: { id: string; code: string; name: string };
+  requestingLocation: { id: string; code: string; name: string };
+};
+
+export type AifShopReturnAuthorizationInboxItem = {
+  id: string;
+  status: string;
+  code: string;
+  requestedBy?: string | null;
+  expiresAt?: string | null;
+  createdAt?: string | null;
+  requestingLocation: { id: string; code: string; name: string };
+  sourceLocation: { id: string; code: string; name: string };
+  saleLineId: string;
+  saleNumber: string;
+  soldAt?: string | null;
+  customerName?: string | null;
+  product: {
+    title: string;
+    productCode?: string | null;
+    barcode?: string | null;
+    brandName?: string | null;
+    colorName?: string | null;
+    size?: string | null;
+    imageUrl?: string | null;
+  };
+};
+
+export type AifShopExchangeHistoryItem = {
+  id: string;
+  exchangeNumber: string;
+  createdAt?: string | null;
+  actor?: string | null;
+  customerName?: string | null;
+  sourceLocation: { id: string; code: string; name: string };
+  sourceSaleId: string;
+  sourceSaleLineId: string;
+  returnedQty: number;
+  returnCredit: number;
+  replacementTotal: number;
+  difference: number;
+  settlementDirection: "none" | "in" | "out" | string;
+  settlementMethod?: "cash" | "card" | "bank_transfer" | string | null;
+  settlementAmount: number;
+  note?: string | null;
+  sourceProduct: {
+    title: string;
+    productCode?: string | null;
+    barcode?: string | null;
+    colorName?: string | null;
+    size?: string | null;
+    imageUrl?: string | null;
+  };
+};
+
+export type AifShopExchangeResult = {
+  ok: true;
+  duplicate?: boolean;
+  exchangeId: string;
+  exchangeNumber: string;
+  returnedQty: number;
+  returnCredit: number;
+  replacementTotal: number;
+  difference: number;
+  settlementDirection: "none" | "in" | "out" | string;
+  settlementMethod?: "cash" | "card" | "bank_transfer" | string | null;
+  settlementAmount: number;
+  createdAt?: string | null;
+};
+
+export function apiAifSearchShopReturnSales(options: { location: string; search: string; limit?: number }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("q", options.search.trim());
+  q.set("limit", String(options.limit || 80));
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    items: AifShopReturnSaleMatch[];
+    count: number;
+  }>(`/shop-returns/sales?${q.toString()}`);
+}
+
+export function apiAifRequestShopReturnAuthorization(input: { location: string; saleLineId: string }) {
+  return fetchAifJSON<{
+    ok: true;
+    required: boolean;
+    message?: string;
+    item?: AifShopReturnAuthorizationRequest;
+  }>("/shop-returns/authorizations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifShopReturnAuthorizationStatus(id: string, options: { location: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  return fetchAifJSON<{
+    ok: true;
+    id: string;
+    status: string;
+    expiresAt?: string | null;
+    unlockExpiresAt?: string | null;
+  }>(`/shop-returns/authorizations/${encodeURIComponent(id)}/status?${q.toString()}`);
+}
+
+export function apiAifUnlockShopReturnAuthorization(id: string, input: { location: string; code: string }) {
+  return fetchAifJSON<{
+    ok: true;
+    unlockToken: string;
+    unlockExpiresAt: string;
+    item: AifShopReturnSaleMatch;
+  }>(`/shop-returns/authorizations/${encodeURIComponent(id)}/unlock`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifShopReturnAuthorizationInbox(options: { location: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    items: AifShopReturnAuthorizationInboxItem[];
+  }>(`/shop-returns/authorizations/inbox?${q.toString()}`);
+}
+
+export function apiAifRejectShopReturnAuthorization(id: string, input: { location: string }) {
+  return fetchAifJSON<{ ok: true; id: string; status: "rejected" }>(
+    `/shop-returns/authorizations/${encodeURIComponent(id)}/reject`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function apiAifShopReturnHistory(options: { location: string; limit?: number }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("limit", String(options.limit || 60));
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    items: AifShopExchangeHistoryItem[];
+  }>(`/shop-returns/history?${q.toString()}`);
+}
+
+export function apiAifCompleteShopExchange(input: {
+  location: string;
+  saleLineId: string;
+  returnedQty: number;
+  replacements: Array<{ variantId: string; quantity: number }>;
+  settlementMethod?: "cash" | "card" | "bank_transfer" | null;
+  authorizationId?: string | null;
+  unlockToken?: string | null;
+  note?: string | null;
+  idempotencyKey: string;
+}) {
+  return fetchAifJSON<AifShopExchangeResult>("/shop-returns/exchanges", {
+    method: "POST",
+    headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+    body: JSON.stringify(input),
+  });
 }
 
 export function apiAifCompleteShopSale(input: {
