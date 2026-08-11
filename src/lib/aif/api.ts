@@ -1627,10 +1627,31 @@ export function apiAifReceptionExportCsvUrl(id: string) {
 }
 
 
-export function apiAifMoveImportRow(rowId: string, targetReceptionId: string) {
-  return fetchAifJSON<{ ok: true; targetBatchId?: string }>(`/import-rows/${encodeURIComponent(rowId)}/move-reception`, {
+export type AifMoveImportRowOptions = {
+  commitAfterMove?: boolean;
+};
+
+export type AifMoveImportRowResponse = {
+  ok: true;
+  targetBatchId?: string;
+  targetReceptionId?: string;
+  sourceReceptionId?: string | null;
+  reopenedTarget?: boolean;
+  committedAfterMove?: boolean;
+  committed?: number;
+};
+
+export function apiAifMoveImportRow(
+  rowId: string,
+  targetReceptionId: string,
+  options: AifMoveImportRowOptions = {}
+) {
+  return fetchAifJSON<AifMoveImportRowResponse>(`/import-rows/${encodeURIComponent(rowId)}/move-reception`, {
     method: "POST",
-    body: JSON.stringify({ targetReceptionId }),
+    body: JSON.stringify({
+      targetReceptionId,
+      commitAfterMove: options.commitAfterMove === true,
+    }),
   });
 }
 
