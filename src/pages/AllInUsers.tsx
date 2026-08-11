@@ -94,52 +94,19 @@ function slugifyId(input: string) {
 }
 
 
-const CODE39_PATTERNS: Record<string, string> = {
-  "0": "nnnwwnwnn",
-  "1": "wnnwnnnnw",
-  "2": "nnwwnnnnw",
-  "3": "wnwwnnnnn",
-  "4": "nnnwwnnnw",
-  "5": "wnnwwnnnn",
-  "6": "nnwwwnnnn",
-  "7": "nnnwnnwnw",
-  "8": "wnnwnnwnn",
-  "9": "nnwwnnwnn",
-  A: "wnnnnwnnw",
-  B: "nnwnnwnnw",
-  C: "wnwnnwnnn",
-  D: "nnnnwwnnw",
-  E: "wnnnwwnnn",
-  F: "nnwnwwnnn",
-  G: "nnnnnwwnw",
-  H: "wnnnnwwnn",
-  I: "nnwnnwwnn",
-  J: "nnnnwwwnn",
-  K: "wnnnnnnww",
-  L: "nnwnnnnww",
-  M: "wnwnnnnwn",
-  N: "nnnnwnnww",
-  O: "wnnnwnnwn",
-  P: "nnwnwnnwn",
-  Q: "nnnnnnwww",
-  R: "wnnnnnwwn",
-  S: "nnwnnnwwn",
-  T: "nnnnwnwwn",
-  U: "wwnnnnnnw",
-  V: "nwwnnnnnw",
-  W: "wwwnnnnnn",
-  X: "nwnnwnnnw",
-  Y: "wwnnwnnnn",
-  Z: "nwwnwnnnn",
-  "-": "nwnnnnwnw",
-  ".": "wwnnnnwnn",
-  " ": "nwwnnnwnn",
-  "$": "nwnwnwnnn",
-  "/": "nwnwnnnwn",
-  "+": "nwnnnwnwn",
-  "%": "nnnwnwnwn",
-  "*": "nwnnwnwnn",
-};
+const CODE128_PATTERNS = [
+  "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
+  "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132",
+  "221231", "213212", "223112", "312131", "311222", "321122", "321221", "312212", "322112", "322211",
+  "212123", "212321", "232121", "111323", "131123", "131321", "112313", "132113", "132311", "211313",
+  "231113", "231311", "112133", "112331", "132131", "113123", "113321", "133121", "313121", "211331",
+  "231131", "213113", "213311", "213131", "311123", "311321", "331121", "312113", "312311", "332111",
+  "314111", "221411", "431111", "111224", "111422", "121124", "121421", "141122", "141221", "112214",
+  "112412", "122114", "122411", "142112", "142211", "241211", "221114", "413111", "241112", "134111",
+  "111242", "121142", "121241", "114212", "124112", "124211", "411212", "421112", "421211", "212141",
+  "214121", "412121", "111143", "111341", "131141", "114113", "114311", "411113", "411311", "113141",
+  "114131", "311141", "411131", "211412", "211214", "211232", "2331112",
+] as const;
 
 function accessCardPayload(item: CodeItem) {
   return String(item.code || "")
@@ -148,35 +115,57 @@ function accessCardPayload(item: CodeItem) {
     .replace(/[^A-Z0-9]/g, "");
 }
 
-function code39Svg(value: string, height = 64) {
-  const safe = String(value || "")
+function code128Svg(value: string, height = 64) {
+  const code = String(value || "")
     .trim()
     .toUpperCase()
-    .replace(/[^0-9A-Z. $/+%-]/g, "");
-  const encoded = `*${safe}*`;
-  const narrow = 2;
-  const wide = 5;
-  const characterGap = 2;
+    .replace(/[^A-Z0-9]/g, "");
+
+  if (!code) return "";
+
+  const values: number[] = [];
+  for (const ch of code) {
+    const charCode = ch.charCodeAt(0);
+    if (charCode < 32 || charCode > 127) return "";
+    values.push(charCode - 32);
+  }
+
+  const startB = 104;
+  let checksum = startB;
+  values.forEach((value, index) => {
+    checksum += value * (index + 1);
+  });
+  checksum %= 103;
+
+  const sequence = [startB, ...values, checksum, 106];
   const quiet = 12;
+  let totalModules = 0;
+
+  for (const value of sequence) {
+    const pattern = CODE128_PATTERNS[value];
+    if (!pattern) return "";
+    totalModules += pattern.split("").reduce((sum, digit) => sum + Number(digit), 0);
+  }
+
+  const totalWidth = quiet * 2 + totalModules;
   let x = quiet;
   const rects: string[] = [];
 
-  for (const character of encoded) {
-    const pattern = CODE39_PATTERNS[character];
-    if (!pattern) continue;
+  for (const value of sequence) {
+    const pattern = CODE128_PATTERNS[value];
+    let black = true;
 
-    pattern.split("").forEach((widthCode, index) => {
-      const width = widthCode === "w" ? wide : narrow;
-      if (index % 2 === 0) {
+    for (const digit of pattern) {
+      const width = Number(digit);
+      if (black) {
         rects.push(`<rect x="${x}" y="0" width="${width}" height="${height}" fill="#000"/>`);
       }
       x += width;
-    });
-    x += characterGap;
+      black = !black;
+    }
   }
 
-  const totalWidth = x + quiet;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${height}" role="img" aria-label="${safe}" preserveAspectRatio="none">${rects.join("")}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${height}" role="img" aria-label="${code}" preserveAspectRatio="xMidYMid meet"><rect width="${totalWidth}" height="${height}" fill="#fff"/>${rects.join("")}</svg>`;
 }
 
 function escapeHtml(value: string) {
@@ -539,7 +528,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
     const nameText = escapeHtml(item.name || "Név nélküli felhasználó");
     const shopText = escapeHtml(shopName(item.shopId));
     const codeText = escapeHtml(item.code);
-    const barcode = code39Svg(payload, 64);
+    const barcode = code128Svg(payload, 64);
 
     popup.document.open();
     popup.document.write(`<!doctype html>
@@ -1101,7 +1090,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="mt-1 text-sm text-slate-500">{shopName(cardItem.shopId)}</div>
                 <div
                   className="mt-4 h-[92px] w-full bg-white"
-                  dangerouslySetInnerHTML={{ __html: code39Svg(accessCardPayload(cardItem), 64) }}
+                  dangerouslySetInnerHTML={{ __html: code128Svg(accessCardPayload(cardItem), 64) }}
                 />
                 <div className="mt-2 text-center font-mono text-sm tracking-[0.16em] text-slate-700">
                   {cardItem.code}
