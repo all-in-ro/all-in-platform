@@ -1,5 +1,6 @@
 import express from "express";
 import createAifAdminShopsRouter from "./aif/adminShops.js";
+import createAifShopReturnsRouter from "./aif/shopReturns.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -400,6 +401,106 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_shop_shift_handovers (location_id, lower(from_actor), status, created_at DESC)`);
         await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_shift_handovers_one_pending_per_location_uq
           ON aif_shop_shift_handovers (location_id) WHERE status='pending'`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_return_authorizations (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          sale_line_id uuid NOT NULL REFERENCES aif_shop_sale_lines(id) ON DELETE CASCADE,
+          source_location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          requesting_location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          requested_by text NULL,
+          status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','unlocked','used','rejected','expired','cancelled')),
+          access_code text NULL,
+          attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+          expires_at timestamptz NOT NULL,
+          unlock_token_hash text NULL,
+          unlock_expires_at timestamptz NULL,
+          unlocked_at timestamptz NULL,
+          unlocked_by text NULL,
+          used_at timestamptz NULL,
+          used_by text NULL,
+          rejected_at timestamptz NULL,
+          rejected_by text NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          CHECK (source_location_id <> requesting_location_id)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_return_authorizations_source_idx
+          ON aif_shop_return_authorizations (source_location_id, status, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_return_authorizations_request_idx
+          ON aif_shop_return_authorizations (requesting_location_id, status, created_at DESC)`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_return_authorizations_pending_uq
+          ON aif_shop_return_authorizations (sale_line_id, requesting_location_id)
+          WHERE status='pending'`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_exchanges (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          exchange_number text NOT NULL UNIQUE,
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          source_location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          source_sale_id uuid NOT NULL REFERENCES aif_shop_sales(id) ON DELETE RESTRICT,
+          source_sale_line_id uuid NOT NULL REFERENCES aif_shop_sale_lines(id) ON DELETE RESTRICT,
+          source_variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+          returned_qty integer NOT NULL CHECK (returned_qty > 0),
+          return_unit_credit numeric(14,2) NOT NULL DEFAULT 0 CHECK (return_unit_credit >= 0),
+          return_credit numeric(14,2) NOT NULL DEFAULT 0 CHECK (return_credit >= 0),
+          replacement_total numeric(14,2) NOT NULL DEFAULT 0 CHECK (replacement_total >= 0),
+          difference numeric(14,2) NOT NULL DEFAULT 0,
+          settlement_direction text NOT NULL DEFAULT 'none' CHECK (settlement_direction IN ('none','in','out')),
+          settlement_method text NULL CHECK (settlement_method IS NULL OR settlement_method IN ('cash','card','bank_transfer')),
+          settlement_amount numeric(14,2) NOT NULL DEFAULT 0 CHECK (settlement_amount >= 0),
+          customer_name text NULL,
+          customer_phone text NULL,
+          actor text NOT NULL,
+          note text NULL,
+          authorization_id uuid NULL REFERENCES aif_shop_return_authorizations(id) ON DELETE SET NULL,
+          original_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+          replacement_snapshot jsonb NOT NULL DEFAULT '[]'::jsonb,
+          client_request_id text NOT NULL UNIQUE,
+          status text NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','cancelled')),
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchanges_location_created_idx
+          ON aif_shop_exchanges (location_id, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchanges_source_line_idx
+          ON aif_shop_exchanges (source_sale_line_id, status, created_at DESC)`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_exchange_lines (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          exchange_id uuid NOT NULL REFERENCES aif_shop_exchanges(id) ON DELETE CASCADE,
+          line_no integer NOT NULL,
+          variant_id uuid NOT NULL REFERENCES aif_product_variants(id) ON DELETE RESTRICT,
+          quantity integer NOT NULL CHECK (quantity > 0),
+          unit_price numeric(14,2) NOT NULL DEFAULT 0 CHECK (unit_price >= 0),
+          line_total numeric(14,2) NOT NULL DEFAULT 0 CHECK (line_total >= 0),
+          product_title text NULL,
+          product_code text NULL,
+          barcode text NULL,
+          brand_name text NULL,
+          color_name text NULL,
+          size text NULL,
+          image_url text NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          UNIQUE (exchange_id, line_no)
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchange_lines_exchange_idx
+          ON aif_shop_exchange_lines (exchange_id, line_no)`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_exchange_settlements (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          exchange_id uuid NOT NULL REFERENCES aif_shop_exchanges(id) ON DELETE CASCADE,
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          method text NOT NULL CHECK (method IN ('cash','card','bank_transfer')),
+          direction text NOT NULL CHECK (direction IN ('in','out')),
+          amount numeric(14,2) NOT NULL CHECK (amount > 0),
+          actor text NULL,
+          note text NULL,
+          raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchange_settlements_location_created_idx
+          ON aif_shop_exchange_settlements (location_id, created_at DESC)`);
 
         // A régi, közös kliensállományt üzletenként szétválasztjuk.
         // Ha ugyanaz a kliens mindkét üzletben vásárolt, külön kliensrekord készül,
@@ -15642,10 +15743,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function aifEmptyShiftPayments() {
     return {
-      cash: { method: "cash", label: "Készpénz", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
-      card: { method: "card", label: "Bankkártya", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
-      bank_transfer: { method: "bank_transfer", label: "Átutalás", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
-      credit: { method: "credit", label: "Utólag fizet", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
+      cash: { method: "cash", label: "Készpénz", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
+      card: { method: "card", label: "Bankkártya", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
+      bank_transfer: { method: "bank_transfer", label: "Átutalás", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
+      credit: { method: "credit", label: "Utólag fizet", amount: 0, salesAmount: 0, customerPaymentAmount: 0, exchangeAmount: 0, transactions: 0, customerPaymentTransactions: 0, exchangeTransactions: 0 },
     };
   }
 
@@ -15653,13 +15754,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const args = [locationId, fromAt, toAt];
     let actorSaleFilter = "";
     let actorPaymentFilter = "";
+    let actorExchangeFilter = "";
     if (actor) {
       args.push(actor);
       actorSaleFilter = `AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
       actorPaymentFilter = `AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
+      actorExchangeFilter = `AND lower(regexp_replace(btrim(COALESCE(es.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
     }
 
-    const [summaryResult, salePaymentsResult, customerPaymentsResult] = await Promise.all([
+    const [summaryResult, salePaymentsResult, customerPaymentsResult, exchangeSettlementsResult] = await Promise.all([
       client.query(
         `WITH filtered_sales AS (
            SELECT s.*
@@ -15730,6 +15833,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          GROUP BY cp.method`,
         args
       ),
+      client.query(
+        `SELECT es.method,
+                COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount,
+                count(*)::int AS transactions
+         FROM aif_shop_exchange_settlements es
+         WHERE es.location_id=$1
+           AND es.created_at >= $2::timestamptz
+           AND es.created_at < $3::timestamptz
+           ${actorExchangeFilter}
+         GROUP BY es.method`,
+        args
+      ),
     ]);
 
     const row = summaryResult.rows[0] || {};
@@ -15744,8 +15859,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       payments[item.method].customerPaymentAmount = aifRoundMoney(item.amount);
       payments[item.method].customerPaymentTransactions = aifNumber(item.transactions);
     }
+    for (const item of exchangeSettlementsResult.rows || []) {
+      if (!payments[item.method]) continue;
+      payments[item.method].exchangeAmount = aifRoundMoney(item.amount);
+      payments[item.method].exchangeTransactions = aifNumber(item.transactions);
+    }
     for (const item of Object.values(payments)) {
-      item.amount = aifRoundMoney(item.salesAmount + item.customerPaymentAmount);
+      item.amount = aifRoundMoney(item.salesAmount + item.customerPaymentAmount + item.exchangeAmount);
     }
 
     return {
@@ -17909,6 +18029,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     count(*) FILTER (WHERE fs.balance_due > 0)::int AS transactions
              FROM filtered_sales fs
              WHERE fs.balance_due > 0
+             UNION ALL
+             SELECT es.method,
+                    COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount,
+                    count(*)::int AS transactions
+             FROM aif_shop_exchange_settlements es
+             WHERE es.location_id=$1
+               AND es.created_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND es.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND lower(regexp_replace(btrim(COALESCE(es.actor,'')), '[[:space:]]+', ' ', 'g'))
+                   = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
+             GROUP BY es.method
            )
            SELECT method, sum(amount)::numeric AS amount, sum(transactions)::int AS transactions
            FROM payment_rows
@@ -18475,6 +18606,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
+
+  router.use("/shop-returns", createAifShopReturnsRouter({
+    pool,
+    requireAuthed,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
+    text,
+    normCode,
+    aifNumber,
+    aifRoundMoney,
+    isUuidText,
+    insertStockMovementSafe,
+    aifAssertNoPendingShopShiftHandover,
+  }));
 
   // Admin üzletmonitor külön modulokban. Innentől ezt a funkciócsaládot ne az aif.js-ben bővítsük.
   router.use("/admin-shops", createAifAdminShopsRouter({
