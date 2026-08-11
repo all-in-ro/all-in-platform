@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowRight,
+  Banknote,
   Bookmark,
   CalendarDays,
   CheckCircle2,
@@ -12,6 +13,7 @@ import {
   Clock3,
   CreditCard,
   History,
+  Landmark,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -21,10 +23,14 @@ import {
   X,
 } from "lucide-react";
 import {
+  apiAifConfirmShopCashMovement,
+  apiAifRejectShopCashMovement,
+  apiAifShopCashOverview,
   apiAifShopReservations,
   apiAifShopReturnAuthorizationInbox,
   apiAifShopReturnHistory,
   apiAifShopShiftDayOverview,
+  type AifShopCashOverview,
   type AifShopExchangeHistoryItem,
   type AifShopReservation,
   type AifShopReturnAuthorizationInboxItem,
@@ -391,6 +397,8 @@ export default function AllInAdminShopWorkflows({
   const [returns, setReturns] = useState<Array<{ store: StoreDef; item: AifShopExchangeHistoryItem }>>([]);
   const [authorizations, setAuthorizations] = useState<Array<{ store: StoreDef; item: AifShopReturnAuthorizationInboxItem }>>([]);
   const [shiftDays, setShiftDays] = useState<Array<{ store: StoreDef; data: AifShopShiftDayOverview }>>([]);
+  const [cashStores, setCashStores] = useState<Array<{ store: StoreDef; data: AifShopCashOverview }>>([]);
+  const [cashActionBusyId, setCashActionBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -440,12 +448,16 @@ export default function AllInAdminShopWorkflows({
         setAuthorizations(responses.flatMap(({ store, inbox }) => (inbox.items || []).map((item) => ({ store, item }))));
       } else {
         const responses = await Promise.all(
-          STORES.map(async (store) => ({
-            store,
-            data: await apiAifShopShiftDayOverview({ location: store.code, date }),
-          })),
+          STORES.map(async (store) => {
+            const [data, cash] = await Promise.all([
+              apiAifShopShiftDayOverview({ location: store.code, date }),
+              apiAifShopCashOverview({ location: store.code, limit: 120 }),
+            ]);
+            return { store, data, cash };
+          }),
         );
-        setShiftDays(responses);
+        setShiftDays(responses.map(({ store, data }) => ({ store, data })));
+        setCashStores(responses.map(({ store, cash }) => ({ store, data: cash })));
       }
     } catch (loadError: any) {
       setError(loadError?.message || "Az üzleti felügyeleti adatok nem tölthetők be.");
@@ -475,6 +487,20 @@ export default function AllInAdminShopWorkflows({
     () => shiftDays.filter(({ store }) => scope === "all" || store.code === scope),
     [scope, shiftDays],
   );
+  const visibleCashStores = useMemo(
+    () => cashStores.filter(({ store }) => scope === "all" || store.code === scope),
+    [cashStores, scope],
+  );
+  const pendingBossCash = useMemo(
+    () => visibleCashStores.flatMap(({ store, data }) => (data.pendingManagerHandovers || []).map((item) => ({ store, item }))),
+    [visibleCashStores],
+  );
+  const cashHistory = useMemo(
+    () => visibleCashStores
+      .flatMap(({ store, data }) => (data.movements || []).map((item) => ({ store, item })))
+      .sort((a, b) => new Date(b.item.createdAt || b.item.requestedAt || 0).getTime() - new Date(a.item.createdAt || a.item.requestedAt || 0).getTime()),
+    [visibleCashStores],
+  );
 
   const reservationSummary = useMemo(() => {
     let tomorrow = 0;
@@ -495,6 +521,32 @@ export default function AllInAdminShopWorkflows({
     () => visibleShiftDays.flatMap(({ store, data }) => (data.handovers || []).map((item) => ({ store, item }))),
     [visibleShiftDays],
   );
+
+  async function confirmBossCash(id: string) {
+    setCashActionBusyId(id);
+    setError("");
+    try {
+      await apiAifConfirmShopCashMovement(id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás visszaigazolása nem sikerült.");
+    } finally {
+      setCashActionBusyId(null);
+    }
+  }
+
+  async function rejectBossCash(id: string) {
+    setCashActionBusyId(id);
+    setError("");
+    try {
+      await apiAifRejectShopCashMovement(id, "A főnök nem igazolta vissza az átvételt.");
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás elutasítása nem sikerült.");
+    } finally {
+      setCashActionBusyId(null);
+    }
+  }
 
   if (!open) return null;
 
@@ -780,6 +832,76 @@ export default function AllInAdminShopWorkflows({
 
           {mode === "shifts" ? (
             <div className="space-y-3">
+              <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {visibleCashStores.map(({ store, data }) => (
+                  <article key={`cash-${store.code}`} className="rounded-2xl border border-[#9be9e5]/20 bg-[#344154] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">{store.city} • kassza</p>
+                        <p className="mt-2 text-2xl text-[#d7fffd]">{money(data.balance.availableCash)}</p>
+                      </div>
+                      <Banknote size={20} className="text-[#8ee6e2]" />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[9px]">
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-white/48">
+                        utolsó zárás: {data.closures?.[0]?.date || "nincs"}
+                      </span>
+                      {data.pendingManagerHandovers?.length ? (
+                        <span className="rounded-full border border-orange-200/28 bg-orange-500/12 px-2 py-1 text-orange-50">
+                          {data.pendingManagerHandovers.length} főnöki átvétel vár
+                        </span>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </section>
+
+              {pendingBossCash.length ? (
+                <section className={`${panel} overflow-hidden border-orange-200/22`}>
+                  <div className="flex items-center justify-between gap-3 border-b border-orange-200/14 bg-orange-500/[0.08] px-4 py-3">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.14em] text-orange-100/58">Főnöki visszaigazolás</p>
+                      <h3 className="mt-1 text-base text-white">Pénzátadások, amelyek rád várnak</h3>
+                    </div>
+                    <span className="rounded-full border border-orange-200/28 bg-orange-500/14 px-2.5 py-1 text-[10px] text-orange-50">{pendingBossCash.length} tétel</span>
+                  </div>
+                  <div className="grid gap-2 p-3 lg:grid-cols-2">
+                    {pendingBossCash.map(({ store, item }) => (
+                      <article key={item.id} className="rounded-2xl border border-orange-200/18 bg-orange-500/[0.07] p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] uppercase tracking-[0.11em] text-orange-100/52">{store.city}</p>
+                            <p className="mt-1 text-sm text-white">{item.requestedBy} • átadás a főnöknek</p>
+                            <p className="mt-1 text-[10px] text-white/42">{formatDateTime(item.requestedAt)}{item.reference ? ` • ${item.reference}` : ""}</p>
+                            {item.note ? <p className="mt-2 text-[11px] leading-relaxed text-white/54">{item.note}</p> : null}
+                          </div>
+                          <p className="shrink-0 text-xl text-orange-50">{money(item.amount)}</p>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            disabled={cashActionBusyId === item.id}
+                            onClick={() => void rejectBossCash(item.id)}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-rose-200/28 bg-rose-500/12 px-3 text-xs text-rose-50 hover:bg-rose-500/18 disabled:opacity-45"
+                          >
+                            <X size={14} /> Nem vettem át
+                          </button>
+                          <button
+                            type="button"
+                            disabled={cashActionBusyId === item.id}
+                            onClick={() => void confirmBossCash(item.id)}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-emerald-200/28 bg-emerald-500/16 px-3 text-xs text-emerald-50 hover:bg-emerald-500/22 disabled:opacity-45"
+                          >
+                            {cashActionBusyId === item.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                            Átvettem
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
               {visibleShiftDays.map(({ store, data }) => (
                 <section key={store.code} className={`${panel} overflow-hidden`}>
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
@@ -790,6 +912,11 @@ export default function AllInAdminShopWorkflows({
                     <div className="flex flex-wrap gap-2 text-[10px]">
                       <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-white/56">{integer(data.handovers.length)} átadás</span>
                       <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2.5 py-1 text-[#cffffd]">Napi forgalom: {money(data.totals.revenue)}</span>
+                      {data.dayClosure ? (
+                        <span className="rounded-full border border-emerald-200/28 bg-emerald-500/12 px-2.5 py-1 text-emerald-50">
+                          Nap lezárva • {data.dayClosure.actor} • {money(data.dayClosure.countedCash)}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
 
@@ -854,6 +981,60 @@ export default function AllInAdminShopWorkflows({
                   </div>
                 </section>
               ))}
+
+              <section className={`${panel} overflow-hidden`}>
+                <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Kassza auditnapló</p>
+                    <h3 className="mt-1 text-base text-white">Főnöki átvételek és bankbefizetések</h3>
+                  </div>
+                  <History size={19} className="text-[#8ee6e2]" />
+                </div>
+                <div className="divide-y divide-white/8">
+                  {cashHistory.slice(0, 80).map(({ store, item }) => (
+                    <article key={`${store.code}-${item.id}`} className="p-4">
+                      <div className="flex flex-wrap items-start gap-3">
+                        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
+                          item.type === "bank_deposit"
+                            ? "border-[#9be9e5]/24 bg-[#2a8d8b]/12 text-[#d7fffd]"
+                            : item.status === "pending"
+                              ? "border-orange-200/28 bg-orange-500/12 text-orange-50"
+                              : "border-emerald-200/22 bg-emerald-500/10 text-emerald-50"
+                        }`}>
+                          {item.type === "bank_deposit" ? <Landmark size={18} /> : <Banknote size={18} />}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-1 text-[10px] text-[#cffffd]">{store.city}</span>
+                            <p className="text-sm text-white">{item.type === "bank_deposit" ? "Bankbefizetés" : "Átadás a főnöknek"}</p>
+                            <span className={`rounded-full border px-2 py-1 text-[9px] ${
+                              item.status === "confirmed"
+                                ? "border-emerald-200/24 bg-emerald-500/10 text-emerald-50"
+                                : item.status === "pending"
+                                  ? "border-orange-200/28 bg-orange-500/12 text-orange-50"
+                                  : item.status === "rejected"
+                                    ? "border-rose-200/24 bg-rose-500/10 text-rose-50"
+                                    : "border-white/12 bg-white/[0.04] text-white/48"
+                            }`}>
+                              {item.status === "confirmed" ? "Igazolva" : item.status === "pending" ? "Várakozik" : item.status === "rejected" ? "Elutasítva" : item.status}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[10px] text-white/44">
+                            Rögzítette: {item.requestedBy} • {formatDateTime(item.requestedAt)}
+                            {item.confirmedBy ? ` • Visszaigazolta: ${item.confirmedBy}` : ""}
+                          </p>
+                          {item.reference ? <p className="mt-1 text-[10px] text-[#bdf8f5]/64">Referencia: {item.reference}</p> : null}
+                          {item.note ? <p className="mt-1 text-[10px] text-white/46">{item.note}</p> : null}
+                        </div>
+                        <p className="shrink-0 text-lg text-white">{money(item.amount)}</p>
+                      </div>
+                    </article>
+                  ))}
+                  {!cashHistory.length ? (
+                    <div className="px-4 py-10 text-center text-sm text-white/42">Még nincs főnöki készpénzátadás vagy bankbefizetés.</div>
+                  ) : null}
+                </div>
+              </section>
 
               {!shiftHandovers.length && !visibleShiftDays.length ? (
                 <div className={`${panel} px-4 py-12 text-center text-sm text-white/42`}>Nincs műszakadat.</div>
