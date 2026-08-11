@@ -44,6 +44,7 @@ import {
 } from "../lib/aif/api";
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 
+
 export type AllInAdminMagazinDashboardMobileProps = {
   actor?: string;
   role?: "admin" | "shop";
