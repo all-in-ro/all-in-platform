@@ -1089,7 +1089,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="mt-4 truncate text-xl font-normal">{cardItem.name || "Név nélküli felhasználó"}</div>
                 <div className="mt-1 text-sm text-slate-500">{shopName(cardItem.shopId)}</div>
                 <div
-                  className="mt-4 h-[92px] w-full bg-white"
+                  className="mt-4 h-[92px] w-full overflow-hidden bg-white [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
                   dangerouslySetInnerHTML={{ __html: code128Svg(accessCardPayload(cardItem), 64) }}
                 />
                 <div className="mt-2 text-center font-mono text-sm tracking-[0.16em] text-slate-700">
