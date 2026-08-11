@@ -13,6 +13,7 @@ import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
+  Bookmark,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -41,6 +42,7 @@ import {
   type AifAdminShopRecentSale,
   type AifAdminShopSaleLineDeleteMode,
 } from "../lib/aif/api";
+import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 
 export type AllInAdminMagazinDashboardMobileProps = {
   actor?: string;
@@ -563,6 +565,7 @@ export default function AllInAdminMagazinDashboardMobile({
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [imagePreview, setImagePreview] = useState<{ src: string; alt: string } | null>(null);
+  const [shopWorkflowMode, setShopWorkflowMode] = useState<AllInAdminShopWorkflowMode | null>(null);
   const loadIdRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -611,25 +614,26 @@ export default function AllInAdminMagazinDashboardMobile({
   }, [load]);
 
   useEffect(() => {
-    const modalOpen = filtersOpen || Boolean(deleteTarget) || Boolean(imagePreview);
+    const modalOpen = filtersOpen || Boolean(deleteTarget) || Boolean(imagePreview) || shopWorkflowMode !== null;
     if (!modalOpen) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [deleteTarget, filtersOpen, imagePreview]);
+  }, [deleteTarget, filtersOpen, imagePreview, shopWorkflowMode]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (imagePreview) setImagePreview(null);
+      else if (shopWorkflowMode) setShopWorkflowMode(null);
       else if (deleteTarget && !deleteSaving) setDeleteTarget(null);
       else if (filtersOpen) setFiltersOpen(false);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [deleteSaving, deleteTarget, filtersOpen, imagePreview]);
+  }, [deleteSaving, deleteTarget, filtersOpen, imagePreview, shopWorkflowMode]);
 
   const stores = useMemo<StoreDataset[]>(() => [
     {
@@ -930,6 +934,35 @@ export default function AllInAdminMagazinDashboardMobile({
             </div>
           </section>
 
+          <section className={`${panel} p-3.5`}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Üzleti felügyelet</p>
+                <h2 className="mt-0.5 text-base text-white">Foglalások, visszáru, kassza</h2>
+              </div>
+              <WalletCards size={18} className="text-[#8ee6e2]" />
+            </div>
+            <div className="grid gap-2 min-[430px]:grid-cols-3">
+              {[
+                { key: "reservations" as const, label: "Félretett", icon: Bookmark },
+                { key: "returns" as const, label: "Visszáru", icon: RotateCcw },
+                { key: "shifts" as const, label: "Műszakátadás", icon: WalletCards },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setShopWorkflowMode(item.key)}
+                    className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-3 text-xs text-[#d7fffd] active:scale-[0.98]"
+                  >
+                    <Icon size={15} /> {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
           <section className="grid grid-cols-2 gap-2.5">
             <KpiCard
               label="Fizetve"
@@ -1181,6 +1214,13 @@ export default function AllInAdminMagazinDashboardMobile({
           </section>
         </div>
       </div>
+
+      <AllInAdminShopWorkflows
+        open={shopWorkflowMode !== null}
+        initialMode={shopWorkflowMode || "reservations"}
+        actor={actor}
+        onClose={() => setShopWorkflowMode(null)}
+      />
 
       {filtersOpen ? (
         <div
