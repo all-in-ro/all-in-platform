@@ -9,12 +9,15 @@ import {
   Boxes,
   Check,
   CheckCircle2,
+  CircleDollarSign,
   ChevronDown,
   ChevronUp,
   Clock3,
   CreditCard,
   Filter,
+  History,
   Landmark,
+  LockKeyhole,
   Loader2,
   PackageSearch,
   Receipt,
@@ -31,13 +34,19 @@ import {
   X,
 } from "lucide-react";
 import {
+  apiAifCancelShopCashMovement,
   apiAifCancelShopShiftHandover,
+  apiAifCloseShopDay,
+  apiAifCreateShopCashMovement,
   apiAifCreateShopShiftHandover,
+  apiAifShopCashOverview,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
   apiAifShopShiftDayOverview,
   apiAifShopShiftEmployees,
   apiAifShopStockOverview,
+  type AifShopCashMovementType,
+  type AifShopCashOverview,
   type AifShopDailySummaryResponse,
   type AifShopSaleCatalogItem,
   type AifShopShiftDayOverview,
@@ -421,6 +430,20 @@ export default function AllInShopOperations({
   const [handoverNotice, setHandoverNotice] = useState("");
   const [handoverCancelBusyId, setHandoverCancelBusyId] = useState<string | null>(null);
 
+  const [cashData, setCashData] = useState<AifShopCashOverview | null>(null);
+  const [cashLoading, setCashLoading] = useState(false);
+  const [dayCloseOpen, setDayCloseOpen] = useState(false);
+  const [dayCloseCounted, setDayCloseCounted] = useState("");
+  const [dayCloseNote, setDayCloseNote] = useState("");
+  const [dayCloseSaving, setDayCloseSaving] = useState(false);
+  const [cashMoveOpen, setCashMoveOpen] = useState(false);
+  const [cashMoveType, setCashMoveType] = useState<AifShopCashMovementType>("manager_handover");
+  const [cashMoveAmount, setCashMoveAmount] = useState("");
+  const [cashMoveReference, setCashMoveReference] = useState("");
+  const [cashMoveNote, setCashMoveNote] = useState("");
+  const [cashMoveSaving, setCashMoveSaving] = useState(false);
+  const [cashCancelBusyId, setCashCancelBusyId] = useState<string | null>(null);
+
   const paymentMap = useMemo(() => {
     const map = new Map<string, { amount: number; transactions: number }>();
     for (const item of summaryData?.payments || []) {
@@ -449,6 +472,15 @@ export default function AllInShopOperations({
   const handoverPreview = shiftData?.handoverPreview || null;
   const handoverShiftPreview = handoverPreview?.shift || currentEmployeeDay;
   const handoverExpectedCash = handoverPreview?.expectedCash ?? shiftPayment(shiftData?.totals, "cash").amount;
+  const currentCashBalance = numberValue(cashData?.balance.availableCash ?? shiftData?.cashBalance?.availableCash ?? handoverExpectedCash);
+  const currentDayClosure = summaryIsToday
+    ? (shiftData?.dayClosure || cashData?.todayClosure || null)
+    : (shiftData?.dayClosure || null);
+  const pendingBossHandover = (cashData?.pendingManagerHandovers || [])[0] || null;
+  const dayCloseCountedValue = Number(String(dayCloseCounted || "").replace(",", "."));
+  const dayCloseDifference = Number.isFinite(dayCloseCountedValue)
+    ? Math.round((dayCloseCountedValue - currentCashBalance + Number.EPSILON) * 100) / 100
+    : null;
 
   const filteredSearchItems = useMemo(
     () => applyProductFilters(searchItems, productFilters),
@@ -562,8 +594,21 @@ export default function AllInShopOperations({
     }
   }
 
+  async function loadCashContext() {
+    setCashLoading(true);
+    try {
+      const response = await apiAifShopCashOverview({ location: locationCode, limit: 80 });
+      setCashData(response);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A kassza naplója nem tölthető be.");
+      setCashData(null);
+    } finally {
+      setCashLoading(false);
+    }
+  }
+
   async function refreshSummaryPage(date = summaryDate) {
-    await Promise.all([loadDailySummary(date), loadShiftContext(date)]);
+    await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext()]);
   }
 
   async function createShiftHandover() {
@@ -603,6 +648,102 @@ export default function AllInShopOperations({
     } finally {
       setHandoverCancelBusyId(null);
     }
+  }
+
+  async function closeShopDay() {
+    const counted = Number(String(dayCloseCounted || "").replace(",", "."));
+    if (!Number.isFinite(counted) || counted < 0) {
+      setError("Add meg a megszámolt záró készpénzt.");
+      return;
+    }
+    setDayCloseSaving(true);
+    setError("");
+    try {
+      const response = await apiAifCloseShopDay({
+        location: locationCode,
+        countedCash: counted,
+        note: dayCloseNote.trim() || null,
+      });
+      setHandoverNotice(`A napi kassza lezárva: ${formatMoney(response.item.countedCash)} • eltérés ${formatMoney(response.item.cashDifference)}.`);
+      setDayCloseOpen(false);
+      setDayCloseCounted("");
+      setDayCloseNote("");
+      await refreshSummaryPage(todayIso());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A napi kassza lezárása nem sikerült.");
+    } finally {
+      setDayCloseSaving(false);
+    }
+  }
+
+  async function createCashMovement() {
+    const amount = Number(String(cashMoveAmount || "").replace(",", "."));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Add meg az átadott / befizetett készpénz összegét.");
+      return;
+    }
+    if (cashMoveType === "bank_deposit" && !cashMoveReference.trim()) {
+      setError("Bankbefizetésnél a referencia vagy bizonylatszám kötelező.");
+      return;
+    }
+    setCashMoveSaving(true);
+    setError("");
+    try {
+      const response = await apiAifCreateShopCashMovement({
+        location: locationCode,
+        type: cashMoveType,
+        amount,
+        reference: cashMoveReference.trim() || null,
+        note: cashMoveNote.trim() || null,
+        idempotencyKey: typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `cash-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      });
+      setHandoverNotice(
+        response.item.type === "manager_handover"
+          ? `${formatMoney(response.item.amount)} főnöki átadás rögzítve. A főnök visszaigazolására vár.`
+          : `${formatMoney(response.item.amount)} bankbefizetés rögzítve (${response.item.reference || "referencia nélkül"}).`,
+      );
+      setCashMoveOpen(false);
+      setCashMoveAmount("");
+      setCashMoveReference("");
+      setCashMoveNote("");
+      await refreshSummaryPage(summaryDate);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A kasszamozgás rögzítése nem sikerült.");
+    } finally {
+      setCashMoveSaving(false);
+    }
+  }
+
+  async function cancelCashMovement(id: string) {
+    setCashCancelBusyId(id);
+    setError("");
+    try {
+      await apiAifCancelShopCashMovement(id);
+      setHandoverNotice("A függő főnöki pénzátadást visszavontad.");
+      await refreshSummaryPage(summaryDate);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A pénzátadás visszavonása nem sikerült.");
+    } finally {
+      setCashCancelBusyId(null);
+    }
+  }
+
+  function openDayClose() {
+    setError("");
+    setDayCloseCounted(currentCashBalance.toFixed(2).replace(".", ","));
+    setDayCloseNote("");
+    setDayCloseOpen(true);
+  }
+
+  function openCashMovement(type: AifShopCashMovementType) {
+    setError("");
+    setCashMoveType(type);
+    setCashMoveAmount("");
+    setCashMoveReference("");
+    setCashMoveNote("");
+    setCashMoveOpen(true);
   }
 
   function openShiftHandover() {
@@ -665,6 +806,14 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (dayCloseOpen && !dayCloseSaving) {
+          setDayCloseOpen(false);
+          return;
+        }
+        if (cashMoveOpen && !cashMoveSaving) {
+          setCashMoveOpen(false);
+          return;
+        }
         if (handoverOpen && !handoverSaving) {
           setHandoverOpen(false);
           return;
@@ -682,7 +831,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [handoverOpen, handoverSaving, mode, onClose, open]);
+  }, [cashMoveOpen, cashMoveSaving, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -874,7 +1023,7 @@ export default function AllInShopOperations({
                   <button type="button" onClick={() => { const next = shiftIsoDate(summaryDate, 1); setSummaryDate(next); setHandoverNotice(""); void refreshSummaryPage(next); }} className="inline-flex h-14 items-center justify-center border-l border-white/12 hover:bg-white/[0.08]"><ArrowRight size={22} /></button>
                   <button type="button" onClick={() => { const next = todayIso(); setSummaryDate(next); setHandoverNotice(""); void refreshSummaryPage(next); }} className="h-14 border-l border-white/12 px-4 text-sm text-[#d7fffd] hover:bg-[#2a8d8b]/20">Ma</button>
                 </div>
-                <button type="button" onClick={() => void refreshSummaryPage()} disabled={summaryLoading || shiftLoading} className="inline-flex h-12 items-center gap-2 rounded-xl border border-white/16 bg-[#354153] px-4 text-sm hover:bg-[#3e4d63] disabled:opacity-55"><RefreshCw className={summaryLoading || shiftLoading ? "animate-spin" : ""} size={17} /> Frissítés</button>
+                <button type="button" onClick={() => void refreshSummaryPage()} disabled={summaryLoading || shiftLoading || cashLoading} className="inline-flex h-12 items-center gap-2 rounded-xl border border-white/16 bg-[#354153] px-4 text-sm hover:bg-[#3e4d63] disabled:opacity-55"><RefreshCw className={summaryLoading || shiftLoading || cashLoading ? "animate-spin" : ""} size={17} /> Frissítés</button>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
@@ -892,6 +1041,142 @@ export default function AllInShopOperations({
                   return <div key={item.method} className="rounded-2xl border border-white/12 bg-[#374357] p-3"><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-xs text-white/58"><Icon size={16} className="text-[#8ee6e2]" />{item.label}</span><span className="text-[10px] text-white/38">{payment.transactions} eladás</span></div><p className="mt-2 text-xl">{formatMoney(payment.amount)}</p></div>;
                 })}
               </div>
+
+              <section className="mt-4 overflow-hidden rounded-[26px] border border-[#9be9e5]/28 bg-[#2d394b] shadow-[0_16px_38px_rgba(15,23,42,0.20)]">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#304257] to-[#315a5d] px-4 py-4">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/24 text-[#d7fffd]"><Banknote size={21} /></span>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Fizikai készpénz útja</p>
+                      <h3 className="mt-1 text-lg text-white">Kassza és pénzátadás</h3>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Rendszer szerint az üzletben</p>
+                    <p className="mt-1 text-2xl tracking-tight text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
+                  </div>
+                </div>
+
+                <div className="p-4">
+                  {currentDayClosure ? (
+                    <div className="mb-3 flex items-start gap-3 rounded-2xl border border-emerald-200/28 bg-emerald-500/12 px-4 py-3">
+                      <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-100" size={18} />
+                      <div className="min-w-0">
+                        <p className="text-sm text-emerald-50">A mai kassza le van zárva</p>
+                        <p className="mt-1 text-xs text-white/52">
+                          {currentDayClosure.actor} • {formatTime(currentDayClosure.closedAt)} • megszámolva {formatMoney(currentDayClosure.countedCash)} • eltérés {formatMoney(currentDayClosure.cashDifference)}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {pendingBossHandover ? (
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-orange-200/30 bg-orange-500/10 px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <Clock3 className="mt-0.5 shrink-0 text-orange-100" size={18} />
+                        <div>
+                          <p className="text-sm text-orange-50">Főnöki átvétel visszaigazolására vár: {formatMoney(pendingBossHandover.amount)}</p>
+                          <p className="mt-1 text-xs text-white/48">{pendingBossHandover.requestedBy} rögzítette • {formatTime(pendingBossHandover.requestedAt)}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void cancelCashMovement(pendingBossHandover.id)}
+                        disabled={cashCancelBusyId === pendingBossHandover.id}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-orange-200/24 bg-orange-300/10 px-3 text-xs text-orange-50 hover:bg-orange-300/16 disabled:opacity-45"
+                      >
+                        {cashCancelBusyId === pendingBossHandover.id ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
+                        Visszavonás
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]">
+                    <div className="rounded-[22px] border border-[#9be9e5]/22 bg-[#263345] p-4">
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
+                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Jelenlegi kassza</p>
+                          <p className="mt-1 text-lg text-[#d7fffd]">{formatMoney(currentCashBalance)}</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
+                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Függő főnöki átadás</p>
+                          <p className="mt-1 text-lg text-orange-50">{formatMoney(cashData?.balance.pendingOut || 0)}</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-[#303c4f] p-3">
+                          <p className="text-[9px] uppercase tracking-[0.08em] text-white/36">Utolsó zárás</p>
+                          <p className="mt-1 truncate text-sm text-white">{cashData?.closures?.[0] ? `${cashData.closures[0].date || ""} • ${formatMoney(cashData.closures[0].countedCash)}` : "Még nincs"}</p>
+                        </div>
+                      </div>
+
+                      {summaryIsToday ? (
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          <button
+                            type="button"
+                            onClick={() => openCashMovement("manager_handover")}
+                            disabled={Boolean(pendingBossHandover) || currentCashBalance <= 0}
+                            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-orange-200/30 bg-orange-500/14 px-3 text-sm text-orange-50 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <WalletCards size={17} /> Átadás a főnöknek
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openCashMovement("bank_deposit")}
+                            disabled={currentCashBalance <= 0}
+                            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#9be9e5]/34 bg-[#2a8d8b]/18 px-3 text-sm text-[#d7fffd] hover:bg-[#2a8d8b]/28 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Landmark size={17} /> Bankba befizetés
+                          </button>
+                          <button
+                            type="button"
+                            onClick={openDayClose}
+                            disabled={Boolean(currentDayClosure) || Boolean(currentOutgoingHandover) || Boolean(currentIncomingHandover)}
+                            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#b9f5f2]/48 bg-[#2a8d8b] px-3 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <LockKeyhole size={17} /> Napi kassza lezárása
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-[22px] border border-white/12 bg-[#344055] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-[0.13em] text-white/42">Auditnapló</p>
+                          <h4 className="mt-1 text-base text-white">Legutóbbi pénzmozgások</h4>
+                        </div>
+                        <History size={20} className="text-[#8ee6e2]" />
+                      </div>
+                      <div className="mt-3 max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                        {(cashData?.movements || []).slice(0, 8).map((movement) => (
+                          <div key={movement.id} className={`rounded-xl border px-3 py-2.5 ${
+                            movement.status === "pending"
+                              ? "border-orange-200/24 bg-orange-500/8"
+                              : movement.status === "confirmed"
+                                ? "border-emerald-200/16 bg-emerald-500/7"
+                                : "border-white/10 bg-[#293548]"
+                          }`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-xs text-white">{movement.type === "manager_handover" ? "Átadás a főnöknek" : "Bankbefizetés"}</p>
+                                <p className="mt-1 truncate text-[10px] text-white/42">{movement.requestedBy} • {formatTime(movement.requestedAt)}{movement.reference ? ` • ${movement.reference}` : ""}</p>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <p className="text-sm text-white">{formatMoney(movement.amount)}</p>
+                                <p className={`mt-1 text-[9px] ${movement.status === "confirmed" ? "text-emerald-100" : movement.status === "pending" ? "text-orange-100" : "text-white/45"}`}>
+                                  {movement.status === "confirmed" ? "Visszaigazolva" : movement.status === "pending" ? "Visszaigazolásra vár" : movement.status}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {!cashLoading && !(cashData?.movements || []).length ? (
+                          <div className="rounded-xl border border-dashed border-white/12 px-3 py-7 text-center text-xs text-white/40">Még nincs főnöki átadás vagy bankbefizetés.</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
 
               <section className="mt-4 overflow-hidden rounded-[26px] border border-[#9be9e5]/28 bg-[#2d394b] shadow-[0_16px_38px_rgba(15,23,42,0.20)]">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#23464e] to-[#2a6266] px-4 py-4">
@@ -1111,6 +1396,153 @@ export default function AllInShopOperations({
             </>
           ) : null}
         </div>
+
+        {dayCloseOpen ? createPortal(
+          <div className="fixed inset-0 z-[435] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5">
+            <section className="w-full max-w-[760px] overflow-hidden rounded-[30px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] to-[#28565c] px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/24"><LockKeyhole size={23} /></span>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Utolsó műszak</p>
+                    <h3 className="mt-1 text-xl">Napi kassza lezárása</h3>
+                    <p className="mt-1 text-xs text-white/52">{actor} • {locationName}</p>
+                  </div>
+                </div>
+                <button type="button" disabled={dayCloseSaving} onClick={() => setDayCloseOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] disabled:opacity-45"><X size={18} /></button>
+              </header>
+
+              <div className="space-y-4 p-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-[22px] border border-[#9be9e5]/30 bg-[#24585d] p-4">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-[#d7fffd]/62">Rendszer szerinti záró kassza</p>
+                    <p className="mt-2 text-4xl tracking-tight">{formatMoney(currentCashBalance)}</p>
+                    <p className="mt-2 text-xs text-white/50">Előző záró kassza + azóta bejött készpénz − igazolt főnöki átadás / bankbefizetés.</p>
+                  </div>
+                  <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                    <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megszámolt készpénz</span>
+                    <input
+                      value={dayCloseCounted}
+                      onChange={(event) => setDayCloseCounted(event.target.value)}
+                      inputMode="decimal"
+                      autoFocus
+                      className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-2xl text-white outline-none focus:border-[#72d8d4]"
+                      placeholder="0,00"
+                    />
+                    <div className={`mt-2 rounded-xl border px-3 py-2 text-sm ${
+                      dayCloseDifference === null
+                        ? "border-white/10 bg-black/10 text-white/45"
+                        : Math.abs(dayCloseDifference) < 0.01
+                          ? "border-emerald-200/26 bg-emerald-500/10 text-emerald-50"
+                          : "border-rose-200/30 bg-rose-500/12 text-rose-50"
+                    }`}>
+                      {dayCloseDifference === null
+                        ? "Add meg a megszámolt összeget."
+                        : Math.abs(dayCloseDifference) < 0.01
+                          ? "✓ Egyezik • eltérés 0,00 RON"
+                          : `Eltérés: ${formatMoney(dayCloseDifference)}`}
+                    </div>
+                  </label>
+                </div>
+
+                <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                  <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Zárási megjegyzés • opcionális</span>
+                  <textarea value={dayCloseNote} onChange={(event) => setDayCloseNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]" placeholder="Pl. kassza és POS ellenőrizve…" />
+                </label>
+
+                <div className="flex items-start gap-3 rounded-2xl border border-amber-200/22 bg-amber-400/8 px-4 py-3">
+                  <TriangleAlert className="mt-0.5 shrink-0 text-amber-100" size={18} />
+                  <p className="text-xs leading-relaxed text-amber-50/82">A lezárás után ezen a napon új eladás, tartozásbefizetés, visszáru vagy félretett termék értékesítése már nem rögzíthető. A zárás nem törölhető ki a naplóból.</p>
+                </div>
+              </div>
+
+              <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+                <button type="button" disabled={dayCloseSaving} onClick={() => setDayCloseOpen(false)} className="h-11 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm disabled:opacity-45">Mégse</button>
+                <button
+                  type="button"
+                  disabled={dayCloseSaving || dayCloseDifference === null || Math.abs(dayCloseDifference) >= 0.01}
+                  onClick={() => void closeShopDay()}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {dayCloseSaving ? <Loader2 size={17} className="animate-spin" /> : <CheckCircle2 size={17} />}
+                  {dayCloseSaving ? "Lezárás…" : "Nap lezárása"}
+                </button>
+              </footer>
+            </section>
+          </div>,
+          document.body,
+        ) : null}
+
+        {cashMoveOpen ? createPortal(
+          <div className="fixed inset-0 z-[434] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5">
+            <section className="w-full max-w-[820px] overflow-hidden rounded-[30px] border border-[#9be9e5]/42 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.62)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#304257] to-[#315a5d] px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/24"><CircleDollarSign size={23} /></span>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Készpénz útja</p>
+                    <h3 className="mt-1 text-xl">{cashMoveType === "manager_handover" ? "Átadás a főnöknek" : "Bankba befizetés"}</h3>
+                    <p className="mt-1 text-xs text-white/52">{locationName} • kassza {formatMoney(currentCashBalance)}</p>
+                  </div>
+                </div>
+                <button type="button" disabled={cashMoveSaving} onClick={() => setCashMoveOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/16 bg-white/[0.05] disabled:opacity-45"><X size={18} /></button>
+              </header>
+
+              <div className="space-y-4 p-5">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button type="button" onClick={() => setCashMoveType("manager_handover")} className={`min-h-16 rounded-2xl border p-3 text-left ${cashMoveType === "manager_handover" ? "border-orange-200/40 bg-orange-500/16" : "border-white/12 bg-[#374357]"}`}>
+                    <p className="flex items-center gap-2 text-sm"><WalletCards size={17} /> Átadás a főnöknek</p>
+                    <p className="mt-1 text-[11px] text-white/48">Függő tétel lesz, amíg a főnök a saját felületén vissza nem igazolja.</p>
+                  </button>
+                  <button type="button" onClick={() => setCashMoveType("bank_deposit")} className={`min-h-16 rounded-2xl border p-3 text-left ${cashMoveType === "bank_deposit" ? "border-[#9be9e5]/40 bg-[#2a8d8b]/16" : "border-white/12 bg-[#374357]"}`}>
+                    <p className="flex items-center gap-2 text-sm"><Landmark size={17} /> Bankba befizetés</p>
+                    <p className="mt-1 text-[11px] text-white/48">Azonnal naplózott pénzkiadás. A banki referencia / bizonylatszám kötelező.</p>
+                  </button>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                    <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Összeg</span>
+                    <input value={cashMoveAmount} onChange={(event) => setCashMoveAmount(event.target.value)} inputMode="decimal" autoFocus className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-2xl text-white outline-none focus:border-[#72d8d4]" placeholder="0,00" />
+                    <button type="button" onClick={() => setCashMoveAmount(currentCashBalance.toFixed(2).replace(".", ","))} className="mt-2 text-[11px] text-[#bdf8f5]">Teljes kassza: {formatMoney(currentCashBalance)}</button>
+                  </label>
+                  <label className={`rounded-[22px] border p-4 ${cashMoveType === "bank_deposit" ? "border-[#9be9e5]/20 bg-[#374357]" : "border-white/8 bg-[#374357]/60"}`}>
+                    <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Referencia / bizonylatszám {cashMoveType === "bank_deposit" ? "• kötelező" : "• opcionális"}</span>
+                    <input value={cashMoveReference} onChange={(event) => setCashMoveReference(event.target.value.slice(0, 120))} className="mt-2 h-14 w-full rounded-2xl border border-white/16 bg-[#273243] px-4 text-sm text-white outline-none focus:border-[#72d8d4]" placeholder={cashMoveType === "bank_deposit" ? "Pl. DEP-2026-0811-01" : "Pl. boríték / belső hivatkozás"} />
+                  </label>
+                </div>
+
+                <label className="block rounded-[22px] border border-white/12 bg-[#374357] p-4">
+                  <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megjegyzés • opcionális</span>
+                  <textarea value={cashMoveNote} onChange={(event) => setCashMoveNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]" placeholder={cashMoveType === "manager_handover" ? "Pl. készpénz átadva személyesen…" : "Pl. bankfiók / automata / megjegyzés…"} />
+                </label>
+
+                <div className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${cashMoveType === "manager_handover" ? "border-orange-200/24 bg-orange-500/8" : "border-[#9be9e5]/22 bg-[#2a8d8b]/8"}`}>
+                  <TriangleAlert className="mt-0.5 shrink-0" size={18} />
+                  <p className="text-xs leading-relaxed text-white/66">
+                    {cashMoveType === "manager_handover"
+                      ? "Az összeg addig nem csökken a rendszer szerinti kasszából, amíg a főnök nem igazolja vissza az átvételt. Így nincs több „odaadtam / nem emlékszem” vita."
+                      : "A bankbefizetés azonnal csökkenti a kasszát, és a referencia örökre megmarad az auditnaplóban."}
+                  </p>
+                </div>
+              </div>
+
+              <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
+                <button type="button" disabled={cashMoveSaving} onClick={() => setCashMoveOpen(false)} className="h-11 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm disabled:opacity-45">Mégse</button>
+                <button
+                  type="button"
+                  disabled={cashMoveSaving || !cashMoveAmount.trim() || (cashMoveType === "bank_deposit" && !cashMoveReference.trim())}
+                  onClick={() => void createCashMovement()}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {cashMoveSaving ? <Loader2 size={17} className="animate-spin" /> : cashMoveType === "manager_handover" ? <WalletCards size={17} /> : <Landmark size={17} />}
+                  {cashMoveSaving ? "Rögzítés…" : cashMoveType === "manager_handover" ? "Átadás rögzítése" : "Bankbefizetés rögzítése"}
+                </button>
+              </footer>
+            </section>
+          </div>,
+          document.body,
+        ) : null}
 
         {handoverOpen ? createPortal(
           <div className="fixed inset-0 z-[430] flex items-center justify-center bg-[#0f172a]/88 p-3 backdrop-blur-md sm:p-5">
