@@ -143,6 +143,91 @@ type InventoryItem = {
 
 type DetailResponse = { item: InventoryItem & Record<string, any>; stock?: StockItem[]; supplierCodes?: any[]; movements?: any[] };
 
+type MobileBarcodeConflictInfo = {
+  barcode: string;
+  conflictVariantId: string;
+  title?: string | null;
+  modelCode?: string | null;
+  brand?: string | null;
+  color?: string | null;
+  size?: string | null;
+  variantStatus?: string | null;
+  modelStatus?: string | null;
+  message?: string | null;
+};
+
+function barcodeConflictInfoFromApi(value: unknown): MobileBarcodeConflictInfo | null {
+  const source = value && typeof value === "object" ? value as Record<string, any> : {};
+  const conflict = source.conflict && typeof source.conflict === "object" ? source.conflict as Record<string, any> : {};
+  const barcode = cleanScannedBarcode(source.barcode || conflict.barcode || "");
+  const conflictVariantId = String(conflict.variantId || source.conflictVariantId || "").trim();
+  if (!barcode || !conflictVariantId) return null;
+  return {
+    barcode,
+    conflictVariantId,
+    title: firstText(conflict.title) || null,
+    modelCode: firstText(conflict.modelCode) || null,
+    brand: firstText(conflict.brand) || null,
+    color: firstText(conflict.color) || null,
+    size: firstText(conflict.size) || null,
+    variantStatus: firstText(conflict.variantStatus) || null,
+    modelStatus: firstText(conflict.modelStatus) || null,
+    message: firstText(source.error, source.message) || null,
+  };
+}
+
+function mobileBarcodeConflictInfoFromItem(item: InventoryItem, barcode: string): MobileBarcodeConflictInfo {
+  return {
+    barcode: cleanScannedBarcode(barcode || item.barcode || ""),
+    conflictVariantId: selectedVariantIdFromItem(item as any),
+    title: firstText(item.title_ro, item.shopify_title, item.title_hu) || null,
+    modelCode: firstText(item.model_code) || null,
+    brand: firstText(item.brand_name, item.brand_code) || null,
+    color: firstText(item.color_name, item.color_code) || null,
+    size: firstText(item.size) || null,
+    variantStatus: firstText(item.variant_status, item.status) || null,
+    modelStatus: firstText(item.model_status) || null,
+  };
+}
+
+function MobileBarcodeConflictNotice({
+  info,
+  onOpen,
+}: {
+  info: MobileBarcodeConflictInfo;
+  onOpen?: (() => void) | null;
+}) {
+  const meta = [info.brand, info.color, info.size].map((value) => String(value || "").trim()).filter(Boolean).join(" • ");
+  const archived = String(info.variantStatus || "").toLowerCase() === "archived" || String(info.modelStatus || "").toLowerCase() === "archived";
+  return (
+    <div className="rounded-2xl border border-rose-300/40 bg-rose-500/12 p-3 text-rose-50 shadow-[0_0_0_1px_rgba(244,63,94,0.08)]">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-rose-200/35 bg-rose-500/20 text-rose-100">
+          <AlertTriangle size={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-white">Ez az SKU már használatban van</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-rose-100/78">
+            A <span className="font-semibold text-white">{info.barcode}</span> kód már egy másik termékvariánshoz tartozik, ezért ezt az SKU-t a rendszer nem fogadja el.
+          </p>
+        </div>
+      </div>
+      <div className="mt-2.5 rounded-xl border border-white/12 bg-black/15 px-3 py-2">
+        <p className="truncate text-sm text-white" title={info.title || info.modelCode || info.conflictVariantId}>
+          {info.title || info.modelCode || "Már létező termék"}
+        </p>
+        <p className="mt-0.5 text-xs text-rose-100/70">{meta || `Variáns: ${info.conflictVariantId}`}{archived ? " • archivált" : ""}</p>
+      </div>
+      <p className="mt-2 text-xs text-rose-100/72">Az SKU nem lett elmentve. Minden variánsnak egyedi Vonalkód / Shopify SKU szükséges.</p>
+      {onOpen && info.conflictVariantId ? (
+        <button className={`${softBtn} mt-2 w-full`} type="button" onClick={onOpen}>
+          <Eye size={14} /> Termék megnyitása
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 type VariantHistoryEvent = {
   id: string;
   created_at?: string | null;
@@ -644,6 +729,9 @@ function fieldValue(value: unknown) {
 }
 
 function formFromItem(item: Partial<InventoryItem> & Record<string, any>): EditForm {
+  const cleanModelStatus = String(item.model_status || item.modelStatus || "active").trim().toLowerCase();
+  const storedVariantStatus = String(item.variant_status || item.variantStatus || item.status || "active").trim().toLowerCase();
+  const cleanVariantStatus = cleanModelStatus !== "active" && storedVariantStatus === "active" ? "inactive" : storedVariantStatus;
   return {
     titleRo: fieldValue(item.title_ro),
     titleHu: fieldValue(item.title_hu),
@@ -653,7 +741,7 @@ function formFromItem(item: Partial<InventoryItem> & Record<string, any>): EditF
     season: fieldValue(item.season),
     material: fieldValue(item.material),
     shopifyTitle: fieldValue(item.shopify_title),
-    modelStatus: fieldValue(item.model_status || "active"),
+    modelStatus: fieldValue(cleanModelStatus),
     brandCode: fieldValue(item.brand_code || item.brandCode),
     categoryCode: fieldValue(item.category_code || item.categoryCode),
     subCategoryCode: fieldValue(item.subcategory_code || item.subCategoryCode),
@@ -668,7 +756,7 @@ function formFromItem(item: Partial<InventoryItem> & Record<string, any>): EditF
     sellPrice: fieldValue(item.sell_price),
     compareAtPrice: fieldValue(item.compare_at_price),
     imageUrl: fieldValue(item.image_url),
-    variantStatus: fieldValue(item.variant_status || item.status || "active"),
+    variantStatus: fieldValue(cleanVariantStatus),
   };
 }
 
@@ -850,6 +938,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
+  const [editBarcodeConflict, setEditBarcodeConflict] = useState<MobileBarcodeConflictInfo | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [historyTarget, setHistoryTarget] = useState<InventoryItem | null>(null);
   const [variantHistory, setVariantHistory] = useState<VariantHistoryResponse | null>(null);
@@ -860,6 +949,9 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [stockEditorTarget, setStockEditorTarget] = useState<InventoryItem | null>(null);
   const [stockEditorRows, setStockEditorRows] = useState<Record<string, string>>({});
   const [stockEditorAllowTotalChange, setStockEditorAllowTotalChange] = useState(false);
+  const [stockEditorReasonCode, setStockEditorReasonCode] = useState("");
+  const [stockEditorReasonText, setStockEditorReasonText] = useState("");
+  const [stockEditorNote, setStockEditorNote] = useState("");
   const [stockEditorWarning, setStockEditorWarning] = useState("");
   const [imagePreview, setImagePreview] = useState<{ src: string; title: string } | null>(null);
   const [focusVariantIds, setFocusVariantIds] = useState<string[]>([]);
@@ -874,6 +966,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const barcodeZxingControlsRef = useRef<any | null>(null);
   const barcodeScanRafRef = useRef<number | null>(null);
   const barcodeScannerHandlingRef = useRef(false);
+  const stockEditorSaveLockRef = useRef(false);
 
   async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const method = String(init?.method || "GET").toUpperCase();
@@ -886,7 +979,12 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     const text = await res.text();
     let data: any = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    if (!res.ok) throw new Error(String((data && (data.error || data.message)) || `${res.status} ${res.statusText}`));
+    if (!res.ok) {
+      const error = new Error(String((data && (data.error || data.message)) || `${res.status} ${res.statusText}`)) as Error & Record<string, any>;
+      error.status = res.status;
+      if (data && typeof data === "object") Object.assign(error, data);
+      throw error;
+    }
     return data as T;
   }
 
@@ -922,12 +1020,52 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<{ ok: true }>(`/variants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
+  async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "") {
+    const cleanBarcode = cleanScannedBarcode(barcode);
+    if (!cleanBarcode) return { ok: true as const, barcode: "", conflict: null as Record<string, any> | null };
+    const qs = new URLSearchParams();
+    qs.set("barcode", cleanBarcode);
+    if (excludeVariantId) qs.set("excludeVariantId", excludeVariantId);
+    qs.set("_", String(Date.now()));
+    return fetchAifJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/barcode-conflict?${qs.toString()}`);
+  }
 
-
-  async function apiVariantStockUpdate(id: string, rows: Array<{ locationId?: string; locationCode?: string; qty: number; reservedQty?: number }>, allowTotalChange: boolean) {
+  async function apiVariantStockUpdate(
+    id: string,
+    rows: Array<{ locationId?: string; locationCode?: string; qty: number; reservedQty?: number }>,
+    options: { allowTotalChange: boolean; reasonCode?: string; reasonText?: string; note?: string },
+  ) {
     return fetchAifJSON<{ ok: true; stock?: StockItem[] }>(`/variants/${encodeURIComponent(id)}/stock`, {
       method: "PATCH",
-      body: JSON.stringify({ rows, mode: allowTotalChange ? "correction" : "redistribute", allowTotalChange }),
+      body: JSON.stringify({
+        rows,
+        mode: options.allowTotalChange ? "correction" : "redistribute",
+        allowTotalChange: options.allowTotalChange,
+        reasonCode: options.reasonCode || null,
+        reasonText: options.reasonText || null,
+        note: options.note || null,
+      }),
+    });
+  }
+
+  async function apiStockTransfer(payload: {
+    title: string;
+    note?: string;
+    idempotencyKey: string;
+    lines: Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }>;
+  }) {
+    return fetchAifJSON<{
+      ok: true;
+      duplicate?: boolean;
+      transferId?: string | null;
+      documentId?: string | null;
+      documentNumber?: string | null;
+      documentTotalValue?: number | string | null;
+      documents?: Array<{ documentNumber?: string | null; transferId?: string | null; documentTotalValue?: number | string | null }>;
+    }>(`/stock-transfers`, {
+      method: "POST",
+      headers: { "Idempotency-Key": payload.idempotencyKey },
+      body: JSON.stringify(payload),
     });
   }
 
@@ -942,6 +1080,50 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     if (!res.ok) throw new Error(data?.error || "Nem sikerült feltölteni a képet.");
     return data as { key: string; url: string };
   }
+
+  const editBarcodeMatches = useMemo(() => {
+    const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
+    const barcode = cleanScannedBarcode(edit.barcode);
+    if (!currentVariantId || !barcode) return [] as InventoryItem[];
+    const key = barcode.toLowerCase();
+    return items
+      .filter((item) => selectedVariantIdFromItem(item as any) !== currentVariantId)
+      .filter((item) => cleanScannedBarcode(item.barcode || "").toLowerCase() === key)
+      .slice(0, 4);
+  }, [detail?.item?.id, detail?.item?.variant_id, edit.barcode, items]);
+
+  const effectiveEditBarcodeConflict = useMemo(
+    () => editBarcodeConflict || (editBarcodeMatches[0] ? mobileBarcodeConflictInfoFromItem(editBarcodeMatches[0], edit.barcode) : null),
+    [editBarcodeConflict, editBarcodeMatches, edit.barcode],
+  );
+
+  useEffect(() => {
+    const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
+    if (!detailOpen || !currentVariantId) {
+      setEditBarcodeConflict(null);
+      return;
+    }
+    const barcode = cleanScannedBarcode(edit.barcode);
+    if (!barcode) {
+      setEditBarcodeConflict(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void apiBarcodeConflictCheck(barcode, currentVariantId)
+        .then((result) => {
+          if (cancelled) return;
+          setEditBarcodeConflict(result.conflict ? barcodeConflictInfoFromApi({ barcode: result.barcode, conflict: result.conflict }) : null);
+        })
+        .catch(() => {
+          // Mentés előtt ugyanaz az ellenőrzés kötelezően újra lefut.
+        });
+    }, 320);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [detailOpen, detail?.item?.id, detail?.item?.variant_id, edit.barcode]);
 
   function stockRowsForVariant(variantId?: string | null) {
     return stockRows.filter((row) => String(row.variant_id || "") === String(variantId || ""));
@@ -1176,9 +1358,15 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         .filter((row) => n(row.qty_delta) > 0)
         .filter((row) => {
           const sourceType = normalizeSearch(row.source_type || "");
-          const movementType = normalizeSearch(row.movement_type || "");
           const reason = normalizeSearch(row.raw?.reason || "");
-          return sourceType.includes("import_batch") || reason.includes("import_batch") || movementType === "incoming";
+          const importBatchId = firstText(
+            row.raw?.importBatchId,
+            row.raw?.import_batch_id,
+            sourceType.includes("import_batch") ? row.source_id : "",
+          );
+          const sourceKey = normalizeSearch(firstText(row.source_id, importBatchId));
+          if (sourceType.includes("stock_table_audit") || sourceKey.startsWith("stock audit") || reason.includes("stock audit")) return false;
+          return sourceType.includes("import_batch") || reason.includes("import_batch") || Boolean(importBatchId);
         })
         .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
       if (!rows.length) {
@@ -1188,10 +1376,20 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         return;
       }
       const latest = rows[0];
-      const sourceId = firstText(latest.source_id, latest.raw?.importBatchId, latest.raw?.import_batch_id);
+      const latestSourceType = normalizeSearch(latest.source_type || "");
+      const sourceId = firstText(
+        latest.raw?.importBatchId,
+        latest.raw?.import_batch_id,
+        latestSourceType.includes("import_batch") ? latest.source_id : "",
+      );
       const latestMinute = Math.floor(dateTimeMs(latest.created_at) / 60000);
       const group = rows.filter((row) => {
-        const rowSourceId = firstText(row.source_id, row.raw?.importBatchId, row.raw?.import_batch_id);
+        const rowSourceType = normalizeSearch(row.source_type || "");
+        const rowSourceId = firstText(
+          row.raw?.importBatchId,
+          row.raw?.import_batch_id,
+          rowSourceType.includes("import_batch") ? row.source_id : "",
+        );
         if (sourceId && rowSourceId) return rowSourceId === sourceId;
         return Math.floor(dateTimeMs(row.created_at) / 60000) === latestMinute;
       });
@@ -1213,6 +1411,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     const id = String(item.variant_id || item.id || "").trim();
     if (!id) return;
     setDetailOpen(true);
+    setEditBarcodeConflict(null);
     setDetailBusy(true);
     setDetail(null);
     setEdit(formFromItem(item as any));
@@ -1266,9 +1465,73 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       setMessage("A terméknév kötelező.");
       return;
     }
+    if (effectiveEditBarcodeConflict) {
+      setEditBarcodeConflict(effectiveEditBarcodeConflict);
+      setMessage("");
+      return;
+    }
+
+    const previousModelStatus = String(detail?.item?.model_status || "active").trim().toLowerCase();
+    const previousVariantStatus = String(detail?.item?.variant_status || detail?.item?.status || "active").trim().toLowerCase();
+    const nextModelStatus = String(edit.modelStatus || "active").trim().toLowerCase();
+    const nextVariantStatus = String(edit.variantStatus || "active").trim().toLowerCase();
+    const explicitlyActivatingVariant = nextVariantStatus === "active" && (previousVariantStatus !== "active" || previousModelStatus !== "active");
+    if (explicitlyActivatingVariant) {
+      const missing: string[] = [];
+      if (!String(edit.imageUrl || "").trim()) missing.push("kép");
+      if (!cleanScannedBarcode(edit.barcode)) missing.push("vonalkód / SKU");
+      if (!String(edit.titleRo || "").trim()) missing.push("terméknév");
+      if (!String(edit.size || "").trim()) missing.push("méret");
+      if (priceNumber(edit.buyPrice) === null) missing.push("vételár");
+      if (priceNumber(edit.sellPrice) === null) missing.push("eladási ár");
+      if (missing.length) {
+        setMessage(`Ezt a konkrét variánst még nem lehet aktiválni. Hiányzik: ${missing.join(", ")}. A termékkód nem helyettesíti az egyedi SKU-t.`);
+        return;
+      }
+    }
+
     setSaving(true);
     setMessage("");
     try {
+      const requestedBarcode = cleanScannedBarcode(edit.barcode);
+      if (requestedBarcode) {
+        const barcodeCheck = await apiBarcodeConflictCheck(requestedBarcode, id);
+        const conflictInfo = barcodeCheck.conflict
+          ? barcodeConflictInfoFromApi({ barcode: barcodeCheck.barcode, conflict: barcodeCheck.conflict })
+          : null;
+        if (conflictInfo) {
+          setEditBarcodeConflict(conflictInfo);
+          return;
+        }
+        setEditBarcodeConflict(null);
+      }
+
+      const normalizedEditColor = normalizeColor(edit.colorName);
+      const normalizedEditSize = normalizeSize(edit.size);
+      const activatingSharedModel = previousModelStatus !== "active" && nextModelStatus === "active";
+      if (activatingSharedModel) {
+        const currentModelId = firstText(detail?.item?.model_id, detail?.item?.modelId);
+        if (currentModelId) {
+          const siblingIds = Array.from(new Set(
+            items
+              .filter((item) => selectedVariantIdFromItem(item as any) !== id)
+              .filter((item) => firstText(item.model_id, (item as any).modelId) === currentModelId)
+              .filter((item) => itemStatus(item) === "active")
+              .map((item) => selectedVariantIdFromItem(item as any))
+              .filter(Boolean)
+          ));
+          for (const siblingId of siblingIds) {
+            await apiVariantUpdate(siblingId, { status: "inactive" });
+          }
+        }
+      }
+
+      const supplierVariantCode = firstText(
+        detail?.item?.supplier_variant_code,
+        detail?.item?.supplierVariantCode,
+        [edit.supplierProductCode, normalizedEditColor || edit.colorCode, normalizedEditSize].filter(Boolean).join("::"),
+      );
+
       await apiVariantUpdate(id, {
         titleRo: edit.titleRo,
         titleHu: edit.titleHu,
@@ -1283,13 +1546,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         categoryCode: edit.categoryCode || null,
         subCategoryCode: edit.subCategoryCode || null,
         barcode: edit.barcode,
+        supplierId: detail?.item?.supplier_id || detail?.item?.supplierId || null,
         supplierProductCode: edit.supplierProductCode,
         productCode: edit.supplierProductCode,
+        supplierVariantCode: supplierVariantCode || null,
+        supplierColorCode: edit.colorCode || normalizedEditColor || null,
+        supplierSize: normalizedEditSize || null,
         snCod: edit.snCod,
         customsTariffCode: edit.customsTariffCode,
         colorCode: edit.colorCode,
-        colorName: normalizeColor(edit.colorName),
-        size: normalizeSize(edit.size),
+        colorName: normalizedEditColor,
+        size: normalizedEditSize,
         buyPrice: edit.buyPrice,
         sellPrice: edit.sellPrice,
         compareAtPrice: edit.compareAtPrice,
@@ -1299,10 +1566,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       const data = await apiVariantDetail(id);
       setDetail(data);
       setEdit(formFromItem(data.item || {}));
+      setEditBarcodeConflict(null);
       await load(false);
       setMessage("Termékadatok mentve.");
     } catch (error: any) {
-      setMessage(error?.message || "Nem sikerült menteni a terméket.");
+      const conflictInfo = barcodeConflictInfoFromApi(error);
+      if (conflictInfo) {
+        setEditBarcodeConflict(conflictInfo);
+        setMessage("");
+      } else {
+        setMessage(error?.message || "Nem sikerült menteni a terméket.");
+      }
     } finally {
       setSaving(false);
     }
@@ -1333,6 +1607,9 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     setStockEditorTarget(item);
     setStockEditorRows(next);
     setStockEditorAllowTotalChange(false);
+    setStockEditorReasonCode("");
+    setStockEditorReasonText("");
+    setStockEditorNote("");
     setStockEditorWarning("");
   }
 
@@ -1342,9 +1619,60 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return Math.max(0, Math.floor(n(row?.reserved_qty)));
   }
 
+  function stockEditorOriginalQty(location: MetaItem) {
+    if (!stockEditorTarget?.variant_id) return 0;
+    return Math.max(0, Math.floor(n(stockForLocation(stockRowsForVariant(stockEditorTarget.variant_id), location)?.qty)));
+  }
+
   function stockEditorOriginalTotal() {
     if (!stockEditorTarget?.variant_id) return 0;
-    return stockLocationRows.reduce((sum, loc) => sum + Math.floor(n(stockForLocation(stockRowsForVariant(stockEditorTarget.variant_id), loc)?.qty)), 0);
+    return stockLocationRows.reduce((sum, loc) => sum + stockEditorOriginalQty(loc), 0);
+  }
+
+  function stockEditorTransferLines() {
+    if (!stockEditorTarget?.variant_id) return [] as Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }>;
+    const donors = stockLocationRows
+      .map((loc) => {
+        const before = stockEditorOriginalQty(loc);
+        const desired = Math.max(stockEditorReservedQty(loc), Math.floor(n(stockEditorRows[locationKey(loc)])));
+        return { loc, qty: Math.max(0, before - desired) };
+      })
+      .filter((row) => row.qty > 0);
+    const receivers = stockLocationRows
+      .map((loc) => {
+        const before = stockEditorOriginalQty(loc);
+        const desired = Math.max(stockEditorReservedQty(loc), Math.floor(n(stockEditorRows[locationKey(loc)])));
+        return { loc, qty: Math.max(0, desired - before) };
+      })
+      .filter((row) => row.qty > 0);
+    const lines: Array<{ variantId: string; fromLocationId: string; toLocationId: string; qty: number }> = [];
+    let donorIndex = 0;
+    let receiverIndex = 0;
+    while (donorIndex < donors.length && receiverIndex < receivers.length) {
+      const donor = donors[donorIndex];
+      const receiver = receivers[receiverIndex];
+      const moved = Math.min(donor.qty, receiver.qty);
+      if (moved > 0) {
+        lines.push({
+          variantId: String(stockEditorTarget.variant_id),
+          fromLocationId: String(donor.loc.id || ""),
+          toLocationId: String(receiver.loc.id || ""),
+          qty: moved,
+        });
+        donor.qty -= moved;
+        receiver.qty -= moved;
+      }
+      if (donor.qty <= 0) donorIndex += 1;
+      if (receiver.qty <= 0) receiverIndex += 1;
+    }
+    const remainder = donors.reduce((sum, row) => sum + row.qty, 0) + receivers.reduce((sum, row) => sum + row.qty, 0);
+    if (remainder > 0) throw new Error("A készletáthelyezés forrás- és célmennyisége nem egyezik.");
+    return lines;
+  }
+
+  function createStockTransferIdempotencyKey() {
+    if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `warehouse-mobile-transfer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
   function stockEditorDraftTotal(rows: Record<string, string> = stockEditorRows) {
@@ -1362,13 +1690,24 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }
 
   async function saveStockEditor() {
-    if (!stockEditorTarget?.variant_id) return;
+    if (!stockEditorTarget?.variant_id || stockEditorSaveLockRef.current) return;
     const totalDelta = stockEditorDraftTotal() - stockEditorOriginalTotal();
     if (totalDelta !== 0 && !stockEditorAllowTotalChange) {
       setStockEditorWarning("A teljes készlet megváltozna. Kapcsold be a készletkorrekció módot, ha ez szándékos.");
       return;
     }
+    if (stockEditorAllowTotalChange && totalDelta !== 0 && !stockEditorReasonCode) {
+      setStockEditorWarning("A készletkorrekció okának kiválasztása kötelező.");
+      return;
+    }
+    if (stockEditorAllowTotalChange && totalDelta !== 0 && stockEditorReasonCode === "other" && !stockEditorReasonText.trim()) {
+      setStockEditorWarning("Az Egyéb készletkorrekció okát szövegesen is add meg.");
+      return;
+    }
+
+    stockEditorSaveLockRef.current = true;
     setSaving(true);
+    setMessage("");
     try {
       const rows = stockLocationRows.map((loc) => ({
         locationId: String(loc.id || ""),
@@ -1376,15 +1715,52 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         qty: Math.max(stockEditorReservedQty(loc), Math.floor(n(stockEditorRows[locationKey(loc)]))),
         reservedQty: stockEditorReservedQty(loc),
       }));
-      await apiVariantStockUpdate(stockEditorTarget.variant_id, rows, stockEditorAllowTotalChange);
-      notifyStockMovesChanged({ variantId: stockEditorTarget.variant_id, source: stockEditorAllowTotalChange ? "warehouse_mobile_stock_correction" : "warehouse_mobile_stock_edit" });
+
+      let resultMessage = "";
+      if (stockEditorAllowTotalChange) {
+        await apiVariantStockUpdate(stockEditorTarget.variant_id, rows, {
+          allowTotalChange: true,
+          reasonCode: stockEditorReasonCode,
+          reasonText: stockEditorReasonText.trim(),
+          note: stockEditorNote.trim(),
+        });
+        resultMessage = `Készletkorrekció mentve: ${totalDelta > 0 ? "+" : ""}${totalDelta} db.`;
+        notifyStockMovesChanged({ variantId: stockEditorTarget.variant_id, source: "warehouse_mobile_stock_correction" });
+      } else {
+        const transferLines = stockEditorTransferLines();
+        if (!transferLines.length) {
+          setMessage("Nem változott a készlet elosztása, ezért nincs mentendő készletmozgatás.");
+          return;
+        }
+        const transfer = await apiStockTransfer({
+          title: "Aviz intern de transfer stoc",
+          note: stockEditorNote.trim(),
+          idempotencyKey: createStockTransferIdempotencyKey(),
+          lines: transferLines,
+        });
+        const documentNumber = (transfer.documents || [])
+          .map((entry) => String(entry.documentNumber || entry.transferId || "").trim())
+          .filter(Boolean)
+          .join(", ") || String(transfer.documentNumber || transfer.transferId || "").trim();
+        const documentValue = Math.max(
+          n(transfer.documentTotalValue),
+          ...(transfer.documents || []).map((entry) => n(entry.documentTotalValue)),
+        );
+        resultMessage = `${transfer.duplicate ? "Az ismételt mentést a rendszer felismerte; nem mozgatta meg újra a készletet." : "Készlet áthelyezve és PV-előkészítéshez adva."}${documentNumber ? ` ${documentNumber}.` : ""}${documentValue >= 10000 ? ` Figyelem: az előkészítés értéke ${money(documentValue)} RON, UIT szükséges.` : ""}`;
+        notifyStockMovesChanged({ variantId: stockEditorTarget.variant_id, source: "warehouse_mobile_transfer", transferId: transfer.transferId || null });
+      }
+
       setStockEditorTarget(null);
       setStockEditorRows({});
+      setStockEditorReasonCode("");
+      setStockEditorReasonText("");
+      setStockEditorNote("");
       await load(false);
-      setMessage(stockEditorAllowTotalChange ? `Készletkorrekció mentve: ${totalDelta > 0 ? "+" : ""}${totalDelta} db.` : "Készlet mentve.");
+      setMessage(resultMessage);
     } catch (error: any) {
       setMessage(error?.message || "Nem sikerült menteni a készletet.");
     } finally {
+      stockEditorSaveLockRef.current = false;
       setSaving(false);
     }
   }
@@ -1749,7 +2125,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
       {detailOpen && (
         <>
-          <MobileBackdrop onClose={() => setDetailOpen(false)} />
+          <MobileBackdrop onClose={() => { setDetailOpen(false); setEditBarcodeConflict(null); }} />
           <div className={sheetPanel}>
             <div className="mb-3 flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1757,7 +2133,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 <h2 className="mt-1 line-clamp-2 text-lg text-white">{edit.titleRo || itemTitle(detail?.item || {})}</h2>
                 {detailBusy ? <p className="mt-1 text-xs text-white/50">Betöltés...</p> : null}
               </div>
-              <button className={iconBtn} onClick={() => setDetailOpen(false)} type="button"><X size={18} /></button>
+              <button className={iconBtn} onClick={() => { setDetailOpen(false); setEditBarcodeConflict(null); }} type="button"><X size={18} /></button>
             </div>
 
             <div className="grid gap-3">
@@ -1794,8 +2170,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <label className={label}>Fotó URL<input className={input} value={edit.imageUrl} onChange={(e) => setEdit((x) => ({ ...x, imageUrl: e.target.value }))} /></label>
               <div className="grid grid-cols-2 gap-2">
                 <label className={label}>Termékkód<input className={input} value={edit.supplierProductCode} onChange={(e) => setEdit((x) => ({ ...x, supplierProductCode: e.target.value }))} /></label>
-                <label className={label}>Vonalkód<input className={input} value={edit.barcode} onChange={(e) => setEdit((x) => ({ ...x, barcode: e.target.value }))} /></label>
+                <label className={label}>Vonalkód / Shopify SKU<input className={input} value={edit.barcode} onChange={(e) => { setEditBarcodeConflict(null); setEdit((x) => ({ ...x, barcode: e.target.value })); }} /></label>
               </div>
+              {effectiveEditBarcodeConflict ? (
+                <MobileBarcodeConflictNotice
+                  info={effectiveEditBarcodeConflict}
+                  onOpen={effectiveEditBarcodeConflict.conflictVariantId ? () => {
+                    const conflictItem = items.find((item) => selectedVariantIdFromItem(item as any) === effectiveEditBarcodeConflict.conflictVariantId);
+                    void openDetail((conflictItem || { variant_id: effectiveEditBarcodeConflict.conflictVariantId }) as InventoryItem);
+                  } : null}
+                />
+              ) : null}
               <div className="grid grid-cols-2 gap-2">
                 <label className={label}>S/N/COD<input className={input} value={edit.snCod} onChange={(e) => setEdit((x) => ({ ...x, snCod: e.target.value }))} /></label>
                 <label className={label}>Vámtarifa kód<input className={input} value={edit.customsTariffCode} onChange={(e) => setEdit((x) => ({ ...x, customsTariffCode: e.target.value }))} /></label>
@@ -1803,13 +2188,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
               <label className={label}>Leírás<textarea className={`${input} h-24 py-3`} value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
               <div className="grid grid-cols-2 gap-2">
-                <label className={label}>Modell állapot<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="active">Aktív</option><option value="draft">Előkészítés</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
-                <label className={label}>Variáns állapot<select className={select} value={edit.variantStatus} onChange={(e) => setEdit((x) => ({ ...x, variantStatus: e.target.value }))}><option value="active">Aktív</option><option value="draft">Előkészítés</option><option value="inactive">Inaktív</option><option value="archived">Archivált</option></select></label>
+                <label className={label}>Modell állapot<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="draft">Előkészítés</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
+                <label className={label}>Variáns állapot<select className={select} value={edit.variantStatus} onChange={(e) => { const value = e.target.value; setEdit((x) => ({ ...x, variantStatus: value, modelStatus: value === "active" && ["draft", "inactive"].includes(String(x.modelStatus || "").toLowerCase()) ? "active" : x.modelStatus })); }}><option value="inactive">Inaktív</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
               </div>
               <div className="grid gap-2 pt-1">
                 <button className={softBtn} onClick={() => detail?.item && openStockEditor(detail.item)} type="button"><Boxes size={15} /> Készlet</button>
               </div>
-              <button className={`${primaryBtn} h-12`} onClick={saveDetail} disabled={saving || detailBusy} type="button"><Save size={16} /> {saving ? "Mentés..." : "Mentés"}</button>
+              <button className={`${primaryBtn} h-12`} onClick={saveDetail} disabled={saving || detailBusy || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : undefined} type="button"><Save size={16} /> {saving ? "Mentés..." : "Mentés"}</button>
             </div>
           </div>
         </>
@@ -1847,10 +2232,30 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               })}
               {stockEditorWarning ? <div className="rounded-2xl border border-amber-200/28 bg-amber-300/12 px-3 py-2 text-sm text-amber-50">{stockEditorWarning}</div> : null}
               <label className="flex items-center gap-2 rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-3 text-sm text-white/78">
-                <input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={stockEditorAllowTotalChange} onChange={(e) => setStockEditorAllowTotalChange(e.target.checked)} />
+                <input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={stockEditorAllowTotalChange} onChange={(e) => { setStockEditorAllowTotalChange(e.target.checked); if (!e.target.checked) { setStockEditorReasonCode(""); setStockEditorReasonText(""); } }} />
                 Készletkorrekció mód, a teljes darabszám változhat
               </label>
-              <button className={`${primaryBtn} h-12`} onClick={saveStockEditor} disabled={saving} type="button"><Save size={16} /> Készlet mentése</button>
+              {stockEditorAllowTotalChange && stockEditorDraftTotal() !== stockEditorOriginalTotal() ? (
+                <div className="rounded-2xl border border-amber-200/25 bg-amber-300/10 p-3">
+                  <p className="text-sm text-amber-50">Korrekció oka</p>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-100/65">Kötelező, ha a teljes darabszám változik. Ez bekerül a készletmozgás naplójába.</p>
+                  <label className={`${label} mt-3`}>
+                    Ok
+                    <select className={select} value={stockEditorReasonCode} onChange={(e) => { setStockEditorReasonCode(e.target.value); if (e.target.value !== "other") setStockEditorReasonText(""); }}>
+                      <option value="">Válassz okot</option>
+                      <option value="inventory_difference">Leltáreltérés</option>
+                      <option value="incorrect_reception">Téves bevételezés</option>
+                      <option value="invoice_correction">Számlakorrekció</option>
+                      <option value="damaged_or_lost">Sérült vagy elveszett termék</option>
+                      <option value="admin_correction">Adminisztrációs javítás</option>
+                      <option value="other">Egyéb</option>
+                    </select>
+                  </label>
+                  {stockEditorReasonCode === "other" ? <label className={`${label} mt-3`}>Egyéb ok<input className={input} value={stockEditorReasonText} onChange={(e) => setStockEditorReasonText(e.target.value)} placeholder="Miért szükséges a korrekció?" /></label> : null}
+                </div>
+              ) : null}
+              <label className={label}>Megjegyzés <span className="text-white/38">(opcionális)</span><input className={input} value={stockEditorNote} onChange={(e) => setStockEditorNote(e.target.value)} placeholder={stockEditorAllowTotalChange ? "Korrekció belső megjegyzése" : "Átadás / PV belső megjegyzése"} /></label>
+              <button className={`${primaryBtn} h-12`} onClick={saveStockEditor} disabled={saving || (stockEditorAllowTotalChange && stockEditorDraftTotal() !== stockEditorOriginalTotal() && (!stockEditorReasonCode || (stockEditorReasonCode === "other" && !stockEditorReasonText.trim())))} type="button"><Save size={16} /> {stockEditorAllowTotalChange ? "Készletkorrekció mentése" : "Áthelyezés mentése"}</button>
             </div>
           </div>
         </>
