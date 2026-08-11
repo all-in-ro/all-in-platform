@@ -17,6 +17,7 @@ import {
   Pencil,
   Save,
   Search,
+  ShieldCheck,
   ShoppingBag,
   Trash2,
   UserPlus,
@@ -50,6 +51,7 @@ type Props = {
   initialMode?: "search" | "new";
   locationCode?: string;
   locationName: string;
+  role?: "admin" | "shop";
   onClose: () => void;
 };
 
@@ -180,6 +182,7 @@ export default function AllInMagazinClients({
   initialMode = "search",
   locationCode: locationCodeProp,
   locationName,
+  role = "shop",
   onClose,
 }: Props) {
   const currentYear = new Date().getFullYear();
@@ -222,6 +225,7 @@ export default function AllInMagazinClients({
     detail && (numberValue(detail.summary.saleCount) > 0 || detail.payments.length > 0),
   );
   const customerHasOpenBalance = numberValue(detail?.summary.openBalance) > 0.005;
+  const canManageCustomerData = role === "admin";
 
   async function loadLocalities(countyCode: string, selectedCode = "") {
     if (!countyCode) {
@@ -418,6 +422,10 @@ export default function AllInMagazinClients({
   }
 
   function openEdit() {
+    if (!canManageCustomerData) {
+      setError("A kliens adatainak módosítása csak adminisztrátori jogosultsággal engedélyezett.");
+      return;
+    }
     const customer = detail?.item || selected;
     if (!customer) return;
     const countyCode = customer.countyCode || defaultCountyCode;
@@ -452,6 +460,10 @@ export default function AllInMagazinClients({
   }
 
   async function saveCustomer() {
+    if (mode === "edit" && !canManageCustomerData) {
+      setError("A kliens adatainak módosítása csak adminisztrátori jogosultsággal engedélyezett.");
+      return;
+    }
     const fullName = draft.fullName.trim();
     const phone = draft.phone.trim();
     if (!fullName || !phone) {
@@ -496,10 +508,15 @@ export default function AllInMagazinClients({
       setSelected(saved);
       setMode("detail");
       setDraft(EMPTY_DRAFT);
+      const duplicateProtected = Boolean((response as { protected?: boolean }).protected);
       setSuccess(
         mode === "edit"
           ? "A kliens adatai frissítve."
-          : ("duplicate" in response && response.duplicate ? "A meglévő kliens adatai frissítve." : "A kliens rögzítve."),
+          : ("duplicate" in response && response.duplicate
+            ? (duplicateProtected
+              ? "Ez a telefonszám már egy meglévő klienshez tartozik. A meglévő kliens adatai nem módosultak."
+              : "A meglévő kliens adatai frissítve.")
+            : "A kliens rögzítve."),
       );
       await loadCustomerDetail(saved.id, detailYear || currentYear);
     } catch (caught) {
@@ -510,6 +527,10 @@ export default function AllInMagazinClients({
   }
 
   async function deleteCustomer() {
+    if (!canManageCustomerData) {
+      setError("Kliens törlése vagy archiválása csak adminisztrátori jogosultsággal engedélyezett.");
+      return;
+    }
     if (!selected) return;
     setCustomerDeleting(true);
     setError("");
@@ -579,6 +600,10 @@ export default function AllInMagazinClients({
   }
 
   async function detachCustomerSale() {
+    if (!canManageCustomerData) {
+      setError("Vásárlás leválasztása a klienstől csak adminisztrátori jogosultsággal engedélyezett.");
+      return;
+    }
     if (!selected || !saleDetachTarget) return;
     setSaleDetaching(true);
     setError("");
@@ -889,22 +914,30 @@ export default function AllInMagazinClients({
                 </button>
 
                 <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={openEdit}
-                    disabled={!detail || detailLoading}
-                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:opacity-50"
-                  >
-                    <Pencil size={15} /> Szerkesztés
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCustomerDeleteOpen(true)}
-                    disabled={!detail || detailLoading}
-                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-rose-300/50 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:opacity-50"
-                  >
-                    <Trash2 size={15} /> Kliens törlése
-                  </button>
+                  {canManageCustomerData ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={openEdit}
+                        disabled={!detail || detailLoading}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/40 bg-[#2a8d8b] px-3 text-xs text-white hover:bg-[#319c99] disabled:opacity-50"
+                      >
+                        <Pencil size={15} /> Szerkesztés
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomerDeleteOpen(true)}
+                        disabled={!detail || detailLoading}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-rose-300/50 bg-rose-600 px-3 text-xs text-white hover:bg-rose-500 disabled:opacity-50"
+                      >
+                        <Trash2 size={15} /> Kliens törlése
+                      </button>
+                    </>
+                  ) : (
+                    <span className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/24 bg-[#2a8d8b]/12 px-3 text-xs text-[#d7fffd]">
+                      <ShieldCheck size={15} /> Védett kliensadat • módosítás és törlés csak ADMIN
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => setYearPickerOpen(true)}
@@ -1110,14 +1143,16 @@ export default function AllInMagazinClients({
                                 <p className="text-[10px] uppercase tracking-[0.08em] text-white/40">Bizonylat összege</p>
                                 <p className="mt-1 text-xl text-white tabular-nums">{formatMoney(sale.total)}</p>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => setSaleDetachTarget(sale)}
-                                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_14px_rgba(225,29,72,0.22)] hover:bg-rose-500"
-                                title="Törlés a kliens vásárlási előzményeiből"
-                              >
-                                <Trash2 size={14} /> Törlés
-                              </button>
+                              {canManageCustomerData ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setSaleDetachTarget(sale)}
+                                  className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-rose-300/55 bg-rose-600 px-3 text-[11px] text-white shadow-[0_6px_14px_rgba(225,29,72,0.22)] hover:bg-rose-500"
+                                  title="Törlés a kliens vásárlási előzményeiből"
+                                >
+                                  <Trash2 size={14} /> Törlés
+                                </button>
+                              ) : null}
                             </div>
                           </div>
 
@@ -1323,7 +1358,7 @@ export default function AllInMagazinClients({
         </div>
       ) : null}
 
-      {customerDeleteOpen && selected && detail ? (
+      {canManageCustomerData && customerDeleteOpen && selected && detail ? (
         <div className="fixed inset-0 z-[285] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm">
           <section className="w-full max-w-[560px] overflow-hidden rounded-[26px] border border-rose-300/36 bg-[#303a4c] text-white shadow-[0_32px_100px_rgba(0,0,0,0.58)]">
             <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4a2632] to-[#303a4c] px-5 py-4">
@@ -1374,7 +1409,7 @@ export default function AllInMagazinClients({
         </div>
       ) : null}
 
-      {saleDetachTarget ? (
+      {canManageCustomerData && saleDetachTarget ? (
         <div className="fixed inset-0 z-[280] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm">
           <section className="w-full max-w-[520px] overflow-hidden rounded-[26px] border border-rose-300/36 bg-[#303a4c] text-white shadow-[0_32px_100px_rgba(0,0,0,0.56)]">
             <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4a2632] to-[#303a4c] px-5 py-4">
