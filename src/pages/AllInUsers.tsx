@@ -165,7 +165,7 @@ function code128Svg(value: string, height = 64) {
     }
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${height}" role="img" aria-label="${code}" preserveAspectRatio="xMidYMid meet"><rect width="${totalWidth}" height="${height}" fill="#fff"/>${rects.join("")}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${height}" role="img" aria-label="${code}" preserveAspectRatio="none"><rect width="${totalWidth}" height="${height}" fill="#fff"/>${rects.join("")}</svg>`;
 }
 
 function escapeHtml(value: string) {
@@ -601,9 +601,9 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
       color: #607083;
     }
     .barcode {
-      margin-top: 3.1mm;
-      width: 74mm;
-      height: 14mm;
+      margin: 3.1mm auto 0;
+      width: 68mm;
+      height: 12.5mm;
       background: #fff;
     }
     .barcode svg { width: 100%; height: 100%; display: block; }
@@ -1089,7 +1089,7 @@ export default function AllInUsers({ api, actor }: { api?: string; actor?: strin
                 <div className="mt-4 truncate text-xl font-normal">{cardItem.name || "Név nélküli felhasználó"}</div>
                 <div className="mt-1 text-sm text-slate-500">{shopName(cardItem.shopId)}</div>
                 <div
-                  className="mt-4 h-[92px] w-full overflow-hidden bg-white [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
+                  className="mx-auto mt-4 h-[80px] w-[88%] overflow-hidden bg-white [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
                   dangerouslySetInnerHTML={{ __html: code128Svg(accessCardPayload(cardItem), 64) }}
                 />
                 <div className="mt-2 text-center font-mono text-sm tracking-[0.16em] text-slate-700">
