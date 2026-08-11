@@ -1938,6 +1938,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
       error.statusCode = 409;
       error.code = "barcode_conflict";
+      error.barcode = barcode;
       error.conflictVariantId = owner?.id ? String(owner.id) : null;
       throw error;
     };
@@ -7266,6 +7267,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const rawSellPrice = rawValueByHeaders(raw, ["PRET DE VINZARE", "PRET DE VANZARE", "PREȚ DE VÂNZARE", "PRET VANZARE", "PRET VINZARE", "SELL PRICE", "SALE PRICE", "ELADASI AR", "ELADÁSI ÁR"]);
     const rawImageUrl = rawValueByHeaders(raw, ["IMAGE", "IMAGE URL", "KÉP", "KEP", "KÉP URL", "KEP URL", "IMG", "PHOTO", "PHOTO URL", "FOTO", "FOTO URL", "POZA", "POZĂ", "POZA URL", "URL FOTO", "URL POZA", "LINK FOTO", "LINK POZA", "IMAGINE", "IMAGINE URL", "PICTURE", "PICTURE URL"]);
     const rawBarcode = rawValueByHeaders(raw, ["BARCODE", "BAR CODE", "BARKOD", "BÁRKÓD", "VONALKOD", "VONALKÓD", "EAN", "EAN13", "UPC", "COD BARE", "COD DE BARE", "CODBAR", "SKU", "SHOPIFY SKU"]);
+    const requestedBarcodeForConflict = assignedBarcodeValue(
+      src.barcode || src.ean || src.ean13 || src.supplierBarcode || src.supplier_barcode || rawBarcode
+    );
     const stockRowsInput = Array.isArray(body.stockRows)
       ? body.stockRows
       : Array.isArray(body.stock_rows)
@@ -7458,8 +7462,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       res.json({ ok: true, variantId, modelId, qty: savedQty, stockRows: savedStockRows });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
+      if (e?.code === "barcode_conflict" || e?.code === "23505") {
+        const requestedBarcode = assignedBarcodeValue(e?.barcode || requestedBarcodeForConflict);
+        if (requestedBarcode) {
+          const conflict = await findVariantBarcodeConflict(pool, requestedBarcode, null).catch(() => null);
+          if (conflict) return barcodeConflictResponse(res, requestedBarcode, conflict);
+        }
+        if (e?.code === "barcode_conflict") {
+          return res.status(409).json({
+            error: e?.message || "Ez a Vonalkód / Shopify SKU már egy másik termékhez tartozik.",
+            code: "barcode_conflict",
+            barcode: requestedBarcode || null,
+            conflict: null,
+          });
+        }
+        return res.status(409).json({
+          error: "A termék mentése egy már létező egyedi kóddal ütközött.",
+          code: "unique_conflict",
+        });
+      }
       console.error("AIF manual product add failed", e);
-      if (e?.code === "23505") return res.status(400).json({ error: "A termék mentése ütközött meglévő vonalkóddal vagy kóddal." });
       res.status(500).json({ error: e?.message || "Az új termék mentése nem sikerült.", code: e?.code || null });
     } finally {
       client.release();
@@ -7736,18 +7758,37 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!candidate) return null;
     const r = await client.query(
       `SELECT
-         v.id, v.barcode, v.internal_sku, v.size, v.color_code, v.color_name,
-         m.title_ro, m.shopify_title, m.model_code,
+         v.id, v.barcode, v.internal_sku, v.size, v.color_code, v.color_name, v.status AS variant_status,
+         m.title_ro, m.shopify_title, m.model_code, m.status AS model_status,
          b.name AS brand_name, b.code AS brand_code
        FROM aif_product_variants v
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
        WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
          AND ($2::text='' OR v.id::text<>$2)
+       ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END,
+                v.created_at ASC,
+                v.id::text ASC
        LIMIT 1`,
       [candidate, excludeVariantId ? String(excludeVariantId) : ""]
     );
     return r.rows[0] || null;
+  }
+
+  function barcodeConflictItem(conflict = null) {
+    if (!conflict) return null;
+    return {
+      variantId: conflict.id,
+      barcode: conflict.barcode,
+      internalSku: conflict.internal_sku,
+      title: conflict.title_ro || conflict.shopify_title || null,
+      modelCode: conflict.model_code || null,
+      brand: conflict.brand_name || conflict.brand_code || null,
+      color: conflict.color_name || conflict.color_code || null,
+      size: conflict.size || null,
+      variantStatus: conflict.variant_status || null,
+      modelStatus: conflict.model_status || null,
+    };
   }
 
   function barcodeConflictResponse(res, barcode, conflict = null) {
@@ -7759,21 +7800,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       text(conflict?.size),
     ].filter(Boolean).join(" • ");
     return res.status(409).json({
-      error: `Bárkód ütközés: a(z) ${assignedBarcodeValue(barcode)} kód már egy másik termékhez tartozik${variantText ? ` (${variantText})` : ""}. Minden variánsnak egyedi bárkód kell.`,
+      error: `SKU ütközés: a(z) ${assignedBarcodeValue(barcode)} Vonalkód / Shopify SKU már egy másik termékhez tartozik${variantText ? ` (${variantText})` : ""}. Minden variánsnak egyedi SKU kell.`,
       code: "barcode_conflict",
       barcode: assignedBarcodeValue(barcode),
-      conflict: conflict ? {
-        variantId: conflict.id,
-        barcode: conflict.barcode,
-        internalSku: conflict.internal_sku,
-        title: conflict.title_ro || conflict.shopify_title || null,
-        modelCode: conflict.model_code || null,
-        brand: conflict.brand_name || conflict.brand_code || null,
-        color: conflict.color_name || conflict.color_code || null,
-        size: conflict.size || null,
-      } : null,
+      conflict: barcodeConflictItem(conflict),
     });
   }
+
+  router.get("/barcode-conflict", requireAuthed, async (req, res) => {
+    const barcode = assignedBarcodeValue(req.query?.barcode ?? req.query?.sku ?? req.query?.code);
+    const excludeVariantId = text(req.query?.excludeVariantId ?? req.query?.exclude_variant_id);
+    if (!barcode) return res.json({ ok: true, barcode: "", conflict: null });
+    try {
+      const conflict = await findVariantBarcodeConflict(pool, barcode, excludeVariantId || null);
+      return res.json({
+        ok: true,
+        barcode,
+        conflict: barcodeConflictItem(conflict),
+      });
+    } catch (e) {
+      console.error("AIF barcode conflict check failed", e);
+      return res.status(500).json({ error: "Az SKU ellenőrzése nem sikerült.", code: "barcode_conflict_check_failed" });
+    }
+  });
 
   async function handleVariantBarcodeAssignment(req, res) {
     const id = text(req.params.id);
