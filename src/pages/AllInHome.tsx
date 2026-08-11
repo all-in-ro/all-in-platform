@@ -17,7 +17,10 @@ import {
   BarChart3,
   Truck,
   Users,
+  RotateCcw,
+  WalletCards,
 } from "lucide-react";
+import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 
 
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
@@ -40,15 +43,20 @@ type CarRow = {
 };
 
 type MenuItem = {
+  key?: string;
   label: string;
-  hash: string;
+  hash?: string;
+  adminModule?: AllInAdminShopWorkflowMode;
   icon: React.ComponentType<{ className?: string }>;
 };
 
 const shopItems: MenuItem[] = [
-  { label: "Csíkszereda", hash: "#allinadminmagazinciuc", icon: BarChart3 },
-  { label: "Kézdivásárhely", hash: "#allinadminmagazintargu", icon: BarChart3 },
-  { label: "Kliensek", hash: "#allinadminclients", icon: Users },
+  { key: "ciuc", label: "Csíkszereda", hash: "#allinadminmagazinciuc", icon: BarChart3 },
+  { key: "targu", label: "Kézdivásárhely", hash: "#allinadminmagazintargu", icon: BarChart3 },
+  { key: "clients", label: "Kliensek", hash: "#allinadminclients", icon: Users },
+  { key: "reservations", label: "Félretett termékek", adminModule: "reservations", icon: Bookmark },
+  { key: "returns", label: "Visszáru", adminModule: "returns", icon: RotateCcw },
+  { key: "shifts", label: "Műszakátadások", adminModule: "shifts", icon: WalletCards },
 ];
 
 const warehouseItems: MenuItem[] = [
@@ -110,41 +118,36 @@ function navigate(hash: string) {
   window.location.hash = hash;
 }
 
-function useIsMobileMenu() {
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
-    return window.matchMedia("(max-width: 820px), (pointer: coarse) and (max-width: 920px)").matches;
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(max-width: 820px), (pointer: coarse) and (max-width: 920px)");
-    const update = () => setIsMobile(media.matches);
-    update();
-
-    if (typeof media.addEventListener === "function") {
-      media.addEventListener("change", update);
-      return () => media.removeEventListener("change", update);
-    }
-
-    media.addListener(update);
-    return () => media.removeListener(update);
-  }, []);
-
-  return isMobile;
-}
-
-function ChildMenuButton({ item }: { item: MenuItem }) {
+function ChildMenuButton({
+  item,
+  onSelect,
+  tone = "normal",
+  badge,
+}: {
+  item: MenuItem;
+  onSelect?: (item: MenuItem) => void;
+  tone?: "normal" | "warning" | "danger";
+  badge?: string;
+}) {
   const Icon = item.icon;
+  const toneClass = tone === "danger"
+    ? "border-red-300/55 bg-[#a7192a] hover:bg-[#b51d30]"
+    : tone === "warning"
+      ? "border-orange-200/55 bg-[#8a5a22] hover:bg-[#9a6728]"
+      : "border-white/14 bg-[#354153] hover:border-[#67d4d1]/55 hover:bg-[#3e4d63]";
 
   return (
     <button
-      className="group flex h-10 w-full items-center gap-2.5 rounded-lg border border-white/14 bg-[#354153] px-3 text-left text-sm text-white transition hover:border-[#67d4d1]/55 hover:bg-[#3e4d63]"
-      onClick={() => navigate(item.hash)}
+      className={`group flex h-10 w-full items-center gap-2.5 rounded-lg border px-3 text-left text-sm text-white transition ${toneClass}`}
+      onClick={() => {
+        if (onSelect) onSelect(item);
+        else if (item.hash) navigate(item.hash);
+      }}
       type="button"
     >
       <Icon className="h-4 w-4 shrink-0 text-[#9ee5e2]" />
       <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      {badge ? <span className="rounded-full border border-white/28 bg-black/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.04em]">{badge}</span> : null}
       <ChevronRight className="h-4 w-4 shrink-0 text-white/38 transition group-hover:translate-x-0.5 group-hover:text-white/75" />
     </button>
   );
@@ -157,6 +160,8 @@ function MenuGroup({
   open,
   onToggle,
   items,
+  onItemSelect,
+  itemDecorations,
 }: {
   title: string;
   count: number;
@@ -164,6 +169,8 @@ function MenuGroup({
   open: boolean;
   onToggle: () => void;
   items: MenuItem[];
+  onItemSelect?: (item: MenuItem) => void;
+  itemDecorations?: Record<string, { tone?: "normal" | "warning" | "danger"; badge?: string }>;
 }) {
   return (
     <section>
@@ -191,9 +198,18 @@ function MenuGroup({
 
       {open ? (
         <div className="ml-4 mt-2 space-y-1.5 border-l-2 border-[#67d4d1]/28 pl-3">
-          {items.map((item) => (
-            <ChildMenuButton key={item.hash} item={item} />
-          ))}
+          {items.map((item) => {
+            const decoration = itemDecorations?.[item.key || ""] || {};
+            return (
+              <ChildMenuButton
+                key={item.key || item.hash || item.label}
+                item={item}
+                onSelect={onItemSelect}
+                tone={decoration.tone}
+                badge={decoration.badge}
+              />
+            );
+          })}
         </div>
       ) : null}
     </section>
@@ -241,10 +257,11 @@ function MainMenuButton({
 }
 
 export default function AllInHome(props: { onLogout?: () => void }) {
-  const isMobileMenu = useIsMobileMenu();
   const [openGroup, setOpenGroup] = useState<GroupKey | null>(null);
   const [carsLevel, setCarsLevel] = useState<CarLevel>("ok");
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
+  const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
+  const [reservationAlert, setReservationAlert] = useState({ urgent: 0, tomorrow: 0 });
 
   useEffect(() => {
     let alive = true;
@@ -301,6 +318,44 @@ export default function AllInHome(props: { onLogout?: () => void }) {
     };
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    let timer = 0;
+
+    const loadReservationAlerts = async () => {
+      try {
+        const stores = ["main_warehouse", "magazin_targu_secuiesc"];
+        const responses = await Promise.all(
+          stores.map((location) => fetchJson(`${API}/aif/shop-reservations?location=${encodeURIComponent(location)}&mode=active`)),
+        );
+        const today = new Date();
+        const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const tomorrowDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+        const tomorrowIso = `${tomorrowDate.getFullYear()}-${String(tomorrowDate.getMonth() + 1).padStart(2, "0")}-${String(tomorrowDate.getDate()).padStart(2, "0")}`;
+        let urgent = 0;
+        let tomorrow = 0;
+        for (const response of responses) {
+          for (const item of response?.items || []) {
+            const expiry = String(item?.expiresOn || "").slice(0, 10);
+            if (!expiry) continue;
+            if (expiry <= todayIso) urgent += 1;
+            else if (expiry === tomorrowIso) tomorrow += 1;
+          }
+        }
+        if (alive) setReservationAlert({ urgent, tomorrow });
+      } catch {
+        if (alive) setReservationAlert({ urgent: 0, tomorrow: 0 });
+      }
+    };
+
+    void loadReservationAlerts();
+    timer = window.setInterval(() => void loadReservationAlerts(), 30000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const toggleGroup = (group: GroupKey) => {
     setOpenGroup((current) => (current === group ? null : group));
   };
@@ -315,6 +370,23 @@ export default function AllInHome(props: { onLogout?: () => void }) {
 
   const carTone = carsLevel === "expired" ? "danger" : carsLevel === "soon" ? "warning" : "normal";
   const carBadge = carsLevel === "expired" ? "Lejárt" : carsLevel === "soon" ? "5 napon belül" : undefined;
+  const reservationTone = reservationAlert.urgent > 0 ? "danger" : reservationAlert.tomorrow > 0 ? "warning" : "normal";
+  const reservationBadge = reservationAlert.urgent > 0
+    ? `${reservationAlert.urgent} ma/lejárt`
+    : reservationAlert.tomorrow > 0
+      ? `${reservationAlert.tomorrow} holnap`
+      : undefined;
+  const shopItemDecorations = {
+    reservations: { tone: reservationTone, badge: reservationBadge },
+  } satisfies Record<string, { tone?: "normal" | "warning" | "danger"; badge?: string }>;
+
+  const handleShopItem = (item: MenuItem) => {
+    if (item.adminModule) {
+      setShopAdminModule(item.adminModule);
+      return;
+    }
+    if (item.hash) navigate(item.hash);
+  };
 
   return (
     <main className="min-h-screen bg-[#474c59] px-3 py-4 font-normal text-white sm:grid sm:place-items-center sm:py-6">
@@ -332,29 +404,16 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         </header>
 
         <div className="space-y-2.5">
-          {isMobileMenu ? (
-            <>
-              <MainMenuButton
-                label="Üzletek"
-                hash="#allinadminmagazinciuc"
-                icon={Store}
-              />
-              <MainMenuButton
-                label="Kliensek"
-                hash="#allinadminclients"
-                icon={Users}
-              />
-            </>
-          ) : (
-            <MenuGroup
-              title="Üzletek"
-              count={shopItems.length}
-              icon={Store}
-              open={openGroup === "shops"}
-              onToggle={() => toggleGroup("shops")}
-              items={shopItems}
-            />
-          )}
+          <MenuGroup
+            title="Üzletek"
+            count={shopItems.length}
+            icon={Store}
+            open={openGroup === "shops"}
+            onToggle={() => toggleGroup("shops")}
+            items={shopItems}
+            onItemSelect={handleShopItem}
+            itemDecorations={shopItemDecorations}
+          />
 
           <MenuGroup
             title="Raktár / Termékek"
@@ -409,6 +468,13 @@ export default function AllInHome(props: { onLogout?: () => void }) {
           </button>
         </footer>
       </div>
+
+      <AllInAdminShopWorkflows
+        open={shopAdminModule !== null}
+        initialMode={shopAdminModule || "reservations"}
+        actor="ADMIN"
+        onClose={() => setShopAdminModule(null)}
+      />
     </main>
   );
 }
