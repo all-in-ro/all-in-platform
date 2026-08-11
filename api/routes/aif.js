@@ -6785,6 +6785,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.post("/import-rows/:id/move-reception", requireAuthed, async (req, res) => {
     const rowId = text(req.params.id);
     const targetReceptionId = text(req.body?.targetReceptionId || req.body?.target_reception_id || req.body?.receptionId || req.body?.reception_id);
+    const commitAfterMove = boolFrom(req.body?.commitAfterMove ?? req.body?.commit_after_move, false);
     if (!targetReceptionId) return res.status(400).json({ error: "Cél receptió kiválasztása kötelező." });
     const client = await pool.connect();
     try {
@@ -6880,17 +6881,51 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await refreshBatch(row.source_batch_id);
       await refreshBatch(targetBatchId);
 
-      // A lezárt cél receptió az új, még nem készletre vett sor miatt újra Vázlat lesz.
-      // A korábban készletre vett sorok és készletmozgások változatlanok maradnak.
+      let committedAfterMove = false;
+      let committed = 0;
+      if (commitAfterMove) {
+        const commitResult = await commitBatchRows(client, {
+          batchId: targetBatchId,
+          rowIds: [String(row.id)],
+          actor: actorFrom(req),
+        });
+        committed = Number(commitResult.committed || 0);
+        if (committed < 1 || Number(commitResult.failedCount || 0) > 0) {
+          const error = new Error(
+            commitResult.failedRows?.[0]?.error ||
+            "Az áthelyezett terméksort nem sikerült készletre venni. Az áthelyezést is visszavontam."
+          );
+          error.statusCode = 400;
+          error.code = commitResult.failedRows?.[0]?.code || "move_commit_failed";
+          throw error;
+        }
+        committedAfterMove = true;
+      }
+
+      // A receptió állapota nem kézi kapcsoló: a még nyitott sorokból számolódik.
+      // Sima áthelyezésnél a cél Vázlat lesz; atomi áthelyezés + készletre vételnél
+      // a cél csak akkor marad nyitva, ha más feldolgozatlan sora is van.
       await refreshReceptionAfterImportHistoryDelete(client, row.source_reception_id);
       await refreshReceptionAfterImportHistoryDelete(client, target.rows[0].id);
 
       await client.query("COMMIT");
-      res.json({ ok: true, targetBatchId, targetReceptionId: target.rows[0].id, reopenedTarget: targetWasCommitted });
+      res.json({
+        ok: true,
+        targetBatchId,
+        targetReceptionId: target.rows[0].id,
+        sourceReceptionId: row.source_reception_id || null,
+        reopenedTarget: targetWasCommitted && !committedAfterMove,
+        committedAfterMove,
+        committed,
+      });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF move import row failed", e);
-      res.status(500).json({ error: e?.message || "A terméksor áthelyezése nem sikerült." });
+      const status = Number(e?.statusCode || 500);
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: e?.message || "A terméksor áthelyezése nem sikerült.",
+        code: e?.code || null,
+      });
     } finally {
       client.release();
     }
