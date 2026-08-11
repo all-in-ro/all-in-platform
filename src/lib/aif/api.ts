@@ -2957,6 +2957,228 @@ export function apiAifCancelShopShiftHandover(id: string) {
   );
 }
 
+
+export type AifShopReservationLine = {
+  id: string;
+  variantId: string;
+  quantity: number;
+  unitPrice: number;
+  title: string;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+};
+
+export type AifShopReservation = {
+  id: string;
+  reservationNumber: string;
+  status: "active" | "fulfilled" | "released" | "cancelled" | string;
+  expiresOn?: string | null;
+  customer: { id: string; name: string; phone?: string | null };
+  createdBy?: string | null;
+  fulfilledBy?: string | null;
+  releasedBy?: string | null;
+  fulfilledSaleId?: string | null;
+  note?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  fulfilledAt?: string | null;
+  releasedAt?: string | null;
+  totalQty: number;
+  totalValue: number;
+  lines: AifShopReservationLine[];
+};
+
+export function apiAifShopReservations(options: {
+  location: string;
+  mode?: "active" | "history";
+  month?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("mode", options.mode || "active");
+  if (options.month) q.set("month", options.month);
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    items: AifShopReservation[];
+    count: number;
+  }>(`/shop-reservations?${q.toString()}`);
+}
+
+export function apiAifCreateShopReservation(input: {
+  location: string;
+  customerId: string;
+  expiresOn: string;
+  note?: string | null;
+  lines: Array<{ variantId: string; quantity: number }>;
+}) {
+  return fetchAifJSON<{ ok: true; item: AifShopReservation }>("/shop-reservations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifReleaseShopReservation(
+  id: string,
+  input: { location: string; note?: string | null },
+) {
+  return fetchAifJSON<{ ok: true; id: string; status: "released" }>(
+    `/shop-reservations/${encodeURIComponent(id)}/release`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function apiAifFulfillShopReservation(
+  id: string,
+  input: {
+    location: string;
+    paymentMethod: AifShopSalePaymentMethod;
+    note?: string | null;
+    idempotencyKey: string;
+  },
+) {
+  return fetchAifJSON<AifShopSaleResult & {
+    reservationId: string;
+    reservationNumber?: string;
+    attributedTo?: string;
+    fulfilledBy?: string;
+  }>(
+    `/shop-reservations/${encodeURIComponent(id)}/fulfill`,
+    {
+      method: "POST",
+      headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined,
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export type AifShopIncomingLine = {
+  id: string;
+  variantId: string;
+  lineNo: number;
+  qty: number;
+  title: string;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  received: boolean;
+  receivedAt?: string | null;
+  receivedBy?: string | null;
+  stockApplied?: boolean;
+};
+
+export type AifShopIncomingDocument = {
+  id: string;
+  documentNumber: string;
+  status: string;
+  sourceLocation: { id: string; name: string };
+  targetLocation: { id: string; name: string };
+  actor?: string | null;
+  note?: string | null;
+  uitCode?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  closedAt?: string | null;
+  inventoryMode: "in_transit_until_received" | "legacy_immediate_target_stock" | string;
+  canReceive: boolean;
+  fullyReceived: boolean;
+  receivedCount: number;
+  lineCount: number;
+  totalQty: number;
+  lines: AifShopIncomingLine[];
+};
+
+export type AifShopIncomingHistoryItem = {
+  id: string;
+  receivedAt?: string | null;
+  receivedBy?: string | null;
+  qty: number;
+  stockApplied: boolean;
+  document: {
+    id: string;
+    documentNumber: string;
+    sourceName: string;
+    targetName: string;
+    createdAt?: string | null;
+    inventoryMode: string;
+  };
+  product: {
+    lineId: string;
+    variantId: string;
+    lineNo: number;
+    title: string;
+    productCode?: string | null;
+    barcode?: string | null;
+    brandName?: string | null;
+    colorName?: string | null;
+    size?: string | null;
+    imageUrl?: string | null;
+  };
+};
+
+export function apiAifShopIncoming(options: { location: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    items: AifShopIncomingDocument[];
+    count: number;
+  }>(`/shop-incoming?${q.toString()}`);
+}
+
+export function apiAifShopIncomingHistory(options: { location: string; month?: string }) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.month) q.set("month", options.month);
+  return fetchAifJSON<{
+    ok: true;
+    location: { id: string; code: string; name: string };
+    month?: string | null;
+    items: AifShopIncomingHistoryItem[];
+    count: number;
+  }>(`/shop-incoming/history?${q.toString()}`);
+}
+
+export function apiAifReceiveShopIncomingLine(
+  lineId: string,
+  input: { location: string },
+) {
+  return fetchAifJSON<{
+    ok: true;
+    duplicate?: boolean;
+    receiptId: string;
+    receivedAt: string;
+    stockApplied: boolean;
+    progress: { lines: number; received: number; fullyReceived: boolean };
+  }>(
+    `/shop-incoming/lines/${encodeURIComponent(lineId)}/receive`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function apiAifReceiveAllShopIncoming(
+  documentId: string,
+  input: { location: string },
+) {
+  return fetchAifJSON<{
+    ok: true;
+    received: number;
+    duplicates: number;
+    progress: { lines: number; received: number; fullyReceived: boolean };
+  }>(
+    `/shop-incoming/documents/${encodeURIComponent(documentId)}/receive-all`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 export type AifShopReturnSaleMatch = {
   saleLineId: string;
   saleId: string;
