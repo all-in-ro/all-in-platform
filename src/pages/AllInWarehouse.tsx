@@ -1418,6 +1418,78 @@ type DetailResponse = {
   movements: any[];
 };
 
+type WarehouseBarcodeConflictInfo = {
+  barcode: string;
+  conflictVariantId: string;
+  title?: string | null;
+  modelCode?: string | null;
+  brand?: string | null;
+  color?: string | null;
+  size?: string | null;
+  message?: string | null;
+};
+
+function barcodeConflictInfoFromApi(value: unknown): WarehouseBarcodeConflictInfo | null {
+  const source = value && typeof value === "object" ? value as Record<string, any> : {};
+  const conflict = source.conflict && typeof source.conflict === "object" ? source.conflict as Record<string, any> : {};
+  const barcode = cleanScannedBarcode(source.barcode || conflict.barcode || "");
+  const conflictVariantId = String(conflict.variantId || source.conflictVariantId || "").trim();
+  if (!barcode || !conflictVariantId) return null;
+  return {
+    barcode,
+    conflictVariantId,
+    title: firstWarehouseText(conflict.title) || null,
+    modelCode: firstWarehouseText(conflict.modelCode) || null,
+    brand: firstWarehouseText(conflict.brand) || null,
+    color: firstWarehouseText(conflict.color) || null,
+    size: firstWarehouseText(conflict.size) || null,
+    message: firstWarehouseText(source.error, source.message) || null,
+  };
+}
+
+function WarehouseBarcodeConflictNotice({
+  info,
+  onOpen,
+}: {
+  info: WarehouseBarcodeConflictInfo;
+  onOpen?: (() => void) | null;
+}) {
+  const meta = [info.brand, info.color, info.size].map((value) => String(value || "").trim()).filter(Boolean).join(" • ");
+  return (
+    <div className="rounded-2xl border border-rose-300/45 bg-rose-500/12 p-3 text-rose-50 shadow-[0_0_0_1px_rgba(244,63,94,0.08)]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-rose-200/35 bg-rose-500/20 text-rose-100">
+            <AlertTriangle size={17} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-rose-50">Ez az SKU már használatban van</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-rose-100/78">
+              A <span className="font-semibold text-white">{info.barcode}</span> kód már egy másik termékvariánshoz tartozik, ezért ezt az SKU-t a rendszer nem fogadja el.
+            </p>
+          </div>
+        </div>
+        {onOpen && info.conflictVariantId ? (
+          <button className={btnSoft} type="button" onClick={onOpen}>
+            <Eye size={14} /> Termék megnyitása
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-2.5 rounded-xl border border-white/12 bg-black/15 px-3 py-2">
+        <p className="truncate text-sm text-white" title={info.title || info.modelCode || info.conflictVariantId}>
+          {info.title || info.modelCode || "Már létező termék"}
+        </p>
+        <p className="mt-0.5 text-xs text-rose-100/70">
+          {meta || `Variáns: ${info.conflictVariantId}`}
+        </p>
+      </div>
+      <p className="mt-2 text-xs text-rose-100/72">
+        Az SKU nem lett elmentve. Minden variánsnak egyedi Vonalkód / Shopify SKU szükséges.
+      </p>
+    </div>
+  );
+}
+
 type WarehouseFilterSnapshot = {
   search: string;
   snCodFilter: string;
@@ -4979,7 +5051,10 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.error || `HTTP ${res.status}`);
+    const error = new Error(body?.error || `HTTP ${res.status}`) as Error & Record<string, any>;
+    error.status = res.status;
+    if (body && typeof body === "object") Object.assign(error, body);
+    throw error;
   }
   return res.json();
 }
@@ -5038,6 +5113,16 @@ async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "") {
+  const cleanBarcode = cleanScannedBarcode(barcode);
+  if (!cleanBarcode) return { ok: true as const, barcode: "", conflict: null as Record<string, any> | null };
+  const qs = new URLSearchParams();
+  qs.set("barcode", cleanBarcode);
+  if (excludeVariantId) qs.set("excludeVariantId", excludeVariantId);
+  qs.set("_", String(Date.now()));
+  return fetchJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/api/aif/barcode-conflict?${qs.toString()}`);
 }
 
 async function apiCreateManualProduct(payload: Record<string, unknown>) {
@@ -5670,6 +5755,8 @@ export default function AllInWarehouse() {
   const [newProduct, setNewProduct] = useState<NewProductForm>(() => emptyNewProductForm());
   const [newProductStockRows, setNewProductStockRows] = useState<Record<string, string>>({});
   const [newProductSaving, setNewProductSaving] = useState(false);
+  const [newProductBarcodeConflict, setNewProductBarcodeConflict] = useState<WarehouseBarcodeConflictInfo | null>(null);
+  const [editBarcodeConflict, setEditBarcodeConflict] = useState<WarehouseBarcodeConflictInfo | null>(null);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
   const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "subCategories" | "genders" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
@@ -7355,6 +7442,7 @@ export default function AllInWarehouse() {
     setDetailBusy(false);
     setEdit(emptyForm());
     setEditBaseline(emptyForm());
+    setEditBarcodeConflict(null);
     if (options.restoreListPosition !== false) {
       window.requestAnimationFrame(() => restoreDetailReturnPosition());
     }
@@ -7587,12 +7675,104 @@ export default function AllInWarehouse() {
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
+  function barcodeConflictInfoFromInventoryItem(item: InventoryItem, barcode: string): WarehouseBarcodeConflictInfo {
+    return {
+      barcode: cleanScannedBarcode(barcode || item.barcode || ""),
+      conflictVariantId: selectedVariantIdFromItem(item),
+      title: firstWarehouseText(item.title_ro, item.shopify_title) || null,
+      modelCode: firstWarehouseText(item.model_code) || null,
+      brand: firstWarehouseText(item.brand_name, item.brand_code) || null,
+      color: firstWarehouseText(item.color_name, item.color_code) || null,
+      size: firstWarehouseText(item.size) || null,
+    };
+  }
+
   const newProductBarcodeMatches = useMemo(() => {
     if (!newProductOpen) return [] as InventoryItem[];
-    const code = cleanScannedBarcode(newProduct.barcode || newProduct.snCod || "");
+    const code = cleanScannedBarcode(newProduct.barcode);
     if (!code) return [] as InventoryItem[];
-    return items.filter((item) => itemMatchesScannedBarcode(item, code)).slice(0, 4);
-  }, [newProductOpen, newProduct.barcode, newProduct.snCod, items]);
+    const key = normalizeSearch(code);
+    return items
+      .filter((item) => normalizeSearch(cleanScannedBarcode(item.barcode || "")) === key)
+      .slice(0, 4);
+  }, [newProductOpen, newProduct.barcode, items]);
+
+  const editBarcodeMatches = useMemo(() => {
+    const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
+    const code = cleanScannedBarcode(edit.barcode);
+    if (!currentVariantId || !code) return [] as InventoryItem[];
+    const key = normalizeSearch(code);
+    return items
+      .filter((item) => selectedVariantIdFromItem(item) !== currentVariantId)
+      .filter((item) => normalizeSearch(cleanScannedBarcode(item.barcode || "")) === key)
+      .slice(0, 4);
+  }, [detail?.item?.id, detail?.item?.variant_id, edit.barcode, items]);
+
+  const effectiveNewProductBarcodeConflict = useMemo(
+    () => newProductBarcodeConflict || (newProductBarcodeMatches[0] ? barcodeConflictInfoFromInventoryItem(newProductBarcodeMatches[0], newProduct.barcode) : null),
+    [newProductBarcodeConflict, newProductBarcodeMatches, newProduct.barcode],
+  );
+
+  const effectiveEditBarcodeConflict = useMemo(
+    () => editBarcodeConflict || (editBarcodeMatches[0] ? barcodeConflictInfoFromInventoryItem(editBarcodeMatches[0], edit.barcode) : null),
+    [editBarcodeConflict, editBarcodeMatches, edit.barcode],
+  );
+
+  useEffect(() => {
+    if (!newProductOpen) {
+      setNewProductBarcodeConflict(null);
+      return;
+    }
+    const barcode = cleanScannedBarcode(newProduct.barcode);
+    if (!barcode) {
+      setNewProductBarcodeConflict(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void apiBarcodeConflictCheck(barcode)
+        .then((result) => {
+          if (cancelled) return;
+          setNewProductBarcodeConflict(result.conflict ? barcodeConflictInfoFromApi({ barcode: result.barcode, conflict: result.conflict }) : null);
+        })
+        .catch(() => {
+          // A mentés előtt újra ellenőrizzük a DB-t. Egy pillanatnyi hálózati hiba
+          // ne tegye használhatatlanná a termékfelvételi modalt.
+        });
+    }, 320);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [newProductOpen, newProduct.barcode]);
+
+  useEffect(() => {
+    const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
+    if (!currentVariantId) {
+      setEditBarcodeConflict(null);
+      return;
+    }
+    const barcode = cleanScannedBarcode(edit.barcode);
+    if (!barcode) {
+      setEditBarcodeConflict(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void apiBarcodeConflictCheck(barcode, currentVariantId)
+        .then((result) => {
+          if (cancelled) return;
+          setEditBarcodeConflict(result.conflict ? barcodeConflictInfoFromApi({ barcode: result.barcode, conflict: result.conflict }) : null);
+        })
+        .catch(() => {
+          // A tényleges mentés előtt ugyanaz a szerveres ellenőrzés újra lefut.
+        });
+    }, 320);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [detail?.item?.id, detail?.item?.variant_id, edit.barcode]);
 
   const totalProductPages = Math.max(1, Math.ceil(filtered.length / productPageSize));
   const safeProductPage = Math.min(productPage, totalProductPages);
@@ -10387,6 +10567,7 @@ export default function AllInWarehouse() {
   async function openDetail(id: string) {
     rememberDetailReturnAnchor(id);
     setDetailCloseConfirmOpen(false);
+    setEditBarcodeConflict(null);
     setDetailBusy(true);
     setMessage("");
     try {
@@ -10473,13 +10654,13 @@ export default function AllInWarehouse() {
 
     if (mode === "editBarcode") {
       const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "");
-      const duplicate = items.find((item) => itemMatchesScannedBarcode(item, code) && String(item.variant_id || "") !== currentVariantId);
-      setEdit((current) => ({ ...current, barcode: code }));
-      setMessage(
-        duplicate
-          ? `Vonalkód beolvasva és beírva: ${code}. Figyelem: ez már szerepel ennél is: ${duplicate.title_ro || duplicate.internal_sku || duplicate.variant_id}. Mentés előtt ellenőrizd.`
-          : `Vonalkód beolvasva és beírva: ${code}. Mentéssel rögzül a terméken.`
+      const duplicate = items.find((item) =>
+        normalizeSearch(cleanScannedBarcode(item.barcode || "")) === normalizeSearch(code) &&
+        String(item.variant_id || "") !== currentVariantId
       );
+      setEdit((current) => ({ ...current, barcode: code }));
+      setEditBarcodeConflict(duplicate ? barcodeConflictInfoFromInventoryItem(duplicate, code) : null);
+      setMessage(duplicate ? "" : `Vonalkód beolvasva és beírva: ${code}. Mentéssel rögzül a terméken.`);
       return;
     }
 
@@ -10668,6 +10849,7 @@ export default function AllInWarehouse() {
     next.supplierId = supplier !== "all" ? String(selectedSupplier?.id || "") : "";
     setNewProduct(next);
     setNewProductStockRows(emptyStockRowsByLocation("0"));
+    setNewProductBarcodeConflict(null);
     setNewProductOpen(true);
     setMessage("");
   }
@@ -10677,6 +10859,7 @@ export default function AllInWarehouse() {
     setNewProductOpen(false);
     setNewProduct(emptyNewProductForm());
     setNewProductStockRows({});
+    setNewProductBarcodeConflict(null);
   }
 
 
@@ -10704,9 +10887,27 @@ export default function AllInWarehouse() {
       setMessage("Legalább egy célhelyre adj meg készletet.");
       return;
     }
+    if (effectiveNewProductBarcodeConflict) {
+      setNewProductBarcodeConflict(effectiveNewProductBarcodeConflict);
+      setMessage("");
+      return;
+    }
     setNewProductSaving(true);
     setMessage("");
     try {
+      const requestedBarcode = cleanScannedBarcode(newProduct.barcode);
+      if (requestedBarcode) {
+        const barcodeCheck = await apiBarcodeConflictCheck(requestedBarcode);
+        const conflictInfo = barcodeCheck.conflict
+          ? barcodeConflictInfoFromApi({ barcode: barcodeCheck.barcode, conflict: barcodeCheck.conflict })
+          : null;
+        if (conflictInfo) {
+          setNewProductBarcodeConflict(conflictInfo);
+          return;
+        }
+        setNewProductBarcodeConflict(null);
+      }
+
       const stockRowsPayload = stockLocationRows
         .map((loc) => ({
           locationId: String(loc.id || ""),
@@ -10760,6 +10961,7 @@ export default function AllInWarehouse() {
       setNewProductOpen(false);
       setNewProduct(emptyNewProductForm());
       setNewProductStockRows({});
+      setNewProductBarcodeConflict(null);
       if (createdVariantId) {
         resetListFiltersForProductFocus(createdSearchText, createdScannedCode && normalizeSearch(createdScannedCode) === normalizeSearch(createdSearchText) ? createdScannedCode : "");
         queueProductRowJump(createdVariantId);
@@ -10768,7 +10970,13 @@ export default function AllInWarehouse() {
         ? `Új termék rögzítve ${totalQty} db készlettel. A terméksorra ugrottam, nem nyitottam külön adatlapot.`
         : `Új termék rögzítve ${totalQty} db készlettel.`);
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült létrehozni az új terméket.");
+      const conflictInfo = barcodeConflictInfoFromApi(e);
+      if (conflictInfo) {
+        setNewProductBarcodeConflict(conflictInfo);
+        setMessage("");
+      } else {
+        setMessage(e.message || "Nem sikerült létrehozni az új terméket.");
+      }
     } finally {
       setNewProductSaving(false);
     }
@@ -10782,6 +10990,12 @@ export default function AllInWarehouse() {
       return true;
     }
     const detailId = String(detail.item.id || detail.item.variant_id || "");
+    if (effectiveEditBarcodeConflict) {
+      setEditBarcodeConflict(effectiveEditBarcodeConflict);
+      setDetailCloseConfirmOpen(false);
+      setMessage("");
+      return false;
+    }
     const priceHistoryEntry = makeWarehousePriceHistoryEntry({
       variantId: detailId,
       before: editBaseline,
@@ -10818,6 +11032,20 @@ export default function AllInWarehouse() {
     setMessage("");
     let deactivatedSiblingCount = 0;
     try {
+      const requestedBarcode = cleanScannedBarcode(edit.barcode);
+      if (requestedBarcode) {
+        const barcodeCheck = await apiBarcodeConflictCheck(requestedBarcode, detailId);
+        const conflictInfo = barcodeCheck.conflict
+          ? barcodeConflictInfoFromApi({ barcode: barcodeCheck.barcode, conflict: barcodeCheck.conflict })
+          : null;
+        if (conflictInfo) {
+          setEditBarcodeConflict(conflictInfo);
+          setDetailCloseConfirmOpen(false);
+          return false;
+        }
+        setEditBarcodeConflict(null);
+      }
+
       const normalizedEditColor = normalizeColor(edit.colorName);
       const normalizedEditSize = normalizeSize(edit.size);
       const supplierVariantCode = firstWarehouseText(
@@ -10947,7 +11175,14 @@ export default function AllInWarehouse() {
       }
       return true;
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült menteni a termékadatokat.");
+      const conflictInfo = barcodeConflictInfoFromApi(e);
+      if (conflictInfo) {
+        setEditBarcodeConflict(conflictInfo);
+        setDetailCloseConfirmOpen(false);
+        setMessage("");
+      } else {
+        setMessage(e.message || "Nem sikerült menteni a termékadatokat.");
+      }
       return false;
     } finally {
       setSaving(false);
@@ -13533,12 +13768,29 @@ export default function AllInWarehouse() {
             </div>
 
             <div className="space-y-4 p-4">
+              {newProductBarcodeConflict && newProductBarcodeMatches.length === 0 ? (
+                <WarehouseBarcodeConflictNotice
+                  info={newProductBarcodeConflict}
+                  onOpen={newProductBarcodeConflict.conflictVariantId ? () => {
+                    const conflictItem = items.find((item) => selectedVariantIdFromItem(item) === newProductBarcodeConflict.conflictVariantId);
+                    setNewProductOpen(false);
+                    setNewProduct(emptyNewProductForm());
+                    setNewProductStockRows({});
+                    setNewProductBarcodeConflict(null);
+                    if (conflictItem) {
+                      focusProductInList(conflictItem, newProductBarcodeConflict.barcode, `Ez az SKU már a(z) ${conflictItem.title_ro || "meglévő termék"} variánshoz tartozik.`);
+                    } else {
+                      void openDetail(newProductBarcodeConflict.conflictVariantId);
+                    }
+                  } : null}
+                />
+              ) : null}
               {newProductBarcodeMatches.length > 0 && (
                 <section className="rounded-2xl border border-amber-200/30 bg-amber-400/10 p-3 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm text-amber-50">Vonalkód találat már létező termékre</p>
-                      <p className="text-xs text-amber-100/70">Az adatlap nem nyílik meg automatikusan. A terméksorra tudsz ugrani, vagy rögtön a készletét módosítani.</p>
+                      <p className="text-sm text-amber-50">Ez az SKU már használatban van</p>
+                      <p className="text-xs text-amber-100/70">A beírt Vonalkód / Shopify SKU már egy másik variánshoz tartozik. Ezt az SKU-t nem mentjük el új termékhez. Nyisd meg a meglévő terméket, vagy adj meg másik egyedi SKU-t.</p>
                     </div>
                     <span className="rounded-full border border-amber-200/30 bg-black/15 px-2.5 py-1 text-xs text-amber-50">{newProductBarcodeMatches.length} találat</span>
                   </div>
@@ -13665,7 +13917,7 @@ export default function AllInWarehouse() {
                       <label className={label}>Termékkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} placeholder="pl. 3026999-001" /></label>
                       <label className={label}>Vámtarifa kód<input className={input} value={newProduct.customsTariffCode} onChange={(e) => setNewProduct((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61099020" /></label>
                       <label className={label}>Variáns kód<input className={input} value={newProduct.supplierVariantCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierVariantCode: e.target.value }))} /></label>
-                      <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={newProduct.barcode} onChange={(e) => setNewProduct((x) => ({ ...x, barcode: e.target.value }))} /></label>
+                      <label className={label}>Vonalkód / Shopify SKU alap<input className={input} value={newProduct.barcode} onChange={(e) => { setNewProductBarcodeConflict(null); setNewProduct((x) => ({ ...x, barcode: e.target.value })); }} /></label>
                       <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
                       <label className={label}>Szín<input className={input} list="warehouse-color-options" value={newProduct.colorName} onChange={(e) => setNewProduct((x) => ({ ...x, colorName: e.target.value }))} placeholder="pl. negru" /></label>
                       <label className={label}>Gyártói színkód<input className={input} value={newProduct.supplierColorCode || newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierColorCode: e.target.value, colorCode: e.target.value }))} placeholder="pl. 001" /></label>
@@ -13711,7 +13963,7 @@ export default function AllInWarehouse() {
                 <div className="text-sm text-white/65">Mentés után a termék azonnal megjelenik a raktárlistában, a készletmozgás pedig kézi bevitelként naplózódik.</div>
                 <div className="flex gap-2">
                   <button className={btnSoft} type="button" onClick={closeNewProductModal} disabled={newProductSaving}>Mégse</button>
-                  <button className={primaryBtn} type="button" onClick={saveNewProduct} disabled={newProductSaving || newProductTotalQty() <= 0}><Save size={15} /> Termék mentése</button>
+                  <button className={primaryBtn} type="button" onClick={saveNewProduct} disabled={newProductSaving || newProductTotalQty() <= 0 || Boolean(effectiveNewProductBarcodeConflict)} title={effectiveNewProductBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : undefined}><Save size={15} /> Termék mentése</button>
                 </div>
               </div>
             </div>
@@ -14391,7 +14643,8 @@ export default function AllInWarehouse() {
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-4 text-sm text-white shadow-[0_10px_22px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-60"
                 type="button"
-                disabled={saving}
+                disabled={saving || Boolean(effectiveEditBarcodeConflict)}
+                title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Előbb adj meg másik egyedi SKU-t." : undefined}
                 onClick={() => { void saveDetailAndClose(); }}
               >
                 <Save size={15} /> {saving ? "Mentés..." : "Igen"}
@@ -14498,7 +14751,7 @@ export default function AllInWarehouse() {
                           </span>
                         </span>
                         <div className="relative">
-                          <input className={`${input} w-full pr-12`} value={edit.barcode} onChange={(e) => setEdit((x) => ({ ...x, barcode: e.target.value }))} />
+                          <input className={`${input} w-full pr-12`} value={edit.barcode} onChange={(e) => { setEditBarcodeConflict(null); setEdit((x) => ({ ...x, barcode: e.target.value })); }} />
                           <button
                             className="absolute right-1.5 top-1.5 inline-flex h-7 w-9 items-center justify-center rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/70 text-white shadow-[0_0_10px_rgba(42,141,139,0.18)] hover:bg-[#2a8d8b] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/45"
                             type="button"
@@ -14510,6 +14763,11 @@ export default function AllInWarehouse() {
                           </button>
                         </div>
                       </label>
+                      {effectiveEditBarcodeConflict ? (
+                        <div className="md:col-span-3">
+                          <WarehouseBarcodeConflictNotice info={effectiveEditBarcodeConflict} />
+                        </div>
+                      ) : null}
                       <label className={label}>S/N/COD<input className={input} value={edit.snCod} onChange={(e) => setEdit((x) => ({ ...x, snCod: e.target.value }))} placeholder="belső azonosító" /></label>
                       <label className={label}>Vámtarifa kód<input className={input} value={edit.customsTariffCode} onChange={(e) => setEdit((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61102091" /></label>
                       <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, colorName: normalizeColor(x.colorName) }))} placeholder="pl. negru" /></label>
@@ -14561,7 +14819,7 @@ export default function AllInWarehouse() {
 
               <div className="flex flex-wrap justify-end gap-2 border-t border-white/12 pt-4">
                 <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Mégse</button>
-                <button className={detailSaveButtonClass} onClick={() => void saveDetail()} disabled={saving || !detailHasChanges} title={!detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése"}><Save size={16} /> Mentés</button>
+                <button className={detailSaveButtonClass} onClick={() => void saveDetail()} disabled={saving || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : !detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése"}><Save size={16} /> Mentés</button>
               </div>
             </div>
           </div>
