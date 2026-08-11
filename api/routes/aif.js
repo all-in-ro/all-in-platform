@@ -1,6 +1,8 @@
 import express from "express";
 import createAifAdminShopsRouter from "./aif/adminShops.js";
 import createAifShopReturnsRouter from "./aif/shopReturns.js";
+import createAifShopReservationsRouter from "./aif/shopReservations.js";
+import createAifShopIncomingRouter from "./aif/shopIncoming.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9890,7 +9892,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const document = await client.query(
-        `SELECT id, transfer_id, document_number, status
+        `SELECT *
          FROM aif_stock_transfer_documents
          WHERE id::text=$1 OR transfer_id=$1 OR document_number=$1
          FOR UPDATE`,
@@ -9905,6 +9907,92 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Az előkészítést a készlet-visszaállító törlés gombbal kell törölni.', code: 'preparation_restore_delete_required' });
       }
+
+      let restoredQty = 0;
+      const isInTransitDocument = cleanAifStockDocumentType(item.document_type, null) === 'internal_transfer'
+        && item?.raw && typeof item.raw === 'object'
+        && item.raw.stockTransferInventoryMode === 'in_transit_until_received';
+
+      // Az új Aviz-logikánál a lezárt, de még át nem vett áru fizikailag úton van:
+      // a forrásból már kikerült, a célba viszont még nem került be. Ha ilyen Avizt
+      // törölnek még átvétel előtt, a forráskészletet kötelező visszaállítani.
+      // Részben/teljesen átvett Avizt viszont nem engedünk törölni, mert abból már
+      // tényleges célkészlet és átvételi előzmény keletkezett.
+      if (isInTransitDocument && item.status === 'issued') {
+        const receiptTable = await client.query(`SELECT to_regclass('public.aif_shop_transfer_receipts') AS table_name`);
+        if (receiptTable.rows[0]?.table_name) {
+          const receipts = await client.query(
+            `SELECT count(*)::int AS c FROM aif_shop_transfer_receipts WHERE document_id=$1`,
+            [item.id]
+          );
+          if (Number(receipts.rows[0]?.c || 0) > 0) {
+            throw Object.assign(new Error('Ezt az Avizt már részben vagy teljesen átvették az üzletben, ezért nem törölhető. Az átvételi előzményt meg kell őrizni.'), {
+              statusCode: 409,
+              code: 'received_transfer_document_cannot_be_deleted',
+            });
+          }
+        }
+
+        if (!item.source_location_id || !item.target_location_id) {
+          throw Object.assign(new Error('Az Aviz forrás- vagy célhelye hiányzik, ezért a készlet nem állítható vissza biztonságosan.'), {
+            statusCode: 409,
+            code: 'transfer_restore_location_missing',
+          });
+        }
+        const locations = await client.query(
+          `SELECT id,code,name FROM aif_locations WHERE id::text = ANY($1::text[])`,
+          [[String(item.source_location_id), String(item.target_location_id)]]
+        );
+        const sourceLocation = locations.rows.find((row) => String(row.id) === String(item.source_location_id));
+        const targetLocation = locations.rows.find((row) => String(row.id) === String(item.target_location_id));
+        if (!sourceLocation || !targetLocation) {
+          throw Object.assign(new Error('Az Aviz készlethelye nem található, ezért a törlés nem végezhető el biztonságosan.'), {
+            statusCode: 409,
+            code: 'transfer_restore_location_not_found',
+          });
+        }
+
+        const lines = await client.query(
+          `SELECT id,line_no,variant_id,qty,product_title,barcode
+           FROM aif_stock_transfer_document_lines
+           WHERE document_id=$1
+           ORDER BY line_no ASC,id ASC
+           FOR UPDATE`,
+          [item.id]
+        );
+        for (const line of lines.rows) {
+          const qty = Math.max(0, Number(line.qty || 0));
+          if (!qty) continue;
+          const variant = await client.query(
+            `SELECT v.id,v.barcode,m.title_ro
+             FROM aif_product_variants v
+             JOIN aif_product_models m ON m.id=v.model_id
+             WHERE v.id::text=$1
+             LIMIT 1`,
+            [String(line.variant_id || '')]
+          );
+          if (!variant.rowCount) {
+            throw Object.assign(new Error(`${line.product_title || 'Termék'}: a variáns nem található, ezért az Aviz törlésekor a forráskészlet nem állítható vissza.`), {
+              statusCode: 409,
+              code: 'transfer_restore_variant_not_found',
+            });
+          }
+          await applyAifPreparationStockDelta(client, {
+            document: item,
+            lineNo: Number(line.line_no || 0),
+            variant: { ...variant.rows[0], title_ro: variant.rows[0].title_ro || line.product_title, barcode: variant.rows[0].barcode || line.barcode },
+            routeFrom: sourceLocation,
+            routeTo: targetLocation,
+            qtyDelta: -qty,
+            actor: deletedBy,
+            note: `Lezárt, még át nem vett Aviz törlése: ${item.document_number}`,
+            title: item.subtitle || item.title || 'Belső készletátadás',
+            reason: 'issued_in_transit_document_delete_restore',
+          });
+          restoredQty += qty;
+        }
+      }
+
       await client.query(
         `INSERT INTO aif_stock_transfer_document_deletions (
            transfer_id, document_number, source, deleted_by, raw, deleted_at
@@ -9916,7 +10004,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            deleted_by=EXCLUDED.deleted_by,
            raw=EXCLUDED.raw,
            deleted_at=now()`,
-        [item.transfer_id, item.document_number, deletedBy, JSON.stringify({ documentId: item.id, deletedFrom: 'product_moves_archive' })]
+        [item.transfer_id, item.document_number, deletedBy, JSON.stringify({ documentId: item.id, deletedFrom: 'product_moves_archive', restoredQty, stockTransferInventoryMode: item?.raw?.stockTransferInventoryMode || null })]
       );
       await client.query(`DELETE FROM aif_stock_transfer_documents WHERE id=$1`, [item.id]);
       await client.query('COMMIT');
@@ -9926,11 +10014,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         source: 'official',
         transferId: item.transfer_id,
         documentNumber: item.document_number,
+        restoredQty,
       });
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch {}
       console.error('AIF stock transfer document permanent delete failed', error);
-      return res.status(500).json({ error: error?.message || 'A készletátadási bizonylat végleges törlése nem sikerült.' });
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A készletátadási bizonylat végleges törlése nem sikerült.', code: error?.code || null });
     } finally {
       client.release();
     }
@@ -10903,6 +10993,113 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     reason = 'preparation_adjustment',
   }) {
     const delta = Number(qtyDelta || 0);
+    const transferInventoryMode = document?.raw && typeof document.raw === 'object'
+      ? String(document.raw.stockTransferInventoryMode || '')
+      : '';
+
+    // Új Aviz-logika: előkészítéskor a termék elhagyja a forrás üzlet eladható készletét,
+    // de a célüzlet készletébe csak a fizikai "Megjött" visszaigazoláskor kerül be.
+    // Régi bizonylatoknál a korábbi, azonnali célkészletes viselkedést megtartjuk.
+    if (transferInventoryMode === 'in_transit_until_received') {
+      const current = await readAifPreparationStockPair(client, variant.id, routeFrom.id, routeTo.id);
+      const sourceRow = current.get(String(routeFrom.id));
+      const targetRow = current.get(String(routeTo.id));
+      const sourceBefore = Number(sourceRow?.qty || 0);
+      const sourceReserved = Number(sourceRow?.reserved_qty || 0);
+      const targetBefore = Number(targetRow?.qty || 0);
+
+      if (!Number.isFinite(delta) || delta === 0) {
+        return {
+          movementRows: 0,
+          sourceBefore,
+          sourceAfter: sourceBefore,
+          targetBefore,
+          targetAfter: targetBefore,
+          routeFromAfter: sourceBefore,
+          routeToAfter: targetBefore,
+        };
+      }
+
+      const quantity = Math.abs(Math.trunc(delta));
+      if (quantity <= 0) throw Object.assign(new Error('Érvénytelen előkészítési mennyiség.'), { statusCode: 400 });
+      const forward = delta > 0;
+      if (forward) {
+        const sourceAvailable = sourceBefore - sourceReserved;
+        if (quantity > sourceAvailable) {
+          throw Object.assign(new Error(`${variant.title_ro || 'Termék'}: ${routeFrom.name || routeFrom.code} helyen csak ${Math.max(0, sourceAvailable)} db szabad készlet van a továbbításhoz.`), {
+            statusCode: 400,
+            code: 'preparation_source_stock_insufficient',
+          });
+        }
+      }
+
+      const sourceAfter = forward ? sourceBefore - quantity : sourceBefore + quantity;
+      await client.query(
+        `INSERT INTO aif_stock (location_id,variant_id,qty,reserved_qty,updated_at)
+         VALUES ($1,$2,$3,$4,now())
+         ON CONFLICT (location_id,variant_id)
+         DO UPDATE SET qty=$3,reserved_qty=$4,updated_at=now()`,
+        [routeFrom.id, variant.id, sourceAfter, sourceReserved]
+      );
+
+      const movementGroupId = aifPreparationMovementGroupId(document.id, lineNo);
+      const movementDelta = forward ? -quantity : quantity;
+      const raw = {
+        reason: 'stock_transfer',
+        preparationReason: reason,
+        preparation: true,
+        preparationAdjustment: true,
+        inTransitUntilReceived: true,
+        stockTransferInventoryMode: 'in_transit_until_received',
+        preparationDirection: forward ? 'forward' : 'reverse',
+        documentType: 'internal_transfer',
+        priceBasis: 'selling_price',
+        transferId: document.transfer_id,
+        documentId: String(document.id),
+        documentNumber: document.document_number,
+        documentStatus: 'preparation',
+        movementGroupId,
+        lineNo,
+        note,
+        title,
+        productTitle: variant.title_ro,
+        barcode: variant.barcode || variant.supplier_barcode || null,
+        fromLocationId: String(routeFrom.id),
+        fromLocationCode: routeFrom.code,
+        fromLocationName: routeFrom.name,
+        toLocationId: String(routeTo.id),
+        toLocationCode: routeTo.code,
+        toLocationName: routeTo.name,
+        qty: quantity,
+        direction: forward ? 'out' : 'in',
+        side: 'source',
+      };
+      let movementRows = 0;
+      if (await insertStockMovementSafe(client, {
+        movementType: forward ? 'manual_adjustment' : 'incoming',
+        sourceType: 'stock_transfer',
+        sourcePrefix: forward ? 'transit_out' : 'transit_restore',
+        fallbackSourceType: 'manual_stock_edit',
+        locationId: routeFrom.id,
+        variantId: variant.id,
+        qtyDelta: movementDelta,
+        qtyBefore: sourceBefore,
+        qtyAfter: sourceAfter,
+        actor,
+        raw,
+      })) movementRows += 1;
+
+      return {
+        movementRows,
+        sourceBefore,
+        sourceAfter,
+        targetBefore,
+        targetAfter: targetBefore,
+        routeFromAfter: sourceAfter,
+        routeToAfter: targetBefore,
+      };
+    }
+
     if (!Number.isFinite(delta) || delta === 0) {
       const current = await readAifPreparationStockPair(client, variant.id, routeFrom.id, routeTo.id);
       return {
@@ -11293,6 +11490,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           preparation: true,
           routeSeparated: true,
           documentType: 'internal_transfer',
+          stockTransferInventoryMode: 'in_transit_until_received',
           idempotencyKey: idempotencyKey || null,
           sourceLocationId: String(routeFrom.id),
           sourceLocationName: routeFrom.name || routeFrom.code,
@@ -12536,6 +12734,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         return res.json({ ok: true, unchanged: true, status: 'preparation', document });
       }
       if (document.status !== 'issued') throw Object.assign(new Error('Csak lezárt bizonylat állítható vissza előkészítésre.'), { statusCode: 400 });
+
+      const receiptTable = await client.query(`SELECT to_regclass('public.aif_shop_transfer_receipts') AS reg`);
+      if (receiptTable.rows[0]?.reg) {
+        const received = await client.query(
+          `SELECT count(*)::int AS c FROM aif_shop_transfer_receipts WHERE document_id=$1`,
+          [document.id]
+        );
+        if (Number(received.rows[0]?.c || 0) > 0) {
+          throw Object.assign(new Error('Ezt az Avizt már részben vagy teljesen átvették a célüzletben, ezért nem nyitható vissza előkészítésre.'), {
+            statusCode: 409,
+            code: 'received_transfer_cannot_reopen',
+          });
+        }
+      }
       const other = routeSpecific
         ? await client.query(
             `SELECT document_number FROM aif_stock_transfer_documents
@@ -15753,11 +15965,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   async function aifShopShiftSnapshot(client, { locationId, fromAt, toAt, actor = null }) {
     const args = [locationId, fromAt, toAt];
     let actorSaleFilter = "";
+    let actorSalePaymentFilter = "";
     let actorPaymentFilter = "";
     let actorExchangeFilter = "";
     if (actor) {
       args.push(actor);
       actorSaleFilter = `AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
+      actorSalePaymentFilter = `AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
       actorPaymentFilter = `AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
       actorExchangeFilter = `AND lower(regexp_replace(btrim(COALESCE(es.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
     }
@@ -15796,27 +16010,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         args
       ),
       client.query(
-        `WITH filtered_sales AS (
-           SELECT s.*
+        `WITH paid AS (
+           SELECT p.method, COALESCE(sum(p.amount),0)::numeric AS amount,
+                  count(DISTINCT p.sale_id)::int AS transactions
+           FROM aif_shop_sale_payments p
+           JOIN aif_shop_sales s ON s.id=p.sale_id
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND p.paid_at >= $2::timestamptz
+             AND p.paid_at < $3::timestamptz
+             AND p.method <> 'credit'
+             ${actorSalePaymentFilter}
+           GROUP BY p.method
+         ), credit AS (
+           SELECT 'credit'::text AS method,
+                  COALESCE(sum(s.balance_due),0)::numeric AS amount,
+                  count(*) FILTER (WHERE s.balance_due > 0)::int AS transactions
            FROM aif_shop_sales s
            WHERE s.location_id=$1
              AND s.status='completed'
              AND s.sold_at >= $2::timestamptz
              AND s.sold_at < $3::timestamptz
              ${actorSaleFilter}
-         ), paid AS (
-           SELECT p.method, COALESCE(sum(p.amount),0)::numeric AS amount,
-                  count(DISTINCT p.sale_id)::int AS transactions
-           FROM aif_shop_sale_payments p
-           JOIN filtered_sales fs ON fs.id=p.sale_id
-           WHERE p.method <> 'credit'
-           GROUP BY p.method
-         ), credit AS (
-           SELECT 'credit'::text AS method,
-                  COALESCE(sum(balance_due),0)::numeric AS amount,
-                  count(*) FILTER (WHERE balance_due > 0)::int AS transactions
-           FROM filtered_sales
-           WHERE balance_due > 0
+             AND s.balance_due > 0
          )
          SELECT * FROM paid
          UNION ALL
@@ -17547,6 +17763,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND s.sold_at < $3::timestamptz
              AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
            UNION
+           SELECT btrim(p.actor) AS actor
+           FROM aif_shop_sale_payments p
+           JOIN aif_shop_sales ps ON ps.id=p.sale_id
+           WHERE ps.location_id=$1
+             AND p.paid_at >= $2::timestamptz
+             AND p.paid_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(p.actor,'')),'') IS NOT NULL
+           UNION
            SELECT btrim(cp.actor) AS actor
            FROM aif_shop_customer_payments cp
            WHERE cp.location_id=$1
@@ -17599,6 +17823,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                AND s.sold_at >= $2::timestamptz
                AND s.sold_at < $3::timestamptz
                AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+             UNION ALL
+             SELECT btrim(p.actor) AS actor, p.paid_at AS happened_at
+             FROM aif_shop_sale_payments p
+             JOIN aif_shop_sales ps ON ps.id=p.sale_id
+             WHERE ps.location_id=$1
+               AND p.paid_at >= $2::timestamptz
+               AND p.paid_at < $3::timestamptz
+               AND NULLIF(btrim(COALESCE(p.actor,'')),'') IS NOT NULL
              UNION ALL
              SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
              FROM aif_shop_customer_payments cp
@@ -18020,8 +18252,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              SELECT p.method, COALESCE(sum(p.amount),0)::numeric AS amount,
                     count(DISTINCT p.sale_id)::int AS transactions
              FROM aif_shop_sale_payments p
-             JOIN filtered_sales fs ON fs.id=p.sale_id
-             WHERE p.method <> 'credit'
+             JOIN aif_shop_sales ps ON ps.id=p.sale_id
+             WHERE ps.location_id=$1
+               AND ps.status='completed'
+               AND p.paid_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND p.paid_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+               AND p.method <> 'credit'
+               AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g'))
+                   = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))
              GROUP BY p.method
              UNION ALL
              SELECT 'credit'::text AS method,
@@ -18606,6 +18844,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.release();
     }
   });
+
+  router.use("/shop-reservations", createAifShopReservationsRouter({
+    pool,
+    requireAuthed,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
+    text,
+    normCode,
+    aifNumber,
+    aifRoundMoney,
+    insertStockMovementSafe,
+    aifAssertNoPendingShopShiftHandover,
+    aifAllocateShopSaleNumber,
+    aifLoadShopSaleResult,
+    aifShopSaleResponse,
+  }));
+
+  router.use("/shop-incoming", createAifShopIncomingRouter({
+    pool,
+    requireAuthed,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
+    text,
+    aifNumber,
+    insertStockMovementSafe,
+  }));
 
   router.use("/shop-returns", createAifShopReturnsRouter({
     pool,
