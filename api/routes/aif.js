@@ -368,6 +368,39 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_events_sale_idx ON aif_shop_sale_events (sale_id, created_at ASC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_sale_events_created_idx ON aif_shop_sale_events (created_at DESC)`);
 
+        await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_shift_handovers (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+          work_date date NOT NULL,
+          from_actor text NOT NULL,
+          to_actor text NOT NULL,
+          status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','cancelled')),
+          shift_start_at timestamptz NOT NULL,
+          cutoff_at timestamptz NOT NULL,
+          expected_cash numeric(14,2) NOT NULL DEFAULT 0,
+          counted_cash numeric(14,2) NULL,
+          cash_difference numeric(14,2) NULL,
+          note text NULL,
+          acceptance_note text NULL,
+          snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_by text NULL,
+          accepted_by text NULL,
+          cancelled_by text NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          accepted_at timestamptz NULL,
+          cancelled_at timestamptz NULL,
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          CHECK (lower(btrim(from_actor)) <> lower(btrim(to_actor)))
+        )`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_shift_handovers_location_date_idx
+          ON aif_shop_shift_handovers (location_id, work_date DESC, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_shift_handovers_to_actor_idx
+          ON aif_shop_shift_handovers (location_id, lower(to_actor), status, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_shift_handovers_from_actor_idx
+          ON aif_shop_shift_handovers (location_id, lower(from_actor), status, created_at DESC)`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_shop_shift_handovers_one_pending_per_location_uq
+          ON aif_shop_shift_handovers (location_id) WHERE status='pending'`);
+
         // A régi, közös kliensállományt üzletenként szétválasztjuk.
         // Ha ugyanaz a kliens mindkét üzletben vásárolt, külön kliensrekord készül,
         // és minden eladás/befizetés annál az üzletnél marad, ahol ténylegesen történt.
@@ -15566,6 +15599,237 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
   }
 
+  function aifEmployeeKey(value) {
+    return text(value).replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function aifShopIdForLocationCode(locationCode) {
+    const code = aifShopLocationCode(locationCode);
+    if (code === "main_warehouse") return "csikszereda";
+    if (code === "magazin_targu_secuiesc") return "kezdivasarhely";
+    return "";
+  }
+
+  async function aifListActiveShopEmployees(client, locationCode) {
+    const shopId = aifShopIdForLocationCode(locationCode);
+    if (!shopId) return [];
+    const result = await client.query(
+      `SELECT min(btrim(name)) AS name
+       FROM login_codes
+       WHERE shop_id=$1
+         AND NULLIF(btrim(COALESCE(name,'')),'') IS NOT NULL
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > now())
+       GROUP BY lower(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g'))
+       ORDER BY min(btrim(name)) ASC`,
+      [shopId]
+    );
+    return result.rows.map((row) => text(row.name)).filter(Boolean);
+  }
+
+  async function aifShopDayBounds(client, date) {
+    const result = await client.query(
+      `SELECT
+         ($1::date::timestamp AT TIME ZONE 'Europe/Bucharest') AS day_start,
+         (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest') AS day_end`,
+      [date]
+    );
+    return {
+      start: result.rows[0]?.day_start || null,
+      end: result.rows[0]?.day_end || null,
+    };
+  }
+
+  function aifEmptyShiftPayments() {
+    return {
+      cash: { method: "cash", label: "Készpénz", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
+      card: { method: "card", label: "Bankkártya", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
+      bank_transfer: { method: "bank_transfer", label: "Átutalás", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
+      credit: { method: "credit", label: "Utólag fizet", amount: 0, salesAmount: 0, customerPaymentAmount: 0, transactions: 0, customerPaymentTransactions: 0 },
+    };
+  }
+
+  async function aifShopShiftSnapshot(client, { locationId, fromAt, toAt, actor = null }) {
+    const args = [locationId, fromAt, toAt];
+    let actorSaleFilter = "";
+    let actorPaymentFilter = "";
+    if (actor) {
+      args.push(actor);
+      actorSaleFilter = `AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
+      actorPaymentFilter = `AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
+    }
+
+    const [summaryResult, salePaymentsResult, customerPaymentsResult] = await Promise.all([
+      client.query(
+        `WITH filtered_sales AS (
+           SELECT s.*
+           FROM aif_shop_sales s
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND s.sold_at >= $2::timestamptz
+             AND s.sold_at < $3::timestamptz
+             ${actorSaleFilter}
+         ), line_totals AS (
+           SELECT sl.sale_id, COALESCE(sum(sl.quantity),0)::numeric AS item_count
+           FROM aif_shop_sale_lines sl
+           JOIN filtered_sales fs ON fs.id=sl.sale_id
+           GROUP BY sl.sale_id
+         )
+         SELECT
+           COALESCE(sum(fs.total),0)::numeric AS revenue,
+           COALESCE(sum(fs.subtotal),0)::numeric AS sales_before_discount,
+           count(*)::int AS transactions,
+           COALESCE(sum(lt.item_count),0)::numeric AS items_sold,
+           COALESCE(avg(fs.total),0)::numeric AS average_basket,
+           COALESCE(sum(fs.discount_total),0)::numeric AS discount_total,
+           COALESCE(sum(fs.paid_total),0)::numeric AS paid_total,
+           COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
+           count(*) FILTER (WHERE fs.balance_due > 0)::int AS unpaid_sales,
+           count(*) FILTER (WHERE fs.customer_id IS NOT NULL)::int AS customer_sales,
+           min(fs.sold_at) AS first_sale_at,
+           max(fs.sold_at) AS last_sale_at
+         FROM filtered_sales fs
+         LEFT JOIN line_totals lt ON lt.sale_id=fs.id`,
+        args
+      ),
+      client.query(
+        `WITH filtered_sales AS (
+           SELECT s.*
+           FROM aif_shop_sales s
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND s.sold_at >= $2::timestamptz
+             AND s.sold_at < $3::timestamptz
+             ${actorSaleFilter}
+         ), paid AS (
+           SELECT p.method, COALESCE(sum(p.amount),0)::numeric AS amount,
+                  count(DISTINCT p.sale_id)::int AS transactions
+           FROM aif_shop_sale_payments p
+           JOIN filtered_sales fs ON fs.id=p.sale_id
+           WHERE p.method <> 'credit'
+           GROUP BY p.method
+         ), credit AS (
+           SELECT 'credit'::text AS method,
+                  COALESCE(sum(balance_due),0)::numeric AS amount,
+                  count(*) FILTER (WHERE balance_due > 0)::int AS transactions
+           FROM filtered_sales
+           WHERE balance_due > 0
+         )
+         SELECT * FROM paid
+         UNION ALL
+         SELECT * FROM credit`,
+        args
+      ),
+      client.query(
+        `SELECT cp.method, COALESCE(sum(cp.amount),0)::numeric AS amount, count(*)::int AS transactions
+         FROM aif_shop_customer_payments cp
+         WHERE cp.location_id=$1
+           AND cp.paid_at >= $2::timestamptz
+           AND cp.paid_at < $3::timestamptz
+           ${actorPaymentFilter}
+         GROUP BY cp.method`,
+        args
+      ),
+    ]);
+
+    const row = summaryResult.rows[0] || {};
+    const payments = aifEmptyShiftPayments();
+    for (const item of salePaymentsResult.rows || []) {
+      if (!payments[item.method]) continue;
+      payments[item.method].salesAmount = aifRoundMoney(item.amount);
+      payments[item.method].transactions = aifNumber(item.transactions);
+    }
+    for (const item of customerPaymentsResult.rows || []) {
+      if (!payments[item.method]) continue;
+      payments[item.method].customerPaymentAmount = aifRoundMoney(item.amount);
+      payments[item.method].customerPaymentTransactions = aifNumber(item.transactions);
+    }
+    for (const item of Object.values(payments)) {
+      item.amount = aifRoundMoney(item.salesAmount + item.customerPaymentAmount);
+    }
+
+    return {
+      fromAt: fromAt ? new Date(fromAt).toISOString() : null,
+      toAt: toAt ? new Date(toAt).toISOString() : null,
+      actor: actor || null,
+      revenue: aifRoundMoney(row.revenue),
+      salesBeforeDiscount: aifRoundMoney(row.sales_before_discount),
+      transactions: aifNumber(row.transactions),
+      itemsSold: aifNumber(row.items_sold),
+      averageBasket: aifRoundMoney(row.average_basket),
+      discountTotal: aifRoundMoney(row.discount_total),
+      paidTotal: aifRoundMoney(row.paid_total),
+      unpaidTotal: aifRoundMoney(row.unpaid_total),
+      unpaidSales: aifNumber(row.unpaid_sales),
+      customerSales: aifNumber(row.customer_sales),
+      firstSaleAt: row.first_sale_at ? new Date(row.first_sale_at).toISOString() : null,
+      lastSaleAt: row.last_sale_at ? new Date(row.last_sale_at).toISOString() : null,
+      payments: Object.values(payments),
+      receipts: payments,
+    };
+  }
+
+  function aifShiftHandoverResponse(row = {}) {
+    const snapshot = row.snapshot && typeof row.snapshot === "object" ? row.snapshot : {};
+    return {
+      id: String(row.id || ""),
+      status: row.status || "pending",
+      date: row.work_date ? String(row.work_date).slice(0, 10) : null,
+      locationId: row.location_id ? String(row.location_id) : null,
+      locationCode: row.location_code || null,
+      locationName: row.location_name || null,
+      fromActor: row.from_actor || "",
+      toActor: row.to_actor || "",
+      shiftStartAt: row.shift_start_at ? new Date(row.shift_start_at).toISOString() : null,
+      cutoffAt: row.cutoff_at ? new Date(row.cutoff_at).toISOString() : null,
+      expectedCash: aifRoundMoney(row.expected_cash),
+      countedCash: row.counted_cash === null || row.counted_cash === undefined ? null : aifRoundMoney(row.counted_cash),
+      cashDifference: row.cash_difference === null || row.cash_difference === undefined ? null : aifRoundMoney(row.cash_difference),
+      note: row.note || null,
+      acceptanceNote: row.acceptance_note || null,
+      snapshot,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      acceptedAt: row.accepted_at ? new Date(row.accepted_at).toISOString() : null,
+      acceptedBy: row.accepted_by || null,
+      cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
+      cancelledBy: row.cancelled_by || null,
+    };
+  }
+
+  async function aifAssertNoPendingShopShiftHandover(client, locationId, actor) {
+    const employee = text(actor);
+    const result = await client.query(
+      `SELECT h.*, l.code AS location_code, l.name AS location_name
+       FROM aif_shop_shift_handovers h
+       JOIN aif_locations l ON l.id=h.location_id
+       WHERE h.location_id=$1
+         AND h.status='pending'
+       ORDER BY h.created_at DESC
+       LIMIT 1`,
+      [locationId]
+    );
+    const handover = result.rows[0];
+    if (!handover) return;
+
+    const isIncoming = employee && aifEmployeeKey(handover.to_actor) === aifEmployeeKey(employee);
+    const isOutgoing = employee && aifEmployeeKey(handover.from_actor) === aifEmployeeKey(employee);
+    const error = new Error(
+      isIncoming
+        ? `${handover.from_actor} műszakátadása vár rád. Nyisd meg az Adminisztrációt, számold meg a készpénzt és fogadd el az átadást az értékesítés folytatása előtt.`
+        : isOutgoing
+          ? `A műszakodat már átadásra jelölted ${handover.to_actor} részére. Új eladás vagy befizetés előtt vond vissza az átadást, ha mégsem váltotok.`
+          : `${handover.from_actor} → ${handover.to_actor} műszakátadás van folyamatban ennél az üzletnél. A kassza átvételéig új eladás vagy befizetés nem rögzíthető.`
+    );
+    error.statusCode = 409;
+    error.code = isIncoming
+      ? "shift_handover_incoming_pending"
+      : isOutgoing
+        ? "shift_handover_outgoing_pending"
+        : "shift_handover_location_pending";
+    error.handoverId = String(handover.id);
+    throw error;
+  }
+
   function aifSaleLocationTag(locationCode) {
     return locationCode === "main_warehouse" ? "CIUC" : "KEZDI";
   }
@@ -16630,6 +16894,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         });
       }
 
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+      await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
+
       const customerLock = await client.query(
         `SELECT id
          FROM aif_shop_customers
@@ -17058,6 +17325,494 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.get("/shop-shifts/employees", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const names = await aifListActiveShopEmployees(pool, location.code);
+      return res.json({
+        ok: true,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        items: names.map((name) => ({ name, current: aifEmployeeKey(name) === aifEmployeeKey(actorFrom(req)) })),
+      });
+    } catch (error) {
+      console.error("AIF shift employee list failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A dolgozók nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
+  router.get("/shop-shifts/pending", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const actor = actorFrom(req);
+      const result = await pool.query(
+        `SELECT h.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_shift_handovers h
+         JOIN aif_locations l ON l.id=h.location_id
+         WHERE h.location_id=$1
+           AND h.status='pending'
+           AND (
+             lower(regexp_replace(btrim(h.from_actor), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($2), '[[:space:]]+', ' ', 'g'))
+             OR lower(regexp_replace(btrim(h.to_actor), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($2), '[[:space:]]+', ' ', 'g'))
+           )
+         ORDER BY h.created_at DESC`,
+        [location.id, actor]
+      );
+      const items = result.rows.map(aifShiftHandoverResponse);
+      return res.json({
+        ok: true,
+        actor,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        incoming: items.find((item) => aifEmployeeKey(item.toActor) === aifEmployeeKey(actor)) || null,
+        outgoing: items.find((item) => aifEmployeeKey(item.fromActor) === aifEmployeeKey(actor)) || null,
+        items,
+      });
+    } catch (error) {
+      console.error("AIF pending shift handover failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A műszakátadás nem tölthető be.", code: error?.code || null });
+    }
+  });
+
+  router.get("/shop-shifts/day-overview", requireAuthed, async (req, res) => {
+    try {
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, pool, req.query.location);
+      const date = aifValidIsoDate(req.query.date, aifBucharestIsoDate());
+      const bounds = await aifShopDayBounds(pool, date);
+      const today = aifBucharestIsoDate();
+      let until = bounds.end;
+      if (date === today) until = new Date();
+      if (date > today) until = bounds.start;
+
+      const actorRows = await pool.query(
+        `SELECT actor FROM (
+           SELECT btrim(s.actor) AS actor
+           FROM aif_shop_sales s
+           WHERE s.location_id=$1
+             AND s.status='completed'
+             AND s.sold_at >= $2::timestamptz
+             AND s.sold_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+           UNION
+           SELECT btrim(cp.actor) AS actor
+           FROM aif_shop_customer_payments cp
+           WHERE cp.location_id=$1
+             AND cp.paid_at >= $2::timestamptz
+             AND cp.paid_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+           UNION
+           SELECT btrim(h.from_actor) AS actor
+           FROM aif_shop_shift_handovers h
+           WHERE h.location_id=$1 AND h.work_date=$4::date
+           UNION
+           SELECT btrim(h.to_actor) AS actor
+           FROM aif_shop_shift_handovers h
+           WHERE h.location_id=$1 AND h.work_date=$4::date
+         ) actors
+         WHERE NULLIF(actor,'') IS NOT NULL
+         ORDER BY actor ASC`,
+        [location.id, bounds.start, until, date]
+      );
+
+      const activeEmployees = date === today ? await aifListActiveShopEmployees(pool, location.code) : [];
+      const names = [];
+      const seen = new Set();
+      for (const value of [...activeEmployees, ...actorRows.rows.map((row) => row.actor)]) {
+        const name = text(value);
+        const key = aifEmployeeKey(name);
+        if (!name || !key || ["admin", "administrator", "system"].includes(key) || seen.has(key)) continue;
+        seen.add(key);
+        names.push(name);
+      }
+
+      const [totals, employeeSnapshots, handoversResult, latestActivityResult] = await Promise.all([
+        aifShopShiftSnapshot(pool, { locationId: location.id, fromAt: bounds.start, toAt: until }),
+        Promise.all(names.map(async (name) => ({ name, ...(await aifShopShiftSnapshot(pool, { locationId: location.id, fromAt: bounds.start, toAt: until, actor: name })) }))),
+        pool.query(
+          `SELECT h.*, l.code AS location_code, l.name AS location_name
+           FROM aif_shop_shift_handovers h
+           JOIN aif_locations l ON l.id=h.location_id
+           WHERE h.location_id=$1 AND h.work_date=$2::date
+           ORDER BY h.created_at ASC, h.id ASC`,
+          [location.id, date]
+        ),
+        pool.query(
+          `SELECT actor
+           FROM (
+             SELECT btrim(s.actor) AS actor, s.sold_at AS happened_at
+             FROM aif_shop_sales s
+             WHERE s.location_id=$1
+               AND s.status='completed'
+               AND s.sold_at >= $2::timestamptz
+               AND s.sold_at < $3::timestamptz
+               AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+             UNION ALL
+             SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
+             FROM aif_shop_customer_payments cp
+             WHERE cp.location_id=$1
+               AND cp.paid_at >= $2::timestamptz
+               AND cp.paid_at < $3::timestamptz
+               AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+           ) activity
+           ORDER BY happened_at DESC
+           LIMIT 1`,
+          [location.id, bounds.start, until]
+        ),
+      ]);
+
+      const handoverRows = handoversResult.rows || [];
+      let handoverPreview = null;
+      if (date === today) {
+        const requester = actorFrom(req);
+        const latestAccepted = handoverRows
+          .filter((row) => row.status === "accepted")
+          .sort((a, b) => new Date(b.accepted_at || b.created_at || 0).getTime() - new Date(a.accepted_at || a.created_at || 0).getTime())[0] || null;
+        let shiftStart = bounds.start;
+        let openingCash = 0;
+        let canCreate = Boolean(requester) && !["admin", "administrator", "system"].includes(aifEmployeeKey(requester));
+        let reason = null;
+        if (latestAccepted) {
+          shiftStart = latestAccepted.accepted_at || latestAccepted.cutoff_at || bounds.start;
+          openingCash = aifRoundMoney(latestAccepted.counted_cash ?? latestAccepted.expected_cash);
+          if (aifEmployeeKey(latestAccepted.to_actor) !== aifEmployeeKey(requester)) {
+            canCreate = false;
+            reason = `A rendszer szerint jelenleg ${latestAccepted.to_actor} műszaka aktív.`;
+          }
+        } else {
+          const latestActor = text(latestActivityResult.rows[0]?.actor);
+          if (latestActor && aifEmployeeKey(latestActor) !== aifEmployeeKey(requester)) {
+            canCreate = false;
+            reason = `A mai utolsó üzleti művelet ${latestActor} nevéhez tartozik. Az első műszakátadást neki kell elindítania.`;
+          }
+        }
+        const pendingRow = handoverRows.find((row) => row.status === "pending") || null;
+        if (pendingRow) {
+          canCreate = false;
+          reason = `${pendingRow.from_actor} → ${pendingRow.to_actor} műszakátadás már folyamatban van.`;
+        }
+        const currentShift = canCreate
+          ? await aifShopShiftSnapshot(pool, { locationId: location.id, fromAt: shiftStart, toAt: until, actor: requester })
+          : null;
+        const newCashDuringShift = aifRoundMoney(currentShift?.receipts?.cash?.amount || 0);
+        handoverPreview = {
+          canCreate,
+          reason,
+          fromActor: requester,
+          shiftStartAt: shiftStart ? new Date(shiftStart).toISOString() : null,
+          cutoffAt: until ? new Date(until).toISOString() : null,
+          openingCash,
+          newCashDuringShift,
+          expectedCash: aifRoundMoney(openingCash + newCashDuringShift),
+          shift: currentShift,
+          day: totals,
+        };
+      }
+
+      return res.json({
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        date,
+        location: { id: String(location.id), code: location.code, name: location.name },
+        totals,
+        employees: employeeSnapshots,
+        handovers: handoverRows.map(aifShiftHandoverResponse),
+        handoverPreview,
+      });
+    } catch (error) {
+      console.error("AIF shift day overview failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A napi műszakok nem tölthetők be.", code: error?.code || null });
+    }
+  });
+
+  router.post("/shop-shifts/handovers", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const requestedToActor = text(body.toActor || body.to_actor || body.employee || body.targetEmployee);
+    const note = emptyToNull(body.note);
+    if (!requestedToActor) return res.status(400).json({ error: "Válaszd ki, kinek adod át a műszakot." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const location = await aifResolveShopLocation(req, client, body.location);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+
+      const sessionRole = normCode(req.session?.role);
+      const fromActor = sessionRole === "shop"
+        ? actorFrom(req)
+        : text(body.fromActor || body.from_actor || actorFrom(req));
+      if (!fromActor || ["admin", "administrator", "system"].includes(aifEmployeeKey(fromActor))) {
+        const error = new Error("Műszakátadást aktív üzleti dolgozó indíthat.");
+        error.statusCode = 403;
+        throw error;
+      }
+      if (aifEmployeeKey(fromActor) === aifEmployeeKey(requestedToActor)) {
+        const error = new Error("Saját magadnak nem adhatod át a műszakot.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const activeEmployees = await aifListActiveShopEmployees(client, location.code);
+      const targetActor = activeEmployees.find((name) => aifEmployeeKey(name) === aifEmployeeKey(requestedToActor));
+      const senderActor = activeEmployees.find((name) => aifEmployeeKey(name) === aifEmployeeKey(fromActor));
+      if (!senderActor) {
+        const error = new Error("A jelenlegi dolgozó nem aktív ennél az üzletnél.");
+        error.statusCode = 403;
+        throw error;
+      }
+      if (!targetActor) {
+        const error = new Error("A kiválasztott kolléga nem aktív ennél az üzletnél.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const workDate = aifBucharestIsoDate();
+      const pending = await client.query(
+        `SELECT * FROM aif_shop_shift_handovers WHERE location_id=$1 AND status='pending' FOR UPDATE`,
+        [location.id]
+      );
+      if (pending.rowCount) {
+        const row = pending.rows[0];
+        const error = new Error(`${row.from_actor} → ${row.to_actor} műszakátadás már függőben van ennél az üzletnél.`);
+        error.statusCode = 409;
+        error.code = "shift_handover_already_pending";
+        throw error;
+      }
+
+      const latestAccepted = await client.query(
+        `SELECT *
+         FROM aif_shop_shift_handovers
+         WHERE location_id=$1 AND work_date=$2::date AND status='accepted'
+         ORDER BY accepted_at DESC NULLS LAST, created_at DESC
+         LIMIT 1`,
+        [location.id, workDate]
+      );
+      if (latestAccepted.rowCount && aifEmployeeKey(latestAccepted.rows[0].to_actor) !== aifEmployeeKey(senderActor)) {
+        const error = new Error(`A rendszer szerint jelenleg ${latestAccepted.rows[0].to_actor} műszaka aktív. Előbb az ő műszakát kell átadni.`);
+        error.statusCode = 409;
+        error.code = "shift_handover_wrong_current_employee";
+        throw error;
+      }
+
+      const bounds = await aifShopDayBounds(client, workDate);
+      if (!latestAccepted.rowCount) {
+        const latestActivity = await client.query(
+          `SELECT actor
+           FROM (
+             SELECT btrim(s.actor) AS actor, s.sold_at AS happened_at
+             FROM aif_shop_sales s
+             WHERE s.location_id=$1
+               AND s.status='completed'
+               AND s.sold_at >= $2::timestamptz
+               AND s.sold_at < $3::timestamptz
+               AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+             UNION ALL
+             SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
+             FROM aif_shop_customer_payments cp
+             WHERE cp.location_id=$1
+               AND cp.paid_at >= $2::timestamptz
+               AND cp.paid_at < $3::timestamptz
+               AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+           ) activity
+           ORDER BY happened_at DESC
+           LIMIT 1`,
+          [location.id, bounds.start, bounds.end]
+        );
+        const latestActor = text(latestActivity.rows[0]?.actor);
+        if (latestActor && aifEmployeeKey(latestActor) !== aifEmployeeKey(senderActor)) {
+          const error = new Error(`A mai utolsó üzleti művelet ${latestActor} nevéhez tartozik. Az első műszakátadást neki kell elindítania.`);
+          error.statusCode = 409;
+          error.code = "shift_handover_wrong_current_employee";
+          throw error;
+        }
+      }
+      const cutoffResult = await client.query(`SELECT now() AS cutoff`);
+      const cutoff = cutoffResult.rows[0].cutoff;
+      const shiftStart = latestAccepted.rows[0]?.accepted_at || bounds.start;
+      const previousCash = latestAccepted.rowCount
+        ? aifRoundMoney(latestAccepted.rows[0].counted_cash ?? latestAccepted.rows[0].expected_cash)
+        : 0;
+
+      const [shiftSnapshot, daySnapshot] = await Promise.all([
+        aifShopShiftSnapshot(client, { locationId: location.id, fromAt: shiftStart, toAt: cutoff, actor: senderActor }),
+        aifShopShiftSnapshot(client, { locationId: location.id, fromAt: bounds.start, toAt: cutoff }),
+      ]);
+      const newCashDuringShift = aifRoundMoney(shiftSnapshot.receipts?.cash?.amount || 0);
+      const expectedCash = aifRoundMoney(previousCash + newCashDuringShift);
+      const snapshot = {
+        version: 1,
+        createdAt: new Date(cutoff).toISOString(),
+        workDate,
+        fromActor: senderActor,
+        toActor: targetActor,
+        openingCash: previousCash,
+        newCashDuringShift,
+        expectedCash,
+        shift: shiftSnapshot,
+        day: daySnapshot,
+      };
+
+      const created = await client.query(
+        `INSERT INTO aif_shop_shift_handovers (
+           location_id, work_date, from_actor, to_actor, status,
+           shift_start_at, cutoff_at, expected_cash, note, snapshot, created_by
+         ) VALUES ($1,$2::date,$3,$4,'pending',$5,$6,$7,$8,$9::jsonb,$10)
+         RETURNING *`,
+        [location.id, workDate, senderActor, targetActor, shiftStart, cutoff, expectedCash, note, JSON.stringify(snapshot), actorFrom(req)]
+      );
+      await client.query("COMMIT");
+      const item = aifShiftHandoverResponse({ ...created.rows[0], location_code: location.code, location_name: location.name });
+      return res.json({ ok: true, item });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF create shift handover failed", error);
+      const status = Number(error?.statusCode || (error?.code === "23505" ? 409 : 500));
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A műszakátadás létrehozása nem sikerült.", code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shop-shifts/handovers/:id/accept", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const countedCash = toMoney(req.body?.countedCash ?? req.body?.counted_cash ?? req.body?.cash);
+    const acceptanceNote = emptyToNull(req.body?.note || req.body?.acceptanceNote || req.body?.acceptance_note);
+    if (!id) return res.status(400).json({ error: "Hiányzik a műszakátadás azonosítója." });
+    if (countedCash === null || countedCash < 0) return res.status(400).json({ error: "Add meg a megszámolt készpénzt." });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const handoverResult = await client.query(
+        `SELECT h.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_shift_handovers h
+         JOIN aif_locations l ON l.id=h.location_id
+         WHERE h.id::text=$1
+         FOR UPDATE OF h`,
+        [id]
+      );
+      if (!handoverResult.rowCount) {
+        const error = new Error("A műszakátadás nem található.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const handover = handoverResult.rows[0];
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${handover.location_id}`]);
+      const location = await aifResolveShopLocation(req, client, handover.location_code);
+      if (String(location.id) !== String(handover.location_id)) {
+        const error = new Error("Ez a műszakátadás nem ehhez az üzlethez tartozik.");
+        error.statusCode = 403;
+        throw error;
+      }
+      if (handover.status !== "pending") {
+        const error = new Error(handover.status === "accepted" ? "Ezt a műszakátadást már elfogadták." : "Ezt a műszakátadást visszavonták.");
+        error.statusCode = 409;
+        throw error;
+      }
+      const actor = actorFrom(req);
+      if (aifEmployeeKey(actor) !== aifEmployeeKey(handover.to_actor)) {
+        const error = new Error(`Ezt a műszakot ${handover.to_actor} veheti át.`);
+        error.statusCode = 403;
+        throw error;
+      }
+      const expectedCash = aifRoundMoney(handover.expected_cash);
+      const counted = aifRoundMoney(countedCash);
+      const difference = aifRoundMoney(counted - expectedCash);
+      if (Math.abs(difference) >= 0.01) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: `A megszámolt készpénz nem egyezik. Rendszer szerint: ${expectedCash.toFixed(2)} RON, megszámolva: ${counted.toFixed(2)} RON, eltérés: ${difference.toFixed(2)} RON.`,
+          code: "shift_handover_cash_mismatch",
+          expectedCash,
+          countedCash: counted,
+          difference,
+          item: aifShiftHandoverResponse(handover),
+        });
+      }
+
+      const updated = await client.query(
+        `UPDATE aif_shop_shift_handovers
+         SET status='accepted', counted_cash=$2, cash_difference=$3,
+             acceptance_note=$4, accepted_by=$5, accepted_at=now(), updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [handover.id, counted, difference, acceptanceNote, actor]
+      );
+      await client.query("COMMIT");
+      return res.json({ ok: true, item: aifShiftHandoverResponse({ ...updated.rows[0], location_code: handover.location_code, location_name: handover.location_name }) });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF accept shift handover failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A műszak átvétele nem sikerült.", code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.post("/shop-shifts/handovers/:id/cancel", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await ensureAifShopSalesSchema();
+      await client.query("BEGIN");
+      const handoverResult = await client.query(
+        `SELECT h.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_shift_handovers h
+         JOIN aif_locations l ON l.id=h.location_id
+         WHERE h.id::text=$1
+         FOR UPDATE OF h`,
+        [id]
+      );
+      if (!handoverResult.rowCount) {
+        const error = new Error("A műszakátadás nem található.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const handover = handoverResult.rows[0];
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${handover.location_id}`]);
+      const location = await aifResolveShopLocation(req, client, handover.location_code);
+      if (String(location.id) !== String(handover.location_id)) {
+        const error = new Error("Ez a műszakátadás nem ehhez az üzlethez tartozik.");
+        error.statusCode = 403;
+        throw error;
+      }
+      if (handover.status !== "pending") {
+        const error = new Error("Csak függőben lévő műszakátadás vonható vissza.");
+        error.statusCode = 409;
+        throw error;
+      }
+      const actor = actorFrom(req);
+      const isAdmin = normCode(req.session?.role) === "admin";
+      if (!isAdmin && aifEmployeeKey(actor) !== aifEmployeeKey(handover.from_actor)) {
+        const error = new Error(`Ezt az átadást ${handover.from_actor} vagy adminisztrátor vonhatja vissza.`);
+        error.statusCode = 403;
+        throw error;
+      }
+      const updated = await client.query(
+        `UPDATE aif_shop_shift_handovers
+         SET status='cancelled', cancelled_by=$2, cancelled_at=now(), updated_at=now()
+         WHERE id=$1
+         RETURNING *`,
+        [handover.id, actor]
+      );
+      await client.query("COMMIT");
+      return res.json({ ok: true, item: aifShiftHandoverResponse({ ...updated.rows[0], location_code: handover.location_code, location_name: handover.location_name }) });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF cancel shift handover failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A műszakátadás visszavonása nem sikerült.", code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/shop-operations/daily-summary", requireAuthed, async (req, res) => {
     try {
       await ensureAifShopSalesSchema();
@@ -17293,6 +18048,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         await client.query("COMMIT");
         return res.json(aifShopSaleResponse(previous, location, true));
       }
+
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
+      await aifAssertNoPendingShopShiftHandover(client, location.id, actorFrom(req));
 
       const preparedInput = [];
       const seenVariants = new Set();
