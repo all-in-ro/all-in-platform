@@ -16297,6 +16297,36 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         let duplicate = false;
         if (existing.rowCount) {
           duplicate = true;
+
+          // Üzleti alkalmazott meglévő kliens adatait nem írhatja felül az „Új kliens” úton sem.
+          // Különben a szerkesztés gomb elrejtése csak dekoráció lenne, márpedig abból van elég a világban.
+          if (normCode(req.session?.role) === "shop") {
+            const existingCustomer = await client.query(
+              `SELECT c.*, l.code AS location_code, l.name AS location_name
+               FROM aif_shop_customers c
+               LEFT JOIN aif_locations l ON l.id=c.location_id
+               WHERE c.id=$1
+               LIMIT 1`,
+              [existing.rows[0].id]
+            );
+            const protectedCustomer = existingCustomer.rows[0] || null;
+            if (!protectedCustomer || protectedCustomer.is_active === false || String(protectedCustomer.location_id || "") !== String(location.id)) {
+              const error = new Error("Ez a telefonszám már egy védett vagy archivált klienshez tartozik. A meglévő kliens adatait alkalmazott nem módosíthatja; adminisztrátori beavatkozás szükséges.");
+              error.statusCode = 409;
+              error.code = "shop_customer_existing_protected";
+              throw error;
+            }
+            const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
+            const snapshot = await aifLoadShopCustomerSnapshot(client, protectedCustomer.id, currentYear, location.id);
+            await client.query("COMMIT");
+            return res.json({
+              ok: true,
+              duplicate: true,
+              protected: true,
+              item: aifShopCustomerResponse(snapshot || protectedCustomer),
+            });
+          }
+
           const updated = await client.query(
             `UPDATE aif_shop_customers
              SET full_name=$2,
@@ -16358,7 +16388,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.patch("/shop-customers/:id", requireAuthed, async (req, res) => {
+  router.patch("/shop-customers/:id", requireAdminOrSecret, async (req, res) => {
     const customerId = text(req.params.id);
     if (!customerId) return res.status(400).json({ error: "Hiányzik a kliens azonosítója." });
 
@@ -16486,7 +16516,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.delete("/shop-customers/:id", requireAuthed, async (req, res) => {
+  router.delete("/shop-customers/:id", requireAdminOrSecret, async (req, res) => {
     const customerId = text(req.params.id);
     if (!customerId) return res.status(400).json({ error: "Hiányzik a kliens azonosítója." });
 
@@ -16713,7 +16743,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.delete("/shop-customers/:customerId/sales/:saleId", requireAuthed, async (req, res) => {
+  router.delete("/shop-customers/:customerId/sales/:saleId", requireAdminOrSecret, async (req, res) => {
     const customerId = text(req.params.customerId);
     const saleId = text(req.params.saleId);
     if (!customerId || !saleId) return res.status(400).json({ error: "Hiányzik a kliens vagy a vásárlás azonosítója." });
@@ -18214,7 +18244,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             [customerPhone, location.id]
           );
           if (existingCustomer.rowCount) {
-            const updatedCustomer = await client.query(
+            // Eladás közben sem lehet a telefonszámra hivatkozva „mellékesen” átírni egy meglévő kliens törzsadatait.
+            if (normCode(req.session?.role) === "shop") {
+              const protectedCustomer = existingCustomer.rows[0];
+              if (protectedCustomer.is_active === false || String(protectedCustomer.location_id || "") !== String(location.id)) {
+                const error = new Error("Ez a telefonszám már egy védett vagy archivált klienshez tartozik. A meglévő kliens adatait alkalmazott nem módosíthatja; adminisztrátori beavatkozás szükséges.");
+                error.statusCode = 409;
+                error.code = "shop_customer_existing_protected";
+                throw error;
+              }
+              customerRow = protectedCustomer;
+            } else {
+              const updatedCustomer = await client.query(
               `UPDATE aif_shop_customers
                SET full_name=COALESCE(NULLIF($2,''),full_name),
                    email=COALESCE($3,email),
@@ -18240,7 +18281,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 customerGeo.postalCode, customerNote, location.id, actorFrom(req),
               ]
             );
-            customerRow = updatedCustomer.rows[0];
+              customerRow = updatedCustomer.rows[0];
+            }
           }
         }
         if (!customerRow && customerName) {
