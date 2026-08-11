@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   Barcode,
@@ -20,7 +21,11 @@ import {
   UploadCloud,
   X,
   AlertTriangle,
+  CalendarDays,
+  Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
 } from "lucide-react";
 import {
@@ -652,45 +657,338 @@ function buildAifImportRowChunks(rows: AifParsedRow[]) {
   return chunks;
 }
 
-const page = "min-h-screen bg-[#4b5362] px-3 py-4 text-white font-normal sm:px-5 sm:py-6";
-const wrap = "mx-auto max-w-7xl space-y-4";
-const topCard = "sticky top-2 z-50 rounded-2xl border border-white/20 bg-[#303a4c]/95 px-4 py-3 shadow-[0_14px_34px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-white/[0.05] backdrop-blur";
-const card = "rounded-2xl border border-white/18 bg-[#4d5869] p-3 shadow-lg shadow-slate-950/15 sm:p-4 font-normal";
-const sectionHeader = "flex w-full items-center justify-between gap-3 rounded-xl border border-white/22 border-l-4 border-l-emerald-300 bg-[#303b4e] px-3 py-2.5 text-left shadow-sm shadow-slate-950/20 font-normal";
-const label = "grid gap-1.5 text-xs uppercase tracking-[0.05em] text-white/86 font-normal";
-const input = "h-9 rounded-lg border border-white/24 bg-[#303b4e] px-3 text-sm text-white caret-white outline-none transition placeholder:text-white/50 selection:bg-emerald-300/35 focus:border-[#67d4d1]/80 focus:ring-1 focus:ring-[#67d4d1]/30 [color-scheme:dark] font-normal";
-const selectInput = `${input} aif-native-select [color-scheme:dark]`;
-const optionStyle = { backgroundColor: "#303b4e", color: "#ffffff" };
-const mutedOptionStyle = { backgroundColor: "#303b4e", color: "#a9b3c7" };
-const btnBase = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs text-white transition disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const primaryBtn = `${btnBase} border-[#67d4d1]/45 bg-[#208d8b] shadow-sm shadow-[#208d8b]/20 hover:bg-[#249b99] active:bg-[#1a7270]`;
+const page = "min-h-screen bg-[#4e5969] p-3 text-white font-normal sm:p-4 lg:p-6";
+const wrap = "mx-auto max-w-[1580px] space-y-3.5";
+const topCard = "sticky top-2 z-50 overflow-hidden rounded-[28px] border border-[#9be9e5]/20 bg-gradient-to-r from-[#263448] via-[#2f3b4f] to-[#294a51] px-4 py-4 shadow-[0_22px_62px_rgba(15,23,42,0.30)] backdrop-blur-xl sm:px-5";
+const card = "rounded-[22px] border border-white/16 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] p-3 shadow-[0_16px_36px_rgba(15,23,42,0.20)] sm:p-4 font-normal";
+const sectionHeader = "relative flex w-full items-center justify-between gap-3 overflow-hidden rounded-2xl border border-[#9be9e5]/18 bg-gradient-to-r from-[#29384c] via-[#303f53] to-[#2d4852] px-3.5 py-3 text-left shadow-[0_10px_24px_rgba(15,23,42,0.16)] font-normal";
+const label = "grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48 font-normal";
+const input = "h-11 min-w-0 w-full rounded-[13px] border border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] px-3 text-sm font-normal text-white caret-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none placeholder:text-white/38 transition hover:border-white/28 focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/15 [color-scheme:dark]";
+const btnBase = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 font-normal";
+const primaryBtn = `${btnBase} border-[#9be9e5]/48 bg-gradient-to-r from-[#238985] to-[#2a9a96] shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:brightness-110`;
 const compactPrimaryBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-[#67d4d1]/45 bg-[#208d8b] px-2 text-[11px] text-white shadow-sm shadow-[#208d8b]/20 transition hover:bg-[#249b99] active:bg-[#1a7270] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const neutralBtn = `${btnBase} border-white/24 bg-[#354153] hover:bg-[#3e4d63]`;
+const neutralBtn = `${btnBase} border-white/18 bg-[#3a475a]/90 hover:border-[#8ce7e2]/28 hover:bg-[#445369]`;
 const tinyBtn = "inline-flex h-7 items-center justify-center gap-1 rounded-md border border-white/20 bg-[#354153] px-2 text-[11px] text-white transition hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const dangerBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d]`;
 const fileBtn = `${btnBase} border-red-300/24 bg-[#c90d22] hover:bg-[#a90c1d] h-9 px-3`;
-const statCard = "rounded-xl border border-white/12 bg-[#354153] px-3 py-2.5";
+const statCard = "rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]";
 const compactFieldLabel = "block w-full truncate text-center text-[8px] uppercase tracking-[0.035em] text-white/36 whitespace-nowrap leading-[9px] font-normal";
-const compactInput = "h-7 min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[11px] text-white outline-none placeholder:text-white/38 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
-const compactSelect = `${compactInput} aif-native-select pr-6`;
 const previewField = "grid min-w-0 content-start gap-[1px]";
 const previewInput = "h-[28px] min-w-0 rounded-md border border-white/18 bg-[#303b4e] px-2 text-[12px] leading-[16px] text-white outline-none placeholder:text-white/44 focus:border-emerald-200/65 focus:ring-1 focus:ring-emerald-200/20 font-normal";
-const previewSelect = `${previewInput} aif-native-select pr-6`;
 const previewTopGrid = "grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,0.9fr)_minmax(0,0.95fr)_minmax(0,0.9fr)_minmax(0,2.8fr)_minmax(0,1.05fr)] lg:items-end";
 const previewTopHeaderGrid = "hidden";
 const previewMiddleGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1.65fr)_minmax(0,1.85fr)_minmax(0,0.65fr)_minmax(0,1fr)_minmax(0,0.65fr)_minmax(0,0.65fr)] lg:items-end";
 const previewBottomGrid = "mt-[2px] grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-[42px_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,3fr)_minmax(0,0.6fr)_minmax(0,0.75fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.05fr)] lg:items-end";
 const modalBackdrop = "fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-slate-950/78 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-4 sm:py-6";
-const modalCard = "my-auto max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl border border-white/22 bg-[#4b5566] p-4 text-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]";
+const modalCard = "my-auto max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-[26px] border border-[#9be9e5]/22 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d] p-4 text-white shadow-[0_34px_110px_rgba(0,0,0,0.58)] sm:max-h-[calc(100dvh-3rem)]";
 const wizardStepBase = "rounded-2xl border px-3 py-3 transition shadow-sm";
 const wizardStepActive = `${wizardStepBase} border-[#67d4d1]/65 bg-[#208d8b]/22 text-white shadow-[#208d8b]/10`;
 const wizardStepDone = `${wizardStepBase} border-[#7bd7d4]/90 bg-[#208d8b] text-white shadow-[0_0_0_1px_rgba(123,215,212,0.28),0_14px_30px_rgba(32,141,139,0.32)] ring-1 ring-[#7bd7d4]/35 hover:bg-[#249b99]`;
 const wizardStepIdle = `${wizardStepBase} border-white/14 bg-[#354153]`;
 const wizardStepLocked = `${wizardStepBase} border-white/10 bg-[#303b4e]/60 opacity-70`;
-const sourceChoiceCard = "group rounded-2xl border border-white/16 bg-[#354153] p-4 text-left shadow-sm transition hover:border-[#67d4d1]/55 hover:bg-[#3b485c] disabled:cursor-not-allowed disabled:opacity-55";
+const sourceChoiceCard = "group rounded-[20px] border border-white/14 bg-gradient-to-br from-[#36465b] to-[#2d394b] p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:border-[#8ce7e2]/38 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55";
+
+
+
+type IncomingSelectOption = { value: string; label: string; hint?: string };
+
+function IncomingSmartSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+  className = "",
+  disabled = false,
+  invalid = false,
+  compact = false,
+  ariaLabel,
+}: {
+  value: string;
+  options: IncomingSelectOption[];
+  onChange: (value: string) => void;
+  placeholder: string;
+  className?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  compact?: boolean;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((item) => String(item.value) === String(value)) || (value ? { value, label: value } : null);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current || typeof window === "undefined") return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = compact ? 5 : 8;
+    const rowHeight = compact ? 34 : 46;
+    const desiredHeight = Math.min(compact ? 280 : 350, 58 + Math.max(1, options.length) * rowHeight);
+    const width = Math.min(Math.max(rect.width, compact ? 210 : 250), window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < Math.min(desiredHeight, compact ? 180 : 240) && roomAbove > roomBelow;
+    if (openUpward) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    } else {
+      setPosition({ left, width, top: Math.min(window.innerHeight - edge, rect.bottom + gap) });
+    }
+  }, [compact, options.length]);
+
+  useEffect(() => {
+    if (!open || disabled) return;
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, disabled, updatePosition]);
+
+  const triggerHeight = compact ? "h-[28px] rounded-md px-2 text-[12px]" : "h-11 rounded-[13px] px-3 text-sm";
+  const closedBorder = invalid ? "border-rose-300/72 bg-rose-500/[0.12]" : "border-white/18";
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel || placeholder}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`group flex w-full min-w-0 items-center justify-between gap-2 overflow-hidden border text-left font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition disabled:cursor-not-allowed disabled:opacity-50 ${triggerHeight} ${
+          open
+            ? invalid
+              ? "border-rose-200/80 bg-gradient-to-b from-[#5b3b49] to-[#3c3444] ring-2 ring-rose-300/12"
+              : "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : `${closedBorder} bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/35 hover:from-[#324157] hover:to-[#2c3a4e]`
+        }`}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span className={`shrink-0 rounded-full transition ${compact ? "h-1.5 w-1.5" : "h-2 w-2"} ${open ? "bg-[#8ff4ee] shadow-[0_0_12px_rgba(123,215,212,0.9)]" : value ? "bg-[#63d8d3]" : "bg-white/28"}`} />
+          <span title={selected?.label || placeholder} className="min-w-0 flex-1 truncate" style={{ color: selected?.label ? "#ffffff" : "rgba(255,255,255,0.55)" }}>
+            {selected?.label || placeholder}
+          </span>
+        </span>
+        <span className={`inline-flex shrink-0 items-center justify-center rounded-lg border transition ${compact ? "h-5 w-5" : "h-7 w-7"} ${open ? "border-[#9be9e5]/48 bg-[#2a8d8b]/34 text-[#d7fffd]" : "border-white/10 bg-white/[0.035] text-white/62 group-hover:border-[#7bd7d4]/25 group-hover:text-white"}`}>
+          <ChevronDown size={compact ? 12 : 14} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+
+      {open && position && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          className={`overflow-hidden border border-[#7bd7d4]/42 bg-[#202c3d]/[0.995] shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl ${compact ? "rounded-xl p-1.5" : "rounded-[18px] p-2"}`}
+          style={{ position: "fixed", zIndex: 1800, left: position.left, width: position.width, top: position.top, bottom: position.bottom, color: "#ffffff" }}
+          role="listbox"
+          aria-label={ariaLabel || placeholder}
+        >
+          {!compact ? (
+            <div className="mb-1.5 flex items-center justify-between gap-3 px-2 py-1.5">
+              <span className="text-[9px] uppercase tracking-[0.16em]" style={{ color: "rgba(215,255,253,0.64)" }}>Válassz</span>
+              <span className="rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[9px]" style={{ color: "rgba(255,255,255,0.52)" }}>{options.length} lehetőség</span>
+            </div>
+          ) : null}
+          <div className={`${compact ? "max-h-[250px]" : "max-h-[310px]"} space-y-1 overflow-y-auto pr-0.5`}>
+            {options.map((option, index) => {
+              const active = String(option.value) === String(value);
+              return (
+                <button
+                  key={`${option.value || "__empty"}-${index}`}
+                  type="button"
+                  className={`group/item flex w-full items-center gap-2.5 rounded-xl border text-left font-normal transition ${compact ? "min-h-8 px-2 py-1.5 text-[11px]" : "min-h-10 px-2.5 py-2 text-sm"} ${active ? "border-[#8ce7e2]/44 bg-gradient-to-r from-[#2a8d8b] to-[#287b82] shadow-[0_8px_18px_rgba(42,141,139,0.18)]" : "border-transparent bg-[#2e3b4f] hover:border-white/10 hover:bg-[#3a4a61]"}`}
+                  onClick={() => { onChange(option.value); setOpen(false); }}
+                  role="option"
+                  aria-selected={active}
+                  title={option.hint || option.label}
+                >
+                  <span className={`shrink-0 rounded-full transition ${compact ? "h-4 w-1" : "h-6 w-1"} ${active ? "bg-[#bff8f5]" : "bg-white/0 group-hover/item:bg-white/18"}`} />
+                  <span className="min-w-0 flex-1 truncate" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}>{option.label}</span>
+                  {option.hint ? <span className="max-w-[90px] shrink-0 truncate text-[9px] text-white/42">{option.hint}</span> : null}
+                  <span className={`inline-flex shrink-0 items-center justify-center ${compact ? "h-5 w-5" : "h-7 w-7"}`}>
+                    {active ? <span className={`inline-flex items-center justify-center rounded-lg bg-[#d8fffd] text-[#176b69] shadow-[0_4px_12px_rgba(0,0,0,0.18)] ${compact ? "h-5 w-5" : "h-7 w-7"}`}><Check size={compact ? 13 : 17} strokeWidth={2.8} /></span> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
+
+const INCOMING_HU_MONTHS = ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"] as const;
+const INCOMING_HU_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function incomingIsoDateParts(value?: string | null) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { year, month, day, date };
+}
+
+function incomingIsoFromUtcDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function incomingHuDateLabel(value?: string | null) {
+  const parsed = incomingIsoDateParts(value);
+  if (!parsed) return "Dátum választása";
+  return `${parsed.year}. ${String(parsed.month).padStart(2, "0")}. ${String(parsed.day).padStart(2, "0")}.`;
+}
+
+function IncomingHungarianDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+  invalid = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  invalid?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const parsed = incomingIsoDateParts(value);
+  const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const todayValue = todayIso();
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current || typeof window === "undefined") return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = 8;
+    const width = Math.min(336, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const estimatedHeight = 382;
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < estimatedHeight && roomAbove > roomBelow;
+    if (openUpward) setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    else setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = incomingIsoDateParts(value);
+    if (current) { setViewYear(current.year); setViewMonth(current.month - 1); }
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const firstOfMonth = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (firstOfMonth.getUTCDay() + 6) % 7;
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart);
+    day.setUTCDate(gridStart.getUTCDate() + index);
+    return day;
+  });
+
+  function shiftMonth(delta: number) {
+    const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+    setViewYear(next.getUTCFullYear());
+    setViewMonth(next.getUTCMonth());
+  }
+
+  function chooseDate(iso: string) { onChange(iso); setOpen(false); }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => { if (!open) updatePosition(); setOpen((current) => !current); }}
+        className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : invalid
+              ? "border-rose-300/72 bg-gradient-to-b from-[#4d3543] to-[#343344] hover:border-rose-200/85"
+              : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/38 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5"><CalendarDays size={16} className="shrink-0 text-[#8fe9e5]" /><span className="truncate tracking-[0.02em]">{incomingHuDateLabel(value)}</span></span>
+        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position && typeof document !== "undefined" ? createPortal(
+        <div ref={menuRef} role="dialog" aria-label={`${ariaLabel} naptár`} className="overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl" style={{ position: "fixed", zIndex: 1840, left: position.left, width: position.width, top: position.top, bottom: position.bottom }}>
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button type="button" onClick={() => shiftMonth(-1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white" aria-label="Előző hónap"><ChevronLeft size={17} /></button>
+            <div className="text-center"><p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p><p className="mt-0.5 text-sm font-medium text-white">{viewYear}. {INCOMING_HU_MONTHS[viewMonth]}</p></div>
+            <button type="button" onClick={() => shiftMonth(1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 transition hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white" aria-label="Következő hónap"><ChevronRight size={17} /></button>
+          </div>
+          <div className="mt-3 grid grid-cols-7 gap-1">
+            {INCOMING_HU_WEEKDAYS.map((day, index) => <div key={day} className={`py-1 text-center text-[10px] font-medium uppercase tracking-[0.05em] ${index >= 5 ? "text-rose-100/55" : "text-[#cffffd]/60"}`}>{day}</div>)}
+            {days.map((day) => {
+              const iso = incomingIsoFromUtcDate(day);
+              const inMonth = day.getUTCMonth() === viewMonth;
+              const selected = iso === value;
+              const today = iso === todayValue;
+              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+              return <button key={iso} type="button" onClick={() => chooseDate(iso)} className={`relative flex h-9 items-center justify-center rounded-lg border text-xs transition ${selected ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] font-semibold text-white shadow-[0_6px_16px_rgba(42,141,139,0.30)]" : inMonth ? weekend ? "border-transparent bg-white/[0.025] text-rose-50/72 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white" : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white" : "border-transparent text-white/24 hover:bg-white/[0.04] hover:text-white/48"}`}>{day.getUTCDate()}{today && !selected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}</button>;
+            })}
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3"><span className="text-[10px] text-white/40">A hét hétfővel kezdődik.</span><button type="button" onClick={() => chooseDate(todayValue)} className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] transition hover:bg-[#2a8d8b]/32"><CalendarDays size={13} /> Ma</button></div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
 
 function goHome() {
   window.location.hash = "#allin";
@@ -2169,15 +2467,6 @@ export default function AllInIncoming(_props: Props) {
     return subCategories.filter((c) => categoryParentId(c) === parentId);
   }
 
-  function importedMainCategoryHint(row: AifParsedRow) {
-    const raw = mainCategoryCandidatesForRow(row).find((x) => String(x ?? "").trim());
-    return String(raw ?? "").trim();
-  }
-
-  function importedSubCategoryHint(row: AifParsedRow) {
-    const raw = subCategoryCandidatesForRow(row).find((x) => String(x ?? "").trim());
-    return String(raw ?? "").trim();
-  }
 
   function normalizeImportedRowsWithMeta(inputRows: AifParsedRow[]) {
     return inputRows.map((row) => {
@@ -2342,8 +2631,7 @@ export default function AllInIncoming(_props: Props) {
     receptionHeaderMissing.invoiceGross ? "számla végösszeg" : "",
   ].filter(Boolean);
   const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white placeholder:text-red-100/60 shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
-  const requiredSelectInput = (missing: boolean) => `${selectInput} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
-  const disabledExchangeRateInput = "h-9 w-full cursor-not-allowed rounded-lg border border-white/14 bg-[#303b4e]/55 px-3 text-sm text-white/45 caret-transparent outline-none opacity-70 transition placeholder:text-transparent focus:border-white/14 focus:ring-0 [color-scheme:dark] font-normal";
+  const disabledExchangeRateInput = "h-11 w-full cursor-not-allowed rounded-[13px] border border-white/12 bg-gradient-to-b from-[#2b3647]/70 to-[#283344]/70 px-3 text-sm text-white/38 caret-transparent outline-none opacity-75 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] placeholder:text-transparent focus:border-white/12 focus:ring-0 font-normal";
   const canSaveApprovedRows = Boolean(supplierId && locationId && approvedCount > 0 && approvedProblems === 0 && approvedBarcodeConflicts.length === 0 && receptionReady);
   const columnWarnings = useMemo(() => {
     if (!workbench) return 0;
@@ -4255,14 +4543,18 @@ export default function AllInIncoming(_props: Props) {
             </div>
             <label className={label}>
               Meglévő receptió folytatása
-              <select className={`${selectInput} w-full`} value={receptionPickerId} onChange={(e) => setReceptionPickerId(e.target.value)}>
-                <option style={mutedOptionStyle} value="">Válassz meglévő receptiót</option>
-                {receptions.filter(receptionHasImportHistory).map((r) => (
-                  <option style={optionStyle} key={r.id} value={r.id}>
-                    {r.invoice_number || "Számlaszám nélkül"} • {r.supplier_name || "-"} • {receptionStatusLabel(r.status)} • {moneyText(toNumber(r.invoice_gross), r.currency_code || "")}
-                  </option>
-                ))}
-              </select>
+              <IncomingSmartSelect
+                value={receptionPickerId}
+                onChange={setReceptionPickerId}
+                placeholder="Válassz meglévő receptiót"
+                options={[
+                  { value: "", label: "Válassz meglévő receptiót" },
+                  ...receptions.filter(receptionHasImportHistory).map((r) => ({
+                    value: String(r.id),
+                    label: `${r.invoice_number || "Számlaszám nélkül"} • ${r.supplier_name || "-"} • ${receptionStatusLabel(r.status)} • ${moneyText(toNumber(r.invoice_gross), r.currency_code || "")}`,
+                  })),
+                ]}
+              />
             </label>
             <div className="flex flex-wrap gap-2 lg:justify-end">
               <button className={primaryBtn} onClick={() => loadReceptionIntoWorkspace()} disabled={busy || !receptionPickerId} type="button">
@@ -4369,23 +4661,25 @@ export default function AllInIncoming(_props: Props) {
           <div className="grid gap-3 lg:grid-cols-[1fr_1fr_2fr]">
             <label className={label}>
               Beszállító
-              <select className={requiredSelectInput(receptionHeaderMissing.supplier)} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-                <option style={mutedOptionStyle} value="">Beszállító kiválasztása</option>
-                {suppliers.map((s) => (
-                  <option style={optionStyle} key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+              <IncomingSmartSelect
+                value={supplierId}
+                onChange={setSupplierId}
+                placeholder="Beszállító kiválasztása"
+                invalid={receptionHeaderMissing.supplier}
+                options={[{ value: "", label: "Beszállító kiválasztása" }, ...suppliers.map((s) => ({ value: String(s.id), label: s.name }))]}
+              />
             </label>
 
             <label className={label}>
               Cél hely
               <div className="grid grid-cols-[1fr_auto] gap-2">
-                <select className={requiredSelectInput(receptionHeaderMissing.location)} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                  <option style={mutedOptionStyle} value="">Cél hely kiválasztása</option>
-                  {locations.map((l) => (
-                    <option style={optionStyle} key={l.id} value={l.id}>{l.name}</option>
-                  ))}
-                </select>
+                <IncomingSmartSelect
+                  value={locationId}
+                  onChange={setLocationId}
+                  placeholder="Cél hely kiválasztása"
+                  invalid={receptionHeaderMissing.location}
+                  options={[{ value: "", label: "Cél hely kiválasztása" }, ...locations.map((l) => ({ value: String(l.id), label: l.name }))]}
+                />
                 <button className={neutralBtn} onClick={() => setLocationModalOpen(true)} type="button" title="Cél helyek kezelése">
                   <MapPin size={14} /> Kezelés
                 </button>
@@ -4405,25 +4699,22 @@ export default function AllInIncoming(_props: Props) {
             </label>
             <label className={label}>
               Számla dátuma
-              <input className={requiredInput(requiredMissing.invoiceDate)} type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+              <IncomingHungarianDatePicker value={invoiceDate} onChange={setInvoiceDate} ariaLabel="Számla dátuma" invalid={requiredMissing.invoiceDate} />
             </label>
             <label className={label}>
               Receptió dátuma
-              <input className={requiredInput(requiredMissing.receptionDate)} type="date" value={receptionDate} onChange={(e) => setReceptionDate(e.target.value)} />
+              <IncomingHungarianDatePicker value={receptionDate} onChange={setReceptionDate} ariaLabel="Receptió dátuma" invalid={requiredMissing.receptionDate} />
             </label>
             <label className={label}>
               Pénznem
               <div className="grid grid-cols-[1fr_auto] gap-2">
-                <select
-                  className={requiredSelectInput(requiredMissing.currencyCode)}
+                <IncomingSmartSelect
                   value={currencyCode}
-                  onChange={(e) => handleCurrencyCodeChange(e.target.value)}
-                >
-                  <option style={mutedOptionStyle} value="">Pénznem kiválasztása</option>
-                  {activeCurrencies.map((c) => (
-                    <option style={optionStyle} key={c.code} value={c.code}>{c.code} • {c.name}</option>
-                  ))}
-                </select>
+                  onChange={handleCurrencyCodeChange}
+                  placeholder="Pénznem kiválasztása"
+                  invalid={requiredMissing.currencyCode}
+                  options={[{ value: "", label: "Pénznem kiválasztása" }, ...activeCurrencies.map((c) => ({ value: String(c.code), label: `${c.code} • ${c.name}` }))]}
+                />
                 <button className={neutralBtn} onClick={() => setCurrencyModalOpen(true)} type="button">
                   Kezelés
                 </button>
@@ -4448,12 +4739,18 @@ export default function AllInIncoming(_props: Props) {
             </label>
             <label className={label}>
               TVA kezelés
-              <select className={requiredSelectInput(requiredMissing.tvaMode)} value={tvaMode} onChange={(e) => { const next = e.target.value as any; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); else if (!tvaRate.trim() || toNumber(tvaRate) <= 0) setTvaRate("21"); }}>
-                <option style={mutedOptionStyle} value="">TVA kezelés kiválasztása</option>
-                <option style={optionStyle} value="without_tva">Árak nettóban • TVA hozzáadódik</option>
-                <option style={optionStyle} value="with_tva">Árak bruttóban • TVA benne van</option>
-                <option style={optionStyle} value="no_tva">TVA nélkül</option>
-              </select>
+              <IncomingSmartSelect
+                value={tvaMode}
+                onChange={(value) => { const next = value as typeof tvaMode; setTvaMode(next); if (next === "no_tva") setTvaRate("0"); else if (!tvaRate.trim() || toNumber(tvaRate) <= 0) setTvaRate("21"); }}
+                placeholder="TVA kezelés kiválasztása"
+                invalid={requiredMissing.tvaMode}
+                options={[
+                  { value: "", label: "TVA kezelés kiválasztása" },
+                  { value: "without_tva", label: "Árak nettóban • TVA hozzáadódik" },
+                  { value: "with_tva", label: "Árak bruttóban • TVA benne van" },
+                  { value: "no_tva", label: "TVA nélkül" },
+                ]}
+              />
             </label>
             <label className={label}>
               TVA %
@@ -4487,14 +4784,15 @@ export default function AllInIncoming(_props: Props) {
               </div>
               <label className={label}>
                 Eladási ár pénzneme
-                <select
-                  className={`${selectInput} w-full`}
+                <IncomingSmartSelect
                   value={sellPriceCurrencyMode}
-                  onChange={(e) => setSellPriceCurrencyMode(e.target.value as SellPriceCurrencyMode)}
-                >
-                  <option style={optionStyle} value="invoice">{`Számla pénzneme (${currencyCode || "nincs kiválasztva"})`}</option>
-                  <option style={optionStyle} value="ron">RON, már kész végár</option>
-                </select>
+                  onChange={(value) => setSellPriceCurrencyMode(value as SellPriceCurrencyMode)}
+                  placeholder="Eladási ár pénzneme"
+                  options={[
+                    { value: "invoice", label: `Számla pénzneme (${currencyCode || "nincs kiválasztva"})` },
+                    { value: "ron", label: "RON, már kész végár" },
+                  ]}
+                />
               </label>
               <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} type="button">TVA beállítás</button>
             </div>
@@ -4625,24 +4923,12 @@ export default function AllInIncoming(_props: Props) {
   }
 
   return (
-    <main className={page}>
-      <style>{`
-        select.aif-native-select,
-        select.aif-native-select option,
-        select.aif-native-select optgroup {
-          background-color: #303b4e !important;
-          color: #ffffff !important;
-          color-scheme: dark;
-        }
-        select.aif-native-select option:disabled {
-          background-color: #303b4e !important;
-          color: rgba(255, 255, 255, 0.45) !important;
-        }
-        select.aif-native-select option:checked {
-          background-color: #3b4658 !important;
-          color: #ffffff !important;
-        }
-      `}</style>
+    <main
+      className={page}
+      style={{
+        backgroundImage: "radial-gradient(circle at 14% 8%, rgba(42,141,139,0.18), transparent 24%), radial-gradient(circle at 88% 12%, rgba(104,221,216,0.08), transparent 22%), linear-gradient(135deg, #5c6878 0%, #535f70 42%, #46515f 100%)",
+      }}
+    >
       <datalist id="aif-size-options">
         {sizeDatalistOptions.map((size) => <option key={size} value={size} />)}
       </datalist>
@@ -4914,11 +5200,12 @@ export default function AllInIncoming(_props: Props) {
                 </label>
                 <label className={label}>
                   Típus
-                  <select className={`${selectInput} w-full`} value={newLocationType} onChange={(e) => setNewLocationType(e.target.value as LocationType)}>
-                    {locationTypeOptions.map((t) => (
-                      <option style={optionStyle} key={t.id} value={t.code}>{t.name}</option>
-                    ))}
-                  </select>
+                  <IncomingSmartSelect
+                    value={newLocationType}
+                    onChange={(value) => setNewLocationType(value as LocationType)}
+                    placeholder="Típus kiválasztása"
+                    options={locationTypeOptions.map((t) => ({ value: String(t.code), label: t.name }))}
+                  />
                 </label>
                 <button className={primaryBtn} onClick={createLocation} disabled={busy} type="button">
                   <Save size={14} /> Mentés
@@ -5025,15 +5312,12 @@ export default function AllInIncoming(_props: Props) {
                         </label>
                         <label className={label}>
                           Típus
-                          <select
-                            className={`${selectInput} w-full`}
+                          <IncomingSmartSelect
                             value={editLocationType}
-                            onChange={(e) => setEditLocationType(e.target.value as LocationType)}
-                          >
-                            {locationTypeOptions.map((t) => (
-                              <option style={optionStyle} key={t.id} value={t.code}>{t.name}</option>
-                            ))}
-                          </select>
+                            onChange={(value) => setEditLocationType(value as LocationType)}
+                            placeholder="Típus kiválasztása"
+                            options={locationTypeOptions.map((t) => ({ value: String(t.code), label: t.name }))}
+                          />
                         </label>
                         <div className="flex flex-wrap gap-2 lg:justify-end">
                           <button className={primaryBtn} onClick={saveLocationEdit} disabled={busy} type="button">
@@ -5175,7 +5459,9 @@ export default function AllInIncoming(_props: Props) {
 
       <div className={wrap}>
         <header className={topCard}>
-          <div className="flex flex-wrap items-center gap-3">
+          <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[#bff8f5]/60 to-transparent" />
+          <span className="pointer-events-none absolute -right-16 -top-20 h-44 w-44 rounded-full bg-[#7bd7d4]/[0.08] blur-3xl" />
+          <div className="relative flex flex-wrap items-center gap-3">
             <div className="min-w-[220px] border-l-4 border-[#7bd7d4]/70 pl-3">
               <p className="text-[11px] uppercase tracking-[0.18em] leading-none text-[#cffffd]/70">AllInFashion</p>
               <h1 className="mt-1 text-xl leading-tight tracking-tight text-white">Áru bevételezés</h1>
@@ -5292,30 +5578,15 @@ export default function AllInIncoming(_props: Props) {
             <div className="mt-3 grid gap-3 lg:grid-cols-3">
               <label className={label}>
                 Márka
-                <select className={`${selectInput} w-full`} value={defaultBrandCode} onChange={(e) => setDefaultBrandCode(e.target.value)}>
-                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett márka</option>
-                  {brandOptionsForSupplier.map((b) => (
-                    <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>
-                  ))}
-                </select>
+                <IncomingSmartSelect value={defaultBrandCode} onChange={setDefaultBrandCode} placeholder="Nincs alapértelmezett márka" options={[{ value: "", label: "Nincs alapértelmezett márka" }, ...brandOptionsForSupplier.map((b) => ({ value: String(b.code || b.id), label: String(b.name || b.code || b.id) }))]} />
               </label>
               <label className={label}>
                 Főkategória
-                <select className={`${selectInput} w-full`} value={defaultCategoryCode} onChange={(e) => setDefaultCategoryCode(e.target.value)}>
-                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett főkategória</option>
-                  {(mainCategories.length ? mainCategories : activeCategories).map((c) => (
-                    <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>
-                  ))}
-                </select>
+                <IncomingSmartSelect value={defaultCategoryCode} onChange={setDefaultCategoryCode} placeholder="Nincs alapértelmezett főkategória" options={[{ value: "", label: "Nincs alapértelmezett főkategória" }, ...(mainCategories.length ? mainCategories : activeCategories).map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]} />
               </label>
               <label className={label}>
                 Nem
-                <select className={`${selectInput} w-full`} value={defaultGender} onChange={(e) => setDefaultGender(e.target.value)}>
-                  <option style={mutedOptionStyle} value="">Nincs alapértelmezett nem</option>
-                  {activeGenderTypes.map((g) => (
-                    <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>
-                  ))}
-                </select>
+                <IncomingSmartSelect value={defaultGender} onChange={setDefaultGender} placeholder="Nincs alapértelmezett nem" options={[{ value: "", label: "Nincs alapértelmezett nem" }, ...activeGenderTypes.map((g) => ({ value: String(g.code), label: g.name }))]} />
               </label>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -5394,31 +5665,29 @@ export default function AllInIncoming(_props: Props) {
               </div>
               <div className="grid gap-3 lg:grid-cols-6">
                 <label className={label}>Márka
-                  <select className={`${selectInput} w-full`} value={manualBrandCode || defaultBrandCode} onChange={(e) => setManualBrandCode(e.target.value)}>
-                    <option style={mutedOptionStyle} value="">Nincs</option>
-                    {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
-                  </select>
+                  <IncomingSmartSelect value={manualBrandCode || defaultBrandCode} onChange={setManualBrandCode} placeholder="Nincs" options={[{ value: "", label: "Nincs" }, ...brandOptionsForSupplier.map((b) => ({ value: String(b.code || b.id), label: String(b.name || b.code || b.id) }))]} />
                 </label>
                 <label className={label}>Főkategória
-                  <select className={`${selectInput} w-full`} value={manualCategoryCode || defaultCategoryCode} onChange={(e) => { const value = e.target.value; const found = (mainCategories.length ? mainCategories : activeCategories).find((c) => String(c.code || c.id) === value); setManualCategoryCode(value); setManualSubCategoryCode(""); if (found) setManualProductType((current) => current || categoryLabel(found)); }}>
-                    <option style={mutedOptionStyle} value="">Nincs</option>
-                    {(mainCategories.length ? mainCategories : activeCategories).map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                  </select>
+                  <IncomingSmartSelect
+                    value={manualCategoryCode || defaultCategoryCode}
+                    onChange={(value) => { const found = (mainCategories.length ? mainCategories : activeCategories).find((c) => String(c.code || c.id) === value); setManualCategoryCode(value); setManualSubCategoryCode(""); if (found) setManualProductType((current) => current || categoryLabel(found)); }}
+                    placeholder="Nincs"
+                    options={[{ value: "", label: "Nincs" }, ...(mainCategories.length ? mainCategories : activeCategories).map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]}
+                  />
                 </label>
                 <label className={label}>Alkategória / terméktípus
-                  <select className={`${selectInput} w-full`} value={manualSubCategoryCode} onChange={(e) => { const value = e.target.value; const found = subCategoriesForManualCategory.find((c) => String(c.code || c.id) === value); setManualSubCategoryCode(value); if (found) setManualProductType((current) => current || categoryLabel(found)); }}>
-                    <option style={mutedOptionStyle} value="">Nincs</option>
-                    {subCategoriesForManualCategory.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                  </select>
+                  <IncomingSmartSelect
+                    value={manualSubCategoryCode}
+                    onChange={(value) => { const found = subCategoriesForManualCategory.find((c) => String(c.code || c.id) === value); setManualSubCategoryCode(value); if (found) setManualProductType((current) => current || categoryLabel(found)); }}
+                    placeholder="Nincs"
+                    options={[{ value: "", label: "Nincs" }, ...subCategoriesForManualCategory.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]}
+                  />
                 </label>
                 <label className={label}>Import terméktípus / RODESCR
                   <input className={`${input} w-full`} value={manualProductType} onChange={(e) => setManualProductType(e.target.value)} placeholder="pl. tricou, hoodie" />
                 </label>
                 <label className={label}>Nem
-                  <select className={`${selectInput} w-full`} value={manualGender || defaultGender} onChange={(e) => setManualGender(e.target.value)}>
-                    <option style={mutedOptionStyle} value="">Nincs</option>
-                    {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
-                  </select>
+                  <IncomingSmartSelect value={manualGender || defaultGender} onChange={setManualGender} placeholder="Nincs" options={[{ value: "", label: "Nincs" }, ...activeGenderTypes.map((g) => ({ value: String(g.code), label: g.name }))]} />
                 </label>
                 <label className={label}>Fotó URL
                   <input className={`${input} w-full`} value={manualImageUrl} onChange={(e) => setManualImageUrl(e.target.value)} placeholder="https://..." />
@@ -5565,11 +5834,14 @@ export default function AllInIncoming(_props: Props) {
                       >
                         <td className="px-3 py-2.5 text-white/90">{c.header}</td>
                         <td className="px-3 py-2.5">
-                          <select className={`${selectInput} h-8 w-[190px]`} value={c.field} onChange={(e) => updateColumnField(c.index, e.target.value as AifColumnField)}>
-                            {AIF_COLUMN_FIELD_OPTIONS_WITH_SN.map((opt) => (
-                              <option style={optionStyle} key={opt.value} value={opt.value}>{opt.label}</option>
-                            ))}
-                          </select>
+                          <IncomingSmartSelect
+                            compact
+                            className="w-[190px]"
+                            value={String(c.field)}
+                            onChange={(value) => updateColumnField(c.index, value as AifColumnField)}
+                            placeholder="Mező kiválasztása"
+                            options={AIF_COLUMN_FIELD_OPTIONS_WITH_SN.map((opt) => ({ value: String(opt.value), label: opt.label }))}
+                          />
                           {c.field === "ignore" && <div className="mt-1 inline-flex rounded-full border border-red-300/30 bg-red-500/16 px-2 py-0.5 text-[10px] text-red-50">Kihagyott oszlop</div>}
                         </td>
                         <td className={`px-3 py-2.5 ${confidenceClass(c.confidence)}`}>{confidenceText(c.confidence)} • {c.confidence}%</td>
@@ -5644,8 +5916,6 @@ export default function AllInIncoming(_props: Props) {
                 const mainCategoryValue = mainCategoryValueForRow(r);
                 const subCategoryValue = subCategoryValueForRow(r);
                 const subCategoryOptions = subCategoriesForParentValue(mainCategoryValue);
-                const mainCategoryHint = importedMainCategoryHint(r);
-                const subCategoryHint = importedSubCategoryHint(r);
                 const colorMissingHint = brandColorMissingHint(r);
                 const rowMessage = errors.length ? errors.join(" ") : rowState;
                 const isDimmedPreviewRow = idx % 2 === 1;
@@ -5692,10 +5962,7 @@ export default function AllInIncoming(_props: Props) {
                       </label>
                       <label className={previewField}>
                         <span className={compactFieldLabel}>Márka</span>
-                        <select className={`${previewSelect} w-full`} value={brandValueForRow(n)} onChange={(e) => updateRowField(globalIndex, "brandCode", e.target.value)}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {brandOptionsForSupplier.map((b) => <option style={optionStyle} key={b.id} value={b.code || b.id}>{b.name || b.code}</option>)}
-                        </select>
+                        <IncomingSmartSelect compact value={brandValueForRow(n)} onChange={(value) => updateRowField(globalIndex, "brandCode", value)} placeholder="Nincs" options={[{ value: "", label: "Nincs" }, ...brandOptionsForSupplier.map((b) => ({ value: String(b.code || b.id), label: String(b.name || b.code || b.id) }))]} />
                       </label>
                     </div>
 
@@ -5703,24 +5970,15 @@ export default function AllInIncoming(_props: Props) {
                       <div className="hidden lg:block" />
                       <label className={previewField}>
                         <span className={compactFieldLabel} title="Főkategória">Főkategória</span>
-                        <select className={`${previewSelect} w-full min-w-0 truncate`} value={mainCategoryValue} onChange={(e) => updateRowField(globalIndex, "categoryCode", e.target.value)} title={mainCategoryValue || mainCategoryHint || "Főkategória"}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {(mainCategories.length ? mainCategories : activeCategories.filter((c) => !isSubcategoryOption(c))).map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                        </select>
+                        <IncomingSmartSelect compact value={mainCategoryValue} onChange={(value) => updateRowField(globalIndex, "categoryCode", value)} placeholder="Nincs" ariaLabel="Főkategória" options={[{ value: "", label: "Nincs" }, ...(mainCategories.length ? mainCategories : activeCategories.filter((c) => !isSubcategoryOption(c))).map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]} />
                       </label>
                       <label className={previewField}>
                         <span className={compactFieldLabel} title="Alkategória / terméktípus">Alkat. / típus</span>
-                        <select className={`${previewSelect} w-full min-w-0 truncate`} value={subCategoryValue} onChange={(e) => updateRowField(globalIndex, "subCategoryCode", e.target.value)} title={subCategoryValue || subCategoryHint || "Alkategória / terméktípus"}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {subCategoryOptions.map((c) => <option style={optionStyle} key={c.id} value={c.code || c.id}>{categoryLabel(c)}</option>)}
-                        </select>
+                        <IncomingSmartSelect compact value={subCategoryValue} onChange={(value) => updateRowField(globalIndex, "subCategoryCode", value)} placeholder="Nincs" ariaLabel="Alkategória / terméktípus" options={[{ value: "", label: "Nincs" }, ...subCategoryOptions.map((c) => ({ value: String(c.code || c.id), label: categoryLabel(c) }))]} />
                       </label>
                       <label className={previewField}>
                         <span className={compactFieldLabel}>Nem</span>
-                        <select className={`${previewSelect} w-full`} value={valueString(n.gender)} onChange={(e) => updateRowField(globalIndex, "gender", e.target.value)}>
-                          <option style={mutedOptionStyle} value="">Nincs</option>
-                          {activeGenderTypes.map((g) => <option style={optionStyle} key={g.code} value={g.code}>{g.name}</option>)}
-                        </select>
+                        <IncomingSmartSelect compact value={valueString(n.gender)} onChange={(value) => updateRowField(globalIndex, "gender", value)} placeholder="Nincs" options={[{ value: "", label: "Nincs" }, ...activeGenderTypes.map((g) => ({ value: String(g.code), label: g.name }))]} />
                       </label>
                       <label className={previewField}>
                         <span className={compactFieldLabel}>Szín</span>
