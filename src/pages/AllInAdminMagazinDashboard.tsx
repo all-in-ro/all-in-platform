@@ -13,6 +13,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   BarChart3,
+  Bookmark,
   Boxes,
   CalendarDays,
   Check,
@@ -50,6 +51,7 @@ import {
   type AifAdminShopRecentSale,
   type AifAdminShopSaleLineDeleteMode,
 } from "../lib/aif/api";
+import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 
 export type AllInAdminMagazinDashboardProps = {
   actor?: string;
@@ -1163,6 +1165,7 @@ export default function AllInAdminMagazinDashboard({
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [shopWorkflowMode, setShopWorkflowMode] = useState<AllInAdminShopWorkflowMode | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1309,6 +1312,32 @@ export default function AllInAdminMagazinDashboard({
             </div>
           </div>
         </header>
+
+        <section className="grid gap-2 sm:grid-cols-3">
+          {[
+            { key: "reservations" as const, label: "Félretett termékek", hint: "Lejáratok és kliensfoglalások", icon: Bookmark },
+            { key: "returns" as const, label: "Visszáru", hint: "Cserék, visszavételek, árfeloldások", icon: RotateCcw },
+            { key: "shifts" as const, label: "Műszakátadások", hint: "Kasszaátadás és eltérések", icon: WalletCards },
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setShopWorkflowMode(item.key)}
+                className="group flex min-h-[74px] items-center gap-3 rounded-[20px] border border-white/15 bg-gradient-to-br from-[#3b485c] to-[#313d4f] px-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:border-[#8ce7e2]/38 hover:from-[#3f5266] hover:to-[#34465a] active:translate-y-0 active:scale-[0.99]"
+              >
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/28 bg-[#2a8d8b]/14 text-[#cffffd]">
+                  <Icon size={19} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm text-white">{item.label}</span>
+                  <span className="mt-1 block truncate text-[10px] text-white/43">{item.hint}</span>
+                </span>
+              </button>
+            );
+          })}
+        </section>
 
         <section className={`${card} overflow-visible border-[#9be9e5]/20 bg-gradient-to-br from-[#37475c] via-[#334154] to-[#2d394b] p-4 shadow-[0_18px_42px_rgba(15,23,42,0.20)]`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1925,6 +1954,13 @@ export default function AllInAdminMagazinDashboard({
           </section>
         </div>
       ) : null}
+
+      <AllInAdminShopWorkflows
+        open={shopWorkflowMode !== null}
+        initialMode={shopWorkflowMode || "reservations"}
+        actor={actor}
+        onClose={() => setShopWorkflowMode(null)}
+      />
 
       {loading ? (
         <div className="fixed inset-0 z-[300] grid place-items-center bg-slate-950/28 backdrop-blur-[2px]">
