@@ -20,6 +20,7 @@ import {
 import AllInMagazinClients from "./AllInMagazinClients";
 import AllInShopVacations from "./AllInShopVacations";
 import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
+import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
 
 
 type Props = {
@@ -384,6 +385,11 @@ export default function AllInMagazinTargu({
         locationCode="magazin_targu_secuiesc"
         locationName="Magazin - Târgu Secuiesc"
         onClose={() => setShopOperationMode(null)}
+      />
+      <AllInShiftHandoverInbox
+        actor={actor}
+        locationCode="magazin_targu_secuiesc"
+        locationName="Magazin - Târgu Secuiesc"
       />
     </main>
   );
