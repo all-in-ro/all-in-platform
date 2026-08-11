@@ -22,7 +22,6 @@ import AllInShopVacations from "./AllInShopVacations";
 import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
 import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
 
-
 type Props = {
   apiBase?: string;
   actor?: string;
