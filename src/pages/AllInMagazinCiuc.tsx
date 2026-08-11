@@ -24,7 +24,6 @@ import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
 import AllInShopReturns from "./AllInShopReturns";
 import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 
-
 type Props = {
   apiBase?: string;
   actor?: string;
