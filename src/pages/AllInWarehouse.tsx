@@ -2693,51 +2693,53 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
 .aifWarehousePrintLabel.aifWhZebraLabel {
   width:var(--aif-label-w);
   height:var(--aif-label-h);
-  padding:1.35mm 1.35mm 1.2mm;
+  padding:.8mm .7mm .75mm;
   border-radius:1.6mm;
-  justify-content:flex-start;
+  justify-content:center;
+  align-items:stretch;
   gap:0;
+  text-align:center;
   font-family:Arial, Helvetica, sans-serif;
 }
 .aifWhZebraLabel .aifWhLabelCompany {
   flex:0 0 auto;
-  margin:0 0 .4mm;
-  font-size:6.5px;
+  margin:0 0 .28mm;
+  font-size:6.4px;
   line-height:1;
   letter-spacing:.085em;
-  color:#555;
+  color:#4d4d4d;
 }
 .aifWhZebraLabel .aifWhLabelBrand {
   flex:0 0 auto;
-  margin:0 0 .3mm;
+  margin:0 0 .25mm;
   font-size:6.7px;
   line-height:1;
   letter-spacing:.055em;
   color:#333;
 }
 .aifWhZebraLabel .aifWhLabelTitle {
-  flex:0 0 4.8mm;
-  min-height:4.8mm;
-  max-height:4.8mm;
+  flex:0 0 4.55mm;
+  min-height:4.55mm;
+  max-height:4.55mm;
   margin:0;
-  padding:0 .25mm;
+  padding:0 .15mm;
   display:-webkit-box;
   -webkit-box-orient:vertical;
   -webkit-line-clamp:2;
   white-space:normal;
   overflow:hidden;
   text-overflow:ellipsis;
-  font-size:9.3px;
+  font-size:9.2px;
   font-weight:700;
-  line-height:1.06;
+  line-height:1.04;
   text-align:center;
   color:#111;
 }
 .aifWhZebraLabel .aifWhLabelMeta {
   flex:0 0 auto;
   min-height:0;
-  margin:.2mm 0 .45mm;
-  font-size:7px;
+  margin:.12mm 0 .32mm;
+  font-size:7.1px;
   line-height:1;
   color:#111;
 }
@@ -2745,10 +2747,10 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  min-width:9mm;
-  height:3mm;
+  min-width:9.2mm;
+  height:2.85mm;
   padding:0 1.2mm;
-  border:.18mm solid #444;
+  border:.18mm solid #333;
   border-radius:1.6mm;
   font-weight:700;
 }
@@ -2759,10 +2761,10 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   padding:0;
 }
 .aifWhZebraLabel .aifWhBarcodeSvgWrap {
-  width:100%;
-  height:10.6mm;
-  flex:0 0 10.6mm;
-  margin:0;
+  width:calc(100% + .35mm);
+  height:12.25mm;
+  flex:0 0 12.25mm;
+  margin:0 0 0 -.175mm;
   overflow:hidden;
   display:flex;
   align-items:stretch;
@@ -2772,81 +2774,84 @@ const WAREHOUSE_ZEBRA_LABEL_CSS = `
   display:block;
   width:100%;
   height:100%;
-  max-width:100%;
-  max-height:100%;
+  max-width:none;
+  max-height:none;
 }
 .aifWhZebraBarcodeText {
-  height:2.8mm;
-  margin:.15mm 0 .4mm;
+  height:3.2mm;
+  margin:.08mm 0 .32mm;
   overflow:hidden;
   white-space:nowrap;
   text-align:center;
   font-family:"Courier New", monospace;
-  font-size:7.35px;
+  font-size:8.35px;
   font-weight:700;
-  line-height:2.55mm;
-  letter-spacing:.065em;
-  color:#111;
+  line-height:3mm;
+  letter-spacing:.075em;
+  color:#080808;
 }
 .aifWhZebraInfo {
   flex:0 0 auto;
-  min-height:6.1mm;
+  width:100%;
+  min-height:6.15mm;
   display:flex;
   flex-direction:column;
   justify-content:center;
-  padding:.42mm .2mm .38mm;
-  border-top:.16mm solid #d8d8d8;
-  border-bottom:.16mm solid #d8d8d8;
+  padding:.38mm .1mm .34mm;
+  border-top:.16mm solid #cfcfcf;
+  border-bottom:.16mm solid #cfcfcf;
 }
 .aifWhZebraLabel .aifWhLabelDescription {
   margin:0;
-  font-size:7px;
-  font-weight:600;
-  line-height:1.1;
-  color:#333;
-}
-.aifWhZebraLabel .aifWhLabelCategory {
-  margin:.3mm 0 0;
-  font-size:7.3px;
+  font-size:7.55px;
   font-weight:700;
   line-height:1.08;
+  color:#222;
+}
+.aifWhZebraLabel .aifWhLabelCategory {
+  margin:.28mm 0 0;
+  font-size:7.8px;
+  font-weight:700;
+  line-height:1.06;
   color:#111;
 }
 .aifWhZebraLabel .aifWhLabelCode {
   flex:0 0 auto;
-  margin:.48mm 0 0;
-  font-size:7.15px;
+  width:100%;
+  margin:.42mm 0 0;
+  font-size:8.15px;
   font-weight:700;
   line-height:1.08;
-  letter-spacing:.015em;
+  letter-spacing:.02em;
   text-align:center;
-  color:#222;
+  color:#111;
 }
 .aifWhZebraLabel .aifWhLabelPrice {
   flex:0 0 auto;
-  margin:auto 0 0;
-  padding:.62mm 0 0;
+  width:100%;
+  margin:.6mm 0 0;
+  padding:.55mm 0 0;
   text-align:center;
-  line-height:.9;
+  line-height:.88;
   border-top:.24mm solid #222;
   color:#111;
 }
 .aifWhZebraLabel .aifWhPriceMajor {
-  font-size:22px;
+  font-size:23px;
   font-weight:700;
-  letter-spacing:.02em;
+  letter-spacing:.018em;
 }
 .aifWhZebraLabel .aifWhPriceCents {
   position:relative;
   top:-.4em;
   margin-left:1px;
-  font-size:10px;
+  font-size:10.4px;
   font-weight:700;
   vertical-align:baseline;
 }
 .aifWhZebraLabel .aifWhPriceUnit {
   margin-left:3px;
-  font-size:6.7px;
+  font-size:7px;
   font-weight:700;
   letter-spacing:.04em;
   vertical-align:baseline;
@@ -3198,7 +3203,8 @@ function warehouseZebraLabelPrintDocumentHtml(
   return `<!doctype html><html><head><meta charset="utf-8" /><title>${labelEscapeHtml("AllInFashion Zebra címke nyomtatás")}</title><style>
 @page { size:${safeWidth}mm ${safeHeight}mm; margin:0; }
 html, body {
-  width:${safeWidth}mm;
+  width:100%;
+  min-width:100%;
   margin:0 !important;
   padding:0 !important;
   background:#fff !important;
@@ -3208,7 +3214,7 @@ html, body {
 * { box-sizing:border-box; }
 .aifWarehouseZebraPrintRoot {
   width:${safeWidth}mm;
-  margin:0;
+  margin:0 auto;
   padding:0;
   background:#fff;
   color:#111;
@@ -3218,10 +3224,12 @@ html, body {
   height:${safeHeight}mm;
   min-width:${safeWidth}mm;
   min-height:${safeHeight}mm;
-  margin:0;
+  margin:0 auto;
   padding:0;
   overflow:hidden;
-  display:block;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   page-break-after:always;
   break-after:page;
   background:#fff;
@@ -3234,12 +3242,19 @@ ${WAREHOUSE_ZEBRA_LABEL_CSS}
   height:${safeHeight}mm;
   min-width:${safeWidth}mm;
   min-height:${safeHeight}mm;
-  margin:0;
+  margin:auto;
 }
 @media print {
-  html, body, .aifWarehouseZebraPrintRoot {
-    width:${safeWidth}mm !important;
+  html, body {
+    width:100% !important;
+    min-width:100% !important;
     margin:0 !important;
+    padding:0 !important;
+    background:#fff !important;
+  }
+  .aifWarehouseZebraPrintRoot {
+    width:${safeWidth}mm !important;
+    margin:0 auto !important;
     padding:0 !important;
     background:#fff !important;
   }
@@ -3248,9 +3263,12 @@ ${WAREHOUSE_ZEBRA_LABEL_CSS}
     height:${safeHeight}mm !important;
     min-width:${safeWidth}mm !important;
     min-height:${safeHeight}mm !important;
-    margin:0 !important;
+    margin:0 auto !important;
     padding:0 !important;
     overflow:hidden !important;
+    display:flex !important;
+    align-items:center !important;
+    justify-content:center !important;
   }
 }
 </style></head><body><div class="aifWarehouseZebraPrintRoot" style="${rootStyle}">${labelsHtml}</div></body></html>`;
