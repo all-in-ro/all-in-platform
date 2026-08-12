@@ -3195,46 +3195,55 @@ function warehouseZebraLabelPrintDocumentHtml(
 ) {
   const safeWidth = Math.max(20, Math.min(120, Number(labelW) || 40));
   const safeHeight = Math.max(15, Math.min(100, Number(labelH) || 46));
+  const pageCount = Math.max(1, labels.length);
+  const totalHeight = safeHeight * pageCount;
   const labelsHtml = labels
-    .map((label) => `<section class="aifWarehouseZebraPrintPage"><div class="aifWarehousePrintLabel aifWhZebraLabel ${options.labelShowBorder ? "" : "noBorder"}">${warehouseZebraLabelContentHtml(label, options)}</div></section>`)
+    .map((label, index) => `<section class="aifWarehouseZebraPrintPage" data-aif-zebra-page="${index + 1}"><div class="aifWarehousePrintLabel aifWhZebraLabel ${options.labelShowBorder ? "" : "noBorder"}">${warehouseZebraLabelContentHtml(label, options)}</div></section>`)
     .join("");
-  const rootStyle = `--aif-label-w:${safeWidth}mm;--aif-label-h:${safeHeight}mm`;
+  const rootStyle = `--aif-label-w:${safeWidth}mm;--aif-label-h:${safeHeight}mm;--aif-zebra-page-count:${pageCount}`;
 
   return `<!doctype html><html><head><meta charset="utf-8" /><title>${labelEscapeHtml("AllInFashion Zebra címke nyomtatás")}</title><style>
 @page { size:${safeWidth}mm ${safeHeight}mm; margin:0; }
 html, body {
-  width:100%;
-  min-width:100%;
+  width:${safeWidth}mm;
+  min-width:${safeWidth}mm;
+  min-height:${totalHeight}mm;
   margin:0 !important;
   padding:0 !important;
   background:#fff !important;
   color:#111;
-  overflow:visible;
+  overflow:visible !important;
 }
 * { box-sizing:border-box; }
 .aifWarehouseZebraPrintRoot {
   width:${safeWidth}mm;
-  margin:0 auto;
+  min-width:${safeWidth}mm;
+  min-height:${totalHeight}mm;
+  margin:0;
   padding:0;
   background:#fff;
   color:#111;
+  overflow:visible;
 }
 .aifWarehouseZebraPrintPage {
   width:${safeWidth}mm;
   height:${safeHeight}mm;
   min-width:${safeWidth}mm;
   min-height:${safeHeight}mm;
-  margin:0 auto;
+  margin:0;
   padding:0;
   overflow:hidden;
   display:flex;
   align-items:center;
   justify-content:center;
-  page-break-after:always;
-  break-after:page;
+  page-break-inside:avoid;
+  break-inside:avoid-page;
   background:#fff;
 }
-.aifWarehouseZebraPrintPage:last-child { page-break-after:auto; break-after:auto; }
+.aifWarehouseZebraPrintPage + .aifWarehouseZebraPrintPage {
+  page-break-before:always;
+  break-before:page;
+}
 ${WAREHOUSE_LABEL_SHEET_CSS}
 ${WAREHOUSE_ZEBRA_LABEL_CSS}
 .aifWarehouseZebraPrintPage .aifWarehousePrintLabel {
@@ -3242,33 +3251,45 @@ ${WAREHOUSE_ZEBRA_LABEL_CSS}
   height:${safeHeight}mm;
   min-width:${safeWidth}mm;
   min-height:${safeHeight}mm;
-  margin:auto;
+  margin:0;
 }
 @media print {
   html, body {
-    width:100% !important;
-    min-width:100% !important;
+    width:${safeWidth}mm !important;
+    min-width:${safeWidth}mm !important;
+    min-height:${totalHeight}mm !important;
     margin:0 !important;
     padding:0 !important;
     background:#fff !important;
+    overflow:visible !important;
   }
   .aifWarehouseZebraPrintRoot {
+    display:block !important;
     width:${safeWidth}mm !important;
-    margin:0 auto !important;
+    min-width:${safeWidth}mm !important;
+    min-height:${totalHeight}mm !important;
+    margin:0 !important;
     padding:0 !important;
     background:#fff !important;
+    overflow:visible !important;
   }
   .aifWarehouseZebraPrintPage {
+    display:flex !important;
     width:${safeWidth}mm !important;
     height:${safeHeight}mm !important;
     min-width:${safeWidth}mm !important;
     min-height:${safeHeight}mm !important;
-    margin:0 auto !important;
+    margin:0 !important;
     padding:0 !important;
     overflow:hidden !important;
-    display:flex !important;
     align-items:center !important;
     justify-content:center !important;
+    page-break-inside:avoid !important;
+    break-inside:avoid-page !important;
+  }
+  .aifWarehouseZebraPrintPage + .aifWarehouseZebraPrintPage {
+    page-break-before:always !important;
+    break-before:page !important;
   }
 }
 </style></head><body><div class="aifWarehouseZebraPrintRoot" style="${rootStyle}">${labelsHtml}</div></body></html>`;
@@ -9830,9 +9851,16 @@ export default function AllInWarehouse() {
     iframe.style.left = "-10000px";
     iframe.style.top = "0";
     iframe.style.width = labelPrintMode === "zebra" ? `${labelW}mm` : "210mm";
-    iframe.style.height = labelPrintMode === "zebra" ? `${labelH}mm` : "297mm";
+    // Zebra módban a rejtett nyomtatási dokumentum viewportja eddig mindig csak
+    // egyetlen címke magas volt. A második/harmadik oldal benne volt a HTML-ben,
+    // de Chromium + a Zebra driver kombinációja így képes volt csak az első oldalt
+    // spoololni. A viewport most a teljes példányszám magasságát lefedi.
+    iframe.style.height = labelPrintMode === "zebra"
+      ? `${Math.max(labelH, labelH * Math.max(1, printItems.length))}mm`
+      : "297mm";
     iframe.style.border = "0";
     iframe.style.opacity = "0";
+    iframe.style.overflow = "visible";
     iframe.style.pointerEvents = "none";
     document.body.appendChild(iframe);
 
@@ -9859,13 +9887,19 @@ export default function AllInWarehouse() {
     printDocument.close();
 
     const runPrint = () => {
+      // Kényszerítjük a teljes többoldalas Zebra dokumentum layoutját a print()
+      // előtt. Ez különösen a kis egyedi papírméreteknél számít.
+      void printDocument.documentElement.offsetHeight;
+      void printDocument.body?.offsetHeight;
       printWindow.focus();
       printWindow.print();
       cleanupTimer = window.setTimeout(cleanup, 60000);
     };
 
     printWindow.requestAnimationFrame(() => {
-      printWindow.requestAnimationFrame(runPrint);
+      printWindow.requestAnimationFrame(() => {
+        window.setTimeout(runPrint, labelPrintMode === "zebra" ? 120 : 0);
+      });
     });
   }
 
