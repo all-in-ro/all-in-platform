@@ -516,6 +516,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ON aif_shop_exchanges (location_id, created_at DESC)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchanges_source_line_idx
           ON aif_shop_exchanges (source_sale_line_id, status, created_at DESC)`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_exchanges ADD COLUMN IF NOT EXISTS cancelled_at timestamptz NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_exchanges ADD COLUMN IF NOT EXISTS cancelled_by text NULL`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_exchanges ADD COLUMN IF NOT EXISTS cancellation_note text NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_exchange_lines (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -16147,6 +16150,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount,
                 count(*)::int AS transactions
          FROM aif_shop_exchange_settlements es
+         JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
          WHERE es.location_id=$1
            AND es.created_at >= $2::timestamptz
            AND es.created_at < $3::timestamptz
@@ -16359,6 +16363,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       client.query(
         `SELECT COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount
          FROM aif_shop_exchange_settlements es
+         JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
          WHERE es.location_id=$1
            AND es.method='cash'
            AND es.created_at >= $2::timestamptz
@@ -18681,6 +18686,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            UNION ALL
            SELECT btrim(es.actor) AS actor, es.created_at AS happened_at
            FROM aif_shop_exchange_settlements es
+           JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
            WHERE es.location_id=$1
              AND es.created_at >= $2::timestamptz
              AND es.created_at < $3::timestamptz
@@ -19171,6 +19177,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                     COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount,
                     count(*)::int AS transactions
              FROM aif_shop_exchange_settlements es
+             JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
              WHERE es.location_id=$1
                AND es.created_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
                AND es.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
@@ -19887,6 +19894,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.use("/shop-returns", createAifShopReturnsRouter({
     pool,
     requireAuthed,
+    requireAdminOrSecret,
     ensureAifShopSalesSchema,
     aifResolveShopLocation,
     actorFrom,
