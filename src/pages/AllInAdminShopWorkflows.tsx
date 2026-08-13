@@ -15,6 +15,8 @@ import {
   History,
   Landmark,
   Loader2,
+  Trash2,
+  ZoomIn,
   RefreshCw,
   RotateCcw,
   Store,
@@ -23,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  apiAifCancelShopExchange,
   apiAifConfirmShopCashMovement,
   apiAifRejectShopCashMovement,
   apiAifShopCashOverview,
@@ -380,6 +383,27 @@ function paymentAmount(handover: AifShopShiftHandover, method: string) {
   return numberValue(item?.amount);
 }
 
+function settlementMethodLabel(value?: string | null) {
+  if (value === "cash") return "Készpénz";
+  if (value === "card") return "Bankkártya";
+  if (value === "bank_transfer") return "Átutalás";
+  return value || "Nincs pénzmozgás";
+}
+
+function differenceText(item: AifShopExchangeHistoryItem) {
+  const value = numberValue(item.difference);
+  if (value > 0.005) return `Kliens fizetett még ${money(value)}`;
+  if (value < -0.005) return `Kliens visszakapott ${money(Math.abs(value))}`;
+  return "Értékazonos csere";
+}
+
+function differenceTone(item: AifShopExchangeHistoryItem) {
+  const value = numberValue(item.difference);
+  if (value > 0.005) return "border-emerald-200/24 bg-emerald-500/10 text-emerald-50";
+  if (value < -0.005) return "border-rose-200/24 bg-rose-500/10 text-rose-50";
+  return "border-white/12 bg-white/[0.04] text-white/65";
+}
+
 function storeByCode(code: string) {
   return STORES.find((store) => store.code === code) || STORES[0];
 }
@@ -399,6 +423,10 @@ export default function AllInAdminShopWorkflows({
   const [shiftDays, setShiftDays] = useState<Array<{ store: StoreDef; data: AifShopShiftDayOverview }>>([]);
   const [cashStores, setCashStores] = useState<Array<{ store: StoreDef; data: AifShopCashOverview }>>([]);
   const [cashActionBusyId, setCashActionBusyId] = useState<string | null>(null);
+  const [returnImagePreview, setReturnImagePreview] = useState<{ src: string; title: string } | null>(null);
+  const [returnDeleteTarget, setReturnDeleteTarget] = useState<{ store: StoreDef; item: AifShopExchangeHistoryItem } | null>(null);
+  const [returnDeleteBusy, setReturnDeleteBusy] = useState(false);
+  const [returnDeleteError, setReturnDeleteError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -412,14 +440,24 @@ export default function AllInAdminShopWorkflows({
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (returnImagePreview) {
+        setReturnImagePreview(null);
+        return;
+      }
+      if (returnDeleteTarget && !returnDeleteBusy) {
+        setReturnDeleteTarget(null);
+        setReturnDeleteError("");
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose, open]);
+  }, [onClose, open, returnDeleteBusy, returnDeleteTarget, returnImagePreview]);
 
   const load = useCallback(async () => {
     if (!open) return;
@@ -545,6 +583,29 @@ export default function AllInAdminShopWorkflows({
       setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás elutasítása nem sikerült.");
     } finally {
       setCashActionBusyId(null);
+    }
+  }
+
+  async function cancelExchange() {
+    if (!returnDeleteTarget || returnDeleteBusy) return;
+    setReturnDeleteBusy(true);
+    setReturnDeleteError("");
+    setError("");
+    try {
+      await apiAifCancelShopExchange(returnDeleteTarget.item.id, {
+        location: returnDeleteTarget.store.code,
+        note: "Adminisztrátori törlés a visszáru naplóból.",
+      });
+      setReturnDeleteTarget(null);
+      await load();
+    } catch (caught: any) {
+      const code = String(caught?.code || "");
+      const message = code === "exchange_cancel_stock_conflict"
+        ? "A csere készlethatása már nem fordítható vissza automatikusan, mert az érintett termékből időközben fogyott vagy foglalás került rá."
+        : String(caught?.message || "A csere törlése nem sikerült.");
+      setReturnDeleteError(message);
+    } finally {
+      setReturnDeleteBusy(false);
     }
   }
 
@@ -777,10 +838,21 @@ export default function AllInAdminShopWorkflows({
                     {visibleAuthorizations.map(({ store, item }) => (
                       <article key={`${store.code}-${item.id}`} className="rounded-2xl border border-orange-200/18 bg-orange-500/[0.07] p-3">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-xs text-white">{item.product.title}</p>
-                            <p className="mt-1 text-[10px] text-white/42">{[item.product.productCode, item.product.colorName, item.product.size].filter(Boolean).join(" • ")}</p>
-                            <p className="mt-2 text-[10px] text-white/54">{item.requestingLocation.name} kérte • {item.requestedBy || "-"}</p>
+                          <div className="flex min-w-0 items-start gap-3">
+                            <button
+                              type="button"
+                              disabled={!item.product.imageUrl}
+                              onClick={() => item.product.imageUrl && setReturnImagePreview({ src: item.product.imageUrl, title: item.product.title })}
+                              className="group relative grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/12 bg-white disabled:cursor-default"
+                            >
+                              {item.product.imageUrl ? <img src={item.product.imageUrl} alt="" className="h-full w-full object-contain" /> : <Store size={18} className="text-slate-500" />}
+                              {item.product.imageUrl ? <span className="absolute inset-0 grid place-items-center bg-slate-950/0 text-white opacity-0 transition group-hover:bg-slate-950/35 group-hover:opacity-100"><ZoomIn size={17} /></span> : null}
+                            </button>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm text-white" title={item.product.title}>{item.product.title}</p>
+                              <p className="mt-1 truncate text-[10px] text-white/42">{[item.product.productCode, item.product.colorName, item.product.size].filter(Boolean).join(" • ")}</p>
+                              <p className="mt-2 text-[10px] text-white/54">{item.requestingLocation.name} kérte • {item.requestedBy || "-"}</p>
+                            </div>
                           </div>
                           <div className="shrink-0 text-center">
                             <p className="text-[9px] uppercase tracking-[0.1em] text-orange-100/55">Egyszeri kód</p>
@@ -794,36 +866,139 @@ export default function AllInAdminShopWorkflows({
               ) : null}
 
               <section className={`${panel} overflow-hidden`}>
-                <div className="border-b border-white/10 px-4 py-3">
-                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Visszáru napló</p>
-                  <h3 className="mt-1 text-base text-white">Legutóbbi cserék és visszavételek</h3>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Visszáru napló</p>
+                    <h3 className="mt-1 text-base text-white">Legutóbbi cserék és visszavételek</h3>
+                  </div>
+                  <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/50">{visibleReturns.length} tétel</span>
                 </div>
-                <div className="divide-y divide-white/8">
+
+                <div className="space-y-2.5 p-3">
                   {visibleReturns
                     .slice()
                     .sort((a, b) => new Date(b.item.createdAt || 0).getTime() - new Date(a.item.createdAt || 0).getTime())
-                    .map(({ store, item }) => (
-                      <article key={`${store.code}-${item.id}`} className="p-4">
-                        <div className="flex flex-wrap items-start gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2 text-[10px]">
-                              <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1 text-[#cffffd]">{store.city}</span>
-                              <span className="text-white/42">{item.exchangeNumber}</span>
-                              <span className="text-white/42">{formatDateTime(item.createdAt)}</span>
+                    .map(({ store, item }) => {
+                      const replacements = item.replacementLines || [];
+                      return (
+                        <article key={`${store.code}-${item.id}`} className="overflow-hidden rounded-[20px] border border-white/11 bg-[#2b3749] shadow-[0_10px_26px_rgba(15,23,42,0.14)]">
+                          <div className="flex flex-wrap items-center gap-2 border-b border-white/8 bg-[#303d50] px-3 py-2.5">
+                            <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[10px] text-[#d7fffd]">{store.city}</span>
+                            <span className="text-[11px] text-white/78">{item.exchangeNumber}</span>
+                            <span className="text-[10px] text-white/40">{formatDateTime(item.createdAt)}</span>
+                            <span className="ml-auto text-[10px] text-white/45">Intézte: <span className="text-white/76">{item.actor || "-"}</span></span>
+                          </div>
+
+                          <div className="grid gap-2.5 p-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_330px]">
+                            <div className="rounded-2xl border border-rose-200/14 bg-rose-500/[0.055] p-3">
+                              <div className="mb-2 flex items-center justify-between gap-2">
+                                <p className="text-[9px] uppercase tracking-[0.12em] text-rose-100/55">Visszahozott termék</p>
+                                <span className="rounded-lg border border-rose-200/18 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-50">{integer(item.returnedQty)} db</span>
+                              </div>
+                              <div className="flex min-w-0 items-center gap-3">
+                                <button
+                                  type="button"
+                                  disabled={!item.sourceProduct.imageUrl}
+                                  onClick={() => item.sourceProduct.imageUrl && setReturnImagePreview({ src: item.sourceProduct.imageUrl, title: item.sourceProduct.title })}
+                                  className="group relative grid h-[70px] w-[70px] shrink-0 place-items-center overflow-hidden rounded-2xl border border-white/12 bg-white disabled:cursor-default"
+                                  title={item.sourceProduct.imageUrl ? "Kép nagyítása" : "Nincs kép"}
+                                >
+                                  {item.sourceProduct.imageUrl ? <img src={item.sourceProduct.imageUrl} alt="" className="h-full w-full object-contain" /> : <RotateCcw size={21} className="text-slate-500" />}
+                                  {item.sourceProduct.imageUrl ? <span className="absolute inset-0 grid place-items-center bg-slate-950/0 text-white opacity-0 transition group-hover:bg-slate-950/38 group-hover:opacity-100"><ZoomIn size={18} /></span> : null}
+                                </button>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm text-white" title={item.sourceProduct.title}>{item.sourceProduct.title}</p>
+                                  <p className="mt-1 truncate text-[10px] text-white/46">{[item.sourceProduct.brandName, item.sourceProduct.colorName, item.sourceProduct.size].filter(Boolean).join(" • ") || "Nincs további adat"}</p>
+                                  <p className="mt-1 truncate text-[10px] text-[#9be9e5]/64">{[item.sourceProduct.productCode ? `Kód: ${item.sourceProduct.productCode}` : "", item.sourceProduct.barcode ? `Vonalkód: ${item.sourceProduct.barcode}` : ""].filter(Boolean).join(" • ")}</p>
+                                  <p className="mt-2 text-base text-rose-50">{money(item.returnCredit)}</p>
+                                </div>
+                              </div>
                             </div>
-                            <p className="mt-2 text-sm text-white">{item.sourceProduct.title}</p>
-                            <p className="mt-1 text-[10px] text-white/42">{[item.sourceProduct.productCode, item.sourceProduct.colorName, item.sourceProduct.size].filter(Boolean).join(" • ")}</p>
-                            <p className="mt-2 text-[10px] text-white/52">Kliens: {item.customerName || "Nincs megadva"} • Intézte: {item.actor || "-"}</p>
+
+                            <div className="rounded-2xl border border-emerald-200/14 bg-emerald-500/[0.045] p-3">
+                              <div className="mb-2 flex items-center justify-between gap-2">
+                                <p className="text-[9px] uppercase tracking-[0.12em] text-emerald-100/55">Kiadott csere-termékek</p>
+                                <span className="rounded-lg border border-emerald-200/18 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-50">{integer(replacements.reduce((sum, line) => sum + numberValue(line.quantity), 0))} db</span>
+                              </div>
+                              <div className="space-y-2">
+                                {replacements.map((line) => (
+                                  <div key={line.id || `${item.id}-${line.lineNo}`} className="flex min-w-0 items-center gap-3 rounded-xl border border-white/8 bg-black/[0.08] p-2">
+                                    <button
+                                      type="button"
+                                      disabled={!line.imageUrl}
+                                      onClick={() => line.imageUrl && setReturnImagePreview({ src: line.imageUrl, title: line.title })}
+                                      className="group relative grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-white disabled:cursor-default"
+                                      title={line.imageUrl ? "Kép nagyítása" : "Nincs kép"}
+                                    >
+                                      {line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" /> : <Store size={17} className="text-slate-500" />}
+                                      {line.imageUrl ? <span className="absolute inset-0 grid place-items-center bg-slate-950/0 text-white opacity-0 transition group-hover:bg-slate-950/38 group-hover:opacity-100"><ZoomIn size={16} /></span> : null}
+                                    </button>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-xs text-white" title={line.title}>{line.title}</p>
+                                      <p className="mt-1 truncate text-[10px] text-white/42">{[line.brandName, line.colorName, line.size].filter(Boolean).join(" • ") || "Nincs további adat"}</p>
+                                      <p className="mt-1 truncate text-[10px] text-[#9be9e5]/60">{line.productCode ? `Kód: ${line.productCode}` : line.barcode ? `Vonalkód: ${line.barcode}` : ""}</p>
+                                    </div>
+                                    <div className="shrink-0 text-right">
+                                      <p className="text-[10px] text-white/42">{integer(line.quantity)} db × {money(line.unitPrice)}</p>
+                                      <p className="mt-1 text-sm text-emerald-50">{money(line.lineTotal)}</p>
+                                    </div>
+                                  </div>
+                                ))}
+                                {!replacements.length ? (
+                                  <div className="rounded-xl border border-dashed border-white/12 px-3 py-5 text-center text-xs text-white/42">Nincs kiadott csere-termék, ez tiszta visszavétel.</div>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="flex min-w-0 flex-col gap-2">
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="rounded-xl border border-white/9 bg-[#334154] p-2.5">
+                                  <p className="text-[9px] uppercase tracking-[0.08em] text-white/38">Visszavett</p>
+                                  <p className="mt-1 text-sm text-white">{money(item.returnCredit)}</p>
+                                </div>
+                                <div className="rounded-xl border border-white/9 bg-[#334154] p-2.5">
+                                  <p className="text-[9px] uppercase tracking-[0.08em] text-white/38">Új termékek</p>
+                                  <p className="mt-1 text-sm text-white">{money(item.replacementTotal)}</p>
+                                </div>
+                                <div className={`col-span-2 rounded-xl border p-2.5 ${differenceTone(item)}`}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <p className="text-[9px] uppercase tracking-[0.08em] opacity-65">Különbözet</p>
+                                      <p className="mt-1 text-base">{money(item.difference)}</p>
+                                    </div>
+                                    <p className="max-w-[150px] text-right text-[10px] leading-relaxed opacity-75">{differenceText(item)}</p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="rounded-xl border border-white/9 bg-[#334154] px-3 py-2.5 text-[10px]">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-white/42">Rendezés</span>
+                                  <span className="text-[#d7fffd]">{settlementMethodLabel(item.settlementMethod)}</span>
+                                </div>
+                                <div className="mt-2 flex items-center justify-between gap-3 border-t border-white/7 pt-2">
+                                  <span className="text-white/42">Kliens</span>
+                                  <span className="max-w-[185px] truncate text-white/74" title={item.customerName || "Nincs megadva"}>{item.customerName || "Nincs megadva"}</span>
+                                </div>
+                              </div>
+
+                              {item.note ? <p className="rounded-xl border border-white/8 bg-black/[0.06] px-3 py-2 text-[10px] leading-relaxed text-white/48">{item.note}</p> : null}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReturnDeleteError("");
+                                  setReturnDeleteTarget({ store, item });
+                                }}
+                                className="mt-auto inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-rose-300/38 bg-rose-600 px-3 text-xs text-white transition hover:bg-rose-500 active:scale-[0.98]"
+                              >
+                                <Trash2 size={15} /> Csere törlése
+                              </button>
+                            </div>
                           </div>
-                          <div className="grid min-w-[260px] grid-cols-2 gap-2 text-right text-[10px] sm:grid-cols-4">
-                            <div><p className="text-white/38">Visszavett</p><p className="mt-1 text-white">{money(item.returnCredit)}</p></div>
-                            <div><p className="text-white/38">Új termék</p><p className="mt-1 text-white">{money(item.replacementTotal)}</p></div>
-                            <div><p className="text-white/38">Különbözet</p><p className="mt-1 text-white">{money(item.difference)}</p></div>
-                            <div><p className="text-white/38">Rendezés</p><p className="mt-1 text-[#cffffd]">{item.settlementMethod || "-"}</p></div>
-                          </div>
-                        </div>
-                      </article>
-                    ))}
+                        </article>
+                      );
+                    })}
                   {!visibleReturns.length ? <div className="px-4 py-12 text-center text-sm text-white/42">Nincs visszáru a kiválasztott nézetben.</div> : null}
                 </div>
               </section>
@@ -1048,6 +1223,113 @@ export default function AllInAdminShopWorkflows({
             <X size={15} /> Bezárás
           </button>
         </footer>
+
+        {returnImagePreview ? (
+          <div
+            className="fixed inset-0 z-[560] grid place-items-center bg-slate-950/92 p-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target) setReturnImagePreview(null);
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setReturnImagePreview(null)}
+              className="absolute right-5 top-5 inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/18 bg-white/[0.08] text-white hover:bg-white/[0.14]"
+              aria-label="Kép bezárása"
+            >
+              <X size={20} />
+            </button>
+            <div className="w-full max-w-[720px]">
+              <div className="grid max-h-[78vh] min-h-[300px] place-items-center overflow-hidden rounded-[26px] border border-white/16 bg-white p-4 shadow-[0_34px_110px_rgba(0,0,0,0.65)]">
+                <img src={returnImagePreview.src} alt={returnImagePreview.title} className="max-h-[73vh] max-w-full object-contain" />
+              </div>
+              <p className="mt-3 truncate text-center text-sm text-white/72">{returnImagePreview.title}</p>
+            </div>
+          </div>
+        ) : null}
+
+        {returnDeleteTarget ? (
+          <div
+            className="fixed inset-0 z-[570] grid place-items-center bg-slate-950/88 p-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target && !returnDeleteBusy) {
+                setReturnDeleteTarget(null);
+                setReturnDeleteError("");
+              }
+            }}
+          >
+            <section className="w-full max-w-[640px] overflow-hidden rounded-[26px] border border-rose-200/24 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.66)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#552d38] to-[#303a4c] px-5 py-4">
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-rose-100/58">Csere törlése</p>
+                  <h3 className="mt-1 truncate text-lg text-white">{returnDeleteTarget.item.exchangeNumber}</h3>
+                  <p className="mt-1 text-xs text-white/48">{returnDeleteTarget.store.city} • {formatDateTime(returnDeleteTarget.item.createdAt)}</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={returnDeleteBusy}
+                  onClick={() => {
+                    setReturnDeleteTarget(null);
+                    setReturnDeleteError("");
+                  }}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white disabled:opacity-45"
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="space-y-3 p-5">
+                <div className="rounded-2xl border border-amber-200/22 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-50/88">
+                  A rendszer visszafordítja a csere készlethatását, a pénzügyi kimutatásokból kiveszi a cserét, és auditként megtartja, hogy admin törölte. Ha az érintett készletből azóta fogyott vagy foglalás került rá, a törlés biztonsági okból leáll.
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase text-white/38">Visszavett</p>
+                    <p className="mt-1 text-sm text-white">{money(returnDeleteTarget.item.returnCredit)}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase text-white/38">Csereérték</p>
+                    <p className="mt-1 text-sm text-white">{money(returnDeleteTarget.item.replacementTotal)}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase text-white/38">Különbözet</p>
+                    <p className="mt-1 text-sm text-white">{money(returnDeleteTarget.item.difference)}</p>
+                  </div>
+                </div>
+
+                {returnDeleteError ? (
+                  <div className="rounded-xl border border-rose-300/34 bg-rose-600/16 px-3 py-3 text-sm leading-relaxed text-rose-50">
+                    {returnDeleteError}
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={returnDeleteBusy}
+                    onClick={() => {
+                      setReturnDeleteTarget(null);
+                      setReturnDeleteError("");
+                    }}
+                    className="h-11 rounded-xl border border-white/14 bg-white/[0.05] text-sm text-white hover:bg-white/[0.1] disabled:opacity-45"
+                  >
+                    Mégse
+                  </button>
+                  <button
+                    type="button"
+                    disabled={returnDeleteBusy}
+                    onClick={() => void cancelExchange()}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-rose-300/42 bg-rose-600 text-sm text-white hover:bg-rose-500 disabled:opacity-50"
+                  >
+                    {returnDeleteBusy ? <Loader2 size={17} className="animate-spin" /> : <Trash2 size={17} />}
+                    Törlés és visszafordítás
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="absolute inset-0 z-10 grid place-items-center bg-slate-950/20 backdrop-blur-[1px]">
