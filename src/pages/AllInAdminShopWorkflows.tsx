@@ -844,7 +844,9 @@ export default function AllInAdminShopWorkflows({
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[9px] text-[#cffffd]">{store.city}</span>
-                                <span className={`rounded-full border px-2 py-1 text-[9px] font-medium ${dueTone.badge}`}>{due.label}</span>
+                                <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${dueTone.badge}`}>
+                                  {due.level === "normal" ? "AKTÍV" : due.label}
+                                </span>
                                 <span className="truncate text-[9px] text-white/40">{item.reservationNumber}</span>
                               </div>
 
@@ -912,26 +914,42 @@ export default function AllInAdminShopWorkflows({
                               );
                             })}
 
-                            {item.note ? (
-                              <div className="rounded-xl border border-white/9 bg-black/10 px-3 py-2 text-[10px] leading-relaxed text-white/48">
-                                {item.note}
-                              </div>
-                            ) : null}
                           </div>
 
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/9 bg-black/[0.06] px-3 py-2.5">
-                            <div className="min-w-0 text-[10px] text-white/44">
-                              Lejárat: <span className={due.level === "overdue" || due.level === "today" ? "text-orange-100" : "text-white/68"}>{item.expiresOn ? formatDate(item.expiresOn) : "Nincs megadva"}</span>
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/9 bg-black/[0.06] px-3 py-3">
+                            <div className={`flex min-w-[240px] flex-1 items-center gap-3 rounded-xl border px-3 py-2.5 ${
+                              due.level === "overdue" || due.level === "today"
+                                ? "border-orange-200/28 bg-orange-500/10"
+                                : due.level === "warning"
+                                  ? "border-amber-200/20 bg-amber-500/[0.06]"
+                                  : "border-white/9 bg-white/[0.025]"
+                            }`}>
+                              <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                                due.level === "overdue" || due.level === "today"
+                                  ? "border-orange-200/30 bg-orange-500/14 text-orange-100"
+                                  : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#bff8f5]"
+                              }`}>
+                                <CalendarDays size={16} />
+                              </span>
+                              <div className="min-w-0">
+                                <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Lejárati dátum</p>
+                                <p className={`mt-0.5 truncate text-[15px] font-medium ${
+                                  due.level === "overdue" || due.level === "today" ? "text-orange-50" : "text-white"
+                                }`}>
+                                  {item.expiresOn ? formatDate(item.expiresOn) : "Nincs megadva"}
+                                </p>
+                              </div>
                             </div>
+
                             <button
                               type="button"
                               onClick={() => {
                                 setReservationReleaseError("");
                                 setReservationReleaseTarget({ store, item });
                               }}
-                              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-orange-200/30 bg-orange-500/15 px-3 text-[11px] text-orange-50 transition hover:bg-orange-500/24 active:scale-[0.98]"
+                              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-orange-200/34 bg-orange-500/16 px-4 text-[12px] text-orange-50 transition hover:bg-orange-500/26 active:scale-[0.98]"
                             >
-                              <RotateCcw size={14} /> Vissza a készletre
+                              <RotateCcw size={15} /> Vissza a készletre
                             </button>
                           </div>
                         </article>
@@ -1376,10 +1394,10 @@ export default function AllInAdminShopWorkflows({
             <section className="w-full max-w-[680px] overflow-hidden rounded-[26px] border border-orange-200/24 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.66)]">
               <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#5a4228] to-[#303a4c] px-5 py-4">
                 <div className="min-w-0">
-                  <p className="text-[9px] uppercase tracking-[0.14em] text-orange-100/62">Félretétel feloldása</p>
-                  <h3 className="mt-1 truncate text-lg text-white">{reservationReleaseTarget.item.customer.name}</h3>
-                  <p className="mt-1 text-xs text-white/48">
-                    {reservationReleaseTarget.store.city} • {reservationReleaseTarget.item.reservationNumber}
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-orange-100/62">Művelet megerősítése</p>
+                  <h3 className="mt-1 text-lg text-white">Biztosan visszateszed a készletre?</h3>
+                  <p className="mt-1 truncate text-xs text-white/48">
+                    {reservationReleaseTarget.item.customer.name} • {reservationReleaseTarget.store.city} • {reservationReleaseTarget.item.reservationNumber}
                   </p>
                 </div>
                 <button
@@ -1460,7 +1478,7 @@ export default function AllInAdminShopWorkflows({
                     className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-orange-200/38 bg-orange-500 text-sm text-white hover:bg-orange-400 disabled:opacity-50"
                   >
                     {reservationReleaseBusy ? <Loader2 size={17} className="animate-spin" /> : <RotateCcw size={17} />}
-                    Vissza a készletre
+                    Igen, vissza a készletre
                   </button>
                 </div>
               </div>
