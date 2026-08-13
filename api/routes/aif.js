@@ -538,6 +538,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         )`);
         await pool.query(`CREATE INDEX IF NOT EXISTS aif_shop_exchange_lines_exchange_idx
           ON aif_shop_exchange_lines (exchange_id, line_no)`);
+        await pool.query(`ALTER TABLE IF EXISTS aif_shop_exchange_lines
+          ADD COLUMN IF NOT EXISTS buy_price_snapshot numeric(14,2) NULL`);
+        await pool.query(`UPDATE aif_shop_exchange_lines el
+          SET buy_price_snapshot=v.buy_price,
+              raw=COALESCE(el.raw,'{}'::jsonb) || jsonb_build_object(
+                'buyPriceSnapshotBackfilled', true,
+                'buyPriceSource', 'variant_backfill'
+              )
+          FROM aif_product_variants v
+          WHERE el.variant_id=v.id
+            AND el.buy_price_snapshot IS NULL
+            AND v.buy_price IS NOT NULL`);
 
         await pool.query(`CREATE TABLE IF NOT EXISTS aif_shop_exchange_settlements (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -16017,16 +16029,24 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     let actorSaleFilter = "";
     let actorSalePaymentFilter = "";
     let actorPaymentFilter = "";
-    let actorExchangeFilter = "";
+    let actorExchangeSettlementFilter = "";
+    let actorExchangeEventFilter = "";
     if (actor) {
       args.push(actor);
       actorSaleFilter = `AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
       actorSalePaymentFilter = `AND lower(regexp_replace(btrim(COALESCE(p.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
       actorPaymentFilter = `AND lower(regexp_replace(btrim(COALESCE(cp.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
-      actorExchangeFilter = `AND lower(regexp_replace(btrim(COALESCE(es.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
+      actorExchangeSettlementFilter = `AND lower(regexp_replace(btrim(COALESCE(es.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
+      actorExchangeEventFilter = `AND lower(regexp_replace(btrim(COALESCE(e.actor,'')), '[[:space:]]+', ' ', 'g')) = lower(regexp_replace(btrim($4), '[[:space:]]+', ' ', 'g'))`;
     }
 
-    const [summaryResult, salePaymentsResult, customerPaymentsResult, exchangeSettlementsResult] = await Promise.all([
+    const [
+      summaryResult,
+      exchangeSummaryResult,
+      salePaymentsResult,
+      customerPaymentsResult,
+      exchangeSettlementsResult,
+    ] = await Promise.all([
       client.query(
         `WITH filtered_sales AS (
            SELECT s.*
@@ -16047,7 +16067,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(sum(fs.subtotal),0)::numeric AS sales_before_discount,
            count(*)::int AS transactions,
            COALESCE(sum(lt.item_count),0)::numeric AS items_sold,
-           COALESCE(avg(fs.total),0)::numeric AS average_basket,
            COALESCE(sum(fs.discount_total),0)::numeric AS discount_total,
            COALESCE(sum(fs.paid_total),0)::numeric AS paid_total,
            COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
@@ -16057,6 +16076,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            max(fs.sold_at) AS last_sale_at
          FROM filtered_sales fs
          LEFT JOIN line_totals lt ON lt.sale_id=fs.id`,
+        args
+      ),
+      client.query(
+        `SELECT
+           COALESCE(sum(e.difference),0)::numeric AS revenue,
+           COALESCE(sum(e.difference),0)::numeric AS sales_before_discount,
+           count(*)::int AS transactions,
+           COALESCE(sum(COALESCE(lines.replacement_qty,0) - e.returned_qty),0)::numeric AS items_sold,
+           COALESCE(sum(e.difference),0)::numeric AS paid_total,
+           count(*) FILTER (WHERE NULLIF(btrim(COALESCE(e.customer_name,'')),'') IS NOT NULL)::int AS customer_sales,
+           min(e.created_at) AS first_sale_at,
+           max(e.created_at) AS last_sale_at
+         FROM aif_shop_exchanges e
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
+           FROM aif_shop_exchange_lines el
+           WHERE el.exchange_id=e.id
+         ) lines ON true
+         WHERE e.location_id=$1
+           AND e.status='completed'
+           AND e.created_at >= $2::timestamptz
+           AND e.created_at < $3::timestamptz
+           ${actorExchangeEventFilter}`,
         args
       ),
       client.query(
@@ -16108,13 +16150,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE es.location_id=$1
            AND es.created_at >= $2::timestamptz
            AND es.created_at < $3::timestamptz
-           ${actorExchangeFilter}
+           ${actorExchangeSettlementFilter}
          GROUP BY es.method`,
         args
       ),
     ]);
 
     const row = summaryResult.rows[0] || {};
+    const exchangeRow = exchangeSummaryResult.rows[0] || {};
+    const revenue = aifRoundMoney(aifNumber(row.revenue) + aifNumber(exchangeRow.revenue));
+    const transactions = aifNumber(row.transactions) + aifNumber(exchangeRow.transactions);
+    const itemsSold = aifNumber(row.items_sold) + aifNumber(exchangeRow.items_sold);
+    const firstTimes = [row.first_sale_at, exchangeRow.first_sale_at].filter(Boolean).map((value) => new Date(value));
+    const lastTimes = [row.last_sale_at, exchangeRow.last_sale_at].filter(Boolean).map((value) => new Date(value));
+    const firstSaleAt = firstTimes.length ? new Date(Math.min(...firstTimes.map((value) => value.getTime()))).toISOString() : null;
+    const lastSaleAt = lastTimes.length ? new Date(Math.max(...lastTimes.map((value) => value.getTime()))).toISOString() : null;
+
     const payments = aifEmptyShiftPayments();
     for (const item of salePaymentsResult.rows || []) {
       if (!payments[item.method]) continue;
@@ -16139,18 +16190,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       fromAt: fromAt ? new Date(fromAt).toISOString() : null,
       toAt: toAt ? new Date(toAt).toISOString() : null,
       actor: actor || null,
-      revenue: aifRoundMoney(row.revenue),
-      salesBeforeDiscount: aifRoundMoney(row.sales_before_discount),
-      transactions: aifNumber(row.transactions),
-      itemsSold: aifNumber(row.items_sold),
-      averageBasket: aifRoundMoney(row.average_basket),
+      revenue,
+      salesBeforeDiscount: aifRoundMoney(aifNumber(row.sales_before_discount) + aifNumber(exchangeRow.sales_before_discount)),
+      transactions,
+      itemsSold,
+      averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
       discountTotal: aifRoundMoney(row.discount_total),
-      paidTotal: aifRoundMoney(row.paid_total),
+      paidTotal: aifRoundMoney(aifNumber(row.paid_total) + aifNumber(exchangeRow.paid_total)),
       unpaidTotal: aifRoundMoney(row.unpaid_total),
       unpaidSales: aifNumber(row.unpaid_sales),
-      customerSales: aifNumber(row.customer_sales),
-      firstSaleAt: row.first_sale_at ? new Date(row.first_sale_at).toISOString() : null,
-      lastSaleAt: row.last_sale_at ? new Date(row.last_sale_at).toISOString() : null,
+      customerSales: aifNumber(row.customer_sales) + aifNumber(exchangeRow.customer_sales),
+      firstSaleAt,
+      lastSaleAt,
       payments: Object.values(payments),
       receipts: payments,
     };
@@ -18022,6 +18073,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND cp.paid_at < $3::timestamptz
              AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
            UNION
+           SELECT btrim(e.actor) AS actor
+           FROM aif_shop_exchanges e
+           WHERE e.location_id=$1
+             AND e.status='completed'
+             AND e.created_at >= $2::timestamptz
+             AND e.created_at < $3::timestamptz
+             AND NULLIF(btrim(COALESCE(e.actor,'')),'') IS NOT NULL
+           UNION
            SELECT btrim(h.from_actor) AS actor
            FROM aif_shop_shift_handovers h
            WHERE h.location_id=$1 AND h.work_date=$4::date
@@ -18082,6 +18141,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                AND cp.paid_at >= $2::timestamptz
                AND cp.paid_at < $3::timestamptz
                AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+             UNION ALL
+             SELECT btrim(e.actor) AS actor, e.created_at AS happened_at
+             FROM aif_shop_exchanges e
+             WHERE e.location_id=$1
+               AND e.status='completed'
+               AND e.created_at >= $2::timestamptz
+               AND e.created_at < $3::timestamptz
+               AND NULLIF(btrim(COALESCE(e.actor,'')),'') IS NOT NULL
            ) activity
            ORDER BY happened_at DESC
            LIMIT 1`,
@@ -19015,8 +19082,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         AND s.sold_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
         AND lower(regexp_replace(btrim(COALESCE(s.actor,'')), '[[:space:]]+', ' ', 'g'))
             = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))`;
+      const exchangeFilter = `e.location_id=$1
+        AND e.status='completed'
+        AND e.created_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND e.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Europe/Bucharest')
+        AND lower(regexp_replace(btrim(COALESCE(e.actor,'')), '[[:space:]]+', ' ', 'g'))
+            = lower(regexp_replace(btrim($3), '[[:space:]]+', ' ', 'g'))`;
 
-      const [summaryResult, paymentsResult, productsResult, salesResult] = await Promise.all([
+      const [
+        summaryResult,
+        exchangeSummaryResult,
+        paymentsResult,
+        productsResult,
+        exchangeProductsResult,
+        salesResult,
+        exchangeSalesResult,
+      ] = await Promise.all([
         pool.query(
           `WITH filtered_sales AS (
              SELECT s.* FROM aif_shop_sales s WHERE ${salesFilter}
@@ -19033,7 +19114,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              COALESCE(sum(fs.subtotal),0)::numeric AS sales_before_discount,
              count(*)::int AS transactions,
              COALESCE(sum(lt.item_count),0)::numeric AS items_sold,
-             COALESCE(avg(fs.total),0)::numeric AS average_basket,
              COALESCE(sum(fs.discount_total),0)::numeric AS discount_total,
              COALESCE(sum(fs.paid_total),0)::numeric AS paid_total,
              COALESCE(sum(fs.balance_due),0)::numeric AS unpaid_total,
@@ -19043,6 +19123,25 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              max(fs.sold_at) AS last_sale_at
            FROM filtered_sales fs
            LEFT JOIN line_totals lt ON lt.sale_id=fs.id`,
+          baseArgs
+        ),
+        pool.query(
+          `SELECT
+             COALESCE(sum(e.difference),0)::numeric AS revenue,
+             COALESCE(sum(e.difference),0)::numeric AS sales_before_discount,
+             count(*)::int AS transactions,
+             COALESCE(sum(COALESCE(lines.replacement_qty,0) - e.returned_qty),0)::numeric AS items_sold,
+             COALESCE(sum(e.difference),0)::numeric AS paid_total,
+             count(*) FILTER (WHERE NULLIF(btrim(COALESCE(e.customer_name,'')),'') IS NOT NULL)::int AS customer_sales,
+             min(e.created_at) AS first_sale_at,
+             max(e.created_at) AS last_sale_at
+           FROM aif_shop_exchanges e
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
+             FROM aif_shop_exchange_lines el
+             WHERE el.exchange_id=e.id
+           ) lines ON true
+           WHERE ${exchangeFilter}`,
           baseArgs
         ),
         pool.query(
@@ -19106,9 +19205,33 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            JOIN filtered_sales fs ON fs.id=sl.sale_id
            LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
            GROUP BY COALESCE(sl.variant_id::text, sl.product_code, sl.product_title, sl.id::text),
-                    COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék')
-           ORDER BY qty DESC, revenue DESC, title ASC
-           LIMIT 200`,
+                    COALESCE(NULLIF(sl.product_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék')`,
+          baseArgs
+        ),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${exchangeFilter}
+           )
+           SELECT
+             COALESCE(el.variant_id::text, el.product_code, el.product_title, el.id::text) AS key,
+             COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') AS title,
+             max(el.product_code) AS product_code,
+             max(el.brand_name) AS brand_name,
+             max(COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,''))) AS subcategory_name,
+             max(el.color_name) AS color_name,
+             max(el.size) AS size,
+             max(COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,''))) AS image_url,
+             COALESCE(sum(el.quantity),0)::numeric AS qty,
+             COALESCE(sum(el.line_total),0)::numeric AS revenue,
+             0::numeric AS discount_total,
+             count(DISTINCT e.id)::int AS transactions
+           FROM filtered_exchanges e
+           JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
+           LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           GROUP BY COALESCE(el.variant_id::text, el.product_code, el.product_title, el.id::text),
+                    COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék')`,
           baseArgs
         ),
         pool.query(
@@ -19140,23 +19263,102 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              fs.payment_status, fs.sale_type,
              COALESCE(lt.line_count,0)::int AS line_count,
              COALESCE(lt.item_count,0)::int AS item_count,
-             COALESCE(pl.payment_label, CASE WHEN fs.balance_due > 0 THEN 'Utólag fizet' ELSE 'Nincs adat' END) AS payment_label
+             COALESCE(pl.payment_label, CASE WHEN fs.balance_due > 0 THEN 'Utólag fizet' ELSE 'Nincs adat' END) AS payment_label,
+             'sale'::text AS record_type
            FROM filtered_sales fs
            LEFT JOIN line_totals lt ON lt.sale_id=fs.id
-           LEFT JOIN payment_labels pl ON pl.sale_id=fs.id
-           ORDER BY fs.sold_at DESC, fs.created_at DESC
-           LIMIT 200`,
+           LEFT JOIN payment_labels pl ON pl.sale_id=fs.id`,
+          baseArgs
+        ),
+        pool.query(
+          `SELECT
+             e.id,
+             e.exchange_number AS sale_number,
+             e.created_at AS sold_at,
+             e.customer_name,
+             e.customer_phone,
+             e.replacement_total AS subtotal,
+             0::numeric AS discount_total,
+             e.difference AS total,
+             e.difference AS paid_total,
+             0::numeric AS balance_due,
+             'paid'::text AS payment_status,
+             'exchange'::text AS sale_type,
+             COALESCE(lines.line_count,0)::int AS line_count,
+             COALESCE(lines.item_count,0)::int AS item_count,
+             CASE
+               WHEN e.settlement_direction='in' THEN
+                 CASE e.settlement_method
+                   WHEN 'cash' THEN 'Készpénz'
+                   WHEN 'card' THEN 'Bankkártya'
+                   WHEN 'bank_transfer' THEN 'Átutalás'
+                   ELSE 'Csere különbözet'
+                 END
+               WHEN e.settlement_direction='out' THEN 'Visszafizetett különbözet'
+               ELSE 'Értékazonos csere'
+             END AS payment_label,
+             'exchange'::text AS record_type
+           FROM aif_shop_exchanges e
+           LEFT JOIN LATERAL (
+             SELECT count(*)::int AS line_count, COALESCE(sum(el.quantity),0)::int AS item_count
+             FROM aif_shop_exchange_lines el
+             WHERE el.exchange_id=e.id
+           ) lines ON true
+           WHERE ${exchangeFilter}`,
           baseArgs
         ),
       ]);
 
-      const summaryRow = summaryResult.rows[0] || {};
+      const saleSummary = summaryResult.rows[0] || {};
+      const exchangeSummary = exchangeSummaryResult.rows[0] || {};
+      const revenue = aifRoundMoney(aifNumber(saleSummary.revenue) + aifNumber(exchangeSummary.revenue));
+      const transactions = aifNumber(saleSummary.transactions) + aifNumber(exchangeSummary.transactions);
+      const firstValues = [saleSummary.first_sale_at, exchangeSummary.first_sale_at].filter(Boolean).map((value) => new Date(value));
+      const lastValues = [saleSummary.last_sale_at, exchangeSummary.last_sale_at].filter(Boolean).map((value) => new Date(value));
+
+      const productMap = new Map();
+      for (const row of [...productsResult.rows, ...exchangeProductsResult.rows]) {
+        const key = String(row.key || row.title || "");
+        const current = productMap.get(key) || {
+          key,
+          title: row.title,
+          product_code: row.product_code || null,
+          brand_name: row.brand_name || null,
+          subcategory_name: row.subcategory_name || null,
+          color_name: row.color_name || null,
+          size: row.size || null,
+          image_url: row.image_url || null,
+          qty: 0,
+          revenue: 0,
+          discount_total: 0,
+          transactions: 0,
+        };
+        current.qty += aifNumber(row.qty);
+        current.revenue = aifRoundMoney(current.revenue + aifNumber(row.revenue));
+        current.discount_total = aifRoundMoney(current.discount_total + aifNumber(row.discount_total));
+        current.transactions += aifNumber(row.transactions);
+        if (!current.product_code && row.product_code) current.product_code = row.product_code;
+        if (!current.brand_name && row.brand_name) current.brand_name = row.brand_name;
+        if (!current.subcategory_name && row.subcategory_name) current.subcategory_name = row.subcategory_name;
+        if (!current.image_url && row.image_url) current.image_url = row.image_url;
+        productMap.set(key, current);
+      }
+      const productRows = Array.from(productMap.values())
+        .filter((row) => Math.abs(row.qty) > 0.0001 || Math.abs(row.revenue) > 0.005)
+        .sort((a, b) => b.qty - a.qty || b.revenue - a.revenue || String(a.title).localeCompare(String(b.title), "hu"))
+        .slice(0, 200);
+
+      const saleRows = [...salesResult.rows, ...exchangeSalesResult.rows]
+        .sort((a, b) => new Date(b.sold_at || 0).getTime() - new Date(a.sold_at || 0).getTime())
+        .slice(0, 200);
+
       const payments = paymentsResult.rows.map((row) => ({
         method: row.method,
         label: aifPaymentMethodLabel(row.method),
         amount: aifNumber(row.amount),
         transactions: aifNumber(row.transactions),
       }));
+
       res.json({
         ok: true,
         generatedAt: new Date().toISOString(),
@@ -19164,21 +19366,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         employee,
         location: { id: String(location.id), code: location.code, name: location.name },
         summary: {
-          revenue: aifNumber(summaryRow.revenue),
-          salesBeforeDiscount: aifNumber(summaryRow.sales_before_discount),
-          transactions: aifNumber(summaryRow.transactions),
-          itemsSold: aifNumber(summaryRow.items_sold),
-          averageBasket: aifNumber(summaryRow.average_basket),
-          discountTotal: aifNumber(summaryRow.discount_total),
-          paidTotal: aifNumber(summaryRow.paid_total),
-          unpaidTotal: aifNumber(summaryRow.unpaid_total),
-          unpaidSales: aifNumber(summaryRow.unpaid_sales),
-          customerSales: aifNumber(summaryRow.customer_sales),
-          firstSaleAt: summaryRow.first_sale_at ? new Date(summaryRow.first_sale_at).toISOString() : null,
-          lastSaleAt: summaryRow.last_sale_at ? new Date(summaryRow.last_sale_at).toISOString() : null,
+          revenue,
+          salesBeforeDiscount: aifRoundMoney(aifNumber(saleSummary.sales_before_discount) + aifNumber(exchangeSummary.sales_before_discount)),
+          transactions,
+          itemsSold: aifNumber(saleSummary.items_sold) + aifNumber(exchangeSummary.items_sold),
+          averageBasket: transactions > 0 ? aifRoundMoney(revenue / transactions) : 0,
+          discountTotal: aifNumber(saleSummary.discount_total),
+          paidTotal: aifRoundMoney(aifNumber(saleSummary.paid_total) + aifNumber(exchangeSummary.paid_total)),
+          unpaidTotal: aifNumber(saleSummary.unpaid_total),
+          unpaidSales: aifNumber(saleSummary.unpaid_sales),
+          customerSales: aifNumber(saleSummary.customer_sales) + aifNumber(exchangeSummary.customer_sales),
+          firstSaleAt: firstValues.length ? new Date(Math.min(...firstValues.map((value) => value.getTime()))).toISOString() : null,
+          lastSaleAt: lastValues.length ? new Date(Math.max(...lastValues.map((value) => value.getTime()))).toISOString() : null,
         },
         payments,
-        products: productsResult.rows.map((row) => ({
+        products: productRows.map((row) => ({
           key: row.key,
           title: row.title,
           productCode: row.product_code || null,
@@ -19192,7 +19394,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           discountTotal: aifNumber(row.discount_total),
           transactions: aifNumber(row.transactions),
         })),
-        sales: salesResult.rows.map((row) => ({
+        sales: saleRows.map((row) => ({
           id: String(row.id),
           saleNumber: row.sale_number,
           soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
@@ -19208,6 +19410,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           lineCount: aifNumber(row.line_count),
           itemCount: aifNumber(row.item_count),
           paymentLabel: row.payment_label,
+          recordType: row.record_type || "sale",
         })),
       });
     } catch (error) {
@@ -19694,6 +19897,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     isUuidText,
     insertStockMovementSafe,
     aifAssertNoPendingShopShiftHandover,
+    readSalesTvaSettings,
   }));
 
   // Admin üzletmonitor külön modulokban. Innentől ezt a funkciócsaládot ne az aif.js-ben bővítsük.
