@@ -30,6 +30,7 @@ import {
   apiAifRejectShopCashMovement,
   apiAifShopCashOverview,
   apiAifShopReservations,
+  apiAifReleaseShopReservation,
   apiAifShopReturnAuthorizationInbox,
   apiAifShopReturnHistory,
   apiAifShopShiftDayOverview,
@@ -370,10 +371,39 @@ function reservationDueLevel(expiresOn?: string | null) {
   const expiry = String(expiresOn).slice(0, 10);
   const today = localIsoDate(new Date());
   const tomorrow = addDays(today, 1);
-  if (expiry < today) return { level: "danger" as const, label: "LEJÁRT" };
-  if (expiry === today) return { level: "danger" as const, label: "MA LEJÁR" };
+  if (expiry < today) return { level: "overdue" as const, label: "LEJÁRT" };
+  if (expiry === today) return { level: "today" as const, label: "MA LEJÁR" };
   if (expiry === tomorrow) return { level: "warning" as const, label: "HOLNAP LEJÁR" };
   return { level: "normal" as const, label: formatDate(expiry) };
+}
+
+function reservationDueTone(level: ReturnType<typeof reservationDueLevel>["level"]) {
+  if (level === "overdue") {
+    return {
+      card: "border-orange-300/46 bg-gradient-to-br from-orange-500/[0.16] via-[#3d4450] to-[#313d4f]",
+      badge: "border-orange-200/44 bg-orange-500/24 text-orange-50",
+      line: "border-orange-200/20 bg-orange-500/[0.075]",
+    };
+  }
+  if (level === "today") {
+    return {
+      card: "border-orange-200/34 bg-gradient-to-br from-orange-500/[0.11] via-[#3b4657] to-[#313d4f]",
+      badge: "border-orange-200/38 bg-orange-500/20 text-orange-50",
+      line: "border-orange-200/16 bg-orange-500/[0.06]",
+    };
+  }
+  if (level === "warning") {
+    return {
+      card: "border-amber-200/24 bg-gradient-to-br from-amber-500/[0.06] via-[#39475b] to-[#313d4f]",
+      badge: "border-amber-200/32 bg-amber-500/14 text-amber-50",
+      line: "border-white/10 bg-[#293548]",
+    };
+  }
+  return {
+    card: "border-white/12 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d]",
+    badge: "border-white/12 bg-white/[0.05] text-white/60",
+    line: "border-white/10 bg-[#293548]",
+  };
 }
 
 function paymentAmount(handover: AifShopShiftHandover, method: string) {
@@ -427,6 +457,9 @@ export default function AllInAdminShopWorkflows({
   const [returnDeleteTarget, setReturnDeleteTarget] = useState<{ store: StoreDef; item: AifShopExchangeHistoryItem } | null>(null);
   const [returnDeleteBusy, setReturnDeleteBusy] = useState(false);
   const [returnDeleteError, setReturnDeleteError] = useState("");
+  const [reservationReleaseTarget, setReservationReleaseTarget] = useState<{ store: StoreDef; item: AifShopReservation } | null>(null);
+  const [reservationReleaseBusy, setReservationReleaseBusy] = useState(false);
+  const [reservationReleaseError, setReservationReleaseError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -445,6 +478,11 @@ export default function AllInAdminShopWorkflows({
         setReturnImagePreview(null);
         return;
       }
+      if (reservationReleaseTarget && !reservationReleaseBusy) {
+        setReservationReleaseTarget(null);
+        setReservationReleaseError("");
+        return;
+      }
       if (returnDeleteTarget && !returnDeleteBusy) {
         setReturnDeleteTarget(null);
         setReturnDeleteError("");
@@ -457,21 +495,28 @@ export default function AllInAdminShopWorkflows({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose, open, returnDeleteBusy, returnDeleteTarget, returnImagePreview]);
+  }, [onClose, open, reservationReleaseBusy, reservationReleaseTarget, returnDeleteBusy, returnDeleteTarget, returnImagePreview]);
 
   const load = useCallback(async () => {
     if (!open) return;
     setLoading(true);
     setError("");
     try {
+      const reservationResponses = await Promise.all(
+        STORES.map(async (store) => ({
+          store,
+          response: await apiAifShopReservations({ location: store.code, mode: "active" }),
+        })),
+      );
+      setReservations(
+        reservationResponses.flatMap(({ store, response }) =>
+          (response.items || []).map((item) => ({ store, item })),
+        ),
+      );
+
       if (mode === "reservations") {
-        const responses = await Promise.all(
-          STORES.map(async (store) => ({
-            store,
-            response: await apiAifShopReservations({ location: store.code, mode: "active" }),
-          })),
-        );
-        setReservations(responses.flatMap(({ store, response }) => (response.items || []).map((item) => ({ store, item }))));
+        // Az aktív foglalások már fent betöltődtek. Így a lejárati jelzés
+        // akkor is friss marad, ha az admin másik munkafolyamatot néz.
       } else if (mode === "returns") {
         const responses = await Promise.all(
           STORES.map(async (store) => {
@@ -542,18 +587,22 @@ export default function AllInAdminShopWorkflows({
 
   const reservationSummary = useMemo(() => {
     let tomorrow = 0;
-    let urgent = 0;
+    let today = 0;
+    let overdue = 0;
     let qty = 0;
     let value = 0;
     visibleReservations.forEach(({ item }) => {
       const due = reservationDueLevel(item.expiresOn);
       if (due.level === "warning") tomorrow += 1;
-      if (due.level === "danger") urgent += 1;
+      if (due.level === "today") today += 1;
+      if (due.level === "overdue") overdue += 1;
       qty += numberValue(item.totalQty);
       value += numberValue(item.totalValue);
     });
-    return { tomorrow, urgent, qty, value };
+    return { tomorrow, today, overdue, urgent: today + overdue, qty, value };
   }, [visibleReservations]);
+
+  const reservationAlertCount = reservationSummary.urgent;
 
   const shiftHandovers = useMemo(
     () => visibleShiftDays.flatMap(({ store, data }) => (data.handovers || []).map((item) => ({ store, item }))),
@@ -583,6 +632,25 @@ export default function AllInAdminShopWorkflows({
       setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás elutasítása nem sikerült.");
     } finally {
       setCashActionBusyId(null);
+    }
+  }
+
+  async function releaseReservation() {
+    if (!reservationReleaseTarget || reservationReleaseBusy) return;
+    setReservationReleaseBusy(true);
+    setReservationReleaseError("");
+    setError("");
+    try {
+      await apiAifReleaseShopReservation(reservationReleaseTarget.item.id, {
+        location: reservationReleaseTarget.store.code,
+        note: `Adminisztrátori feloldás: ${actor}`,
+      });
+      setReservationReleaseTarget(null);
+      await load();
+    } catch (caught: any) {
+      setReservationReleaseError(String(caught?.message || "A félretétel feloldása nem sikerült."));
+    } finally {
+      setReservationReleaseBusy(false);
     }
   }
 
@@ -655,21 +723,31 @@ export default function AllInAdminShopWorkflows({
               ["reservations", "Félretett termékek", Bookmark],
               ["returns", "Visszáru", RotateCcw],
               ["shifts", "Műszakátadások", WalletCards],
-            ] as Array<[AllInAdminShopWorkflowMode, string, typeof Bookmark]>).map(([value, label, Icon]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setMode(value)}
-                className={`flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-[11px] transition sm:text-xs ${
-                  mode === value
-                    ? "border-[#9be9e5]/50 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)]"
-                    : "border-white/14 bg-[#344154] text-white/68 hover:border-[#7bd7d4]/28 hover:text-white"
-                }`}
-              >
-                <Icon size={15} />
-                <span className="truncate">{label}</span>
-              </button>
-            ))}
+            ] as Array<[AllInAdminShopWorkflowMode, string, typeof Bookmark]>).map(([value, label, Icon]) => {
+              const reservationAlert = value === "reservations" && reservationAlertCount > 0;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setMode(value)}
+                  className={`relative flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-[11px] transition sm:text-xs ${
+                    reservationAlert
+                      ? "border-orange-200/55 bg-gradient-to-r from-orange-500/80 to-orange-600/72 text-white shadow-[0_8px_22px_rgba(249,115,22,0.22)] hover:brightness-110"
+                      : mode === value
+                        ? "border-[#9be9e5]/50 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)]"
+                        : "border-white/14 bg-[#344154] text-white/68 hover:border-[#7bd7d4]/28 hover:text-white"
+                  }`}
+                >
+                  <Icon size={15} />
+                  <span className="truncate">{label}</span>
+                  {reservationAlert ? (
+                    <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-white/28 bg-black/12 px-1.5 py-0.5 text-[9px] text-white">
+                      {reservationAlertCount}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
         </header>
 
@@ -717,24 +795,22 @@ export default function AllInAdminShopWorkflows({
               <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                 {[
                   ["Aktív félretétel", integer(visibleReservations.length), Bookmark, "normal"],
-                  ["Holnap lejár", integer(reservationSummary.tomorrow), Clock3, reservationSummary.tomorrow > 0 ? "warning" : "normal"],
-                  ["Ma / lejárt", integer(reservationSummary.urgent), AlertTriangle, reservationSummary.urgent > 0 ? "danger" : "normal"],
+                  ["Lejárt", integer(reservationSummary.overdue), AlertTriangle, reservationSummary.overdue > 0 ? "warning" : "normal"],
+                  ["Ma / holnap", `${integer(reservationSummary.today)} / ${integer(reservationSummary.tomorrow)}`, Clock3, reservationSummary.today + reservationSummary.tomorrow > 0 ? "warning" : "normal"],
                   ["Foglalt darab", `${integer(reservationSummary.qty)} db`, Store, "normal"],
                   ["Foglalt érték", money(reservationSummary.value), CreditCard, "normal"],
                 ].map(([label, value, Icon, tone]) => (
                   <article
                     key={String(label)}
                     className={`rounded-2xl border p-3 ${
-                      tone === "danger"
-                        ? "border-rose-200/28 bg-rose-500/14"
-                        : tone === "warning"
-                          ? "border-orange-200/32 bg-orange-500/16"
-                          : "border-white/12 bg-[#344154]"
+                      tone === "warning"
+                        ? "border-orange-200/32 bg-gradient-to-br from-orange-500/[0.14] to-[#344154]"
+                        : "border-white/12 bg-[#344154]"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-[9px] uppercase tracking-[0.12em] text-white/45">{String(label)}</p>
-                      <Icon size={15} className="text-[#9be9e5]" />
+                      <Icon size={15} className={tone === "warning" ? "text-orange-100" : "text-[#9be9e5]"} />
                     </div>
                     <p className="mt-2 text-lg text-white">{String(value)}</p>
                   </article>
@@ -742,67 +818,130 @@ export default function AllInAdminShopWorkflows({
               </section>
 
               <section className={`${panel} overflow-hidden`}>
-                <div className="border-b border-white/10 px-4 py-3">
-                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Aktív foglalások</p>
-                  <h3 className="mt-1 text-base text-white">Kliensre félretett termékek</h3>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Aktív foglalások</p>
+                    <h3 className="mt-1 text-base text-white">Kliensre félretett termékek</h3>
+                  </div>
+                  <span className="rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[10px] text-white/52">
+                    {visibleReservations.length} foglalás
+                  </span>
                 </div>
-                <div className="divide-y divide-white/8">
+
+                <div className="grid gap-3 p-3 xl:grid-cols-2">
                   {visibleReservations
                     .slice()
                     .sort((a, b) => String(a.item.expiresOn || "9999").localeCompare(String(b.item.expiresOn || "9999")))
                     .map(({ store, item }) => {
                       const due = reservationDueLevel(item.expiresOn);
+                      const dueTone = reservationDueTone(due.level);
                       return (
                         <article
                           key={`${store.code}-${item.id}`}
-                          className={`p-4 ${
-                            due.level === "danger"
-                              ? "bg-rose-500/[0.08]"
-                              : due.level === "warning"
-                                ? "bg-orange-500/[0.10]"
-                                : ""
-                          }`}
+                          className={`overflow-hidden rounded-[22px] border shadow-[0_10px_26px_rgba(15,23,42,0.16)] ${dueTone.card}`}
                         >
-                          <div className="flex flex-wrap items-start gap-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/9 px-3.5 py-3">
                             <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1 text-[10px] text-[#cffffd]">{store.city}</span>
-                                <span className={`rounded-full border px-2 py-1 text-[10px] font-medium ${
-                                  due.level === "danger"
-                                    ? "border-rose-200/35 bg-rose-500/20 text-rose-50"
-                                    : due.level === "warning"
-                                      ? "border-orange-200/42 bg-orange-500/24 text-orange-50"
-                                      : "border-white/12 bg-white/[0.05] text-white/60"
-                                }`}>{due.label}</span>
-                                <span className="text-[10px] text-white/38">{item.reservationNumber}</span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[9px] text-[#cffffd]">{store.city}</span>
+                                <span className={`rounded-full border px-2 py-1 text-[9px] font-medium ${dueTone.badge}`}>{due.label}</span>
+                                <span className="truncate text-[9px] text-white/40">{item.reservationNumber}</span>
                               </div>
-                              <p className="mt-2 text-base text-white">{item.customer.name}</p>
-                              <p className="mt-1 text-xs text-white/45">{item.customer.phone || "Nincs telefonszám"} • Félretette: {item.createdBy || "-"} • {formatDateTime(item.createdAt)}</p>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <p className="text-sm text-white">{integer(item.totalQty)} db</p>
-                              <p className="mt-1 text-xs text-[#cffffd]/78">{money(item.totalValue)}</p>
+
+                              <div className="mt-2.5 flex min-w-0 items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-[15px] text-white" title={item.customer.name}>{item.customer.name}</p>
+                                  <p className="mt-1 truncate text-[11px] text-white/50">
+                                    {item.customer.phone || "Nincs telefonszám"}
+                                  </p>
+                                  <p className="mt-1 truncate text-[10px] text-white/38">
+                                    Félretette: {item.createdBy || "-"} • {formatDateTime(item.createdAt)}
+                                  </p>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <p className="text-lg text-white">{integer(item.totalQty)} db</p>
+                                  <p className="mt-0.5 text-[12px] text-[#d7fffd]">{money(item.totalValue)}</p>
+                                </div>
+                              </div>
                             </div>
                           </div>
-                          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                            {(item.lines || []).map((line) => (
-                              <div key={line.id} className="flex min-w-0 items-center gap-3 rounded-xl border border-white/9 bg-[#293548] p-2.5">
-                                <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 bg-white">
-                                  {line.imageUrl ? <img src={line.imageUrl} alt={line.title} className="h-full w-full object-contain" /> : <Bookmark size={16} className="text-slate-500" />}
+
+                          <div className="space-y-2 p-3">
+                            {(item.lines || []).map((line) => {
+                              const lineTotal = numberValue(line.unitPrice) * numberValue(line.quantity);
+                              return (
+                                <div
+                                  key={line.id}
+                                  className={`grid min-h-[78px] grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border p-2.5 ${dueTone.line}`}
+                                >
+                                  <button
+                                    type="button"
+                                    disabled={!line.imageUrl}
+                                    onClick={() => line.imageUrl && setReturnImagePreview({ src: line.imageUrl, title: line.title })}
+                                    className="group relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/12 bg-white disabled:cursor-default"
+                                    aria-label={line.imageUrl ? `${line.title} képének nagyítása` : undefined}
+                                  >
+                                    {line.imageUrl
+                                      ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" />
+                                      : <Bookmark size={19} className="text-slate-500" />}
+                                    {line.imageUrl ? (
+                                      <span className="absolute inset-0 grid place-items-center bg-slate-950/0 text-white opacity-0 transition group-hover:bg-slate-950/35 group-hover:opacity-100">
+                                        <ZoomIn size={17} />
+                                      </span>
+                                    ) : null}
+                                  </button>
+
+                                  <div className="min-w-0">
+                                    <p className="truncate text-[13px] text-white" title={line.title}>{line.title}</p>
+                                    <p className="mt-1 truncate text-[10px] text-white/48">
+                                      {[line.brandName, line.colorName, line.size].filter(Boolean).join(" • ") || "Nincs variánsadat"}
+                                    </p>
+                                    <p className="mt-1 truncate font-mono text-[10px] text-[#9be9e5]/70">
+                                      {[line.productCode ? `Kód: ${line.productCode}` : "", line.barcode ? `Vonalkód: ${line.barcode}` : ""].filter(Boolean).join(" • ") || "Nincs kód"}
+                                    </p>
+                                  </div>
+
+                                  <div className="shrink-0 text-right">
+                                    <span className="inline-flex min-w-11 justify-center rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[11px] text-[#d5fffd]">
+                                      {integer(line.quantity)} db
+                                    </span>
+                                    <p className="mt-1.5 text-[12px] text-white">{money(lineTotal)}</p>
+                                    <p className="mt-0.5 text-[9px] text-white/38">{money(line.unitPrice)} / db</p>
+                                  </div>
                                 </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-xs text-white">{line.title}</p>
-                                  <p className="mt-1 truncate text-[10px] text-white/42">{[line.productCode, line.colorName, line.size].filter(Boolean).join(" • ")}</p>
-                                </div>
-                                <span className="shrink-0 rounded-lg border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-1 text-[10px] text-[#cffffd]">{integer(line.quantity)} db</span>
+                              );
+                            })}
+
+                            {item.note ? (
+                              <div className="rounded-xl border border-white/9 bg-black/10 px-3 py-2 text-[10px] leading-relaxed text-white/48">
+                                {item.note}
                               </div>
-                            ))}
+                            ) : null}
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/9 bg-black/[0.06] px-3 py-2.5">
+                            <div className="min-w-0 text-[10px] text-white/44">
+                              Lejárat: <span className={due.level === "overdue" || due.level === "today" ? "text-orange-100" : "text-white/68"}>{item.expiresOn ? formatDate(item.expiresOn) : "Nincs megadva"}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReservationReleaseError("");
+                                setReservationReleaseTarget({ store, item });
+                              }}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-orange-200/30 bg-orange-500/15 px-3 text-[11px] text-orange-50 transition hover:bg-orange-500/24 active:scale-[0.98]"
+                            >
+                              <RotateCcw size={14} /> Vissza a készletre
+                            </button>
                           </div>
                         </article>
                       );
                     })}
+
                   {!visibleReservations.length ? (
-                    <div className="px-4 py-12 text-center text-sm text-white/42">Nincs aktív félretett termék a kiválasztott üzletben.</div>
+                    <div className="xl:col-span-2 px-4 py-12 text-center text-sm text-white/42">
+                      Nincs aktív félretett termék a kiválasztott üzletben.
+                    </div>
                   ) : null}
                 </div>
               </section>
@@ -1223,6 +1362,111 @@ export default function AllInAdminShopWorkflows({
             <X size={15} /> Bezárás
           </button>
         </footer>
+
+        {reservationReleaseTarget ? (
+          <div
+            className="fixed inset-0 z-[555] grid place-items-center bg-slate-950/88 p-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target && !reservationReleaseBusy) {
+                setReservationReleaseTarget(null);
+                setReservationReleaseError("");
+              }
+            }}
+          >
+            <section className="w-full max-w-[680px] overflow-hidden rounded-[26px] border border-orange-200/24 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.66)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#5a4228] to-[#303a4c] px-5 py-4">
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-orange-100/62">Félretétel feloldása</p>
+                  <h3 className="mt-1 truncate text-lg text-white">{reservationReleaseTarget.item.customer.name}</h3>
+                  <p className="mt-1 text-xs text-white/48">
+                    {reservationReleaseTarget.store.city} • {reservationReleaseTarget.item.reservationNumber}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={reservationReleaseBusy}
+                  onClick={() => {
+                    setReservationReleaseTarget(null);
+                    setReservationReleaseError("");
+                  }}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white disabled:opacity-45"
+                  aria-label="Bezárás"
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="space-y-3 p-5">
+                <div className="rounded-2xl border border-orange-200/22 bg-orange-500/10 px-4 py-3 text-sm leading-relaxed text-orange-50/88">
+                  A félretétel megszűnik, és a foglalt mennyiség újra elérhető készlet lesz az üzletben. Fizikai készletet nem duplázunk: a rendszer a foglalást oldja fel.
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase text-white/38">Termék</p>
+                    <p className="mt-1 text-sm text-white">{reservationReleaseTarget.item.lines.length} sor</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase text-white/38">Foglalt darab</p>
+                    <p className="mt-1 text-sm text-white">{integer(reservationReleaseTarget.item.totalQty)} db</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase text-white/38">Foglalt érték</p>
+                    <p className="mt-1 text-sm text-white">{money(reservationReleaseTarget.item.totalValue)}</p>
+                  </div>
+                </div>
+
+                <div className="max-h-[240px] space-y-2 overflow-y-auto pr-1">
+                  {reservationReleaseTarget.item.lines.map((line) => (
+                    <div key={line.id} className="flex items-center gap-3 rounded-xl border border-white/9 bg-[#293548] p-2.5">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white">
+                        {line.imageUrl
+                          ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" />
+                          : <Bookmark size={15} className="text-slate-500" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs text-white">{line.title}</p>
+                        <p className="mt-1 truncate text-[10px] text-white/42">{[line.productCode, line.colorName, line.size].filter(Boolean).join(" • ")}</p>
+                      </div>
+                      <span className="shrink-0 rounded-lg border border-orange-200/22 bg-orange-500/10 px-2 py-1 text-[10px] text-orange-50">
+                        {integer(line.quantity)} db
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {reservationReleaseError ? (
+                  <div className="rounded-xl border border-rose-300/34 bg-rose-600/16 px-3 py-3 text-sm leading-relaxed text-rose-50">
+                    {reservationReleaseError}
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={reservationReleaseBusy}
+                    onClick={() => {
+                      setReservationReleaseTarget(null);
+                      setReservationReleaseError("");
+                    }}
+                    className="h-11 rounded-xl border border-white/14 bg-white/[0.05] text-sm text-white hover:bg-white/[0.1] disabled:opacity-45"
+                  >
+                    Mégse
+                  </button>
+                  <button
+                    type="button"
+                    disabled={reservationReleaseBusy}
+                    onClick={() => void releaseReservation()}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-orange-200/38 bg-orange-500 text-sm text-white hover:bg-orange-400 disabled:opacity-50"
+                  >
+                    {reservationReleaseBusy ? <Loader2 size={17} className="animate-spin" /> : <RotateCcw size={17} />}
+                    Vissza a készletre
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         {returnImagePreview ? (
           <div
