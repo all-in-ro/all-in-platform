@@ -300,6 +300,91 @@ export default function createAifShopReservationsRouter({
     }
   });
 
+  router.patch("/:id/expires-on", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const expiresOn = isoDate(
+      req.body?.expiresOn || req.body?.expires_on || req.body?.expiryDate || req.body?.expiry_date,
+    );
+    if (!expiresOn) {
+      return res.status(400).json({ error: "Érvényes lejárati dátum szükséges." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureSchema();
+
+      const location = await aifResolveShopLocation(req, client, req.body?.location);
+      const actor = actorFrom(req);
+      const current = await client.query(
+        `SELECT *
+         FROM aif_shop_reservations
+         WHERE id::text=$1
+           AND location_id=$2
+         FOR UPDATE`,
+        [id, location.id],
+      );
+
+      if (!current.rowCount) {
+        throw Object.assign(new Error("A félretétel nem található."), { statusCode: 404 });
+      }
+
+      const reservation = current.rows[0];
+      if (reservation.status !== "active") {
+        throw Object.assign(
+          new Error("Csak aktív félretétel lejárati dátuma módosítható."),
+          { statusCode: 409, code: "reservation_not_active" },
+        );
+      }
+
+      const previousExpiresOn = reservation.expires_on
+        ? String(reservation.expires_on).slice(0, 10)
+        : null;
+
+      await client.query(
+        `UPDATE aif_shop_reservations
+         SET expires_on=$2,
+             updated_at=now()
+         WHERE id=$1`,
+        [reservation.id, expiresOn],
+      );
+
+      await client.query(
+        `INSERT INTO aif_shop_reservation_events (
+           reservation_id,event_type,actor,payload
+         ) VALUES ($1,'expiry_changed',$2,$3::jsonb)`,
+        [
+          reservation.id,
+          actor,
+          JSON.stringify({
+            previousExpiresOn,
+            expiresOn,
+            note: text(req.body?.note) || null,
+          }),
+        ],
+      );
+
+      await client.query("COMMIT");
+
+      const items = await listRows(location.id, ` AND r.id=$2`, [reservation.id]);
+      return res.json({
+        ok: true,
+        item: items[0] || null,
+        previousExpiresOn,
+        expiresOn,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A lejárati dátum módosítása nem sikerült.",
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   router.post("/:id/release", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const client = await pool.connect();
