@@ -52,6 +52,7 @@ type Props = {
   onClose: () => void;
 };
 
+
 type StoreDef = {
   code: "main_warehouse" | "magazin_targu_secuiesc";
   city: string;
