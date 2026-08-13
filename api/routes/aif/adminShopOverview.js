@@ -6,6 +6,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
     pool, requireAdminOrSecret, ensureAifShopSalesSchema, text, normCode,
     aifNumber, aifBucharestIsoDate, aifValidIsoDate, aifInclusiveDayCount,
     aifShiftIsoDate, aifMapShopSummary, aifPaymentMethodLabel,
+    readSalesTvaSettings,
   } = deps;
   const router = express.Router();
 
@@ -49,6 +50,17 @@ export default function createAifAdminShopOverviewRouter(deps) {
       const brand = text(req.query.brand);
       const category = text(req.query.category);
       const search = text(req.query.search || req.query.q);
+
+      const salesTvaSettings = typeof readSalesTvaSettings === "function"
+        ? await readSalesTvaSettings(pool)
+        : { salesTvaRate: 21, sellPriceIncludesTva: true, salesPriceIncludesTva: true };
+      const salesTvaRate = Math.max(
+        0,
+        Math.min(100, aifNumber(salesTvaSettings?.salesTvaRate ?? 21)),
+      );
+      const sellPriceIncludesTva =
+        salesTvaSettings?.sellPriceIncludesTva !== false &&
+        salesTvaSettings?.salesPriceIncludesTva !== false;
 
       const buildFilters = (rangeFrom, rangeTo) => {
         const args = [location.id, rangeFrom, rangeTo];
@@ -117,7 +129,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
         return { args, where: where.join(" AND ") };
       };
 
-      const summarySql = (where) => `
+      const summarySql = (where, tvaRateParam, priceIncludesTvaParam) => `
         WITH filtered_sales AS (
           SELECT s.*
           FROM aif_shop_sales s
@@ -127,7 +139,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
           SELECT
             sl.sale_id,
             COALESCE(sum(sl.quantity),0)::numeric AS items_sold,
-            COALESCE(sum(COALESCE(sl.buy_price_snapshot, v.buy_price,0) * sl.quantity),0)::numeric AS estimated_cost
+            COALESCE(sum(COALESCE(sl.buy_price_snapshot, v.buy_price,0) * sl.quantity),0)::numeric AS estimated_cost,
+            COALESCE(sum(sl.quantity) FILTER (
+              WHERE sl.buy_price_snapshot IS NOT NULL
+            ),0)::numeric AS cost_snapshot_qty,
+            COALESCE(sum(sl.quantity) FILTER (
+              WHERE sl.buy_price_snapshot IS NULL AND v.buy_price IS NOT NULL
+            ),0)::numeric AS cost_fallback_qty,
+            COALESCE(sum(sl.quantity) FILTER (
+              WHERE sl.buy_price_snapshot IS NULL AND v.buy_price IS NULL
+            ),0)::numeric AS cost_missing_qty
           FROM aif_shop_sale_lines sl
           JOIN filtered_sales fs ON fs.id=sl.sale_id
           LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
@@ -136,6 +157,37 @@ export default function createAifAdminShopOverviewRouter(deps) {
         SELECT
           count(*) FILTER (WHERE fs.status='completed')::int AS transactions,
           COALESCE(sum(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS revenue,
+          COALESCE(sum(
+            CASE
+              WHEN COALESCE(
+                CASE
+                  WHEN lower(COALESCE(fs.raw->>'sellPriceIncludesTva', fs.raw->>'salesPriceIncludesTva', '')) IN ('true','false')
+                  THEN lower(COALESCE(fs.raw->>'sellPriceIncludesTva', fs.raw->>'salesPriceIncludesTva'))='true'
+                  ELSE NULL
+                END,
+                ${priceIncludesTvaParam}::boolean
+              )
+              THEN fs.total / (
+                1 + (
+                  GREATEST(
+                    0,
+                    LEAST(
+                      100,
+                      COALESCE(
+                        CASE
+                          WHEN COALESCE(fs.raw->>'salesTvaRate','') ~ '^[0-9]+([.][0-9]+)?$'
+                          THEN (fs.raw->>'salesTvaRate')::numeric
+                          ELSE NULL
+                        END,
+                        ${tvaRateParam}::numeric
+                      )
+                    )
+                  ) / 100
+                )
+              )
+              ELSE fs.total
+            END
+          ) FILTER (WHERE fs.status='completed'),0)::numeric AS net_revenue,
           COALESCE(sum(fs.subtotal) FILTER (WHERE fs.status='completed'),0)::numeric AS sales_before_discount,
           COALESCE(sum(fs.discount_total) FILTER (WHERE fs.status='completed'),0)::numeric AS discount_total,
           COALESCE(sum(fs.paid_total) FILTER (WHERE fs.status='completed'),0)::numeric AS paid_total,
@@ -148,6 +200,9 @@ export default function createAifAdminShopOverviewRouter(deps) {
           )::int AS credit_sales,
           COALESCE(sum(lt.items_sold) FILTER (WHERE fs.status='completed'),0)::numeric AS items_sold,
           COALESCE(sum(lt.estimated_cost) FILTER (WHERE fs.status='completed'),0)::numeric AS estimated_cost,
+          COALESCE(sum(lt.cost_snapshot_qty) FILTER (WHERE fs.status='completed'),0)::numeric AS cost_snapshot_qty,
+          COALESCE(sum(lt.cost_fallback_qty) FILTER (WHERE fs.status='completed'),0)::numeric AS cost_fallback_qty,
+          COALESCE(sum(lt.cost_missing_qty) FILTER (WHERE fs.status='completed'),0)::numeric AS cost_missing_qty,
           COALESCE(avg(fs.total) FILTER (WHERE fs.status='completed'),0)::numeric AS average_basket,
           count(*) FILTER (WHERE fs.status='cancelled')::int AS cancelled_sales,
           count(*) FILTER (WHERE fs.status='refunded')::int AS refunded_sales
@@ -155,8 +210,20 @@ export default function createAifAdminShopOverviewRouter(deps) {
         LEFT JOIN line_totals lt ON lt.sale_id=fs.id
       `;
 
+      const summaryQuery = (filters) => {
+        const args = [...filters.args, salesTvaRate, sellPriceIncludesTva];
+        const tvaRateParam = `$${args.length - 1}`;
+        const priceIncludesTvaParam = `$${args.length}`;
+        return {
+          sql: summarySql(filters.where, tvaRateParam, priceIncludesTvaParam),
+          args,
+        };
+      };
+
       const currentFilters = buildFilters(from, to);
       const previousFilters = buildFilters(previousFrom, previousTo);
+      const currentSummaryQuery = summaryQuery(currentFilters);
+      const previousSummaryQuery = summaryQuery(previousFilters);
 
       const buildRecentLineFilters = (rangeFrom, rangeTo) => {
         const args = [location.id, rangeFrom, rangeTo];
@@ -252,8 +319,8 @@ export default function createAifAdminShopOverviewRouter(deps) {
              AND (sm.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date`,
           [location.id, from, to]
         ),
-        pool.query(summarySql(currentFilters.where), currentFilters.args),
-        pool.query(summarySql(previousFilters.where), previousFilters.args),
+        pool.query(currentSummaryQuery.sql, currentSummaryQuery.args),
+        pool.query(previousSummaryQuery.sql, previousSummaryQuery.args),
         pool.query(
           `WITH filtered_sales AS (
              SELECT s.*
@@ -466,8 +533,36 @@ export default function createAifAdminShopOverviewRouter(deps) {
         ),
       ]);
 
-      const summary = aifMapShopSummary(summaryResult.rows[0] || {});
-      const previousSummary = aifMapShopSummary(previousSummaryResult.rows[0] || {});
+      const mapSummary = (row = {}) => {
+        const mapped = aifMapShopSummary(row);
+        const revenue = aifNumber(row.revenue);
+        const netRevenue = aifNumber(row.net_revenue);
+        const estimatedCost = aifNumber(row.estimated_cost);
+        const grossProfit = netRevenue - estimatedCost;
+        const costSnapshotQty = aifNumber(row.cost_snapshot_qty);
+        const costFallbackQty = aifNumber(row.cost_fallback_qty);
+        const costMissingQty = aifNumber(row.cost_missing_qty);
+        const costCoveredQty = costSnapshotQty + costFallbackQty;
+        const costTotalQty = costCoveredQty + costMissingQty;
+
+        return {
+          ...mapped,
+          netRevenue,
+          tvaAmount: revenue - netRevenue,
+          estimatedCost,
+          grossProfit,
+          grossMargin: netRevenue > 0 ? grossProfit / netRevenue * 100 : 0,
+          costSnapshotQty,
+          costFallbackQty,
+          costMissingQty,
+          costCoveragePercent: costTotalQty > 0 ? costCoveredQty / costTotalQty * 100 : 100,
+          salesTvaRate,
+          sellPriceIncludesTva,
+        };
+      };
+
+      const summary = mapSummary(summaryResult.rows[0] || {});
+      const previousSummary = mapSummary(previousSummaryResult.rows[0] || {});
       const rankingMap = (rows) => {
         const totalRevenue = rows.reduce((sum, row) => sum + aifNumber(row.revenue), 0);
         return rows.map((row) => ({
@@ -490,6 +585,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
           name: location.name,
         },
         period: { from, to, previousFrom, previousTo, days },
+        salesTva: {
+          rate: salesTvaRate,
+          priceIncludesTva: sellPriceIncludesTva,
+        },
         summary,
         previousSummary,
         stockSnapshot: {
