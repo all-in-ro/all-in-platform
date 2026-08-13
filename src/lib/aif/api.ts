@@ -3374,6 +3374,22 @@ export type AifShopReturnAuthorizationInboxItem = {
   };
 };
 
+export type AifShopExchangeReplacementLine = {
+  id: string;
+  lineNo: number;
+  variantId: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  title: string;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+};
+
 export type AifShopExchangeHistoryItem = {
   id: string;
   exchangeNumber: string;
@@ -3395,10 +3411,12 @@ export type AifShopExchangeHistoryItem = {
     title: string;
     productCode?: string | null;
     barcode?: string | null;
+    brandName?: string | null;
     colorName?: string | null;
     size?: string | null;
     imageUrl?: string | null;
   };
+  replacementLines: AifShopExchangeReplacementLine[];
 };
 
 export type AifShopExchangeResult = {
@@ -3491,6 +3509,35 @@ export function apiAifShopReturnHistory(options: { location: string; limit?: num
     location: { id: string; code: string; name: string };
     items: AifShopExchangeHistoryItem[];
   }>(`/shop-returns/history?${q.toString()}`);
+}
+
+export type AifShopExchangeCancelResult = {
+  ok: true;
+  duplicate?: boolean;
+  exchangeId: string;
+  exchangeNumber: string;
+  status: "cancelled";
+  cancelledAt: string;
+  cancelledBy: string;
+  stockAdjusted: Array<{
+    variantId: string;
+    qtyBefore: number;
+    qtyAfter: number;
+    qtyDelta: number;
+  }>;
+};
+
+export function apiAifCancelShopExchange(
+  id: string,
+  input: { location: string; note?: string | null },
+) {
+  return fetchAifJSON<AifShopExchangeCancelResult>(
+    `/shop-returns/exchanges/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export function apiAifCompleteShopExchange(input: {
