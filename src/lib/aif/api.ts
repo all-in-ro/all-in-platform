@@ -3151,6 +3151,24 @@ export function apiAifCreateShopReservation(input: {
   });
 }
 
+export function apiAifUpdateShopReservationExpiry(
+  id: string,
+  input: { location: string; expiresOn: string; note?: string | null },
+) {
+  return fetchAifJSON<{
+    ok: true;
+    item: AifShopReservation | null;
+    previousExpiresOn?: string | null;
+    expiresOn: string;
+  }>(
+    `/shop-reservations/${encodeURIComponent(id)}/expires-on`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export function apiAifReleaseShopReservation(
   id: string,
   input: { location: string; note?: string | null },
