@@ -22,7 +22,6 @@ import {
   ChevronRight,
   CircleDollarSign,
   Clock3,
-  CreditCard,
   Filter,
   Home,
   Layers3,
@@ -1162,6 +1161,7 @@ export default function AllInAdminMagazinDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [discountView, setDiscountView] = useState<"money" | "percent">("money");
+  const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [receiptTarget, setReceiptTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AifAdminShopRecentSale | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
@@ -1270,6 +1270,13 @@ export default function AllInAdminMagazinDashboard({
   const previousDiscountPercent = numberValue(previous?.salesBeforeDiscount) > 0
     ? numberValue(previous?.discountTotal) / numberValue(previous?.salesBeforeDiscount) * 100
     : 0;
+  const marginCostMissingQty = numberValue((summary as any)?.costMissingQty);
+  const marginCostFallbackQty = numberValue((summary as any)?.costFallbackQty);
+  const marginHint = marginCostMissingQty > 0
+    ? `${integer(marginCostMissingQty)} db terméknél nincs vételár-adat`
+    : marginCostFallbackQty > 0
+      ? `${integer(marginCostFallbackQty)} db jelenlegi vételárral becsülve`
+      : "TVA nélkül, eladáskori vételár alapján";
 
   return (
     <main
@@ -1489,7 +1496,7 @@ export default function AllInAdminMagazinDashboard({
           </div>
         ) : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <MetricCard
             title="Forgalom"
             value={money(summary?.revenue)}
@@ -1516,14 +1523,6 @@ export default function AllInAdminMagazinDashboard({
             previous={numberValue(previous?.itemsSold)}
           />
           <MetricCard
-            title="Átlagkosár"
-            value={money(summary?.averageBasket)}
-            hint="Tranzakciónként"
-            icon={CreditCard}
-            current={numberValue(summary?.averageBasket)}
-            previous={numberValue(previous?.averageBasket)}
-          />
-          <MetricCard
             title="Kedvezmény"
             value={discountView === "percent" ? `${discountPercent.toFixed(1)}%` : money(summary?.discountTotal)}
             hint={discountView === "percent" ? `${money(summary?.discountTotal)} összes kedvezmény` : "Kattints a százalékos nézethez"}
@@ -1545,12 +1544,14 @@ export default function AllInAdminMagazinDashboard({
           />
           <MetricCard
             title="Becsült árrés"
-            value={`${numberValue(summary?.grossMargin).toFixed(1)}%`}
-            hint={`${money(summary?.grossProfit)} becsült eredmény`}
+            value={marginView === "percent" ? `${numberValue(summary?.grossMargin).toFixed(1)}%` : money(summary?.grossProfit)}
+            hint={marginHint}
             icon={TrendingUp}
-            current={numberValue(summary?.grossMargin)}
-            previous={numberValue(previous?.grossMargin)}
+            current={marginView === "percent" ? numberValue(summary?.grossMargin) : numberValue(summary?.grossProfit)}
+            previous={marginView === "percent" ? numberValue(previous?.grossMargin) : numberValue(previous?.grossProfit)}
             tone="success"
+            onClick={() => setMarginView((current) => current === "percent" ? "money" : "percent")}
+            actionLabel={marginView === "percent" ? "RON" : "%"}
           />
         </section>
 
