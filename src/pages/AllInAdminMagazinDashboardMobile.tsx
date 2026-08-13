@@ -233,6 +233,7 @@ function saleTypeLabel(value: string) {
   if (value === "sale") return "Eladás";
   if (value === "reservation") return "Félretett";
   if (value === "credit") return "Hitel";
+  if (value === "exchange") return "Csere";
   return value || "-";
 }
 
@@ -1179,13 +1180,19 @@ export default function AllInAdminMagazinDashboardMobile({
                       <span className={`rounded-full border px-2 py-1 text-[9px] ${statusBadge(sale.status)}`}>{saleStatusLabel(sale.status)}</span>
                       <span className={`rounded-full border px-2 py-1 text-[9px] ${paymentBadge(sale.paymentStatus)}`}>{paymentLabel(sale.paymentStatus)}</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setDeleteTarget({ sale })}
-                      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300/38 bg-rose-600 px-3 text-[11px] text-white active:scale-[0.98]"
-                    >
-                      <Trash2 size={13} /> Törlés
-                    </button>
+                    {sale.deletable !== false && sale.recordType !== "exchange" ? (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget({ sale })}
+                        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300/38 bg-rose-600 px-3 text-[11px] text-white active:scale-[0.98]"
+                      >
+                        <Trash2 size={13} /> Törlés
+                      </button>
+                    ) : (
+                      <span className="inline-flex min-h-9 shrink-0 items-center rounded-xl border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-3 text-[10px] text-[#d7fffd]">
+                        Csere: {money(sale.exchangeDifference ?? sale.total)}
+                      </span>
+                    )}
                   </div>
                 </article>
               ))}
@@ -1331,6 +1338,7 @@ export default function AllInAdminMagazinDashboardMobile({
                       { value: "partial", label: "Részben fizetve" },
                       { value: "unpaid", label: "Nincs fizetve" },
                       { value: "credit", label: "Hitel" },
+                      { value: "exchange", label: "Csere" },
                     ]}
                   />
                 </label>
