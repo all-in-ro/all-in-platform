@@ -31,6 +31,7 @@ import {
   apiAifShopCashOverview,
   apiAifShopReservations,
   apiAifReleaseShopReservation,
+  apiAifUpdateShopReservationExpiry,
   apiAifShopReturnAuthorizationInbox,
   apiAifShopReturnHistory,
   apiAifShopShiftDayOverview,
@@ -100,30 +101,60 @@ function addDays(iso: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+const HU_MONTHS_DISPLAY = [
+  "Január", "Február", "Március", "Április", "Május", "Június",
+  "Július", "Augusztus", "Szeptember", "Október", "November", "December",
+] as const;
+
+const HU_WEEKDAYS_FULL = [
+  "Vasárnap", "Hétfő", "Kedd", "Szerda", "Csütörtök", "Péntek", "Szombat",
+] as const;
+
 function formatDate(value?: string | null) {
   if (!value) return "Nincs dátum";
-  const date = new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleDateString("hu-HU", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "short",
-  });
+  const match = String(value).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return String(value);
+
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, monthIndex, day, 12));
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== monthIndex ||
+    date.getUTCDate() !== day
+  ) return String(value);
+
+  return `${HU_WEEKDAYS_FULL[date.getUTCDay()]} - ${HU_MONTHS_DISPLAY[monthIndex]} ${day}.`;
 }
 
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString("hu-HU", {
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Bucharest",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-  });
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = Number(values.year);
+  const monthIndex = Number(values.month) - 1;
+  const day = Number(values.day);
+  const hour = String(values.hour || "00").padStart(2, "0");
+  const minute = String(values.minute || "00").padStart(2, "0");
+
+  if (!Number.isFinite(year) || monthIndex < 0 || monthIndex > 11 || !Number.isFinite(day)) {
+    return String(value);
+  }
+
+  return `${year}. ${HU_MONTHS_DISPLAY[monthIndex].toLowerCase()} ${day}. ${hour}:${minute}`;
 }
 
 
@@ -460,6 +491,10 @@ export default function AllInAdminShopWorkflows({
   const [reservationReleaseTarget, setReservationReleaseTarget] = useState<{ store: StoreDef; item: AifShopReservation } | null>(null);
   const [reservationReleaseBusy, setReservationReleaseBusy] = useState(false);
   const [reservationReleaseError, setReservationReleaseError] = useState("");
+  const [reservationExpiryTarget, setReservationExpiryTarget] = useState<{ store: StoreDef; item: AifShopReservation } | null>(null);
+  const [reservationExpiryDraft, setReservationExpiryDraft] = useState("");
+  const [reservationExpiryBusy, setReservationExpiryBusy] = useState(false);
+  const [reservationExpiryError, setReservationExpiryError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -476,6 +511,12 @@ export default function AllInAdminShopWorkflows({
       if (event.key !== "Escape") return;
       if (returnImagePreview) {
         setReturnImagePreview(null);
+        return;
+      }
+      if (reservationExpiryTarget && !reservationExpiryBusy) {
+        setReservationExpiryTarget(null);
+        setReservationExpiryDraft("");
+        setReservationExpiryError("");
         return;
       }
       if (reservationReleaseTarget && !reservationReleaseBusy) {
@@ -495,7 +536,17 @@ export default function AllInAdminShopWorkflows({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose, open, reservationReleaseBusy, reservationReleaseTarget, returnDeleteBusy, returnDeleteTarget, returnImagePreview]);
+  }, [
+    onClose,
+    open,
+    reservationExpiryBusy,
+    reservationExpiryTarget,
+    reservationReleaseBusy,
+    reservationReleaseTarget,
+    returnDeleteBusy,
+    returnDeleteTarget,
+    returnImagePreview,
+  ]);
 
   const load = useCallback(async () => {
     if (!open) return;
@@ -632,6 +683,34 @@ export default function AllInAdminShopWorkflows({
       setError(caught instanceof Error ? caught.message : "A főnöki pénzátadás elutasítása nem sikerült.");
     } finally {
       setCashActionBusyId(null);
+    }
+  }
+
+  async function saveReservationExpiry() {
+    if (!reservationExpiryTarget || reservationExpiryBusy) return;
+    if (!isoDateParts(reservationExpiryDraft)) {
+      setReservationExpiryError("Válassz érvényes lejárati dátumot.");
+      return;
+    }
+
+    setReservationExpiryBusy(true);
+    setReservationExpiryError("");
+    setError("");
+    try {
+      await apiAifUpdateShopReservationExpiry(reservationExpiryTarget.item.id, {
+        location: reservationExpiryTarget.store.code,
+        expiresOn: reservationExpiryDraft,
+        note: `Adminisztrátori lejáratidátum-módosítás: ${actor}`,
+      });
+      setReservationExpiryTarget(null);
+      setReservationExpiryDraft("");
+      await load();
+    } catch (caught: any) {
+      setReservationExpiryError(
+        String(caught?.message || "A lejárati dátum módosítása nem sikerült."),
+      );
+    } finally {
+      setReservationExpiryBusy(false);
     }
   }
 
@@ -852,12 +931,19 @@ export default function AllInAdminShopWorkflows({
 
                               <div className="mt-2.5 flex min-w-0 items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                  <p className="truncate text-[15px] text-white" title={item.customer.name}>{item.customer.name}</p>
-                                  <p className="mt-1 truncate text-[11px] text-white/50">
-                                    {item.customer.phone || "Nincs telefonszám"}
+                                  <p
+                                    className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-white"
+                                    title={[item.customer.name, item.customer.phone].filter(Boolean).join(" • ")}
+                                  >
+                                    <span className="font-medium">{item.customer.name}</span>
+                                    <span className="text-white/28">•</span>
+                                    <span className="text-[13px] text-[#d7fffd]/82">{item.customer.phone || "Nincs telefonszám"}</span>
                                   </p>
-                                  <p className="mt-1 truncate text-[10px] text-white/38">
-                                    Félretette: {item.createdBy || "-"} • {formatDateTime(item.createdAt)}
+                                  <p className="mt-2 truncate text-[12px] text-white/62">
+                                    <span className="text-white/42">Félretette:</span>{" "}
+                                    <span className="text-white/86">{item.createdBy || "-"}</span>
+                                    <span className="mx-2 text-white/24">•</span>
+                                    <span className="text-white/70">{formatDateTime(item.createdAt)}</span>
                                   </p>
                                 </div>
                                 <div className="shrink-0 text-right">
@@ -917,28 +1003,39 @@ export default function AllInAdminShopWorkflows({
                           </div>
 
                           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/9 bg-black/[0.06] px-3 py-3">
-                            <div className={`flex min-w-[240px] flex-1 items-center gap-3 rounded-xl border px-3 py-2.5 ${
+                            <div className={`flex min-w-[300px] flex-1 items-center gap-3 rounded-xl border px-3.5 py-3 ${
                               due.level === "overdue" || due.level === "today"
-                                ? "border-orange-200/28 bg-orange-500/10"
+                                ? "border-orange-200/32 bg-orange-500/11"
                                 : due.level === "warning"
-                                  ? "border-amber-200/20 bg-amber-500/[0.06]"
-                                  : "border-white/9 bg-white/[0.025]"
+                                  ? "border-amber-200/22 bg-amber-500/[0.07]"
+                                  : "border-white/10 bg-white/[0.03]"
                             }`}>
-                              <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                              <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
                                 due.level === "overdue" || due.level === "today"
-                                  ? "border-orange-200/30 bg-orange-500/14 text-orange-100"
-                                  : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#bff8f5]"
+                                  ? "border-orange-200/32 bg-orange-500/16 text-orange-100"
+                                  : "border-[#7bd7d4]/24 bg-[#2a8d8b]/12 text-[#bff8f5]"
                               }`}>
-                                <CalendarDays size={16} />
+                                <CalendarDays size={18} />
                               </span>
-                              <div className="min-w-0">
-                                <p className="text-[9px] uppercase tracking-[0.12em] text-white/42">Lejárati dátum</p>
-                                <p className={`mt-0.5 truncate text-[15px] font-medium ${
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[9px] uppercase tracking-[0.12em] text-white/45">Lejárati dátum</p>
+                                <p className={`mt-1 truncate text-[17px] font-medium leading-tight ${
                                   due.level === "overdue" || due.level === "today" ? "text-orange-50" : "text-white"
                                 }`}>
                                   {item.expiresOn ? formatDate(item.expiresOn) : "Nincs megadva"}
                                 </p>
                               </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReservationExpiryError("");
+                                  setReservationExpiryDraft(String(item.expiresOn || ""));
+                                  setReservationExpiryTarget({ store, item });
+                                }}
+                                className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-3 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/24 active:scale-[0.98]"
+                              >
+                                <CalendarDays size={13} /> Dátum módosítása
+                              </button>
                             </div>
 
                             <button
@@ -1380,6 +1477,117 @@ export default function AllInAdminShopWorkflows({
             <X size={15} /> Bezárás
           </button>
         </footer>
+
+        {reservationExpiryTarget ? (
+          <div
+            className="fixed inset-0 z-[552] grid place-items-center bg-slate-950/88 p-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target && !reservationExpiryBusy) {
+                setReservationExpiryTarget(null);
+                setReservationExpiryDraft("");
+                setReservationExpiryError("");
+              }
+            }}
+          >
+            <section className="w-full max-w-[560px] overflow-hidden rounded-[26px] border border-[#9be9e5]/28 bg-[#303a4c] shadow-[0_34px_110px_rgba(0,0,0,0.66)]">
+              <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#294957] to-[#303a4c] px-5 py-4">
+                <div className="min-w-0">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/58">Lejárati dátum módosítása</p>
+                  <h3 className="mt-1 truncate text-lg text-white">
+                    {reservationExpiryTarget.item.customer.name}
+                    {reservationExpiryTarget.item.customer.phone ? ` • ${reservationExpiryTarget.item.customer.phone}` : ""}
+                  </h3>
+                  <p className="mt-1 text-xs text-white/48">
+                    {reservationExpiryTarget.store.city} • {reservationExpiryTarget.item.reservationNumber}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={reservationExpiryBusy}
+                  onClick={() => {
+                    setReservationExpiryTarget(null);
+                    setReservationExpiryDraft("");
+                    setReservationExpiryError("");
+                  }}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white disabled:opacity-45"
+                  aria-label="Bezárás"
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="space-y-4 p-5">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl border border-white/10 bg-[#293548] p-3">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Jelenlegi lejárat</p>
+                    <p className="mt-1 text-sm text-white">
+                      {reservationExpiryTarget.item.expiresOn
+                        ? formatDate(reservationExpiryTarget.item.expiresOn)
+                        : "Nincs megadva"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-[#7bd7d4]/18 bg-[#2a8d8b]/08 p-3">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-[#cffffd]/48">Új lejárat</p>
+                    <p className="mt-1 text-sm text-[#d7fffd]">
+                      {reservationExpiryDraft ? formatDate(reservationExpiryDraft) : "Válassz dátumot"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-[#293548] p-4">
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.11em] text-white/46">Új lejárati dátum</p>
+                  <HungarianDatePicker
+                    value={reservationExpiryDraft}
+                    onChange={(value) => {
+                      setReservationExpiryDraft(value);
+                      setReservationExpiryError("");
+                    }}
+                    ariaLabel="Félretétel új lejárati dátuma"
+                  />
+                  <p className="mt-2 text-[10px] text-white/38">
+                    A naptár hétfővel indul, és ugyanazt a magyar dátumválasztót használja, mint az admin szűrők.
+                  </p>
+                </div>
+
+                {reservationExpiryError ? (
+                  <div className="rounded-xl border border-rose-300/34 bg-rose-600/16 px-3 py-3 text-sm leading-relaxed text-rose-50">
+                    {reservationExpiryError}
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={reservationExpiryBusy}
+                    onClick={() => {
+                      setReservationExpiryTarget(null);
+                      setReservationExpiryDraft("");
+                      setReservationExpiryError("");
+                    }}
+                    className="h-11 rounded-xl border border-white/14 bg-white/[0.05] text-sm text-white hover:bg-white/[0.1] disabled:opacity-45"
+                  >
+                    Mégse
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      reservationExpiryBusy ||
+                      !reservationExpiryDraft ||
+                      reservationExpiryDraft === reservationExpiryTarget.item.expiresOn
+                    }
+                    onClick={() => void saveReservationExpiry()}
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#2a8d8b] text-sm text-white hover:bg-[#329b98] disabled:opacity-45"
+                  >
+                    {reservationExpiryBusy
+                      ? <Loader2 size={17} className="animate-spin" />
+                      : <CheckCircle2 size={17} />}
+                    Dátum mentése
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         {reservationReleaseTarget ? (
           <div
