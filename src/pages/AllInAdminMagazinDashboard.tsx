@@ -162,6 +162,7 @@ function saleTypeLabel(value: string) {
   if (value === "sale") return "Eladás";
   if (value === "reservation") return "Félretett";
   if (value === "credit") return "Hitel";
+  if (value === "exchange") return "Csere";
   return value || "-";
 }
 
@@ -652,6 +653,7 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
   } | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const canDelete = sale.deletable !== false && sale.recordType !== "exchange";
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
@@ -767,21 +769,24 @@ function SaleRowActionMenu({ sale, onReceipt, onDelete }: SaleRowActionMenuProps
             <span style={{ color: "#ffffff" }}>Bizonylat</span>
           </button>
 
-          <div className="my-1 border-t border-white/9" />
-
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onDelete(sale);
-            }}
-            className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs transition hover:bg-rose-500/18"
-            style={{ color: "#ff6478" }}
-          >
-            <Trash2 size={15} className="shrink-0" style={{ color: "#ff6478" }} />
-            <span style={{ color: "#ff6478" }}>Törlés</span>
-          </button>
+          {canDelete ? (
+            <>
+              <div className="my-1 border-t border-white/9" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onDelete(sale);
+                }}
+                className="flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-xs transition hover:bg-rose-500/18"
+                style={{ color: "#ff6478" }}
+              >
+                <Trash2 size={15} className="shrink-0" style={{ color: "#ff6478" }} />
+                <span style={{ color: "#ff6478" }}>Törlés</span>
+              </button>
+            </>
+          ) : null}
         </div>,
         document.body,
       )}
@@ -1094,9 +1099,10 @@ function RankingBars({
 function PaymentDonut({ items }: { items: AifAdminShopOverviewResponse["payments"] }) {
   const colors = ["#2dd4bf", "#60a5fa", "#f59e0b", "#f43f5e", "#a78bfa", "#94a3b8"];
   const total = items.reduce((sum, item) => sum + numberValue(item.amount), 0);
+  const totalMagnitude = items.reduce((sum, item) => sum + Math.abs(numberValue(item.amount)), 0);
   let cursor = 0;
   const parts = items.map((item, index) => {
-    const share = total > 0 ? numberValue(item.amount) / total * 100 : 0;
+    const share = totalMagnitude > 0 ? Math.abs(numberValue(item.amount)) / totalMagnitude * 100 : 0;
     const start = cursor;
     const end = cursor + share;
     cursor = end;
@@ -1427,6 +1433,7 @@ export default function AllInAdminMagazinDashboard({
                     { value: "partial", label: "Részben fizetve" },
                     { value: "unpaid", label: "Nincs fizetve" },
                     { value: "credit", label: "Hitel" },
+                    { value: "exchange", label: "Csere" },
                   ]}
                 />
               </label>
@@ -1776,7 +1783,7 @@ export default function AllInAdminMagazinDashboard({
                   <ReceiptText size={20} />
                 </span>
                 <div className="min-w-0">
-                  <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">Eladási bizonylat</p>
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-white/45">{receiptTarget.saleType === "exchange" ? "Cserebizonylat" : "Eladási bizonylat"}</p>
                   <h3 className="mt-1 truncate text-xl text-white">{receiptTarget.saleNumber}</h3>
                   <p className="mt-1 text-xs text-white/48">{dateTime(receiptTarget.soldAt)} • {locationName}</p>
                 </div>
@@ -1814,6 +1821,14 @@ export default function AllInAdminMagazinDashboard({
                   {paymentLabel(receiptTarget.paymentStatus)}
                 </span>
               </div>
+
+              {receiptTarget.saleType === "exchange" ? (
+                <div className="mt-4 rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b]/14 px-4 py-3">
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-[#d7fffd]/58">Csere pénzügyi különbözete</p>
+                  <p className="mt-1 text-lg text-white">{money(receiptTarget.exchangeDifference ?? receiptTarget.total)}</p>
+                  <p className="mt-1 text-[10px] text-white/48">A terméksorok lent a saját teljes eladási árukkal látszanak; ez az összeg csak a kliens által fizetett vagy visszakapott különbözet.</p>
+                </div>
+              ) : null}
 
               <section className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-[#293548]">
                 <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
