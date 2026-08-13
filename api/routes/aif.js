@@ -19475,6 +19475,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const saleNumber = await aifAllocateShopSaleNumber(client, location);
       const isCredit = paymentMethod === "credit";
+      const saleTvaSettings = await readSalesTvaSettings(client);
       const saleInsert = await client.query(
         `INSERT INTO aif_shop_sales (
            sale_number, location_id, customer_id, status, sale_type, payment_status,
@@ -19500,7 +19501,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           customerRow?.phone || customerPhone || null,
           emptyToNull(body.note),
           idempotencyKey,
-          JSON.stringify({ source: "shop_sale_screen", paymentMethod, role: req.session?.role || null }),
+          JSON.stringify({
+            source: "shop_sale_screen",
+            paymentMethod,
+            role: req.session?.role || null,
+            salesTvaRate: Number(saleTvaSettings?.salesTvaRate || 0),
+            sellPriceIncludesTva: saleTvaSettings?.sellPriceIncludesTva !== false,
+            salesPriceIncludesTva: saleTvaSettings?.sellPriceIncludesTva !== false,
+          }),
         ]
       );
       const sale = saleInsert.rows[0];
@@ -19704,6 +19712,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     aifShiftIsoDate,
     aifMapShopSummary,
     aifPaymentMethodLabel,
+    readSalesTvaSettings,
   }));
 
   return router;
