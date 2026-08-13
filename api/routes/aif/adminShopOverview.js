@@ -129,6 +129,104 @@ export default function createAifAdminShopOverviewRouter(deps) {
         return { args, where: where.join(" AND ") };
       };
 
+      const buildExchangeFilters = (rangeFrom, rangeTo) => {
+        const args = [location.id, rangeFrom, rangeTo];
+        const where = [
+          `e.location_id=$1`,
+          `e.status='completed'`,
+          `(e.created_at AT TIME ZONE 'Europe/Bucharest')::date BETWEEN $2::date AND $3::date`,
+        ];
+        const push = (value) => {
+          args.push(value);
+          return `$${args.length}`;
+        };
+        if (employee) {
+          const p = push(employee);
+          where.push(`e.actor=${p}`);
+        }
+        if (paymentStatus && paymentStatus !== "paid") where.push(`1=0`);
+        if (saleType && saleType !== "exchange") where.push(`1=0`);
+        if (brand) {
+          const p = push(brand);
+          where.push(`(
+            EXISTS (
+              SELECT 1
+              FROM aif_shop_exchange_lines elf
+              WHERE elf.exchange_id=e.id
+                AND lower(COALESCE(elf.brand_name,''))=lower(${p})
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM aif_shop_sale_lines srcf
+              WHERE srcf.id=e.source_sale_line_id
+                AND lower(COALESCE(srcf.brand_name,''))=lower(${p})
+            )
+          )`);
+        }
+        if (category) {
+          const p = push(category);
+          where.push(`(
+            EXISTS (
+              SELECT 1
+              FROM aif_shop_exchange_lines elf
+              LEFT JOIN aif_product_variants evf ON evf.id=elf.variant_id
+              LEFT JOIN aif_product_models emf ON emf.id=evf.model_id
+              LEFT JOIN aif_categories escf ON escf.id=emf.subcategory_id
+              WHERE elf.exchange_id=e.id
+                AND lower(COALESCE(
+                  NULLIF(escf.name_hu,''),
+                  NULLIF(escf.name_ro,''),
+                  'Nincs alkategória'
+                ))=lower(${p})
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM aif_shop_sale_lines srcf
+              LEFT JOIN aif_product_variants svf ON svf.id=srcf.variant_id
+              LEFT JOIN aif_product_models smf ON smf.id=svf.model_id
+              LEFT JOIN aif_categories sscf ON sscf.id=smf.subcategory_id
+              WHERE srcf.id=e.source_sale_line_id
+                AND lower(COALESCE(
+                  NULLIF(srcf.subcategory_name,''),
+                  NULLIF(sscf.name_hu,''),
+                  NULLIF(sscf.name_ro,''),
+                  'Nincs alkategória'
+                ))=lower(${p})
+            )
+          )`);
+        }
+        if (search) {
+          const p = push(`%${search}%`);
+          where.push(`(
+            e.exchange_number ILIKE ${p}
+            OR COALESCE(e.actor,'') ILIKE ${p}
+            OR COALESCE(e.customer_name,'') ILIKE ${p}
+            OR COALESCE(e.customer_phone,'') ILIKE ${p}
+            OR EXISTS (
+              SELECT 1
+              FROM aif_shop_exchange_lines elf
+              WHERE elf.exchange_id=e.id
+                AND (
+                  COALESCE(elf.product_title,'') ILIKE ${p}
+                  OR COALESCE(elf.product_code,'') ILIKE ${p}
+                  OR COALESCE(elf.barcode,'') ILIKE ${p}
+                )
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM aif_shop_sale_lines srcf
+              WHERE srcf.id=e.source_sale_line_id
+                AND (
+                  COALESCE(srcf.product_title,'') ILIKE ${p}
+                  OR COALESCE(srcf.product_code,'') ILIKE ${p}
+                  OR COALESCE(srcf.barcode,'') ILIKE ${p}
+                )
+            )
+          )`);
+        }
+        return { args, where: where.join(" AND ") };
+      };
+
       const summarySql = (where, tvaRateParam, priceIncludesTvaParam) => `
         WITH filtered_sales AS (
           SELECT s.*
@@ -220,10 +318,113 @@ export default function createAifAdminShopOverviewRouter(deps) {
         };
       };
 
+      const exchangeSummarySql = (where, tvaRateParam, priceIncludesTvaParam) => `
+        WITH filtered_exchanges AS (
+          SELECT e.*
+          FROM aif_shop_exchanges e
+          WHERE ${where}
+        ),
+        exchange_rows AS (
+          SELECT
+            e.id,
+            e.difference,
+            e.returned_qty,
+            e.customer_name,
+            e.created_at,
+            e.original_snapshot,
+            COALESCE(rep.replacement_qty,0)::numeric AS replacement_qty,
+            COALESCE(rep.replacement_cost,0)::numeric AS replacement_cost,
+            COALESCE(src.buy_price_snapshot, srcv.buy_price,0)::numeric * e.returned_qty::numeric AS return_cost,
+            COALESCE(rep.cost_snapshot_qty,0)::numeric
+              + CASE WHEN src.buy_price_snapshot IS NOT NULL THEN e.returned_qty ELSE 0 END::numeric AS cost_snapshot_qty,
+            COALESCE(rep.cost_fallback_qty,0)::numeric
+              + CASE WHEN src.buy_price_snapshot IS NULL AND srcv.buy_price IS NOT NULL THEN e.returned_qty ELSE 0 END::numeric AS cost_fallback_qty,
+            COALESCE(rep.cost_missing_qty,0)::numeric
+              + CASE WHEN src.buy_price_snapshot IS NULL AND srcv.buy_price IS NULL THEN e.returned_qty ELSE 0 END::numeric AS cost_missing_qty
+          FROM filtered_exchanges e
+          JOIN aif_shop_sale_lines src ON src.id=e.source_sale_line_id
+          LEFT JOIN aif_product_variants srcv ON srcv.id=src.variant_id
+          LEFT JOIN LATERAL (
+            SELECT
+              COALESCE(sum(el.quantity),0)::numeric AS replacement_qty,
+              COALESCE(sum(COALESCE(el.buy_price_snapshot, rv.buy_price,0) * el.quantity),0)::numeric AS replacement_cost,
+              COALESCE(sum(el.quantity) FILTER (WHERE el.buy_price_snapshot IS NOT NULL),0)::numeric AS cost_snapshot_qty,
+              COALESCE(sum(el.quantity) FILTER (WHERE el.buy_price_snapshot IS NULL AND rv.buy_price IS NOT NULL),0)::numeric AS cost_fallback_qty,
+              COALESCE(sum(el.quantity) FILTER (WHERE el.buy_price_snapshot IS NULL AND rv.buy_price IS NULL),0)::numeric AS cost_missing_qty
+            FROM aif_shop_exchange_lines el
+            LEFT JOIN aif_product_variants rv ON rv.id=el.variant_id
+            WHERE el.exchange_id=e.id
+          ) rep ON true
+        )
+        SELECT
+          count(*)::int AS transactions,
+          COALESCE(sum(difference),0)::numeric AS revenue,
+          COALESCE(sum(
+            CASE
+              WHEN COALESCE(
+                CASE
+                  WHEN lower(COALESCE(original_snapshot->>'sellPriceIncludesTva', original_snapshot->>'salesPriceIncludesTva', '')) IN ('true','false')
+                  THEN lower(COALESCE(original_snapshot->>'sellPriceIncludesTva', original_snapshot->>'salesPriceIncludesTva'))='true'
+                  ELSE NULL
+                END,
+                ${priceIncludesTvaParam}::boolean
+              )
+              THEN difference / (
+                1 + (
+                  GREATEST(
+                    0,
+                    LEAST(
+                      100,
+                      COALESCE(
+                        CASE
+                          WHEN COALESCE(original_snapshot->>'salesTvaRate','') ~ '^[0-9]+([.][0-9]+)?$'
+                          THEN (original_snapshot->>'salesTvaRate')::numeric
+                          ELSE NULL
+                        END,
+                        ${tvaRateParam}::numeric
+                      )
+                    )
+                  ) / 100
+                )
+              )
+              ELSE difference
+            END
+          ),0)::numeric AS net_revenue,
+          COALESCE(sum(difference),0)::numeric AS sales_before_discount,
+          0::numeric AS discount_total,
+          COALESCE(sum(difference),0)::numeric AS paid_total,
+          0::numeric AS unpaid_total,
+          0::int AS unpaid_sales,
+          0::int AS credit_sales,
+          COALESCE(sum(replacement_qty - returned_qty),0)::numeric AS items_sold,
+          COALESCE(sum(replacement_cost - return_cost),0)::numeric AS estimated_cost,
+          COALESCE(sum(cost_snapshot_qty),0)::numeric AS cost_snapshot_qty,
+          COALESCE(sum(cost_fallback_qty),0)::numeric AS cost_fallback_qty,
+          COALESCE(sum(cost_missing_qty),0)::numeric AS cost_missing_qty,
+          COALESCE(avg(difference),0)::numeric AS average_basket,
+          0::int AS cancelled_sales,
+          0::int AS refunded_sales
+        FROM exchange_rows
+      `;
+
+      const exchangeSummaryQuery = (filters) => {
+        const args = [...filters.args, salesTvaRate, sellPriceIncludesTva];
+        const tvaRateParam = `$${args.length - 1}`;
+        const priceIncludesTvaParam = `$${args.length}`;
+        return {
+          sql: exchangeSummarySql(filters.where, tvaRateParam, priceIncludesTvaParam),
+          args,
+        };
+      };
+
       const currentFilters = buildFilters(from, to);
       const previousFilters = buildFilters(previousFrom, previousTo);
+      const currentExchangeFilters = buildExchangeFilters(from, to);
+      const previousExchangeFilters = buildExchangeFilters(previousFrom, previousTo);
       const currentSummaryQuery = summaryQuery(currentFilters);
       const previousSummaryQuery = summaryQuery(previousFilters);
+      const currentExchangeSummaryQuery = exchangeSummaryQuery(currentExchangeFilters);
+      const previousExchangeSummaryQuery = exchangeSummaryQuery(previousExchangeFilters);
 
       const buildRecentLineFilters = (rangeFrom, rangeTo) => {
         const args = [location.id, rangeFrom, rangeTo];
@@ -293,6 +494,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
         employeesOptionResult,
         brandsOptionResult,
         categoriesOptionResult,
+        exchangeSummaryResult,
+        previousExchangeSummaryResult,
+        exchangeTrendResult,
+        exchangeImpactResult,
+        exchangePaymentResult,
+        exchangeEmployeeResult,
+        exchangeRecentResult,
+        exchangeEmployeesOptionResult,
+        exchangeBrandsOptionResult,
+        exchangeCategoriesOptionResult,
       ] = await Promise.all([
         pool.query(
           `SELECT
@@ -531,7 +742,258 @@ export default function createAifAdminShopOverviewRouter(deps) {
            ORDER BY value ASC`,
           [location.id]
         ),
+        pool.query(currentExchangeSummaryQuery.sql, currentExchangeSummaryQuery.args),
+        pool.query(previousExchangeSummaryQuery.sql, previousExchangeSummaryQuery.args),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+           ),
+           exchange_days AS (
+             SELECT
+               (e.created_at AT TIME ZONE 'Europe/Bucharest')::date AS day,
+               COALESCE(sum(e.difference),0)::numeric AS revenue,
+               count(*)::int AS transactions,
+               COALESCE(sum(COALESCE(lines.replacement_qty,0) - e.returned_qty),0)::numeric AS items_sold
+             FROM filtered_exchanges e
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
+               FROM aif_shop_exchange_lines el
+               WHERE el.exchange_id=e.id
+             ) lines ON true
+             GROUP BY (e.created_at AT TIME ZONE 'Europe/Bucharest')::date
+           )
+           SELECT
+             day::text AS date,
+             to_char(day,'MM.DD') AS label,
+             revenue, transactions, items_sold,
+             0::numeric AS discount_total,
+             0::numeric AS unpaid_total
+           FROM exchange_days
+           ORDER BY day ASC`,
+          currentExchangeFilters.args
+        ),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+           )
+           SELECT * FROM (
+             SELECT
+               'replacement'::text AS impact_kind,
+               e.id AS exchange_id,
+               COALESCE(NULLIF(el.brand_name,''), NULLIF(b.name,''), 'Ismeretlen márka') AS brand_name,
+               COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,''), 'Nincs alkategória') AS category_name,
+               COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') AS product_name,
+               el.product_code,
+               el.line_total::numeric AS revenue,
+               el.quantity::numeric AS qty
+             FROM filtered_exchanges e
+             JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
+             LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+
+             UNION ALL
+
+             SELECT
+               'return'::text AS impact_kind,
+               e.id AS exchange_id,
+               COALESCE(NULLIF(src.brand_name,''), NULLIF(b.name,''), 'Ismeretlen márka') AS brand_name,
+               COALESCE(NULLIF(src.subcategory_name,''), NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,''), 'Nincs alkategória') AS category_name,
+               COALESCE(NULLIF(src.product_title,''), NULLIF(src.product_code,''), 'Ismeretlen termék') AS product_name,
+               src.product_code,
+               (-e.return_credit)::numeric AS revenue,
+               (-e.returned_qty)::numeric AS qty
+             FROM filtered_exchanges e
+             JOIN aif_shop_sale_lines src ON src.id=e.source_sale_line_id
+             LEFT JOIN aif_product_variants v ON v.id=src.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           ) impacts`,
+          currentExchangeFilters.args
+        ),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+           )
+           SELECT
+             es.method,
+             COALESCE(sum(CASE WHEN es.direction='in' THEN es.amount ELSE -es.amount END),0)::numeric AS amount,
+             count(DISTINCT es.exchange_id)::int AS transactions
+           FROM aif_shop_exchange_settlements es
+           JOIN filtered_exchanges e ON e.id=es.exchange_id
+           GROUP BY es.method
+           ORDER BY amount DESC`,
+          currentExchangeFilters.args
+        ),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+           )
+           SELECT
+             COALESCE(NULLIF(e.actor,''),'Ismeretlen') AS actor,
+             COALESCE(sum(e.difference),0)::numeric AS revenue,
+             count(*)::int AS transactions,
+             COALESCE(sum(COALESCE(lines.replacement_qty,0) - e.returned_qty),0)::numeric AS items_sold,
+             0::numeric AS discount_total,
+             0::numeric AS unpaid_total,
+             COALESCE(avg(e.difference),0)::numeric AS average_basket
+           FROM filtered_exchanges e
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(el.quantity),0)::numeric AS replacement_qty
+             FROM aif_shop_exchange_lines el
+             WHERE el.exchange_id=e.id
+           ) lines ON true
+           GROUP BY COALESCE(NULLIF(e.actor,''),'Ismeretlen')
+           ORDER BY revenue DESC, transactions DESC`,
+          currentExchangeFilters.args
+        ),
+        pool.query(
+          `WITH filtered_exchanges AS (
+             SELECT e.* FROM aif_shop_exchanges e WHERE ${currentExchangeFilters.where}
+           )
+           SELECT
+             ('exchange:' || el.id::text) AS line_id,
+             e.id AS sale_id,
+             el.line_no,
+             el.variant_id,
+             e.exchange_number AS sale_number,
+             e.created_at AS sold_at,
+             e.actor,
+             e.customer_name,
+             e.customer_phone,
+             'completed'::text AS status,
+             'paid'::text AS payment_status,
+             'exchange'::text AS sale_type,
+             e.replacement_total AS subtotal,
+             0::numeric AS discount_total,
+             e.difference AS total,
+             e.difference AS paid_total,
+             0::numeric AS balance_due,
+             totals.item_count,
+             totals.line_count,
+             COALESCE(NULLIF(el.product_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék') AS product_title,
+             el.product_code,
+             el.barcode,
+             COALESCE(NULLIF(el.brand_name,''), NULLIF(b.name,'')) AS brand_name,
+             NULL::text AS category_name,
+             COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS subcategory_name,
+             el.color_name,
+             el.size,
+             COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,'')) AS image_url,
+             el.quantity,
+             el.unit_price AS list_price,
+             el.unit_price,
+             0::numeric AS line_discount_amount,
+             0::numeric AS line_discount_percent,
+             el.line_total,
+             'exchange'::text AS record_type,
+             false AS deletable,
+             e.id AS exchange_id,
+             e.exchange_number,
+             e.return_credit,
+             e.replacement_total,
+             e.difference AS exchange_difference,
+             e.settlement_direction,
+             e.settlement_method,
+             e.settlement_amount
+           FROM filtered_exchanges e
+           JOIN aif_shop_exchange_lines el ON el.exchange_id=e.id
+           LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+           LEFT JOIN LATERAL (
+             SELECT count(*)::int AS line_count, COALESCE(sum(x.quantity),0)::int AS item_count
+             FROM aif_shop_exchange_lines x
+             WHERE x.exchange_id=e.id
+           ) totals ON true
+           ORDER BY e.created_at DESC, el.line_no ASC, el.id ASC
+           LIMIT 500`,
+          currentExchangeFilters.args
+        ),
+        pool.query(
+          `SELECT DISTINCT actor
+           FROM aif_shop_exchanges
+           WHERE location_id=$1
+             AND status='completed'
+             AND NULLIF(actor,'') IS NOT NULL
+           ORDER BY actor ASC`,
+          [location.id]
+        ),
+        pool.query(
+          `SELECT DISTINCT value
+           FROM (
+             SELECT COALESCE(NULLIF(el.brand_name,''), NULLIF(b.name,'')) AS value
+             FROM aif_shop_exchange_lines el
+             JOIN aif_shop_exchanges e ON e.id=el.exchange_id
+             LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             WHERE e.location_id=$1 AND e.status='completed'
+             UNION
+             SELECT COALESCE(NULLIF(src.brand_name,''), NULLIF(b.name,'')) AS value
+             FROM aif_shop_exchanges e
+             JOIN aif_shop_sale_lines src ON src.id=e.source_sale_line_id
+             LEFT JOIN aif_product_variants v ON v.id=src.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_brands b ON b.id=m.brand_id
+             WHERE e.location_id=$1 AND e.status='completed'
+           ) opts
+           WHERE NULLIF(value,'') IS NOT NULL
+           ORDER BY value ASC`,
+          [location.id]
+        ),
+        pool.query(
+          `SELECT DISTINCT value
+           FROM (
+             SELECT COALESCE(NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS value
+             FROM aif_shop_exchange_lines el
+             JOIN aif_shop_exchanges e ON e.id=el.exchange_id
+             LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+             WHERE e.location_id=$1 AND e.status='completed'
+             UNION
+             SELECT COALESCE(NULLIF(src.subcategory_name,''), NULLIF(subc.name_hu,''), NULLIF(subc.name_ro,'')) AS value
+             FROM aif_shop_exchanges e
+             JOIN aif_shop_sale_lines src ON src.id=e.source_sale_line_id
+             LEFT JOIN aif_product_variants v ON v.id=src.variant_id
+             LEFT JOIN aif_product_models m ON m.id=v.model_id
+             LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+             WHERE e.location_id=$1 AND e.status='completed'
+           ) opts
+           WHERE NULLIF(value,'') IS NOT NULL
+           ORDER BY value ASC`,
+          [location.id]
+        ),
       ]);
+
+      const combineSummaryRows = (saleRow = {}, exchangeRow = {}) => {
+        const revenue = aifNumber(saleRow.revenue) + aifNumber(exchangeRow.revenue);
+        const transactions = aifNumber(saleRow.transactions) + aifNumber(exchangeRow.transactions);
+        return {
+          ...saleRow,
+          revenue,
+          net_revenue: aifNumber(saleRow.net_revenue) + aifNumber(exchangeRow.net_revenue),
+          sales_before_discount: aifNumber(saleRow.sales_before_discount) + aifNumber(exchangeRow.sales_before_discount),
+          discount_total: aifNumber(saleRow.discount_total) + aifNumber(exchangeRow.discount_total),
+          paid_total: aifNumber(saleRow.paid_total) + aifNumber(exchangeRow.paid_total),
+          unpaid_total: aifNumber(saleRow.unpaid_total) + aifNumber(exchangeRow.unpaid_total),
+          unpaid_sales: aifNumber(saleRow.unpaid_sales) + aifNumber(exchangeRow.unpaid_sales),
+          credit_sales: aifNumber(saleRow.credit_sales) + aifNumber(exchangeRow.credit_sales),
+          items_sold: aifNumber(saleRow.items_sold) + aifNumber(exchangeRow.items_sold),
+          estimated_cost: aifNumber(saleRow.estimated_cost) + aifNumber(exchangeRow.estimated_cost),
+          cost_snapshot_qty: aifNumber(saleRow.cost_snapshot_qty) + aifNumber(exchangeRow.cost_snapshot_qty),
+          cost_fallback_qty: aifNumber(saleRow.cost_fallback_qty) + aifNumber(exchangeRow.cost_fallback_qty),
+          cost_missing_qty: aifNumber(saleRow.cost_missing_qty) + aifNumber(exchangeRow.cost_missing_qty),
+          average_basket: transactions > 0 ? revenue / transactions : 0,
+          transactions,
+          cancelled_sales: aifNumber(saleRow.cancelled_sales) + aifNumber(exchangeRow.cancelled_sales),
+          refunded_sales: aifNumber(saleRow.refunded_sales) + aifNumber(exchangeRow.refunded_sales),
+        };
+      };
 
       const mapSummary = (row = {}) => {
         const mapped = aifMapShopSummary(row);
@@ -551,30 +1013,202 @@ export default function createAifAdminShopOverviewRouter(deps) {
           tvaAmount: revenue - netRevenue,
           estimatedCost,
           grossProfit,
-          grossMargin: netRevenue > 0 ? grossProfit / netRevenue * 100 : 0,
+          grossMargin: netRevenue !== 0 ? grossProfit / netRevenue * 100 : 0,
           costSnapshotQty,
           costFallbackQty,
           costMissingQty,
           costCoveragePercent: costTotalQty > 0 ? costCoveredQty / costTotalQty * 100 : 100,
           salesTvaRate,
           sellPriceIncludesTva,
+          exchangeRevenue: aifNumber(row.exchange_revenue),
+          exchangeTransactions: aifNumber(row.exchange_transactions),
         };
       };
 
-      const summary = mapSummary(summaryResult.rows[0] || {});
-      const previousSummary = mapSummary(previousSummaryResult.rows[0] || {});
-      const rankingMap = (rows) => {
-        const totalRevenue = rows.reduce((sum, row) => sum + aifNumber(row.revenue), 0);
+      const currentCombinedRow = combineSummaryRows(summaryResult.rows[0] || {}, exchangeSummaryResult.rows[0] || {});
+      currentCombinedRow.exchange_revenue = aifNumber(exchangeSummaryResult.rows[0]?.revenue);
+      currentCombinedRow.exchange_transactions = aifNumber(exchangeSummaryResult.rows[0]?.transactions);
+      const previousCombinedRow = combineSummaryRows(previousSummaryResult.rows[0] || {}, previousExchangeSummaryResult.rows[0] || {});
+      previousCombinedRow.exchange_revenue = aifNumber(previousExchangeSummaryResult.rows[0]?.revenue);
+      previousCombinedRow.exchange_transactions = aifNumber(previousExchangeSummaryResult.rows[0]?.transactions);
+
+      const summary = mapSummary(currentCombinedRow);
+      const previousSummary = mapSummary(previousCombinedRow);
+
+      const mergeRankingRows = (saleRows, exchangeRows, nameKey, productCodeKey = null) => {
+        const map = new Map();
+        for (const row of saleRows || []) {
+          const name = String(row.name || "Ismeretlen").trim() || "Ismeretlen";
+          const key = name.toLocaleLowerCase("hu-HU");
+          map.set(key, {
+            name,
+            revenue: aifNumber(row.revenue),
+            qty: aifNumber(row.qty),
+            transactions: aifNumber(row.transactions),
+            product_code: row.product_code || null,
+          });
+        }
+        const exchangeGroups = new Map();
+        for (const row of exchangeRows || []) {
+          const name = String(row[nameKey] || "Ismeretlen").trim() || "Ismeretlen";
+          const key = name.toLocaleLowerCase("hu-HU");
+          const group = exchangeGroups.get(key) || {
+            name,
+            revenue: 0,
+            qty: 0,
+            transactions: new Set(),
+            product_code: productCodeKey ? (row[productCodeKey] || null) : null,
+          };
+          group.revenue += aifNumber(row.revenue);
+          group.qty += aifNumber(row.qty);
+          if (row.exchange_id) group.transactions.add(String(row.exchange_id));
+          if (!group.product_code && productCodeKey && row[productCodeKey]) group.product_code = row[productCodeKey];
+          exchangeGroups.set(key, group);
+        }
+        for (const [key, group] of exchangeGroups.entries()) {
+          const current = map.get(key) || { name: group.name, revenue: 0, qty: 0, transactions: 0, product_code: group.product_code };
+          current.revenue += group.revenue;
+          current.qty += group.qty;
+          current.transactions += group.transactions.size;
+          if (!current.product_code && group.product_code) current.product_code = group.product_code;
+          map.set(key, current);
+        }
+        const rows = Array.from(map.values())
+          .filter((row) => Math.abs(row.revenue) > 0.005 || Math.abs(row.qty) > 0.0001 || row.transactions > 0)
+          .sort((a, b) => b.revenue - a.revenue || b.qty - a.qty || a.name.localeCompare(b.name, "hu"))
+          .slice(0, 12);
+        const totalAbsRevenue = rows.reduce((sum, row) => sum + Math.abs(aifNumber(row.revenue)), 0);
         return rows.map((row) => ({
           name: row.name,
           revenue: aifNumber(row.revenue),
           qty: aifNumber(row.qty),
           transactions: aifNumber(row.transactions),
           productCode: row.product_code || null,
-          share: totalRevenue > 0 ? aifNumber(row.revenue) / totalRevenue * 100 : 0,
+          share: totalAbsRevenue > 0 ? Math.abs(aifNumber(row.revenue)) / totalAbsRevenue * 100 : 0,
         }));
       };
-      const totalPayments = paymentResult.rows.reduce((sum, row) => sum + aifNumber(row.amount), 0);
+
+      const trendMap = new Map();
+      for (const row of [...trendResult.rows, ...exchangeTrendResult.rows]) {
+        const key = String(row.date);
+        const current = trendMap.get(key) || {
+          date: key,
+          label: row.label,
+          revenue: 0,
+          transactions: 0,
+          itemsSold: 0,
+          discountTotal: 0,
+          unpaidTotal: 0,
+        };
+        current.revenue += aifNumber(row.revenue);
+        current.transactions += aifNumber(row.transactions);
+        current.itemsSold += aifNumber(row.items_sold);
+        current.discountTotal += aifNumber(row.discount_total);
+        current.unpaidTotal += aifNumber(row.unpaid_total);
+        trendMap.set(key, current);
+      }
+      const trend = Array.from(trendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+      const paymentMap = new Map();
+      for (const row of [...paymentResult.rows, ...exchangePaymentResult.rows]) {
+        const method = String(row.method || "");
+        if (!method) continue;
+        const current = paymentMap.get(method) || { method, amount: 0, transactions: 0 };
+        current.amount += aifNumber(row.amount);
+        current.transactions += aifNumber(row.transactions);
+        paymentMap.set(method, current);
+      }
+      const paymentRows = Array.from(paymentMap.values()).sort((a, b) => b.amount - a.amount);
+      const totalPaymentAbs = paymentRows.reduce((sum, row) => sum + Math.abs(row.amount), 0);
+
+      const employeeMap = new Map();
+      for (const row of [...employeeResult.rows, ...exchangeEmployeeResult.rows]) {
+        const actorName = String(row.actor || "Ismeretlen");
+        const key = actorName.toLocaleLowerCase("hu-HU");
+        const current = employeeMap.get(key) || {
+          actor: actorName,
+          revenue: 0,
+          transactions: 0,
+          itemsSold: 0,
+          discountTotal: 0,
+          unpaidTotal: 0,
+        };
+        current.revenue += aifNumber(row.revenue);
+        current.transactions += aifNumber(row.transactions);
+        current.itemsSold += aifNumber(row.items_sold);
+        current.discountTotal += aifNumber(row.discount_total);
+        current.unpaidTotal += aifNumber(row.unpaid_total);
+        employeeMap.set(key, current);
+      }
+      const employees = Array.from(employeeMap.values())
+        .map((row) => ({
+          ...row,
+          averageBasket: row.transactions > 0 ? row.revenue / row.transactions : 0,
+        }))
+        .sort((a, b) => b.revenue - a.revenue || b.transactions - a.transactions);
+
+      const mapRecentRow = (row) => ({
+        id: String(row.line_id),
+        lineId: String(row.line_id),
+        saleId: String(row.sale_id),
+        lineNo: aifNumber(row.line_no),
+        variantId: row.variant_id ? String(row.variant_id) : null,
+        saleNumber: row.sale_number,
+        soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
+        actor: row.actor,
+        customerName: row.customer_name,
+        customerPhone: row.customer_phone,
+        status: row.status,
+        paymentStatus: row.payment_status,
+        saleType: row.sale_type,
+        subtotal: aifNumber(row.subtotal),
+        discountTotal: aifNumber(row.discount_total),
+        total: aifNumber(row.total),
+        paidTotal: aifNumber(row.paid_total),
+        balanceDue: aifNumber(row.balance_due),
+        itemCount: aifNumber(row.item_count),
+        lineCount: aifNumber(row.line_count),
+        productTitle: row.product_title || null,
+        productCode: row.product_code || null,
+        barcode: row.barcode || null,
+        brandName: row.brand_name || null,
+        categoryName: row.category_name || null,
+        subcategoryName: row.subcategory_name || null,
+        colorName: row.color_name || null,
+        size: row.size || null,
+        imageUrl: row.image_url || null,
+        quantity: aifNumber(row.quantity),
+        listPrice: aifNumber(row.list_price),
+        unitPrice: aifNumber(row.unit_price),
+        lineDiscountAmount: aifNumber(row.line_discount_amount),
+        lineDiscountPercent: aifNumber(row.line_discount_percent),
+        lineTotal: aifNumber(row.line_total),
+        recordType: row.record_type || "sale",
+        deletable: row.deletable === undefined || row.deletable === null ? true : Boolean(row.deletable),
+        exchangeId: row.exchange_id ? String(row.exchange_id) : null,
+        exchangeNumber: row.exchange_number || null,
+        returnCredit: aifNumber(row.return_credit),
+        replacementTotal: aifNumber(row.replacement_total),
+        exchangeDifference: aifNumber(row.exchange_difference),
+        settlementDirection: row.settlement_direction || null,
+        settlementMethod: row.settlement_method || null,
+        settlementAmount: aifNumber(row.settlement_amount),
+      });
+
+      const recentSales = [
+        ...recentResult.rows.map((row) => mapRecentRow({ ...row, record_type: "sale", deletable: true })),
+        ...exchangeRecentResult.rows.map(mapRecentRow),
+      ]
+        .sort((a, b) => new Date(b.soldAt || 0).getTime() - new Date(a.soldAt || 0).getTime() || a.lineNo - b.lineNo)
+        .slice(0, 500);
+
+      const uniqueTextOptions = (...groups) => Array.from(new Set(
+        groups.flat().map((value) => String(value || "").trim()).filter(Boolean)
+      )).sort((a, b) => a.localeCompare(b, "hu"));
+
+      const brands = mergeRankingRows(brandResult.rows, exchangeImpactResult.rows, "brand_name");
+      const categories = mergeRankingRows(categoryResult.rows, exchangeImpactResult.rows, "category_name");
+      const products = mergeRankingRows(productResult.rows, exchangeImpactResult.rows, "product_name", "product_code");
 
       res.json({
         ok: true,
@@ -606,75 +1240,32 @@ export default function createAifAdminShopOverviewRouter(deps) {
           outgoingQty: aifNumber(movementResult.rows[0]?.outgoing_qty),
           netQty: aifNumber(movementResult.rows[0]?.net_qty),
         },
-        trend: trendResult.rows.map((row) => ({
-          date: row.date,
-          label: row.label,
-          revenue: aifNumber(row.revenue),
-          transactions: aifNumber(row.transactions),
-          itemsSold: aifNumber(row.items_sold),
-          discountTotal: aifNumber(row.discount_total),
-          unpaidTotal: aifNumber(row.unpaid_total),
-        })),
-        brands: rankingMap(brandResult.rows),
-        categories: rankingMap(categoryResult.rows),
-        products: rankingMap(productResult.rows),
-        payments: paymentResult.rows.map((row) => ({
+        trend,
+        brands,
+        categories,
+        products,
+        payments: paymentRows.map((row) => ({
           method: row.method,
           label: aifPaymentMethodLabel(row.method),
           amount: aifNumber(row.amount),
           transactions: aifNumber(row.transactions),
-          share: totalPayments > 0 ? aifNumber(row.amount) / totalPayments * 100 : 0,
+          share: totalPaymentAbs > 0 ? Math.abs(aifNumber(row.amount)) / totalPaymentAbs * 100 : 0,
         })),
-        employees: employeeResult.rows.map((row) => ({
-          actor: row.actor,
-          revenue: aifNumber(row.revenue),
-          transactions: aifNumber(row.transactions),
-          itemsSold: aifNumber(row.items_sold),
-          discountTotal: aifNumber(row.discount_total),
-          unpaidTotal: aifNumber(row.unpaid_total),
-          averageBasket: aifNumber(row.average_basket),
-        })),
-        recentSales: recentResult.rows.map((row) => ({
-          id: String(row.line_id),
-          lineId: String(row.line_id),
-          saleId: String(row.sale_id),
-          lineNo: aifNumber(row.line_no),
-          variantId: row.variant_id ? String(row.variant_id) : null,
-          saleNumber: row.sale_number,
-          soldAt: row.sold_at ? new Date(row.sold_at).toISOString() : null,
-          actor: row.actor,
-          customerName: row.customer_name,
-          customerPhone: row.customer_phone,
-          status: row.status,
-          paymentStatus: row.payment_status,
-          saleType: row.sale_type,
-          subtotal: aifNumber(row.subtotal),
-          discountTotal: aifNumber(row.discount_total),
-          total: aifNumber(row.total),
-          paidTotal: aifNumber(row.paid_total),
-          balanceDue: aifNumber(row.balance_due),
-          itemCount: aifNumber(row.item_count),
-          lineCount: aifNumber(row.line_count),
-          productTitle: row.product_title || null,
-          productCode: row.product_code || null,
-          barcode: row.barcode || null,
-          brandName: row.brand_name || null,
-          categoryName: row.category_name || null,
-          subcategoryName: row.subcategory_name || null,
-          colorName: row.color_name || null,
-          size: row.size || null,
-          imageUrl: row.image_url || null,
-          quantity: aifNumber(row.quantity),
-          listPrice: aifNumber(row.list_price),
-          unitPrice: aifNumber(row.unit_price),
-          lineDiscountAmount: aifNumber(row.line_discount_amount),
-          lineDiscountPercent: aifNumber(row.line_discount_percent),
-          lineTotal: aifNumber(row.line_total),
-        })),
+        employees,
+        recentSales,
         filterOptions: {
-          employees: employeesOptionResult.rows.map((row) => row.actor).filter(Boolean),
-          brands: brandsOptionResult.rows.map((row) => row.value).filter(Boolean),
-          categories: categoriesOptionResult.rows.map((row) => row.value).filter(Boolean),
+          employees: uniqueTextOptions(
+            employeesOptionResult.rows.map((row) => row.actor),
+            exchangeEmployeesOptionResult.rows.map((row) => row.actor),
+          ),
+          brands: uniqueTextOptions(
+            brandsOptionResult.rows.map((row) => row.value),
+            exchangeBrandsOptionResult.rows.map((row) => row.value),
+          ),
+          categories: uniqueTextOptions(
+            categoriesOptionResult.rows.map((row) => row.value),
+            exchangeCategoriesOptionResult.rows.map((row) => row.value),
+          ),
         },
       });
     } catch (error) {
