@@ -432,31 +432,27 @@ function reservationDueLevel(expiresOn?: string | null) {
 }
 
 function reservationDueTone(level: ReturnType<typeof reservationDueLevel>["level"]) {
-  if (level === "overdue") {
+  if (level === "overdue" || level === "today") {
     return {
-      card: "border-orange-300/46 bg-gradient-to-br from-orange-500/[0.16] via-[#3d4450] to-[#313d4f]",
-      badge: "border-orange-200/44 bg-orange-500/24 text-orange-50",
-      line: "border-orange-200/20 bg-orange-500/[0.075]",
-    };
-  }
-  if (level === "today") {
-    return {
-      card: "border-orange-200/34 bg-gradient-to-br from-orange-500/[0.11] via-[#3b4657] to-[#313d4f]",
-      badge: "border-orange-200/38 bg-orange-500/20 text-orange-50",
-      line: "border-orange-200/16 bg-orange-500/[0.06]",
+      card: "border-white/12 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d]",
+      badge: "border-white/32 bg-black/12 text-white",
+      line: "border-white/10 bg-[#293548]",
+      header: "border-orange-200/55 bg-orange-500/80",
     };
   }
   if (level === "warning") {
     return {
-      card: "border-amber-200/24 bg-gradient-to-br from-amber-500/[0.06] via-[#39475b] to-[#313d4f]",
+      card: "border-white/12 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d]",
       badge: "border-amber-200/32 bg-amber-500/14 text-amber-50",
       line: "border-white/10 bg-[#293548]",
+      header: "border-white/9 bg-[#303d50]",
     };
   }
   return {
     card: "border-white/12 bg-gradient-to-br from-[#39475b] via-[#344154] to-[#303b4d]",
     badge: "border-white/12 bg-white/[0.05] text-white/60",
     line: "border-white/10 bg-[#293548]",
+    header: "border-white/9 bg-[#303d50]",
   };
 }
 
@@ -834,7 +830,7 @@ export default function AllInAdminShopWorkflows({
                   onClick={() => setMode(value)}
                   className={`relative flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-[11px] transition sm:text-xs ${
                     reservationAlert
-                      ? "border-orange-200/55 bg-gradient-to-r from-orange-500/80 to-orange-600/72 text-white shadow-[0_8px_22px_rgba(249,115,22,0.22)] hover:brightness-110"
+                      ? "border-orange-200/62 bg-orange-500/80 text-white shadow-[0_8px_22px_rgba(249,115,22,0.22)] hover:bg-orange-500/90"
                       : mode === value
                         ? "border-[#9be9e5]/50 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.22)]"
                         : "border-white/14 bg-[#344154] text-white/68 hover:border-[#7bd7d4]/28 hover:text-white"
@@ -906,7 +902,7 @@ export default function AllInAdminShopWorkflows({
                     key={String(label)}
                     className={`rounded-2xl border p-3 ${
                       tone === "warning"
-                        ? "border-orange-200/32 bg-gradient-to-br from-orange-500/[0.14] to-[#344154]"
+                        ? "border-orange-400/55 bg-[#344154]"
                         : "border-white/12 bg-[#344154]"
                     }`}
                   >
@@ -942,10 +938,14 @@ export default function AllInAdminShopWorkflows({
                           key={`${store.code}-${item.id}`}
                           className={`overflow-hidden rounded-[22px] border shadow-[0_10px_26px_rgba(15,23,42,0.16)] ${dueTone.card}`}
                         >
-                          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/9 px-3.5 py-3">
+                          <div className={`flex flex-wrap items-start justify-between gap-3 border-b px-3.5 py-3 ${dueTone.header}`}>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="rounded-full border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[9px] text-[#cffffd]">{store.city}</span>
+                                <span className={`rounded-full border px-2 py-1 text-[9px] ${
+                                  due.level === "overdue" || due.level === "today"
+                                    ? "border-white/30 bg-black/10 text-white"
+                                    : "border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#cffffd]"
+                                }`}>{store.city}</span>
                                 <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${dueTone.badge}`}>
                                   {due.level === "normal" ? "AKTÍV" : due.label}
                                 </span>
@@ -960,13 +960,17 @@ export default function AllInAdminShopWorkflows({
                                   >
                                     <span className="font-medium">{item.customer.name}</span>
                                     <span className="text-white/28">•</span>
-                                    <span className="text-[13px] text-[#d7fffd]/82">{item.customer.phone || "Nincs telefonszám"}</span>
+                                    <span className={`text-[13px] ${
+                                      due.level === "overdue" || due.level === "today"
+                                        ? "text-white/88"
+                                        : "text-[#d7fffd]/82"
+                                    }`}>{item.customer.phone || "Nincs telefonszám"}</span>
                                   </p>
-                                  <p className="mt-2 truncate text-[12px] text-white/62">
-                                    <span className="text-white/42">Félretette:</span>{" "}
-                                    <span className="text-white/86">{item.createdBy || "-"}</span>
-                                    <span className="mx-2 text-white/24">•</span>
-                                    <span className="text-white/70">{formatDateTime(item.createdAt)}</span>
+                                  <p className="mt-2 truncate text-[12px] text-white/76">
+                                    <span className={due.level === "overdue" || due.level === "today" ? "text-white/72" : "text-white/42"}>Félretette:</span>{" "}
+                                    <span className="text-white/92">{item.createdBy || "-"}</span>
+                                    <span className="mx-2 text-white/40">•</span>
+                                    <span className={due.level === "overdue" || due.level === "today" ? "text-white/86" : "text-white/70"}>{formatDateTime(item.createdAt)}</span>
                                   </p>
                                 </div>
                                 <div className="shrink-0 text-right">
@@ -1028,14 +1032,14 @@ export default function AllInAdminShopWorkflows({
                           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/9 bg-black/[0.06] px-3 py-3">
                             <div className={`flex min-w-[300px] flex-1 items-center gap-3 rounded-xl border px-3.5 py-3 ${
                               due.level === "overdue" || due.level === "today"
-                                ? "border-orange-200/32 bg-orange-500/11"
+                                ? "border-white/12 bg-white/[0.035]"
                                 : due.level === "warning"
                                   ? "border-amber-200/22 bg-amber-500/[0.07]"
                                   : "border-white/10 bg-white/[0.03]"
                             }`}>
                               <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${
                                 due.level === "overdue" || due.level === "today"
-                                  ? "border-orange-200/32 bg-orange-500/16 text-orange-100"
+                                  ? "border-[#7bd7d4]/24 bg-[#2a8d8b]/12 text-[#bff8f5]"
                                   : "border-[#7bd7d4]/24 bg-[#2a8d8b]/12 text-[#bff8f5]"
                               }`}>
                                 <CalendarDays size={18} />
@@ -1043,7 +1047,7 @@ export default function AllInAdminShopWorkflows({
                               <div className="min-w-0 flex-1">
                                 <p className="text-[9px] uppercase tracking-[0.12em] text-white/45">Lejárati dátum</p>
                                 <p className={`mt-1 truncate text-[17px] font-medium leading-tight ${
-                                  due.level === "overdue" || due.level === "today" ? "text-orange-50" : "text-white"
+                                  "text-white"
                                 }`}>
                                   {item.expiresOn ? formatDate(item.expiresOn) : "Nincs megadva"}
                                 </p>
@@ -1067,7 +1071,7 @@ export default function AllInAdminShopWorkflows({
                                 setReservationReleaseError("");
                                 setReservationReleaseTarget({ store, item });
                               }}
-                              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-orange-200/34 bg-orange-500/16 px-4 text-[12px] text-orange-50 transition hover:bg-orange-500/26 active:scale-[0.98]"
+                              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/16 bg-white/[0.055] px-4 text-[12px] text-white transition hover:border-[#7bd7d4]/28 hover:bg-white/[0.09] active:scale-[0.98]"
                             >
                               <RotateCcw size={15} /> Vissza a készletre
                             </button>
