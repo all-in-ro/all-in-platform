@@ -95,6 +95,7 @@ type DeleteTarget = {
 
 type CombinedSummary = {
   revenue: number;
+  netRevenue: number;
   salesBeforeDiscount: number;
   transactions: number;
   itemsSold: number;
@@ -103,8 +104,11 @@ type CombinedSummary = {
   paidTotal: number;
   unpaidTotal: number;
   unpaidSales: number;
+  estimatedCost: number;
   grossProfit: number;
   grossMargin: number;
+  costFallbackQty: number;
+  costMissingQty: number;
 };
 
 type SelectOption = { value: string; label: string };
@@ -258,6 +262,7 @@ function statusBadge(value: string) {
 function emptySummary(): CombinedSummary {
   return {
     revenue: 0,
+    netRevenue: 0,
     salesBeforeDiscount: 0,
     transactions: 0,
     itemsSold: 0,
@@ -266,8 +271,11 @@ function emptySummary(): CombinedSummary {
     paidTotal: 0,
     unpaidTotal: 0,
     unpaidSales: 0,
+    estimatedCost: 0,
     grossProfit: 0,
     grossMargin: 0,
+    costFallbackQty: 0,
+    costMissingQty: 0,
   };
 }
 
@@ -278,7 +286,13 @@ function combineSummaries(
   const result = emptySummary();
   datasets.forEach((dataset) => {
     const source = dataset?.[key];
+    const sourceAny = source as any;
+    const estimatedCost = numberValue(sourceAny?.estimatedCost);
+    const grossProfit = numberValue(source?.grossProfit);
+    const netRevenue = numberValue(sourceAny?.netRevenue) || (grossProfit + estimatedCost);
+
     result.revenue += numberValue(source?.revenue);
+    result.netRevenue += netRevenue;
     result.salesBeforeDiscount += numberValue(source?.salesBeforeDiscount);
     result.transactions += numberValue(source?.transactions);
     result.itemsSold += numberValue(source?.itemsSold);
@@ -286,10 +300,13 @@ function combineSummaries(
     result.paidTotal += numberValue(source?.paidTotal);
     result.unpaidTotal += numberValue(source?.unpaidTotal);
     result.unpaidSales += numberValue(source?.unpaidSales);
-    result.grossProfit += numberValue(source?.grossProfit);
+    result.estimatedCost += estimatedCost;
+    result.grossProfit += grossProfit;
+    result.costFallbackQty += numberValue(sourceAny?.costFallbackQty);
+    result.costMissingQty += numberValue(sourceAny?.costMissingQty);
   });
   result.averageBasket = result.transactions > 0 ? result.revenue / result.transactions : 0;
-  result.grossMargin = result.revenue > 0 ? result.grossProfit / result.revenue * 100 : 0;
+  result.grossMargin = result.netRevenue > 0 ? result.grossProfit / result.netRevenue * 100 : 0;
   return result;
 }
 
@@ -369,12 +386,16 @@ function KpiCard({
   hint,
   icon: Icon,
   tone = "normal",
+  onClick,
+  actionLabel,
 }: {
   label: string;
   value: string;
   hint: string;
   icon: ComponentType<{ size?: number; className?: string }>;
   tone?: "normal" | "danger" | "warning" | "success";
+  onClick?: () => void;
+  actionLabel?: string;
 }) {
   const toneClass = tone === "danger"
     ? "border-rose-200/22 bg-gradient-to-br from-[#533543] to-[#344154]"
@@ -383,21 +404,44 @@ function KpiCard({
       : tone === "success"
         ? "border-emerald-200/22 bg-gradient-to-br from-[#27665b] to-[#344154]"
         : "border-white/14 bg-[#344154]";
-  return (
-    <article className={`min-w-0 rounded-[20px] border p-3.5 shadow-[0_12px_30px_rgba(15,23,42,0.14)] ${toneClass}`}>
+  const baseClass = `min-w-0 rounded-[20px] border p-3.5 text-left shadow-[0_12px_30px_rgba(15,23,42,0.14)] ${toneClass}`;
+  const content = (
+    <>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[9px] uppercase tracking-[0.12em] text-white/48">{label}</p>
           <p className="mt-2 truncate text-[17px] leading-tight text-white" title={value}>{value}</p>
         </div>
-        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.06] text-[#bff8f5]">
-          <Icon size={15} />
-        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {actionLabel ? (
+            <span className="rounded-full border border-white/14 bg-black/10 px-2 py-1 text-[9px] text-white/62">
+              {actionLabel}
+            </span>
+          ) : null}
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/14 bg-white/[0.06] text-[#bff8f5]">
+            <Icon size={15} />
+          </span>
+        </div>
       </div>
       <p className="mt-2 truncate text-[10px] text-white/44" title={hint}>{hint}</p>
-    </article>
+    </>
   );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`${baseClass} w-full transition active:scale-[0.99]`}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <article className={baseClass}>{content}</article>;
 }
+
 
 function StorePerformanceCard({
   cityName,
@@ -559,6 +603,7 @@ export default function AllInAdminMagazinDashboardMobile({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [marginView, setMarginView] = useState<"percent" | "money">("percent");
   const [filterError, setFilterError] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showAllEmployees, setShowAllEmployees] = useState(false);
@@ -664,6 +709,11 @@ export default function AllInAdminMagazinDashboardMobile({
   const periodLabel = applied.from === applied.to
     ? shortDate(applied.from)
     : `${shortDate(applied.from)} – ${shortDate(applied.to)}`;
+  const marginHint = summary.costMissingQty > 0
+    ? `${integer(summary.costMissingQty)} db terméknél nincs vételár-adat`
+    : summary.costFallbackQty > 0
+      ? `${integer(summary.costFallbackQty)} db jelenlegi vételárral becsülve`
+      : "TVA nélkül, eladáskori vételár alapján";
 
   const filterOptions = useMemo(() => ({
     employees: uniqueOptions([
@@ -885,7 +935,7 @@ export default function AllInAdminMagazinDashboardMobile({
               </div>
               <DeltaPill current={summary.revenue} previous={previousSummary.revenue} />
             </div>
-            <div className="mt-4 grid grid-cols-3 divide-x divide-white/14 rounded-2xl border border-white/12 bg-black/10 py-3 text-center">
+            <div className="mt-4 grid grid-cols-2 divide-x divide-white/14 rounded-2xl border border-white/12 bg-black/10 py-3 text-center">
               <div className="min-w-0 px-2">
                 <p className="text-[9px] uppercase tracking-[0.09em] text-white/45">Eladás</p>
                 <p className="mt-1 truncate text-base text-white">{integer(summary.transactions)}</p>
@@ -893,10 +943,6 @@ export default function AllInAdminMagazinDashboardMobile({
               <div className="min-w-0 px-2">
                 <p className="text-[9px] uppercase tracking-[0.09em] text-white/45">Darab</p>
                 <p className="mt-1 truncate text-base text-white">{integer(summary.itemsSold)}</p>
-              </div>
-              <div className="min-w-0 px-2">
-                <p className="text-[9px] uppercase tracking-[0.09em] text-white/45">Átlagkosár</p>
-                <p className="mt-1 truncate text-sm text-white" title={money(summary.averageBasket)}>{compactMoney(summary.averageBasket)}</p>
               </div>
             </div>
           </section>
@@ -988,10 +1034,12 @@ export default function AllInAdminMagazinDashboardMobile({
             />
             <KpiCard
               label="Becsült árrés"
-              value={`${summary.grossMargin.toFixed(1)}%`}
-              hint={`${compactMoney(summary.grossProfit)} becsült eredmény`}
+              value={marginView === "percent" ? `${summary.grossMargin.toFixed(1)}%` : compactMoney(summary.grossProfit)}
+              hint={marginHint}
               icon={TrendingUp}
               tone="success"
+              onClick={() => setMarginView((current) => current === "percent" ? "money" : "percent")}
+              actionLabel={marginView === "percent" ? "RON" : "%"}
             />
           </section>
 
@@ -1025,7 +1073,7 @@ export default function AllInAdminMagazinDashboardMobile({
                           />
                         </div>
                         <p className="mt-1.5 text-[10px] text-white/42">
-                          {integer(item.transactions)} eladás • {integer(item.itemsSold)} db • átlag {compactMoney(numberValue(item.transactions) > 0 ? revenue / numberValue(item.transactions) : 0)}
+                          {integer(item.transactions)} eladás • {integer(item.itemsSold)} db
                         </p>
                       </div>
                       <p className="shrink-0 text-right text-sm text-white">{compactMoney(revenue)}</p>
