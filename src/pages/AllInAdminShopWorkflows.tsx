@@ -52,7 +52,6 @@ type Props = {
   onClose: () => void;
 };
 
-
 type StoreDef = {
   code: "main_warehouse" | "magazin_targu_secuiesc";
   city: string;
@@ -102,6 +101,27 @@ function addDays(iso: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function normalizeDateOnly(value?: string | Date | null) {
+  if (!value) return "";
+
+  const raw = String(value).trim();
+  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (direct) return direct[1];
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  if (!values.year || !values.month || !values.day) return "";
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 const HU_MONTHS_DISPLAY = [
   "Január", "Február", "Március", "Április", "Május", "Június",
   "Július", "Augusztus", "Szeptember", "Október", "November", "December",
@@ -113,7 +133,8 @@ const HU_WEEKDAYS_FULL = [
 
 function formatDate(value?: string | null) {
   if (!value) return "Nincs dátum";
-  const match = String(value).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const normalized = normalizeDateOnly(value);
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return String(value);
 
   const year = Number(match[1]);
@@ -400,7 +421,8 @@ function HungarianDatePicker({
 
 function reservationDueLevel(expiresOn?: string | null) {
   if (!expiresOn) return { level: "normal" as const, label: "Nincs lejárat" };
-  const expiry = String(expiresOn).slice(0, 10);
+  const expiry = normalizeDateOnly(expiresOn);
+  if (!expiry) return { level: "normal" as const, label: "Nincs lejárat" };
   const today = localIsoDate(new Date());
   const tomorrow = addDays(today, 1);
   if (expiry < today) return { level: "overdue" as const, label: "LEJÁRT" };
@@ -1030,7 +1052,7 @@ export default function AllInAdminShopWorkflows({
                                 type="button"
                                 onClick={() => {
                                   setReservationExpiryError("");
-                                  setReservationExpiryDraft(String(item.expiresOn || ""));
+                                  setReservationExpiryDraft(normalizeDateOnly(item.expiresOn));
                                   setReservationExpiryTarget({ store, item });
                                 }}
                                 className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-3 text-[10px] text-[#d7fffd] transition hover:bg-[#2a8d8b]/24 active:scale-[0.98]"
@@ -1574,7 +1596,7 @@ export default function AllInAdminShopWorkflows({
                     disabled={
                       reservationExpiryBusy ||
                       !reservationExpiryDraft ||
-                      reservationExpiryDraft === reservationExpiryTarget.item.expiresOn
+                      reservationExpiryDraft === normalizeDateOnly(reservationExpiryTarget.item.expiresOn)
                     }
                     onClick={() => void saveReservationExpiry()}
                     className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#8ce7e2]/40 bg-[#2a8d8b] text-sm text-white hover:bg-[#329b98] disabled:opacity-45"
