@@ -87,6 +87,27 @@ export default function createAifShopReservationsRouter({
     return schemaPromise;
   }
 
+  function dateOnlyIso(value) {
+    if (!value) return "";
+
+    const raw = String(value).trim();
+    const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (direct) return direct[1];
+
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "";
+
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Bucharest",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(parsed);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    if (!values.year || !values.month || !values.day) return "";
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
   function isoDate(value) {
     const raw = text(value);
     return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
@@ -121,7 +142,7 @@ export default function createAifShopReservationsRouter({
       id: String(row.id),
       reservationNumber: row.reservation_number,
       status: row.status,
-      expiresOn: row.expires_on ? String(row.expires_on).slice(0, 10) : null,
+      expiresOn: dateOnlyIso(row.expires_on) || null,
       customer: {
         id: row.customer_id ? String(row.customer_id) : "",
         name: row.customer_name || "",
@@ -337,9 +358,7 @@ export default function createAifShopReservationsRouter({
         );
       }
 
-      const previousExpiresOn = reservation.expires_on
-        ? String(reservation.expires_on).slice(0, 10)
-        : null;
+      const previousExpiresOn = dateOnlyIso(reservation.expires_on) || null;
 
       await client.query(
         `UPDATE aif_shop_reservations
