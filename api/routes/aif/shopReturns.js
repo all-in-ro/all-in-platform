@@ -4,6 +4,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 export default function createAifShopReturnsRouter({
   pool,
   requireAuthed,
+  requireAdminOrSecret,
   ensureAifShopSalesSchema,
   aifResolveShopLocation,
   actorFrom,
@@ -587,12 +588,46 @@ export default function createAifShopReturnsRouter({
            sl.product_title AS source_product_title,
            sl.product_code AS source_product_code,
            sl.barcode AS source_barcode,
+           sl.brand_name AS source_brand_name,
            sl.color_name AS source_color_name,
            sl.size AS source_size,
-           sl.image_url AS source_image_url
+           sl.image_url AS source_image_url,
+           COALESCE(repl.lines, '[]'::jsonb) AS replacement_lines
          FROM aif_shop_exchanges e
          JOIN aif_locations src ON src.id=e.source_location_id
          JOIN aif_shop_sale_lines sl ON sl.id=e.source_sale_line_id
+         LEFT JOIN LATERAL (
+           SELECT jsonb_agg(
+             jsonb_build_object(
+               'id', el.id::text,
+               'lineNo', el.line_no,
+               'variantId', el.variant_id::text,
+               'quantity', el.quantity,
+               'unitPrice', el.unit_price,
+               'lineTotal', el.line_total,
+               'title', COALESCE(NULLIF(el.product_title,''), NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), NULLIF(el.product_code,''), 'Ismeretlen termék'),
+               'productCode', COALESCE(NULLIF(el.product_code,''), NULLIF(sc.supplier_product_code,''), NULLIF(m.model_code,''), NULLIF(v.internal_sku,'')),
+               'barcode', COALESCE(NULLIF(el.barcode,''), NULLIF(v.barcode,'')),
+               'brandName', COALESCE(NULLIF(el.brand_name,''), NULLIF(b.name,'')),
+               'colorName', COALESCE(NULLIF(el.color_name,''), NULLIF(v.color_name,''), NULLIF(v.color_code,'')),
+               'size', COALESCE(NULLIF(el.size,''), NULLIF(v.size,'')),
+               'imageUrl', COALESCE(NULLIF(el.image_url,''), NULLIF(v.image_url,''))
+             )
+             ORDER BY el.line_no ASC
+           ) AS lines
+           FROM aif_shop_exchange_lines el
+           LEFT JOIN aif_product_variants v ON v.id=el.variant_id
+           LEFT JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_brands b ON b.id=m.brand_id
+           LEFT JOIN LATERAL (
+             SELECT supplier_product_code
+             FROM aif_variant_supplier_codes sc
+             WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+             ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST
+             LIMIT 1
+           ) sc ON true
+           WHERE el.exchange_id=e.id
+         ) repl ON true
          WHERE e.location_id=$1 AND e.status='completed'
          ORDER BY e.created_at DESC
          LIMIT $2`,
@@ -622,10 +657,26 @@ export default function createAifShopReturnsRouter({
             title: row.source_product_title || "Ismeretlen termék",
             productCode: row.source_product_code || null,
             barcode: row.source_barcode || null,
+            brandName: row.source_brand_name || null,
             colorName: row.source_color_name || null,
             size: row.source_size || null,
             imageUrl: row.source_image_url || null,
           },
+          replacementLines: (Array.isArray(row.replacement_lines) ? row.replacement_lines : []).map((line) => ({
+            id: String(line.id || ""),
+            lineNo: aifNumber(line.lineNo),
+            variantId: String(line.variantId || ""),
+            quantity: aifNumber(line.quantity),
+            unitPrice: aifNumber(line.unitPrice),
+            lineTotal: aifNumber(line.lineTotal),
+            title: line.title || "Ismeretlen termék",
+            productCode: line.productCode || null,
+            barcode: line.barcode || null,
+            brandName: line.brandName || null,
+            colorName: line.colorName || null,
+            size: line.size || null,
+            imageUrl: line.imageUrl || null,
+          })),
         })),
       });
     } catch (error) {
@@ -634,6 +685,7 @@ export default function createAifShopReturnsRouter({
       return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A visszáru előzmények nem tölthetők be.", code: error?.code || null });
     }
   });
+
 
   router.post("/exchanges", requireAuthed, async (req, res) => {
     const body = req.body || {};
@@ -1105,6 +1157,203 @@ export default function createAifShopReturnsRouter({
       console.error("AIF complete shop exchange failed", error);
       const status = Number(error?.statusCode || 500);
       return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || "A visszáru/csere lezárása nem sikerült.", code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
+  router.delete("/exchanges/:id", requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    if (!isUuidText(id)) return res.status(400).json({ error: "Érvénytelen csereazonosító." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureAifShopSalesSchema();
+      const location = await aifResolveShopLocation(req, client, req.body?.location || req.query?.location);
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_exchange_cancel:${id}`]);
+
+      const exchangeResult = await client.query(
+        `SELECT e.*
+         FROM aif_shop_exchanges e
+         WHERE e.id::text=$1
+           AND e.location_id=$2
+         FOR UPDATE`,
+        [id, location.id]
+      );
+      if (!exchangeResult.rowCount) {
+        const error = new Error("A csere nem található ebben az üzletben.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const exchange = exchangeResult.rows[0];
+      if (exchange.status === "cancelled") {
+        await client.query("COMMIT");
+        return res.json({
+          ok: true,
+          duplicate: true,
+          exchangeId: String(exchange.id),
+          exchangeNumber: exchange.exchange_number,
+          status: "cancelled",
+          cancelledAt: exchange.cancelled_at ? new Date(exchange.cancelled_at).toISOString() : new Date().toISOString(),
+          cancelledBy: exchange.cancelled_by || actorFrom(req),
+          stockAdjusted: [],
+        });
+      }
+      if (exchange.status !== "completed") {
+        const error = new Error("Csak lezárt csere vonható vissza.");
+        error.statusCode = 409;
+        error.code = "exchange_not_completed";
+        throw error;
+      }
+
+      const linesResult = await client.query(
+        `SELECT id, variant_id, quantity, product_title
+         FROM aif_shop_exchange_lines
+         WHERE exchange_id=$1
+         ORDER BY line_no ASC
+         FOR UPDATE`,
+        [exchange.id]
+      );
+
+      // A teljes csere készlethatását egyetlen nettó delta/variáns művelettel fordítjuk vissza.
+      // Így ugyanaz a variáns visszahozott + csereként kiadott esetben sem számolódik kétszer rosszul.
+      const deltaByVariant = new Map();
+      const sourceVariantId = String(exchange.source_variant_id);
+      deltaByVariant.set(sourceVariantId, -aifNumber(exchange.returned_qty));
+      for (const line of linesResult.rows) {
+        const variantId = String(line.variant_id);
+        deltaByVariant.set(
+          variantId,
+          aifNumber(deltaByVariant.get(variantId)) + aifNumber(line.quantity),
+        );
+      }
+
+      const variantIds = Array.from(deltaByVariant.keys()).sort();
+      const stocksResult = variantIds.length
+        ? await client.query(
+            `SELECT variant_id, qty, reserved_qty
+             FROM aif_stock
+             WHERE location_id=$1
+               AND variant_id = ANY($2::uuid[])
+             ORDER BY variant_id
+             FOR UPDATE`,
+            [location.id, variantIds]
+          )
+        : { rows: [] };
+      const stockMap = new Map(stocksResult.rows.map((row) => [String(row.variant_id), row]));
+      const stockAdjusted = [];
+
+      for (const variantId of variantIds) {
+        const qtyDelta = aifNumber(deltaByVariant.get(variantId));
+        if (Math.abs(qtyDelta) < 0.0001) continue;
+
+        const current = stockMap.get(variantId);
+        const qtyBefore = current ? aifNumber(current.qty) : 0;
+        const reservedQty = current ? aifNumber(current.reserved_qty) : 0;
+        const qtyAfter = qtyBefore + qtyDelta;
+        if (qtyAfter < 0 || qtyAfter < reservedQty) {
+          const error = new Error(
+            "A csere már nem vonható vissza automatikusan, mert az érintett készletből időközben eladtak vagy lefoglaltak. Előbb rendezd a készletet."
+          );
+          error.statusCode = 409;
+          error.code = "exchange_cancel_stock_conflict";
+          error.variantId = variantId;
+          throw error;
+        }
+
+        await client.query(
+          `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (location_id, variant_id)
+           DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+          [location.id, variantId, qtyAfter, reservedQty]
+        );
+
+        const logged = await insertStockMovementSafe(client, {
+          movementType: "manual_adjustment",
+          sourceType: "shop_exchange_cancel",
+          sourcePrefix: "ex_cancel",
+          fallbackSourceType: "manual_stock_edit",
+          sourceId: String(exchange.id),
+          locationId: location.id,
+          variantId,
+          qtyDelta,
+          qtyBefore,
+          qtyAfter,
+          actor: actorFrom(req),
+          raw: {
+            reason: "shop_exchange_cancel",
+            exchangeId: String(exchange.id),
+            exchangeNumber: exchange.exchange_number,
+            cancelledBy: actorFrom(req),
+            sourceSaleId: String(exchange.source_sale_id),
+            sourceSaleLineId: String(exchange.source_sale_line_id),
+          },
+        });
+        if (!logged) {
+          const error = new Error("A csere visszavonásának készletmozgása nem naplózható.");
+          error.statusCode = 500;
+          throw error;
+        }
+        stockAdjusted.push({ variantId, qtyBefore, qtyAfter, qtyDelta });
+      }
+
+      const cancelNote = text(req.body?.note) || null;
+      const cancelledBy = actorFrom(req);
+      const cancelledResult = await client.query(
+        `UPDATE aif_shop_exchanges
+         SET status='cancelled',
+             cancelled_at=now(),
+             cancelled_by=$2,
+             cancellation_note=$3,
+             updated_at=now()
+         WHERE id=$1
+         RETURNING cancelled_at`,
+        [exchange.id, cancelledBy, cancelNote]
+      );
+
+      await client.query(
+        `INSERT INTO aif_shop_sale_events (sale_id, event_type, actor, note, payload)
+         VALUES ($1,'exchange_cancelled',$2,$3,$4::jsonb)`,
+        [
+          exchange.source_sale_id,
+          cancelledBy,
+          cancelNote || "Csere adminisztrátori visszavonása.",
+          JSON.stringify({
+            exchangeId: String(exchange.id),
+            exchangeNumber: exchange.exchange_number,
+            reversedStock: stockAdjusted,
+            returnCredit: aifNumber(exchange.return_credit),
+            replacementTotal: aifNumber(exchange.replacement_total),
+            difference: aifNumber(exchange.difference),
+            settlementDirection: exchange.settlement_direction,
+            settlementMethod: exchange.settlement_method || null,
+            settlementAmount: aifNumber(exchange.settlement_amount),
+          }),
+        ]
+      );
+
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        exchangeId: String(exchange.id),
+        exchangeNumber: exchange.exchange_number,
+        status: "cancelled",
+        cancelledAt: new Date(cancelledResult.rows[0]?.cancelled_at || Date.now()).toISOString(),
+        cancelledBy,
+        stockAdjusted,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF shop exchange cancel failed", error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || "A csere visszavonása nem sikerült.",
+        code: error?.code || null,
+      });
     } finally {
       client.release();
     }
