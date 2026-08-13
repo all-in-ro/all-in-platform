@@ -78,6 +78,27 @@ function justDate(value?: string | null): string | undefined {
   return String(value).slice(0, 10);
 }
 
+function normalizeReservationDate(value?: string | Date | null) {
+  if (!value) return "";
+
+  const raw = String(value).trim();
+  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (direct) return direct[1];
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  if (!values.year || !values.month || !values.day) return "";
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function daysLeft(fromIso: string | undefined, years = 0, months = 0): number | null {
   if (!fromIso) return null;
   const start = new Date(`${fromIso}T00:00:00`);
@@ -132,7 +153,7 @@ function ChildMenuButton({
   const toneClass = tone === "danger"
     ? "border-red-300/55 bg-[#a7192a] hover:bg-[#b51d30]"
     : tone === "warning"
-      ? "border-orange-200/55 bg-[#8a5a22] hover:bg-[#9a6728]"
+      ? "border-orange-200/70 bg-gradient-to-r from-[#e67817] to-[#bd5410] shadow-[0_7px_18px_rgba(234,88,12,0.24)] hover:from-[#f28724] hover:to-[#ce6016]"
       : "border-white/14 bg-[#354153] hover:border-[#67d4d1]/55 hover:bg-[#3e4d63]";
 
   return (
@@ -336,7 +357,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         let tomorrow = 0;
         for (const response of responses) {
           for (const item of response?.items || []) {
-            const expiry = String(item?.expiresOn || "").slice(0, 10);
+            const expiry = normalizeReservationDate(item?.expiresOn);
             if (!expiry) continue;
             if (expiry < todayIso) overdue += 1;
             else if (expiry === todayIso) dueToday += 1;
