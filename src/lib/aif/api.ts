@@ -2766,6 +2766,7 @@ export type AifShopDailySaleItem = {
   lineCount: number;
   itemCount: number;
   paymentLabel: string;
+  recordType?: "sale" | "exchange" | string;
 };
 
 export type AifShopDailySummaryResponse = {
@@ -3542,6 +3543,8 @@ export function apiAifCompleteShopSale(input: {
 
 export type AifAdminShopOverviewSummary = {
   revenue: number;
+  netRevenue?: number;
+  tvaAmount?: number;
   salesBeforeDiscount: number;
   transactions: number;
   itemsSold: number;
@@ -3554,6 +3557,12 @@ export type AifAdminShopOverviewSummary = {
   estimatedCost: number;
   grossProfit: number;
   grossMargin: number;
+  costSnapshotQty?: number;
+  costFallbackQty?: number;
+  costMissingQty?: number;
+  costCoveragePercent?: number;
+  exchangeRevenue?: number;
+  exchangeTransactions?: number;
   cancelledSales: number;
   refundedSales: number;
 };
@@ -3631,6 +3640,16 @@ export type AifAdminShopRecentSale = {
   lineDiscountAmount: number;
   lineDiscountPercent: number;
   lineTotal: number;
+  recordType?: "sale" | "exchange" | string;
+  deletable?: boolean;
+  exchangeId?: string | null;
+  exchangeNumber?: string | null;
+  returnCredit?: number;
+  replacementTotal?: number;
+  exchangeDifference?: number;
+  settlementDirection?: "in" | "out" | "none" | string | null;
+  settlementMethod?: string | null;
+  settlementAmount?: number;
 };
 
 export type AifAdminShopSaleLineDeleteMode = "restore_stock" | "permanent";
