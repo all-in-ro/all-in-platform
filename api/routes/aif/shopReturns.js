@@ -14,6 +14,7 @@ export default function createAifShopReturnsRouter({
   isUuidText,
   insertStockMovementSafe,
   aifAssertNoPendingShopShiftHandover,
+  readSalesTvaSettings,
 }) {
   const router = express.Router();
 
@@ -84,6 +85,8 @@ export default function createAifShopReturnsRouter({
          sl.discount_amount,
          sl.discount_percent,
          sl.line_total,
+         sl.buy_price_snapshot,
+         COALESCE(sl.buy_price_snapshot, v.buy_price) AS source_buy_price,
          COALESCE(NULLIF(sl.product_title,''), NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), NULLIF(sl.product_code,''), 'Ismeretlen termék') AS product_title,
          COALESCE(NULLIF(sl.product_code,''), NULLIF(sc.supplier_product_code,''), NULLIF(m.model_code,''), NULLIF(v.internal_sku,'')) AS product_code,
          COALESCE(NULLIF(sl.barcode,''), NULLIF(v.barcode,'')) AS barcode,
@@ -761,7 +764,7 @@ export default function createAifShopReturnsRouter({
       const variantIdsToLock = Array.from(new Set([String(source.variant_id), ...replacements.map((item) => item.variantId)])).sort();
       const variantRows = await client.query(
         `SELECT
-           v.id AS variant_id, v.internal_sku, v.barcode, v.sell_price, v.size, v.color_name, v.color_code, v.image_url,
+           v.id AS variant_id, v.internal_sku, v.barcode, v.sell_price, v.buy_price, v.size, v.color_name, v.color_code, v.image_url,
            v.status AS variant_status, m.status AS model_status,
            m.model_code, COALESCE(NULLIF(m.title_ro,''), NULLIF(m.shopify_title,''), m.model_code, v.internal_sku) AS title,
            b.name AS brand_name,
@@ -828,6 +831,9 @@ export default function createAifShopReturnsRouter({
         }
         replacement.unitPrice = aifRoundMoney(unitPrice);
         replacement.lineTotal = aifRoundMoney(unitPrice * replacement.quantity);
+        replacement.buyPrice = stock.buy_price === null || stock.buy_price === undefined || stock.buy_price === ""
+          ? null
+          : aifRoundMoney(stock.buy_price);
         replacement.stock = stock;
       }
 
@@ -844,6 +850,9 @@ export default function createAifShopReturnsRouter({
       }
 
       const exchangeNumber = await allocateExchangeNumber(client, location);
+      const exchangeTvaSettings = typeof readSalesTvaSettings === "function"
+        ? await readSalesTvaSettings(client)
+        : { salesTvaRate: 21, sellPriceIncludesTva: true, salesPriceIncludesTva: true };
       const exchangeInsert = await client.query(
         `INSERT INTO aif_shop_exchanges (
            exchange_number, location_id, source_location_id, source_sale_id, source_sale_line_id, source_variant_id,
@@ -892,8 +901,23 @@ export default function createAifShopReturnsRouter({
             listPrice: aifRoundMoney(source.list_price),
             unitPrice: returnUnitCredit,
             discountPercent: aifRoundMoney(source.discount_percent),
+            sourceBuyPrice: source.source_buy_price === null || source.source_buy_price === undefined || source.source_buy_price === ""
+              ? null
+              : aifRoundMoney(source.source_buy_price),
+            sourceBuyPriceSource: source.buy_price_snapshot === null || source.buy_price_snapshot === undefined
+              ? "current_variant_fallback"
+              : "sale_snapshot",
+            salesTvaRate: Number(exchangeTvaSettings?.salesTvaRate ?? 21),
+            sellPriceIncludesTva: exchangeTvaSettings?.sellPriceIncludesTva !== false,
+            salesPriceIncludesTva: exchangeTvaSettings?.sellPriceIncludesTva !== false,
           }),
-          JSON.stringify(replacements.map((item) => ({ variantId: item.variantId, quantity: item.quantity, unitPrice: item.unitPrice, lineTotal: item.lineTotal }))),
+          JSON.stringify(replacements.map((item) => ({
+            variantId: item.variantId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            lineTotal: item.lineTotal,
+            buyPrice: item.buyPrice,
+          }))),
           idempotencyKey,
         ]
       );
@@ -904,9 +928,9 @@ export default function createAifShopReturnsRouter({
         const stock = item.stock;
         await client.query(
           `INSERT INTO aif_shop_exchange_lines (
-             exchange_id, line_no, variant_id, quantity, unit_price, line_total,
+             exchange_id, line_no, variant_id, quantity, unit_price, line_total, buy_price_snapshot,
              product_title, product_code, barcode, brand_name, color_name, size, image_url, raw
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)`,
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)`,
           [
             exchange.id,
             lineNo++,
@@ -914,6 +938,7 @@ export default function createAifShopReturnsRouter({
             item.quantity,
             item.unitPrice,
             item.lineTotal,
+            item.buyPrice,
             stock.title || null,
             stock.supplier_product_code || stock.model_code || stock.internal_sku || null,
             stock.barcode || null,
@@ -921,7 +946,11 @@ export default function createAifShopReturnsRouter({
             stock.color_name || stock.color_code || null,
             stock.size || null,
             stock.image_url || null,
-            JSON.stringify({ source: "shop_exchange", availableBefore: aifNumber(stock.qty) - aifNumber(stock.reserved_qty) }),
+            JSON.stringify({
+              source: "shop_exchange",
+              availableBefore: aifNumber(stock.qty) - aifNumber(stock.reserved_qty),
+              buyPriceSource: item.buyPrice === null ? "missing" : "exchange_time_variant",
+            }),
           ]
         );
       }
