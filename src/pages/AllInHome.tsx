@@ -260,7 +260,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
   const [carsLevel, setCarsLevel] = useState<CarLevel>("ok");
   const [vacationPendingCount, setVacationPendingCount] = useState(0);
   const [shopAdminModule, setShopAdminModule] = useState<AllInAdminShopWorkflowMode | null>(null);
-  const [reservationAlert, setReservationAlert] = useState({ urgent: 0, tomorrow: 0 });
+  const [reservationAlert, setReservationAlert] = useState({ overdue: 0, today: 0, tomorrow: 0 });
 
   useEffect(() => {
     let alive = true;
@@ -331,19 +331,21 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
         const tomorrowDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
         const tomorrowIso = `${tomorrowDate.getFullYear()}-${String(tomorrowDate.getMonth() + 1).padStart(2, "0")}-${String(tomorrowDate.getDate()).padStart(2, "0")}`;
-        let urgent = 0;
+        let overdue = 0;
+        let dueToday = 0;
         let tomorrow = 0;
         for (const response of responses) {
           for (const item of response?.items || []) {
             const expiry = String(item?.expiresOn || "").slice(0, 10);
             if (!expiry) continue;
-            if (expiry <= todayIso) urgent += 1;
+            if (expiry < todayIso) overdue += 1;
+            else if (expiry === todayIso) dueToday += 1;
             else if (expiry === tomorrowIso) tomorrow += 1;
           }
         }
-        if (alive) setReservationAlert({ urgent, tomorrow });
+        if (alive) setReservationAlert({ overdue, today: dueToday, tomorrow });
       } catch {
-        if (alive) setReservationAlert({ urgent: 0, tomorrow: 0 });
+        if (alive) setReservationAlert({ overdue: 0, today: 0, tomorrow: 0 });
       }
     };
 
@@ -369,12 +371,17 @@ export default function AllInHome(props: { onLogout?: () => void }) {
 
   const carTone = carsLevel === "expired" ? "danger" : carsLevel === "soon" ? "warning" : "normal";
   const carBadge = carsLevel === "expired" ? "Lejárt" : carsLevel === "soon" ? "5 napon belül" : undefined;
-  const reservationTone = reservationAlert.urgent > 0 ? "danger" : reservationAlert.tomorrow > 0 ? "warning" : "normal";
-  const reservationBadge = reservationAlert.urgent > 0
-    ? `${reservationAlert.urgent} ma/lejárt`
-    : reservationAlert.tomorrow > 0
-      ? `${reservationAlert.tomorrow} holnap`
-      : undefined;
+  const reservationTone =
+    reservationAlert.overdue > 0 || reservationAlert.today > 0 || reservationAlert.tomorrow > 0
+      ? "warning"
+      : "normal";
+  const reservationBadge = reservationAlert.overdue > 0
+    ? `${reservationAlert.overdue} lejárt`
+    : reservationAlert.today > 0
+      ? `${reservationAlert.today} ma lejár`
+      : reservationAlert.tomorrow > 0
+        ? `${reservationAlert.tomorrow} holnap`
+        : undefined;
   const shopItemDecorations = {
     reservations: { tone: reservationTone, badge: reservationBadge },
   } satisfies Record<string, { tone?: "normal" | "warning" | "danger"; badge?: string }>;
