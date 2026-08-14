@@ -3,6 +3,7 @@ import createAifAdminShopsRouter from "./aif/adminShops.js";
 import createAifShopReturnsRouter from "./aif/shopReturns.js";
 import createAifShopReservationsRouter from "./aif/shopReservations.js";
 import createAifShopIncomingRouter from "./aif/shopIncoming.js";
+import createAifShopDocumentsRouter from "./aif/shopDocuments.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -20014,6 +20015,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     insertStockMovementSafe,
     aifAssertNoPendingShopShiftHandover,
     readSalesTvaSettings,
+  }));
+
+  router.use("/shop-documents", createAifShopDocumentsRouter({
+    pool,
+    requireAuthed,
+    ensureAifShopSalesSchema,
+    aifResolveShopLocation,
+    actorFrom,
+    text,
+    normCode,
+    aifNumber,
+    aifRoundMoney,
+    aifBucharestIsoDate,
+    aifValidIsoDate,
+    aifInclusiveDayCount,
   }));
 
   // Admin üzletmonitor külön modulokban. Innentől ezt a funkciócsaládot ne az aif.js-ben bővítsük.
