@@ -25,6 +25,7 @@ import AllInShopReturns from "./AllInShopReturns";
 import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 import AllInShopReservations from "./AllInShopReservations";
 import AllInShopIncoming from "./AllInShopIncoming";
+import AllInShopDocuments from "./AllInShopDocuments";
 
 
 type Props = {
@@ -81,9 +82,10 @@ const actions: ActionCard[] = [
   },
   {
     key: "receipts",
-    title: "Mai bizonylatok",
-    description: "A mai eladások és bizonylatok gyors visszakeresése.",
+    title: "Bizonylatok",
+    description: "Saját eladások, pénzátadások, műszakok, áruátvételek és kérelmek.",
     icon: Receipt,
+    primary: true,
   },
   {
     key: "summary",
@@ -153,6 +155,7 @@ export default function AllInMagazinTargu({
   const [returnsOpen, setReturnsOpen] = useState(false);
   const [reservationsOpen, setReservationsOpen] = useState(false);
   const [incomingOpen, setIncomingOpen] = useState(false);
+  const [documentsOpen, setDocumentsOpen] = useState(false);
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
@@ -217,6 +220,11 @@ export default function AllInMagazinTargu({
     if (action.key === "transfers") {
       setNotice("");
       setIncomingOpen(true);
+      return;
+    }
+    if (action.key === "receipts") {
+      setNotice("");
+      setDocumentsOpen(true);
       return;
     }
     if (action.key === "search" || action.key === "stock" || action.key === "summary") {
@@ -425,6 +433,13 @@ export default function AllInMagazinTargu({
         locationCode="magazin_targu_secuiesc"
         locationName="Magazin - Târgu Secuiesc"
         onClose={() => setIncomingOpen(false)}
+      />
+      <AllInShopDocuments
+        open={documentsOpen}
+        actor={actor}
+        locationCode="magazin_targu_secuiesc"
+        locationName="Magazin - Târgu Secuiesc"
+        onClose={() => setDocumentsOpen(false)}
       />
       <AllInShopReturns
         open={returnsOpen}
