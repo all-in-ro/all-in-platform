@@ -3037,6 +3037,7 @@ export function apiAifShopCashOverview(options: { location: string; limit?: numb
 export function apiAifCloseShopDay(input: {
   location: string;
   countedCash: number;
+  workDate?: string;
   note?: string | null;
 }) {
   return fetchAifJSON<{ ok: true; item: AifShopDayClosure }>("/shop-shifts/day-close", {
