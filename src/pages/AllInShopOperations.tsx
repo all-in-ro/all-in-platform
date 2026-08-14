@@ -1483,15 +1483,15 @@ export default function AllInShopOperations({
 
                 <div className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
                   summaryIsToday
-                    ? "border-orange-200/34 bg-orange-500/12"
+                    ? "border-[#ff8792] bg-[#c30d1c] shadow-[0_10px_28px_rgba(195,13,28,0.22)]"
                     : "border-[#9be9e5]/24 bg-[#2a8d8b]/10"
                 }`}>
                   <TriangleAlert
-                    className={`mt-0.5 shrink-0 ${summaryIsToday ? "text-orange-100" : "text-[#bff8f5]"}`}
+                    className={`mt-0.5 shrink-0 ${summaryIsToday ? "text-white" : "text-[#bff8f5]"}`}
                     size={18}
                   />
                   <div className="min-w-0">
-                    <p className={`text-sm font-medium ${summaryIsToday ? "text-orange-50" : "text-white"}`}>
+                    <p className={`text-sm font-medium ${summaryIsToday ? "text-white" : "text-white"}`}>
                       {summaryIsToday
                         ? `FIGYELEM: a MAI napot zárod le • ${formatDate(summaryDate)}`
                         : `Ezt az üzleti napot zárod le: ${formatDate(summaryDate)}`}
@@ -1503,14 +1503,14 @@ export default function AllInShopOperations({
                 </div>
 
                 {summaryIsToday ? (
-                  <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-orange-200/28 bg-orange-500/[0.08] px-4 py-3">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#ff8792]/70 bg-[#c30d1c]/24 px-4 py-3">
                     <input
                       type="checkbox"
                       checked={dayCloseTodayConfirmed}
                       onChange={(event) => setDayCloseTodayConfirmed(event.target.checked)}
-                      className="mt-0.5 h-5 w-5 shrink-0 accent-[#2a8d8b]"
+                      className="mt-0.5 h-5 w-5 shrink-0 accent-[#c30d1c]"
                     />
-                    <span className="text-sm leading-relaxed text-orange-50">
+                    <span className="text-sm leading-relaxed text-white">
                       Igen, tudom, hogy a <strong>mai napot</strong> zárom le, és utána ma már nem lehet új eladást rögzíteni.
                     </span>
                   </label>
@@ -1528,7 +1528,7 @@ export default function AllInShopOperations({
                     (summaryIsToday && !dayCloseTodayConfirmed)
                   }
                   onClick={() => void closeShopDay()}
-                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#ff8792]/70 bg-[#c30d1c] px-5 text-sm text-white shadow-[0_8px_20px_rgba(195,13,28,0.20)] hover:bg-[#a90b18] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {dayCloseSaving ? <Loader2 size={17} className="animate-spin" /> : <CheckCircle2 size={17} />}
                   {dayCloseSaving ? "Lezárás…" : `${formatDate(summaryDate)} lezárása`}
