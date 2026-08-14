@@ -336,7 +336,6 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
     if (from === yesterday && to === yesterday) return "yesterday";
     if (from === monthStart(today) && to === today) return "month";
     if (from === previousMonth.from && to === previousMonth.to) return "previous_month";
-    if (from === shiftDate(today, -6) && to === today) return "7days";
     return "custom";
   }, [from, to, today]);
 
@@ -400,7 +399,6 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
               <button type="button" onClick={() => { const day = shiftDate(today, -1); setRange(day, day); }} className={presetClass("yesterday")}>Tegnap</button>
               <button type="button" onClick={() => setRange(monthStart(today), today)} className={presetClass("month")}>Ez a hónap</button>
               <button type="button" onClick={() => { const r = previousMonthRange(today); setRange(r.from, r.to); }} className={presetClass("previous_month")}>Előző hónap</button>
-              <button type="button" onClick={() => setRange(shiftDate(today, -6), today)} className={presetClass("7days")}>7 nap</button>
 
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <DatePicker label="Ettől" value={from} onChange={(value) => setFrom(value)} />
