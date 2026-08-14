@@ -110,6 +110,17 @@ function formatDateTime(value?: string | null) {
   }).format(date);
 }
 
+function formatTime(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function monthKey(value: string) {
   return value.slice(0, 7);
 }
@@ -251,6 +262,10 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
   const [tab, setTab] = useState<TabKey>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [saleLineDetail, setSaleLineDetail] = useState<{
+    sale: AifShopDocumentsOverviewResponse["sales"][number];
+    line: AifShopDocumentsOverviewResponse["sales"][number]["lines"][number];
+  } | null>(null);
 
   async function load(nextFrom = from, nextTo = to) {
     setLoading(true);
@@ -290,14 +305,19 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (saleLineDetail) {
+        setSaleLineDetail(null);
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, open]);
+  }, [onClose, open, saleLineDetail]);
 
   const counts = useMemo(() => ({
     all: data?.summary.evidenceCount || 0,
@@ -549,29 +569,59 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
 
               {(tab === "all" || tab === "sales") && (data?.sales.length || 0) > 0 ? (
                 <Section title="Eladási bizonylatok" icon={Receipt}>
-                  {(data?.sales || []).map((sale) => (
-                    <Record key={`sale-${sale.id}`}>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm">{sale.saleNumber}</p>
-                          {sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1 text-[9px] text-white/52"><UserRound className="mr-1 inline" size={11} />{sale.customerName}</span> : null}
+                  <div className="space-y-2">
+                    {(data?.sales || []).map((sale) => (
+                      <article
+                        key={`sale-${sale.id}`}
+                        className="rounded-2xl border border-white/10 bg-[#293548] p-3.5"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <p className="text-[15px] font-medium text-white">{sale.saleNumber}</p>
+                              <span className="text-white/24">•</span>
+                              <p className="text-[13px] text-[#d7fffd]">{formatDate(sale.soldAt?.slice(0, 10))}</p>
+                            </div>
+                            <p className="mt-1.5 text-[11px] text-white/46">
+                              {sale.itemCount} db termék
+                              {sale.customerName ? ` • Kliens hozzárendelve` : ""}
+                            </p>
+                          </div>
+
+                          <div className="shrink-0 text-right">
+                            <p className="text-xl font-medium text-[#d7fffd]">{money(sale.total)}</p>
+                            {sale.discountTotal > 0 ? (
+                              <p className="mt-1 text-[10px] text-white/40">Kedvezmény {money(sale.discountTotal)}</p>
+                            ) : null}
+                          </div>
                         </div>
-                        <p className="mt-1 text-[11px] text-white/48">{formatDateTime(sale.soldAt)} • {sale.itemCount} db</p>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {sale.lines.slice(0, 4).map((line) => (
-                            <span key={line.id} className="inline-flex items-center gap-2 rounded-xl border border-white/9 bg-[#263345] px-2 py-1.5">
+
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {sale.lines.map((line) => (
+                            <button
+                              key={line.id}
+                              type="button"
+                              onClick={() => setSaleLineDetail({ sale, line })}
+                              className="group flex min-w-0 items-center gap-3 rounded-xl border border-white/10 bg-[#253144] p-2.5 text-left transition hover:border-[#7bd7d4]/38 hover:bg-[#2c3a4f] active:scale-[0.99]"
+                            >
                               <ProductImage src={line.imageUrl} />
-                              <span className="max-w-[220px] truncate text-[10px] text-white/64">{line.title || line.productCode || "Termék"} • {line.quantity} db</span>
-                            </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[12px] font-medium text-white/88">
+                                  {line.title || line.productCode || "Termék"}
+                                </span>
+                                <span className="mt-1 block truncate text-[10px] text-white/42">
+                                  {[line.brandName, line.colorName, line.size].filter(Boolean).join(" • ") || line.productCode || line.barcode || "Nincs variánsadat"}
+                                </span>
+                              </span>
+                              <span className="shrink-0 rounded-lg border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 px-2 py-1 text-[11px] text-[#d7fffd]">
+                                {line.quantity} db
+                              </span>
+                            </button>
                           ))}
                         </div>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-lg text-[#d7fffd]">{money(sale.total)}</p>
-                        {sale.discountTotal > 0 ? <p className="mt-1 text-[9px] text-white/38">Kedv. {money(sale.discountTotal)}</p> : null}
-                      </div>
-                    </Record>
-                  ))}
+                      </article>
+                    ))}
+                  </div>
                 </Section>
               ) : null}
 
@@ -713,6 +763,100 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
           <button type="button" onClick={onClose} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm"><X size={17} /> Bezárás</button>
         </footer>
       </section>
+
+      {saleLineDetail ? (
+        <div
+          className="fixed inset-0 z-[640] grid place-items-center bg-slate-950/82 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setSaleLineDetail(null);
+          }}
+        >
+          <section className="w-full max-w-[620px] overflow-hidden rounded-[26px] border border-[#9be9e5]/34 bg-[#303a4c] text-white shadow-[0_36px_120px_rgba(0,0,0,0.68)]">
+            <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#1f5f61] to-[#2a8d8b] px-4 py-4">
+              <div className="min-w-0">
+                <p className="text-[9px] uppercase tracking-[0.14em] text-white/58">Eladott termék részletei</p>
+                <h3 className="mt-1 truncate text-lg">{saleLineDetail.line.title || saleLineDetail.line.productCode || "Termék"}</h3>
+                <p className="mt-1 text-[11px] text-white/62">
+                  {saleLineDetail.sale.saleNumber} • {formatDate(saleLineDetail.sale.soldAt?.slice(0, 10))}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaleLineDetail(null)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-black/10"
+                aria-label="Bezárás"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="p-4 sm:p-5">
+              <div className="flex items-start gap-4">
+                <span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white">
+                  {saleLineDetail.line.imageUrl
+                    ? <img src={saleLineDetail.line.imageUrl} alt="" className="h-full w-full object-contain" />
+                    : <ShoppingBag size={28} className="text-slate-500" />}
+                </span>
+
+                <div className="min-w-0 flex-1">
+                  <p className="text-[15px] font-medium text-white">{saleLineDetail.line.title || "Termék"}</p>
+                  <p className="mt-1 text-[11px] text-white/48">
+                    {[saleLineDetail.line.brandName, saleLineDetail.line.colorName, saleLineDetail.line.size]
+                      .filter(Boolean)
+                      .join(" • ") || "Nincs variánsadat"}
+                  </p>
+                  <p className="mt-2 font-mono text-[10px] text-[#9be9e5]/68">
+                    {[saleLineDetail.line.productCode, saleLineDetail.line.barcode].filter(Boolean).join(" • ") || "Nincs kód"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <SaleDetailMetric
+                  label="Eladás időpontja"
+                  value={formatTime(saleLineDetail.sale.soldAt)}
+                />
+                <SaleDetailMetric
+                  label="Darabszám"
+                  value={`${saleLineDetail.line.quantity} db`}
+                />
+                <SaleDetailMetric
+                  label="Kliens"
+                  value={saleLineDetail.sale.customerName || "Nem volt kliens hozzárendelve"}
+                />
+                <SaleDetailMetric
+                  label="Tétel értéke"
+                  value={money(saleLineDetail.line.lineTotal)}
+                />
+              </div>
+
+              {saleLineDetail.sale.customerPhone ? (
+                <div className="mt-2 rounded-xl border border-white/9 bg-[#253144] px-3 py-2.5">
+                  <p className="text-[9px] uppercase tracking-[0.09em] text-white/38">Kliens telefonszáma</p>
+                  <p className="mt-1 text-[13px] text-white/78">{saleLineDetail.sale.customerPhone}</p>
+                </div>
+              ) : null}
+
+              {saleLineDetail.line.discountAmount > 0 ? (
+                <div className="mt-2 rounded-xl border border-white/9 bg-[#253144] px-3 py-2.5">
+                  <p className="text-[9px] uppercase tracking-[0.09em] text-white/38">Kedvezmény ezen a tételen</p>
+                  <p className="mt-1 text-[13px] text-white/78">{money(saleLineDetail.line.discountAmount)}</p>
+                </div>
+              ) : null}
+            </div>
+
+            <footer className="flex justify-end border-t border-white/10 bg-[#293548] px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setSaleLineDetail(null)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white"
+              >
+                <X size={16} /> Bezárás
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>,
     document.body,
   );
@@ -760,6 +904,15 @@ function InfoLine({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl border border-white/9 bg-[#253144] px-3 py-2.5">
       <p className="text-[9px] uppercase tracking-[0.09em] text-white/38">{label}</p>
       <p className="mt-1 text-[11px] leading-relaxed text-white/72">{value}</p>
+    </div>
+  );
+}
+
+function SaleDetailMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/9 bg-[#253144] px-3 py-3">
+      <p className="text-[9px] uppercase tracking-[0.09em] text-white/38">{label}</p>
+      <p className="mt-1.5 text-[15px] font-medium text-[#d7fffd]">{value}</p>
     </div>
   );
 }
