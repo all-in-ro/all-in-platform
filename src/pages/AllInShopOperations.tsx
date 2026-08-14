@@ -436,6 +436,7 @@ export default function AllInShopOperations({
   const [dayCloseCounted, setDayCloseCounted] = useState("");
   const [dayCloseNote, setDayCloseNote] = useState("");
   const [dayCloseSaving, setDayCloseSaving] = useState(false);
+  const [dayCloseTodayConfirmed, setDayCloseTodayConfirmed] = useState(false);
   const [cashMoveOpen, setCashMoveOpen] = useState(false);
   const [cashMoveType, setCashMoveType] = useState<AifShopCashMovementType>("manager_handover");
   const [cashMoveAmount, setCashMoveAmount] = useState("");
@@ -472,7 +473,11 @@ export default function AllInShopOperations({
   const handoverPreview = shiftData?.handoverPreview || null;
   const handoverShiftPreview = handoverPreview?.shift || currentEmployeeDay;
   const handoverExpectedCash = handoverPreview?.expectedCash ?? shiftPayment(shiftData?.totals, "cash").amount;
-  const currentCashBalance = numberValue(cashData?.balance.availableCash ?? shiftData?.cashBalance?.availableCash ?? handoverExpectedCash);
+  const currentCashBalance = numberValue(
+    summaryIsToday
+      ? (cashData?.balance.availableCash ?? shiftData?.cashBalance?.availableCash ?? handoverExpectedCash)
+      : (shiftData?.cashBalance?.availableCash ?? 0),
+  );
   const currentDayClosure = summaryIsToday
     ? (shiftData?.dayClosure || cashData?.todayClosure || null)
     : (shiftData?.dayClosure || null);
@@ -662,13 +667,17 @@ export default function AllInShopOperations({
       const response = await apiAifCloseShopDay({
         location: locationCode,
         countedCash: counted,
+        workDate: summaryDate,
         note: dayCloseNote.trim() || null,
       });
-      setHandoverNotice(`A napi kassza lezárva: ${formatMoney(response.item.countedCash)} • eltérés ${formatMoney(response.item.cashDifference)}.`);
+      setHandoverNotice(
+        `${formatDate(summaryDate)} napi kassza lezárva: ${formatMoney(response.item.countedCash)} • eltérés ${formatMoney(response.item.cashDifference)}.`,
+      );
       setDayCloseOpen(false);
       setDayCloseCounted("");
       setDayCloseNote("");
-      await refreshSummaryPage(todayIso());
+      setDayCloseTodayConfirmed(false);
+      await refreshSummaryPage(summaryDate);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A napi kassza lezárása nem sikerült.");
     } finally {
@@ -734,6 +743,7 @@ export default function AllInShopOperations({
     setError("");
     setDayCloseCounted(currentCashBalance.toFixed(2).replace(".", ","));
     setDayCloseNote("");
+    setDayCloseTodayConfirmed(false);
     setDayCloseOpen(true);
   }
 
@@ -1136,6 +1146,20 @@ export default function AllInShopOperations({
                           </button>
                         </div>
                       ) : null}
+
+                      {!summaryIsToday && summaryDate <= todayIso() && !currentDayClosure ? (
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={openDayClose}
+                            disabled={Boolean(currentOutgoingHandover) || Boolean(currentIncomingHandover)}
+                            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#b9f5f2]/48 bg-[#2a8d8b] px-4 text-sm text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <LockKeyhole size={17} />
+                            {formatDate(summaryDate)} napi kassza lezárása
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="rounded-[22px] border border-white/12 bg-[#344055] p-4">
@@ -1404,8 +1428,9 @@ export default function AllInShopOperations({
                 <div className="flex items-center gap-3">
                   <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[#9be9e5]/34 bg-[#2a8d8b]/24"><LockKeyhole size={23} /></span>
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Utolsó műszak</p>
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-white/52">Kiválasztott üzleti nap</p>
                     <h3 className="mt-1 text-xl">Napi kassza lezárása</h3>
+                    <p className="mt-1 text-base font-medium text-[#d7fffd]">{formatDate(summaryDate)}</p>
                     <p className="mt-1 text-xs text-white/52">{actor} • {locationName}</p>
                   </div>
                 </div>
@@ -1415,9 +1440,15 @@ export default function AllInShopOperations({
               <div className="space-y-4 p-5">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-[22px] border border-[#9be9e5]/30 bg-[#24585d] p-4">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-[#d7fffd]/62">Rendszer szerinti záró kassza</p>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-[#d7fffd]/62">
+                      {formatDate(summaryDate)} • rendszer szerinti záró kassza
+                    </p>
                     <p className="mt-2 text-4xl tracking-tight">{formatMoney(currentCashBalance)}</p>
-                    <p className="mt-2 text-xs text-white/50">Előző záró kassza + azóta bejött készpénz − igazolt főnöki átadás / bankbefizetés.</p>
+                    <p className="mt-2 text-xs text-white/50">
+                      {summaryIsToday
+                        ? "Az aktuális pillanatig számolt kassza."
+                        : "A kiválasztott üzleti nap végéig számolt kassza. A mai mozgások nem kerülnek bele."}
+                    </p>
                   </div>
                   <label className="rounded-[22px] border border-white/12 bg-[#374357] p-4">
                     <span className="text-[10px] uppercase tracking-[0.12em] text-white/42">Megszámolt készpénz</span>
@@ -1450,22 +1481,57 @@ export default function AllInShopOperations({
                   <textarea value={dayCloseNote} onChange={(event) => setDayCloseNote(event.target.value.slice(0, 1000))} rows={3} className="mt-2 w-full resize-none rounded-2xl border border-white/14 bg-[#273243] px-4 py-3 text-sm text-white outline-none placeholder:text-white/32 focus:border-[#72d8d4]" placeholder="Pl. kassza és POS ellenőrizve…" />
                 </label>
 
-                <div className="flex items-start gap-3 rounded-2xl border border-amber-200/22 bg-amber-400/8 px-4 py-3">
-                  <TriangleAlert className="mt-0.5 shrink-0 text-amber-100" size={18} />
-                  <p className="text-xs leading-relaxed text-amber-50/82">A lezárás után ezen a napon új eladás, tartozásbefizetés, visszáru vagy félretett termék értékesítése már nem rögzíthető. A zárás nem törölhető ki a naplóból.</p>
+                <div className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
+                  summaryIsToday
+                    ? "border-orange-200/34 bg-orange-500/12"
+                    : "border-[#9be9e5]/24 bg-[#2a8d8b]/10"
+                }`}>
+                  <TriangleAlert
+                    className={`mt-0.5 shrink-0 ${summaryIsToday ? "text-orange-100" : "text-[#bff8f5]"}`}
+                    size={18}
+                  />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${summaryIsToday ? "text-orange-50" : "text-white"}`}>
+                      {summaryIsToday
+                        ? `FIGYELEM: a MAI napot zárod le • ${formatDate(summaryDate)}`
+                        : `Ezt az üzleti napot zárod le: ${formatDate(summaryDate)}`}
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-white/58">
+                      A lezárás után ezen a napon új eladás, tartozásbefizetés, visszáru vagy félretett termék értékesítése már nem rögzíthető.
+                    </p>
+                  </div>
                 </div>
+
+                {summaryIsToday ? (
+                  <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-orange-200/28 bg-orange-500/[0.08] px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={dayCloseTodayConfirmed}
+                      onChange={(event) => setDayCloseTodayConfirmed(event.target.checked)}
+                      className="mt-0.5 h-5 w-5 shrink-0 accent-[#2a8d8b]"
+                    />
+                    <span className="text-sm leading-relaxed text-orange-50">
+                      Igen, tudom, hogy a <strong>mai napot</strong> zárom le, és utána ma már nem lehet új eladást rögzíteni.
+                    </span>
+                  </label>
+                ) : null}
               </div>
 
               <footer className="flex justify-end gap-2 border-t border-white/12 bg-[#293548] px-5 py-4">
                 <button type="button" disabled={dayCloseSaving} onClick={() => setDayCloseOpen(false)} className="h-11 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm disabled:opacity-45">Mégse</button>
                 <button
                   type="button"
-                  disabled={dayCloseSaving || dayCloseDifference === null || Math.abs(dayCloseDifference) >= 0.01}
+                  disabled={
+                    dayCloseSaving ||
+                    dayCloseDifference === null ||
+                    Math.abs(dayCloseDifference) >= 0.01 ||
+                    (summaryIsToday && !dayCloseTodayConfirmed)
+                  }
                   onClick={() => void closeShopDay()}
                   className="inline-flex h-11 items-center gap-2 rounded-xl border border-[#b9f5f2]/50 bg-[#2a8d8b] px-5 text-sm text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {dayCloseSaving ? <Loader2 size={17} className="animate-spin" /> : <CheckCircle2 size={17} />}
-                  {dayCloseSaving ? "Lezárás…" : "Nap lezárása"}
+                  {dayCloseSaving ? "Lezárás…" : `${formatDate(summaryDate)} lezárása`}
                 </button>
               </footer>
             </section>
