@@ -3983,3 +3983,172 @@ export function apiAifAdminCustomersOverview(options?: {
   return fetchAifJSON<AifAdminCustomersOverviewResponse>(`/admin-shops/customers-overview?${q.toString()}`);
 }
 
+export type AifShopDocumentsSummary = {
+  revenue: number;
+  normalRevenue: number;
+  exchangeNet: number;
+  transactions: number;
+  itemsSold: number;
+  discountTotal: number;
+  evidenceCount: number;
+  cashHandedOver: number;
+  incomingQty: number;
+};
+
+export type AifShopDocumentsOverviewResponse = {
+  ok: true;
+  generatedAt: string;
+  employee: string;
+  location: { id: string; code: string; name: string };
+  period: { from: string; to: string; days: number };
+  summary: AifShopDocumentsSummary;
+  trend: Array<{ date: string; revenue: number; transactions: number; itemsSold: number }>;
+  sales: Array<{
+    id: string;
+    saleNumber: string;
+    soldAt?: string | null;
+    saleType: string;
+    paymentStatus: string;
+    subtotal: number;
+    discountTotal: number;
+    total: number;
+    paidTotal: number;
+    balanceDue: number;
+    customerName?: string | null;
+    customerPhone?: string | null;
+    note?: string | null;
+    itemCount: number;
+    lines: Array<{
+      id: string;
+      title?: string | null;
+      productCode?: string | null;
+      barcode?: string | null;
+      brandName?: string | null;
+      subcategoryName?: string | null;
+      colorName?: string | null;
+      size?: string | null;
+      imageUrl?: string | null;
+      quantity: number;
+      unitPrice: number;
+      lineTotal: number;
+      discountAmount: number;
+    }>;
+  }>;
+  exchanges: Array<{
+    id: string;
+    exchangeNumber: string;
+    createdAt?: string | null;
+    returnedQty: number;
+    returnCredit: number;
+    replacementTotal: number;
+    difference: number;
+    settlementDirection: string;
+    settlementMethod?: string | null;
+    settlementAmount: number;
+    customerName?: string | null;
+    note?: string | null;
+    replacementQty: number;
+    replacementLines: Array<Record<string, any>>;
+  }>;
+  cashMovements: Array<{
+    id: string;
+    type: string;
+    status: string;
+    amount: number;
+    requestedBy: string;
+    requestedAt?: string | null;
+    reference?: string | null;
+    note?: string | null;
+    confirmedBy?: string | null;
+    confirmedAt?: string | null;
+    effectiveAt?: string | null;
+    pdfAvailable: boolean;
+  }>;
+  shiftHandovers: Array<{
+    id: string;
+    date?: string | null;
+    status: string;
+    fromActor: string;
+    toActor: string;
+    shiftStartAt?: string | null;
+    cutoffAt?: string | null;
+    expectedCash: number;
+    countedCash?: number | null;
+    cashDifference?: number | null;
+    note?: string | null;
+    acceptanceNote?: string | null;
+    snapshot?: Record<string, any>;
+    createdAt?: string | null;
+    acceptedAt?: string | null;
+    acceptedBy?: string | null;
+    pdfAvailable: boolean;
+  }>;
+  dayClosures: Array<{
+    id: string;
+    date?: string | null;
+    actor: string;
+    expectedCash: number;
+    countedCash: number;
+    cashDifference: number;
+    note?: string | null;
+    closedAt?: string | null;
+    pdfAvailable: boolean;
+  }>;
+  incoming: Array<{
+    id: string;
+    receivedAt?: string | null;
+    qty: number;
+    stockApplied: boolean;
+    documentNumber: string;
+    sourceName: string;
+    targetName: string;
+    product: {
+      title: string;
+      productCode?: string | null;
+      barcode?: string | null;
+      brandName?: string | null;
+      colorName?: string | null;
+      size?: string | null;
+      imageUrl?: string | null;
+    };
+  }>;
+  vacations: Array<{
+    id: string;
+    kind: string;
+    dayFrom: string;
+    dayTo: string;
+    hoursOff?: number | null;
+    note?: string | null;
+    status: string;
+    requestedAt?: string | null;
+    decidedAt?: string | null;
+    decidedBy?: string | null;
+    decisionNote?: string | null;
+  }>;
+};
+
+export function apiAifShopDocumentsOverview(options: {
+  location: string;
+  from: string;
+  to: string;
+  employee?: string;
+}) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  q.set("from", options.from);
+  q.set("to", options.to);
+  if (options.employee?.trim()) q.set("employee", options.employee.trim());
+  return fetchAifJSON<AifShopDocumentsOverviewResponse>(`/shop-documents/overview?${q.toString()}`);
+}
+
+export function apiAifShopProofPdfUrl(
+  kind: "cash_movement" | "shift_handover" | "day_closure",
+  id: string,
+  options: { location: string; employee?: string },
+) {
+  const q = new URLSearchParams();
+  q.set("location", options.location);
+  if (options.employee?.trim()) q.set("employee", options.employee.trim());
+  return `${AIF_BASE}/shop-documents/proof/${encodeURIComponent(kind)}/${encodeURIComponent(id)}.pdf?${q.toString()}`;
+}
+
