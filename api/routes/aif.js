@@ -18611,6 +18611,22 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const body = req.body || {};
     const countedCash = toMoney(body.countedCash ?? body.counted_cash ?? body.cash);
     const note = emptyToNull(body.note);
+    const workDateInput = text(body.workDate ?? body.work_date ?? body.date);
+    const today = aifBucharestIsoDate();
+    const workDate = workDateInput ? aifValidIsoDate(workDateInput, "") : today;
+
+    if (!workDate) {
+      return res.status(400).json({
+        error: "Érvényes üzleti nap szükséges a kasszazáráshoz.",
+        code: "shop_day_close_invalid_date",
+      });
+    }
+    if (workDate > today) {
+      return res.status(400).json({
+        error: "Jövőbeli üzleti nap nem zárható le.",
+        code: "shop_day_close_future_date",
+      });
+    }
     if (countedCash === null || countedCash < 0) {
       return res.status(400).json({ error: "Add meg a megszámolt záró készpénzt." });
     }
@@ -18622,9 +18638,85 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const location = await aifResolveShopLocation(req, client, body.location);
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [`aif_shop_shift:${location.id}`]);
 
-      const workDate = aifBucharestIsoDate();
       const actor = actorFrom(req);
       const isAdmin = normCode(req.session?.role) === "admin";
+      const dayLabel = workDate === today ? "mai" : `${workDate} napi`;
+
+      /*
+        Biztonsági korlát:
+        ha MA akarjuk lezárni a kasszát, de tegnap tényleges üzleti mozgás volt
+        és tegnap nincs lezárva, a mai nap nem zárható le.
+        Pont ezt a véletlen műveletet akadályozza meg, ami 2026-08-13-án történt.
+      */
+      if (workDate === today) {
+        const previousUnclosed = await client.query(
+          `WITH previous_day AS (
+             SELECT ($2::date - interval '1 day')::date AS work_date
+           ),
+           previous_activity AS (
+             SELECT 1
+             FROM previous_day p
+             WHERE EXISTS (
+               SELECT 1
+               FROM aif_shop_sales s
+               WHERE s.location_id=$1
+                 AND s.status='completed'
+                 AND (s.sold_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
+
+               UNION ALL
+
+               SELECT 1
+               FROM aif_shop_customer_payments cp
+               WHERE cp.location_id=$1
+                 AND (cp.paid_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
+
+               UNION ALL
+
+               SELECT 1
+               FROM aif_shop_exchange_settlements es
+               JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
+               WHERE es.location_id=$1
+                 AND (es.created_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date
+
+               UNION ALL
+
+               SELECT 1
+               FROM aif_shop_cash_movements m
+               WHERE m.location_id=$1
+                 AND (
+                   (m.status='confirmed' AND m.effective_at IS NOT NULL
+                    AND (m.effective_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date)
+                   OR
+                   (m.status='pending'
+                    AND (m.requested_at AT TIME ZONE 'Europe/Bucharest')::date=p.work_date)
+                 )
+             )
+           )
+           SELECT p.work_date
+           FROM previous_day p
+           WHERE EXISTS (SELECT 1 FROM previous_activity)
+             AND NOT EXISTS (
+               SELECT 1
+               FROM aif_shop_day_closures c
+               WHERE c.location_id=$1
+                 AND c.work_date=p.work_date
+             )
+           LIMIT 1`,
+          [location.id, workDate]
+        );
+
+        if (previousUnclosed.rowCount) {
+          const previousDate = String(previousUnclosed.rows[0].work_date).slice(0, 10);
+          const error = new Error(
+            `Az előző üzleti nap (${previousDate}) még nincs lezárva. A mai kassza addig nem zárható le. Előbb válts a ${previousDate} napra és zárd le azt.`
+          );
+          error.statusCode = 409;
+          error.code = "previous_shop_day_unclosed";
+          error.previousWorkDate = previousDate;
+          throw error;
+        }
+      }
+
       const existing = await client.query(
         `SELECT c.*, l.code AS location_code, l.name AS location_name
          FROM aif_shop_day_closures c
@@ -18634,7 +18726,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [location.id, workDate]
       );
       if (existing.rowCount) {
-        const error = new Error("A mai kassza már le van zárva.");
+        const error = new Error(`A ${dayLabel} kassza már le van zárva.`);
         error.statusCode = 409;
         error.code = "shop_day_already_closed";
         error.item = aifDayClosureResponse(existing.rows[0]);
@@ -18644,19 +18736,26 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const pendingHandover = await client.query(
         `SELECT from_actor, to_actor
          FROM aif_shop_shift_handovers
-         WHERE location_id=$1 AND status='pending'
+         WHERE location_id=$1
+           AND work_date=$2::date
+           AND status='pending'
          LIMIT 1`,
-        [location.id]
+        [location.id, workDate]
       );
       if (pendingHandover.rowCount) {
         const row = pendingHandover.rows[0];
-        const error = new Error(`${row.from_actor} → ${row.to_actor} műszakátadás még folyamatban van. Előbb ezt kell lezárni.`);
+        const error = new Error(`${row.from_actor} → ${row.to_actor} műszakátadás még folyamatban van ezen a napon. Előbb ezt kell lezárni.`);
         error.statusCode = 409;
         error.code = "shift_handover_location_pending";
         throw error;
       }
 
       const bounds = await aifShopDayBounds(client, workDate);
+
+      // Mai napnál az aktuális pillanatig zárunk. Korábbi napnál a nap végét használjuk,
+      // így a következő napi pénzmozgás sem tud véletlenül belecsúszni a zárásba.
+      const cutoff = workDate === today ? new Date() : new Date(bounds.end);
+
       const latestAccepted = await client.query(
         `SELECT *
          FROM aif_shop_shift_handovers
@@ -18676,14 +18775,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              AND s.sold_at >= $2::timestamptz
              AND s.sold_at < $3::timestamptz
              AND NULLIF(btrim(COALESCE(s.actor,'')),'') IS NOT NULL
+
            UNION ALL
+
            SELECT btrim(cp.actor) AS actor, cp.paid_at AS happened_at
            FROM aif_shop_customer_payments cp
            WHERE cp.location_id=$1
              AND cp.paid_at >= $2::timestamptz
              AND cp.paid_at < $3::timestamptz
              AND NULLIF(btrim(COALESCE(cp.actor,'')),'') IS NOT NULL
+
            UNION ALL
+
            SELECT btrim(es.actor) AS actor, es.created_at AS happened_at
            FROM aif_shop_exchange_settlements es
            JOIN aif_shop_exchanges e ON e.id=es.exchange_id AND e.status='completed'
@@ -18694,14 +18797,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          ) activity
          ORDER BY happened_at DESC
          LIMIT 1`,
-        [location.id, bounds.start, bounds.end]
+        [location.id, bounds.start, cutoff]
       );
 
       if (!isAdmin) {
         if (latestAccepted.rowCount) {
           const activeActor = text(latestAccepted.rows[0].to_actor);
           if (activeActor && aifEmployeeKey(activeActor) !== aifEmployeeKey(actor)) {
-            const error = new Error(`A rendszer szerint jelenleg ${activeActor} az aktív műszak. A napi kasszát neki kell lezárnia.`);
+            const error = new Error(`A rendszer szerint ${workDate} nap végén ${activeActor} volt az aktív műszak. A napi kasszát neki kell lezárnia.`);
             error.statusCode = 409;
             error.code = "shop_day_close_wrong_employee";
             throw error;
@@ -18709,7 +18812,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         } else {
           const activeActor = text(latestActivity.rows[0]?.actor);
           if (activeActor && aifEmployeeKey(activeActor) !== aifEmployeeKey(actor)) {
-            const error = new Error(`A mai utolsó üzleti művelet ${activeActor} nevéhez tartozik. A napi kasszát neki kell lezárnia.`);
+            const error = new Error(`A(z) ${workDate} nap utolsó üzleti művelete ${activeActor} nevéhez tartozik. A napi kasszát neki kell lezárnia.`);
             error.statusCode = 409;
             error.code = "shop_day_close_wrong_employee";
             throw error;
@@ -18717,8 +18820,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
       }
 
-      const cutoffResult = await client.query(`SELECT now() AS cutoff`);
-      const cutoff = cutoffResult.rows[0].cutoff;
       const cashBalance = await aifShopCashBalanceAt(client, { locationId: location.id, at: cutoff });
       const expectedCash = aifRoundMoney(cashBalance.availableCash);
       const counted = aifRoundMoney(countedCash);
@@ -18727,8 +18828,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (Math.abs(difference) >= 0.01) {
         await client.query("ROLLBACK");
         return res.status(409).json({
-          error: `A záró kassza nem egyezik. Rendszer szerint: ${expectedCash.toFixed(2)} RON, megszámolva: ${counted.toFixed(2)} RON, eltérés: ${difference.toFixed(2)} RON.`,
+          error: `A(z) ${workDate} napi záró kassza nem egyezik. Rendszer szerint: ${expectedCash.toFixed(2)} RON, megszámolva: ${counted.toFixed(2)} RON, eltérés: ${difference.toFixed(2)} RON.`,
           code: "shop_day_close_cash_mismatch",
+          workDate,
           expectedCash,
           countedCash: counted,
           difference,
@@ -18741,10 +18843,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         aifShopShiftSnapshot(client, { locationId: location.id, fromAt: shiftStart, toAt: cutoff, actor: isAdmin ? null : actor }),
         aifShopShiftSnapshot(client, { locationId: location.id, fromAt: bounds.start, toAt: cutoff }),
       ]);
+
+      const recordedAt = new Date();
       const snapshot = {
-        version: 1,
+        version: 2,
         workDate,
-        closedAt: new Date(cutoff).toISOString(),
+        closedAt: cutoff.toISOString(),
+        recordedAt: recordedAt.toISOString(),
+        historicalClose: workDate !== today,
         actor,
         expectedCash,
         countedCash: counted,
@@ -18762,6 +18868,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          RETURNING *`,
         [location.id, workDate, actor, expectedCash, counted, difference, note, JSON.stringify(snapshot), cutoff]
       );
+
       await client.query("COMMIT");
       return res.json({
         ok: true,
@@ -18775,6 +18882,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error: error?.message || "A napi kassza lezárása nem sikerült.",
         code: error?.code || null,
         item: error?.item || null,
+        previousWorkDate: error?.previousWorkDate || null,
       });
     } finally {
       client.release();
