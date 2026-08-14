@@ -309,6 +309,24 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
     returns: data?.exchanges.length || 0,
   }), [data]);
 
+  const activePreset = useMemo(() => {
+    const yesterday = shiftDate(today, -1);
+    const previousMonth = previousMonthRange(today);
+    if (from === today && to === today) return "today";
+    if (from === yesterday && to === yesterday) return "yesterday";
+    if (from === monthStart(today) && to === today) return "month";
+    if (from === previousMonth.from && to === previousMonth.to) return "previous_month";
+    if (from === shiftDate(today, -6) && to === today) return "7days";
+    return "custom";
+  }, [from, to, today]);
+
+  const presetClass = (key: string) =>
+    `h-10 rounded-xl border px-3 text-xs transition ${
+      activePreset === key
+        ? "border-[#b9f5f2]/62 bg-[#2a8d8b] text-white shadow-[0_7px_18px_rgba(42,141,139,0.20)]"
+        : "border-white/14 bg-[#293548] text-white/76 hover:border-[#7bd7d4]/30 hover:bg-[#354153]"
+    }`;
+
   const maxTrend = Math.max(1, ...(data?.trend || []).map((item) => Math.abs(numberValue(item.revenue))));
 
   function openPdf(kind: "cash_movement" | "shift_handover" | "day_closure", id: string) {
@@ -358,11 +376,11 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
 
           <section className="rounded-[22px] border border-white/12 bg-[#374357] p-3">
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => setRange(today, today)} className="h-10 rounded-xl border border-[#9be9e5]/35 bg-[#2a8d8b] px-3 text-xs">Ma</button>
-              <button type="button" onClick={() => { const day = shiftDate(today, -1); setRange(day, day); }} className="h-10 rounded-xl border border-white/14 bg-[#293548] px-3 text-xs hover:bg-[#354153]">Tegnap</button>
-              <button type="button" onClick={() => setRange(monthStart(today), today)} className="h-10 rounded-xl border border-white/14 bg-[#293548] px-3 text-xs hover:bg-[#354153]">Ez a hónap</button>
-              <button type="button" onClick={() => { const r = previousMonthRange(today); setRange(r.from, r.to); }} className="h-10 rounded-xl border border-white/14 bg-[#293548] px-3 text-xs hover:bg-[#354153]">Előző hónap</button>
-              <button type="button" onClick={() => setRange(shiftDate(today, -6), today)} className="h-10 rounded-xl border border-white/14 bg-[#293548] px-3 text-xs hover:bg-[#354153]">7 nap</button>
+              <button type="button" onClick={() => setRange(today, today)} className={presetClass("today")}>Ma</button>
+              <button type="button" onClick={() => { const day = shiftDate(today, -1); setRange(day, day); }} className={presetClass("yesterday")}>Tegnap</button>
+              <button type="button" onClick={() => setRange(monthStart(today), today)} className={presetClass("month")}>Ez a hónap</button>
+              <button type="button" onClick={() => { const r = previousMonthRange(today); setRange(r.from, r.to); }} className={presetClass("previous_month")}>Előző hónap</button>
+              <button type="button" onClick={() => setRange(shiftDate(today, -6), today)} className={presetClass("7days")}>7 nap</button>
 
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <DatePicker label="Ettől" value={from} onChange={(value) => setFrom(value)} />
@@ -439,56 +457,93 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
             <div className="mt-3 space-y-3">
               {(tab === "all" || tab === "money") && (data?.cashMovements.length || data?.dayClosures.length) ? (
                 <Section title="Pénzátadások és napi zárások" icon={Banknote}>
-                  {(data?.cashMovements || []).map((item) => (
-                    <Record key={`cash-${item.id}`}>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm text-white">{item.type === "bank_deposit" ? "Bankbefizetés" : "Átadás a főnöknek"}</p>
-                          <span className={`rounded-full border px-2 py-1 text-[9px] ${statusPill(item.status)}`}>{statusLabel(item.status)}</span>
+                  <div className="grid gap-2 xl:grid-cols-2">
+                    {(data?.cashMovements || []).map((item) => (
+                      <article key={`cash-${item.id}`} className="rounded-2xl border border-white/10 bg-[#293548] p-3.5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-[15px] font-medium text-white">{item.type === "bank_deposit" ? "Bankbefizetés" : "Átadás a főnöknek"}</p>
+                              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusPill(item.status)}`}>{statusLabel(item.status)}</span>
+                            </div>
+                            <p className="mt-1.5 text-[12px] text-white/58">
+                              {formatDateTime(item.requestedAt)} • {item.requestedBy}
+                              {item.confirmedBy ? ` → ${item.confirmedBy}` : ""}
+                            </p>
+                            <p className="mt-1 text-[10px] text-white/38">{item.reference || "Nincs referencia"}{item.note ? ` • ${item.note}` : ""}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xl font-medium text-[#d7fffd]">{money(item.amount)}</p>
+                            {item.pdfAvailable ? <PdfButton onClick={() => openPdf("cash_movement", item.id)} /> : <span className="mt-2 block text-[9px] text-white/32">PDF visszaigazolás után</span>}
+                          </div>
                         </div>
-                        <p className="mt-1 text-[11px] text-white/48">{formatDateTime(item.requestedAt)} • {item.requestedBy}{item.confirmedBy ? ` → ${item.confirmedBy}` : ""}</p>
-                        <p className="mt-1 text-[10px] text-white/38">{item.reference || "Nincs referencia"}{item.note ? ` • ${item.note}` : ""}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-lg text-[#d7fffd]">{money(item.amount)}</p>
-                        {item.pdfAvailable ? <PdfButton onClick={() => openPdf("cash_movement", item.id)} /> : <span className="mt-2 block text-[9px] text-white/32">PDF visszaigazolás után</span>}
-                      </div>
-                    </Record>
-                  ))}
-                  {(data?.dayClosures || []).map((item) => (
-                    <Record key={`closure-${item.id}`}>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm">Napi kasszazárás • {formatDate(item.date)}</p>
-                        <p className="mt-1 text-[11px] text-white/48">{item.actor} • {formatDateTime(item.closedAt)}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-sm text-[#d7fffd]">{money(item.countedCash)}</p>
-                        <p className="mt-1 text-[9px] text-white/36">Eltérés {money(item.cashDifference)}</p>
-                        <PdfButton onClick={() => openPdf("day_closure", item.id)} />
-                      </div>
-                    </Record>
-                  ))}
+                      </article>
+                    ))}
+
+                    {(data?.dayClosures || []).map((item) => (
+                      <article key={`closure-${item.id}`} className="rounded-2xl border border-white/10 bg-[#293548] p-3.5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[15px] font-medium text-white">Napi kasszazárás</p>
+                            <p className="mt-1.5 text-[13px] text-[#d7fffd]">{formatDate(item.date)}</p>
+                            <p className="mt-1 text-[11px] text-white/46">{item.actor} • {formatDateTime(item.closedAt)}</p>
+                          </div>
+                          <PdfButton onClick={() => openPdf("day_closure", item.id)} />
+                        </div>
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          <Metric label="Rendszer" value={money(item.expectedCash)} />
+                          <Metric label="Megszámolt" value={money(item.countedCash)} />
+                          <Metric label="Eltérés" value={money(item.cashDifference)} emphasis={Math.abs(numberValue(item.cashDifference)) >= 0.01} />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </Section>
               ) : null}
 
               {(tab === "all" || tab === "shifts") && (data?.shiftHandovers.length || 0) > 0 ? (
                 <Section title="Műszakátadások" icon={ArrowLeftRight}>
-                  {(data?.shiftHandovers || []).map((item) => (
-                    <Record key={`shift-${item.id}`}>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm">{item.fromActor} → {item.toActor}</p>
-                          <span className={`rounded-full border px-2 py-1 text-[9px] ${statusPill(item.status)}`}>{statusLabel(item.status)}</span>
+                  <div className="grid gap-2 xl:grid-cols-2">
+                    {(data?.shiftHandovers || []).map((item) => (
+                      <article
+                        key={`shift-${item.id}`}
+                        className="rounded-2xl border border-white/10 bg-[#293548] p-3.5 shadow-[0_7px_18px_rgba(15,23,42,0.10)]"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-[15px] font-medium text-white">{item.fromActor}</p>
+                              <ArrowLeftRight size={16} className="text-[#8ee6e2]" />
+                              <p className="text-[15px] font-medium text-white">{item.toActor}</p>
+                              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusPill(item.status)}`}>{statusLabel(item.status)}</span>
+                            </div>
+                            <p className="mt-1.5 text-[12px] text-white/62">
+                              {formatDate(item.date)}
+                              <span className="mx-2 text-white/24">•</span>
+                              {formatDateTime(item.cutoffAt)}
+                            </p>
+                          </div>
+                          {item.pdfAvailable ? <PdfButton onClick={() => openPdf("shift_handover", item.id)} /> : null}
                         </div>
-                        <p className="mt-1 text-[11px] text-white/48">{formatDate(item.date)} • {formatDateTime(item.cutoffAt)}</p>
-                        <p className="mt-1 text-[10px] text-white/38">Átadandó {money(item.expectedCash)} • megszámolva {item.countedCash == null ? "-" : money(item.countedCash)}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-sm">Eltérés {item.cashDifference == null ? "-" : money(item.cashDifference)}</p>
-                        {item.pdfAvailable ? <PdfButton onClick={() => openPdf("shift_handover", item.id)} /> : null}
-                      </div>
-                    </Record>
-                  ))}
+
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          <Metric label="Átadandó" value={money(item.expectedCash)} />
+                          <Metric label="Megszámolt" value={item.countedCash == null ? "-" : money(item.countedCash)} />
+                          <Metric
+                            label="Eltérés"
+                            value={item.cashDifference == null ? "-" : money(item.cashDifference)}
+                            emphasis={Math.abs(numberValue(item.cashDifference)) >= 0.01}
+                          />
+                        </div>
+
+                        {item.acceptedAt ? (
+                          <p className="mt-2.5 text-[10px] text-white/42">
+                            Átvétel: {formatDateTime(item.acceptedAt)}{item.acceptedBy ? ` • ${item.acceptedBy}` : ""}
+                          </p>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
                 </Section>
               ) : null}
 
@@ -522,52 +577,124 @@ export default function AllInShopDocuments({ open, actor, locationCode, location
 
               {(tab === "all" || tab === "returns") && (data?.exchanges.length || 0) > 0 ? (
                 <Section title="Visszáru és csere" icon={RotateCcw}>
-                  {(data?.exchanges || []).map((item) => (
-                    <Record key={`exchange-${item.id}`}>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm">{item.exchangeNumber}{item.customerName ? ` • ${item.customerName}` : ""}</p>
-                        <p className="mt-1 text-[11px] text-white/48">{formatDateTime(item.createdAt)} • visszavett {item.returnedQty} db • kiadott {item.replacementQty} db</p>
-                        <p className="mt-1 text-[10px] text-white/38">Visszavett érték {money(item.returnCredit)} • új termék {money(item.replacementTotal)}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className={`text-lg ${item.difference >= 0 ? "text-[#d7fffd]" : "text-white"}`}>{item.difference >= 0 ? "+" : ""}{money(item.difference)}</p>
-                        <p className="mt-1 text-[9px] text-white/36">különbözet</p>
-                      </div>
-                    </Record>
-                  ))}
+                  <div className="grid gap-2 xl:grid-cols-2">
+                    {(data?.exchanges || []).map((item) => (
+                      <article
+                        key={`exchange-${item.id}`}
+                        className="rounded-2xl border border-white/10 bg-[#293548] p-3.5"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[15px] font-medium text-white">{item.exchangeNumber}</p>
+                            <p className="mt-1 text-[12px] text-white/58">
+                              {formatDateTime(item.createdAt)}
+                              {item.customerName ? <><span className="mx-2 text-white/24">•</span>{item.customerName}</> : null}
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className={`text-xl font-medium ${item.difference >= 0 ? "text-[#d7fffd]" : "text-white"}`}>
+                              {item.difference >= 0 ? "+" : ""}{money(item.difference)}
+                            </p>
+                            <p className="mt-0.5 text-[10px] text-white/38">különbözet</p>
+                          </div>
+                        </div>
+
+                        {item.replacementLines?.length ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {item.replacementLines.slice(0, 4).map((line: any, index: number) => (
+                              <div
+                                key={String(line.id || line.variantId || index)}
+                                className="flex min-w-0 flex-1 basis-[230px] items-center gap-2 rounded-xl border border-white/9 bg-[#253144] p-2"
+                              >
+                                <ProductImage src={line.imageUrl} />
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] text-white/82">{line.title || line.productCode || "Csere-termék"}</p>
+                                  <p className="mt-1 text-[10px] text-white/42">
+                                    {numberValue(line.quantity)} db • {money(line.lineTotal)}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          <Metric label="Visszavett érték" value={money(item.returnCredit)} />
+                          <Metric label="Új termékek" value={money(item.replacementTotal)} />
+                          <Metric label="Nettó darab" value={`${item.replacementQty - item.returnedQty} db`} />
+                        </div>
+
+                        <p className="mt-2.5 text-[10px] text-white/42">
+                          Visszahozva {item.returnedQty} db • kiadva {item.replacementQty} db
+                          {item.settlementMethod ? ` • rendezés: ${item.settlementMethod}` : ""}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
                 </Section>
               ) : null}
 
               {(tab === "all" || tab === "incoming") && (data?.incoming.length || 0) > 0 ? (
                 <Section title="Termékátvételek" icon={PackageCheck}>
-                  {(data?.incoming || []).map((item) => (
-                    <Record key={`incoming-${item.id}`}>
-                      <ProductImage src={item.product.imageUrl} />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm">{item.product.title}</p>
-                        <p className="mt-1 text-[11px] text-white/48">{item.documentNumber} • {item.sourceName} → {item.targetName}</p>
-                        <p className="mt-1 text-[10px] text-white/38">{formatDateTime(item.receivedAt)} • {item.product.productCode || item.product.barcode || "kód nélkül"}</p>
-                      </div>
-                      <p className="shrink-0 text-lg text-[#d7fffd]">{item.qty} db</p>
-                    </Record>
-                  ))}
+                  <div className="grid gap-2 xl:grid-cols-2">
+                    {(data?.incoming || []).map((item) => (
+                      <article key={`incoming-${item.id}`} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3">
+                        <ProductImage src={item.product.imageUrl} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13px] font-medium text-white">{item.product.title}</p>
+                          <p className="mt-1 truncate text-[11px] text-white/50">{item.documentNumber} • {item.sourceName} → {item.targetName}</p>
+                          <p className="mt-1 truncate text-[10px] text-white/36">{formatDateTime(item.receivedAt)} • {item.product.productCode || item.product.barcode || "kód nélkül"}</p>
+                        </div>
+                        <span className="shrink-0 rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/12 px-3 py-2 text-lg text-[#d7fffd]">{item.qty} db</span>
+                      </article>
+                    ))}
+                  </div>
                 </Section>
               ) : null}
 
               {(tab === "all" || tab === "vacations") && (data?.vacations.length || 0) > 0 ? (
                 <Section title="Szabadságos és elkérési kérelmek" icon={CalendarDays}>
-                  {(data?.vacations || []).map((item) => (
-                    <Record key={`vacation-${item.id}`}>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm">{item.kind === "short" ? "Órás elkérés" : "Szabadság"}</p>
-                          <span className={`rounded-full border px-2 py-1 text-[9px] ${statusPill(item.status)}`}>{statusLabel(item.status)}</span>
+                  <div className="grid gap-2 xl:grid-cols-2">
+                    {(data?.vacations || []).map((item) => (
+                      <article
+                        key={`vacation-${item.id}`}
+                        className="rounded-2xl border border-white/10 bg-[#293548] p-3.5"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-[15px] font-medium text-white">{item.kind === "short" ? "Órás elkérés" : "Szabadság"}</p>
+                              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusPill(item.status)}`}>{statusLabel(item.status)}</span>
+                            </div>
+                            <p className="mt-2 text-[15px] text-[#d7fffd]">
+                              {formatDate(item.dayFrom)}
+                              {item.dayTo !== item.dayFrom ? ` → ${formatDate(item.dayTo)}` : ""}
+                              {item.hoursOff ? ` • ${item.hoursOff} óra` : ""}
+                            </p>
+                          </div>
                         </div>
-                        <p className="mt-1 text-[11px] text-white/48">{formatDate(item.dayFrom)}{item.dayTo !== item.dayFrom ? ` → ${formatDate(item.dayTo)}` : ""}{item.hoursOff ? ` • ${item.hoursOff} óra` : ""}</p>
-                        <p className="mt-1 text-[10px] text-white/38">Beküldve {formatDateTime(item.requestedAt)}{item.decidedBy ? ` • döntött: ${item.decidedBy}` : ""}</p>
-                      </div>
-                    </Record>
-                  ))}
+
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <InfoLine label="Beküldve" value={formatDateTime(item.requestedAt)} />
+                          <InfoLine
+                            label="Döntés"
+                            value={
+                              item.decidedAt
+                                ? `${formatDateTime(item.decidedAt)}${item.decidedBy ? ` • ${item.decidedBy}` : ""}`
+                                : "Még nincs döntés"
+                            }
+                          />
+                        </div>
+
+                        {item.note || item.decisionNote ? (
+                          <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                            {item.note ? <InfoLine label="Megjegyzés" value={item.note} /> : null}
+                            {item.decisionNote ? <InfoLine label="Vezetői megjegyzés" value={item.decisionNote} /> : null}
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
                 </Section>
               ) : null}
 
@@ -607,12 +734,42 @@ function Record({ children }: { children: ReactNode }) {
   return <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/9 bg-[#293548] p-3">{children}</div>;
 }
 
+function Metric({
+  label,
+  value,
+  emphasis = false,
+}: {
+  label: string;
+  value: string;
+  emphasis?: boolean;
+}) {
+  return (
+    <div className={`min-w-0 rounded-xl border px-3 py-2.5 ${
+      emphasis
+        ? "border-[#ff8792]/58 bg-[#c30d1c]/24"
+        : "border-white/9 bg-[#253144]"
+    }`}>
+      <p className="text-[9px] uppercase tracking-[0.09em] text-white/38">{label}</p>
+      <p className={`mt-1 truncate text-[13px] font-medium ${emphasis ? "text-white" : "text-[#d7fffd]"}`} title={value}>{value}</p>
+    </div>
+  );
+}
+
+function InfoLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/9 bg-[#253144] px-3 py-2.5">
+      <p className="text-[9px] uppercase tracking-[0.09em] text-white/38">{label}</p>
+      <p className="mt-1 text-[11px] leading-relaxed text-white/72">{value}</p>
+    </div>
+  );
+}
+
 function PdfButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/16 px-3 text-[10px] text-[#d7fffd] hover:bg-[#2a8d8b]/26"
+      className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#9be9e5]/30 bg-[#2a8d8b]/16 px-3 text-[10px] text-[#d7fffd] hover:bg-[#2a8d8b]/26"
     >
       <Printer size={13} /> PDF
     </button>
