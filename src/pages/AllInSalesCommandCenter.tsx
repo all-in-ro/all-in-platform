@@ -62,7 +62,6 @@ type ChartMetric =
   | "grossProfit"
   | "itemsSold"
   | "transactions"
-  | "averageBasket"
   | "discountTotal"
   | "unpaidTotal";
 type QuickPreset = "ytd" | "month" | "lastMonth" | "fullYear";
@@ -130,7 +129,6 @@ const chartMetricConfig: Record<
   grossProfit: { label: "Bruttó nyereség", short: "Nyereség", format: money },
   itemsSold: { label: "Eladott darab", short: "Darab", format: (value) => `${integer(value)} db` },
   transactions: { label: "Tranzakció", short: "Tranzakció", format: integer },
-  averageBasket: { label: "Átlagkosár", short: "Átlagkosár", format: money },
   discountTotal: { label: "Kedvezmény", short: "Kedvezmény", format: money },
   unpaidTotal: { label: "Kintlévőség", short: "Kintlévőség", format: money },
 };
@@ -248,6 +246,14 @@ function presetFilters(preset: QuickPreset, current = localIsoDate()): Pick<Filt
   };
 }
 
+function automaticComparison(filters: FiltersState): FiltersState {
+  return {
+    ...filters,
+    compareFrom: shiftYear(filters.from, -1),
+    compareTo: shiftYear(filters.to, -1),
+  };
+}
+
 function huDate(value?: string | null) {
   if (!value) return "-";
   const date = new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
@@ -292,8 +298,8 @@ function sourceLabel(source: string) {
 }
 
 function sourceBadge(source: string) {
-  if (source === "history") return "border-violet-300/24 bg-violet-400/12 text-violet-50";
-  if (source === "live_exchange" || source === "live_exchange_return") return "border-amber-200/24 bg-amber-400/12 text-amber-50";
+  if (source === "history") return "border-white/16 bg-white/[0.055] text-white/72";
+  if (source === "live_exchange" || source === "live_exchange_return") return "border-white/16 bg-[#3b485b] text-white/76";
   return "border-[#8ce7e2]/24 bg-[#2a8d8b]/14 text-[#d7fffd]";
 }
 
@@ -816,9 +822,9 @@ function MetricCard({
   icon: Icon,
   hint,
   active = false,
-  tone = "normal",
   onClick,
   warning,
+  comparisonAvailable = true,
 }: {
   title: string;
   value: string;
@@ -827,20 +833,12 @@ function MetricCard({
   icon: ComponentType<{ size?: number; className?: string }>;
   hint: string;
   active?: boolean;
-  tone?: "normal" | "success" | "warning" | "danger" | "accent";
   onClick?: () => void;
   warning?: string;
+  comparisonAvailable?: boolean;
 }) {
-  const toneClass =
-    tone === "danger"
-      ? "from-[#4a2633] via-[#382b3b] to-[#283145] border-rose-200/22"
-      : tone === "warning"
-        ? "from-[#4b4029] via-[#383a39] to-[#283145] border-amber-200/20"
-        : tone === "success"
-          ? "from-[#145f59] via-[#23515a] to-[#283145] border-[#8ce7e2]/28"
-          : tone === "accent"
-            ? "from-[#1d5563] via-[#27475a] to-[#283145] border-[#8ce7e2]/24"
-            : "from-[#2c3c51] via-[#263448] to-[#202c3d] border-white/12";
+  // Egységes AllIn kártyaszín. A szín itt nem díszítő kategóriajelző.
+  const toneClass = "from-[#405067] via-[#38465a] to-[#303b4d] border-white/16";
 
   const content = (
     <>
@@ -865,9 +863,11 @@ function MetricCard({
       <div className="relative mt-3 flex items-end justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-[10px] text-white/42" title={hint}>{hint}</p>
-          <p className="mt-1 truncate text-[9px] text-white/32" title={comparison}>Összehasonlítás: {comparison}</p>
+          <p className="mt-1 truncate text-[9px] text-white/36" title={comparisonAvailable ? comparison : "Nincs előző évi adat"}>
+            {comparisonAvailable ? `Előző év: ${comparison}` : "Előző év: nincs adat"}
+          </p>
         </div>
-        <DeltaPill value={delta} inverse={title === "Kedvezmény" || title === "Kintlévőség"} />
+        {comparisonAvailable ? <DeltaPill value={delta} inverse={title === "Kedvezmény" || title === "Kintlévőség"} /> : null}
       </div>
     </>
   );
@@ -903,6 +903,7 @@ function CompareChart({
   currentLabel,
   comparisonLabel,
   onBucketClick,
+  comparisonAvailable,
 }: {
   data: AifSalesCommandOverviewResponse["trend"];
   metric: ChartMetric;
@@ -910,12 +911,13 @@ function CompareChart({
   currentLabel: string;
   comparisonLabel: string;
   onBucketClick: (index: number) => void;
+  comparisonAvailable: boolean;
 }) {
   const width = 980;
   const height = 360;
   const padding = { left: 62, right: 26, top: 28, bottom: 54 };
   const current = data.current || [];
-  const comparison = data.comparison || [];
+  const comparison = comparisonAvailable ? (data.comparison || []) : [];
   const count = Math.max(current.length, comparison.length, 1);
   const values = [
     ...current.map((item) => metricValue(item, metric)),
@@ -984,7 +986,11 @@ function CompareChart({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/48">
         <div className="flex flex-wrap items-center gap-4">
           <span className="inline-flex items-center gap-2"><span className="h-2.5 w-5 rounded-full bg-[#58d7d0]" />{currentLabel}</span>
-          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-5 rounded-full bg-[#f0a43b]" />{comparisonLabel}</span>
+          {comparisonAvailable ? (
+            <span className="inline-flex items-center gap-2"><span className="h-2.5 w-5 rounded-full bg-[#9aa7b7]" />{comparisonLabel}</span>
+          ) : (
+            <span className="inline-flex items-center gap-2 text-white/34"><span className="h-2.5 w-5 rounded-full bg-white/18" />Előző év: nincs adat</span>
+          )}
         </div>
         <span>Kattints egy pontra a pontos időszak megnyitásához</span>
       </div>
@@ -1013,8 +1019,8 @@ function CompareChart({
               <stop offset="100%" stopColor="#58d7d0" stopOpacity="0.015" />
             </linearGradient>
             <linearGradient id="commandComparisonArea" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#f0a43b" stopOpacity="0.20" />
-              <stop offset="100%" stopColor="#f0a43b" stopOpacity="0.01" />
+              <stop offset="0%" stopColor="#9aa7b7" stopOpacity="0.20" />
+              <stop offset="100%" stopColor="#9aa7b7" stopOpacity="0.01" />
             </linearGradient>
           </defs>
 
@@ -1033,7 +1039,7 @@ function CompareChart({
           {min < 0 && max > 0 ? <line x1={padding.left} x2={width - padding.right} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" /> : null}
           {comparisonArea ? <path d={comparisonArea} fill="url(#commandComparisonArea)" /> : null}
           {currentArea ? <path d={currentArea} fill="url(#commandCurrentArea)" /> : null}
-          {comparisonLine ? <path d={comparisonLine} fill="none" stroke="#f0a43b" strokeWidth="3" strokeLinecap="round" /> : null}
+          {comparisonLine ? <path d={comparisonLine} fill="none" stroke="#9aa7b7" strokeWidth="3" strokeLinecap="round" /> : null}
           {currentLine ? <path d={currentLine} fill="none" stroke="#58d7d0" strokeWidth="4" strokeLinecap="round" /> : null}
 
           {Array.from({ length: count }, (_, index) => {
@@ -1050,7 +1056,7 @@ function CompareChart({
             <g>
               <line x1={hoverX} x2={hoverX} y1={padding.top} y2={height - padding.bottom} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
               {hoverCurrent ? <circle cx={hoverX} cy={yAt(metricValue(hoverCurrent, metric))} r="6" fill="#d8fffd" stroke="#2a8d8b" strokeWidth="3" /> : null}
-              {hoverComparison ? <circle cx={hoverX} cy={yAt(metricValue(hoverComparison, metric))} r="5" fill="#fff4dc" stroke="#f0a43b" strokeWidth="3" /> : null}
+              {hoverComparison ? <circle cx={hoverX} cy={yAt(metricValue(hoverComparison, metric))} r="5" fill="#f4f7fa" stroke="#9aa7b7" strokeWidth="3" /> : null}
             </g>
           ) : null}
         </svg>
@@ -1066,13 +1072,17 @@ function CompareChart({
                 <div className="flex items-center justify-between gap-3"><span className="text-[#9ff3ee]">Vizsgált</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverCurrent, metric))}</strong></div>
                 <p className="mt-0.5 text-[9px] text-white/34">{hoverCurrent ? `${huDate(hoverCurrent.start)} – ${huDate(hoverCurrent.end)}` : "Nincs időszak"}</p>
               </div>
-              <div>
-                <div className="flex items-center justify-between gap-3"><span className="text-amber-100">Összehasonlítás</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverComparison, metric))}</strong></div>
-                <p className="mt-0.5 text-[9px] text-white/34">{hoverComparison ? `${huDate(hoverComparison.start)} – ${huDate(hoverComparison.end)}` : "Nincs időszak"}</p>
-              </div>
-              <div className="border-t border-white/8 pt-2">
-                <DeltaPill value={deltaValue(metricValue(hoverCurrent, metric), metricValue(hoverComparison, metric))} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
-              </div>
+              {comparisonAvailable ? (
+                <>
+                  <div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-white/60">Előző év</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverComparison, metric))}</strong></div>
+                    <p className="mt-0.5 text-[9px] text-white/34">{hoverComparison ? `${huDate(hoverComparison.start)} – ${huDate(hoverComparison.end)}` : "Nincs adat"}</p>
+                  </div>
+                  <div className="border-t border-white/8 pt-2">
+                    <DeltaPill value={deltaValue(metricValue(hoverCurrent, metric), metricValue(hoverComparison, metric))} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
+                  </div>
+                </>
+              ) : <p className="border-t border-white/8 pt-2 text-[10px] text-white/38">Az előző év azonos időszakához még nincs rögzített adat.</p>}
             </div>
           </div>
         ) : null}
@@ -1086,16 +1096,20 @@ function EmployeeRanking({
   metric,
   selected,
   onSelect,
+  comparisonAvailable,
 }: {
   rows: AifSalesCommandOverviewResponse["employees"];
   metric: ChartMetric;
   selected: string;
   onSelect: (actor: string) => void;
+  comparisonAvailable: boolean;
 }) {
   const visible = rows.slice(0, 12);
   const max = Math.max(
     1,
-    ...visible.flatMap((row) => [Math.abs(metricValue(row.current, metric)), Math.abs(metricValue(row.comparison, metric))]),
+    ...visible.flatMap((row) => comparisonAvailable
+      ? [Math.abs(metricValue(row.current, metric)), Math.abs(metricValue(row.comparison, metric))]
+      : [Math.abs(metricValue(row.current, metric))]),
   );
   return (
     <section className={`${panel} p-4`}>
@@ -1129,20 +1143,22 @@ function EmployeeRanking({
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
                   <span className="text-xs text-white">{chartMetricConfig[metric].format(currentValue)}</span>
-                  <DeltaPill value={row.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
+                  {comparisonAvailable ? <DeltaPill value={row.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} /> : null}
                 </span>
               </div>
               <div className="mt-2.5 space-y-1">
                 <div className="h-2 overflow-hidden rounded-full bg-[#101a28]">
                   <div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(currentValue === 0 ? 0 : 3, Math.abs(currentValue) / max * 100)}%` }} />
                 </div>
-                <div className="h-1 overflow-hidden rounded-full bg-[#101a28]">
-                  <div className="h-full rounded-full bg-[#f0a43b]/80" style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / max * 100)}%` }} />
-                </div>
+                {comparisonAvailable ? (
+                  <div className="h-1 overflow-hidden rounded-full bg-[#2b3749]">
+                    <div className="h-full rounded-full bg-[#9aa7b7]/75" style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / max * 100)}%` }} />
+                  </div>
+                ) : null}
               </div>
               <div className="mt-2 flex items-center justify-between text-[9px] text-white/34">
                 <span>{integer(row.current.itemsSold)} db • {integer(row.current.transactions)} eladás</span>
-                <span>Korábban: {chartMetricConfig[metric].format(comparisonValue)}</span>
+                <span>{comparisonAvailable ? `Előző év: ${chartMetricConfig[metric].format(comparisonValue)}` : "Előző év: nincs adat"}</span>
               </div>
             </button>
           );
@@ -1159,15 +1175,19 @@ function DimensionPanel({
   onDimensionChange,
   metric,
   onDrill,
+  comparisonAvailable,
 }: {
   dimensions: AifSalesCommandOverviewResponse["dimensions"];
   activeDimension: AifSalesCommandDimensionKey;
   onDimensionChange: (dimension: AifSalesCommandDimensionKey) => void;
   metric: ChartMetric;
   onDrill: (dimension: AifSalesCommandDimensionKey, item: AifSalesCommandDimensionItem) => void;
+  comparisonAvailable: boolean;
 }) {
   const items = dimensions?.[activeDimension] || [];
-  const max = Math.max(1, ...items.flatMap((item) => [Math.abs(metricValue(item.current, metric)), Math.abs(metricValue(item.comparison, metric))]));
+  const max = Math.max(1, ...items.flatMap((item) => comparisonAvailable
+    ? [Math.abs(metricValue(item.current, metric)), Math.abs(metricValue(item.comparison, metric))]
+    : [Math.abs(metricValue(item.current, metric))]));
   return (
     <section className={`${panel} overflow-hidden`}>
       <div className="border-b border-white/8 p-4">
@@ -1213,12 +1233,12 @@ function DimensionPanel({
                 </span>
                 <span className="shrink-0 text-right">
                   <span className="block text-xs text-white">{chartMetricConfig[metric].format(currentValue)}</span>
-                  <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} /></span>
+                  {comparisonAvailable ? <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} /></span> : null}
                 </span>
               </div>
               <div className="mt-2.5 space-y-1">
                 <div className="h-2 overflow-hidden rounded-full bg-[#101a28]"><div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(currentValue === 0 ? 0 : 3, Math.abs(currentValue) / max * 100)}%` }} /></div>
-                <div className="h-1 overflow-hidden rounded-full bg-[#101a28]"><div className="h-full rounded-full bg-[#f0a43b]/75" style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / max * 100)}%` }} /></div>
+                {comparisonAvailable ? <div className="h-1 overflow-hidden rounded-full bg-[#2b3749]"><div className="h-full rounded-full bg-[#9aa7b7]/70" style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / max * 100)}%` }} /></div> : null}
               </div>
             </button>
           );
@@ -1233,10 +1253,12 @@ function Heatmap({
   heatmap,
   metric,
   onCellClick,
+  comparisonAvailable,
 }: {
   heatmap: AifSalesCommandOverviewResponse["heatmap"];
   metric: "revenue" | "itemsSold" | "transactions" | "grossProfit";
   onCellClick: (actor: string, month: AifSalesCommandOverviewResponse["heatmap"]["months"][number]) => void;
+  comparisonAvailable: boolean;
 }) {
   const values = heatmap.rows.flatMap((row) => row.values.map((value) => Math.abs(metricValue(value.current, metric))));
   const max = Math.max(1, ...values);
@@ -1275,7 +1297,7 @@ function Heatmap({
                         <div>
                           <p className="font-medium text-white">{row.actor} • {month.label}</p>
                           <p className="mt-1 text-[#aef4f0]">{label}: {chartMetricConfig[metric].format(currentValue)}</p>
-                          <p className="text-amber-100/82">Korábban: {chartMetricConfig[metric].format(metricValue(value?.comparison, metric))}</p>
+                          {comparisonAvailable ? <p className="text-white/55">Előző év: {chartMetricConfig[metric].format(metricValue(value?.comparison, metric))}</p> : <p className="text-white/38">Előző év: nincs adat</p>}
                           <p className="mt-1 text-white/45">{month.currentStart ? `${huDate(month.currentStart)} – ${huDate(month.currentEnd)}` : "Nincs vizsgált hónap"}</p>
                         </div>
                       }
@@ -1302,6 +1324,7 @@ function Heatmap({
 }
 
 function CoverageStrip({ data }: { data: AifSalesCommandOverviewResponse }) {
+  const comparisonAvailable = numberValue(data.comparisonSummary?.liveRows) + numberValue(data.comparisonSummary?.historyRows) > 0;
   const items = [
     {
       label: "Vételár-lefedettség",
@@ -1334,7 +1357,7 @@ function CoverageStrip({ data }: { data: AifSalesCommandOverviewResponse }) {
             <div className="w-full rounded-xl border border-white/7 bg-white/[0.025] px-3 py-2.5">
               <div className="flex items-center justify-between gap-2 text-[9px]"><span className="truncate text-white/48">{item.label}</span><span className="text-white/76">{percentage(item.current, 0)}</span></div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#101a28]"><div className={`h-full rounded-full ${item.current >= 99 ? "bg-[#54d7ce]" : item.current >= 75 ? "bg-amber-400" : "bg-rose-500"}`} style={{ width: `${Math.max(0, Math.min(100, item.current))}%` }} /></div>
-              <p className="mt-1.5 text-[8px] text-white/28">Összehasonlítás: {percentage(item.comparison, 0)}</p>
+              <p className="mt-1.5 text-[8px] text-white/28">{comparisonAvailable ? `Előző év: ${percentage(item.comparison, 0)}` : "Előző év: nincs adat"}</p>
             </div>
           </FloatingHint>
         ))}
@@ -1709,23 +1732,24 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   useEffect(() => { void load(); }, [load]);
 
   function applyPreset(preset: QuickPreset) {
-    const next = { ...draft, ...presetFilters(preset) };
+    const next = automaticComparison({ ...draft, ...presetFilters(preset) });
     setDraft(next);
     setApplied(next);
     setActivePreset(preset);
   }
 
   function applyFilters() {
-    const next = { ...draft };
+    let next = { ...draft };
     if (next.from > next.to) [next.from, next.to] = [next.to, next.from];
-    if (next.compareFrom > next.compareTo) [next.compareFrom, next.compareTo] = [next.compareTo, next.compareFrom];
+    next = automaticComparison(next);
     setDraft(next);
     setApplied(next);
     setActivePreset("custom");
   }
 
   function applyPatch(patch: Partial<FiltersState>) {
-    const next = { ...draft, ...patch };
+    let next = { ...draft, ...patch };
+    if (patch.from !== undefined || patch.to !== undefined) next = automaticComparison(next);
     setDraft(next);
     setApplied(next);
     setActivePreset("custom");
@@ -1767,7 +1791,8 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const delta = data?.deltaPercent;
   const currentPeriodLabel = data ? `${huDate(data.scope.from)} – ${huDate(data.scope.to)}` : `${huDate(applied.from)} – ${huDate(applied.to)}`;
   const comparisonPeriodLabel = data ? `${huDate(data.scope.compareFrom)} – ${huDate(data.scope.compareTo)}` : `${huDate(applied.compareFrom)} – ${huDate(applied.compareTo)}`;
-  const marginDelta = deltaValue(numberValue(summary?.grossMargin), numberValue(comparison?.grossMargin));
+  const comparisonAvailable = numberValue(comparison?.liveRows) + numberValue(comparison?.historyRows) > 0;
+  const marginDelta = comparisonAvailable ? deltaValue(numberValue(summary?.grossMargin), numberValue(comparison?.grossMargin)) : null;
 
   const locationOptions = useMemo<SelectOption[]>(() => [
     { value: "all", label: "Minden üzlet" },
@@ -1785,14 +1810,8 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
 
   const bucketClick = (index: number) => {
     const current = data?.trend.current[index];
-    const previous = data?.trend.comparison[index];
     if (!current) return;
-    applyPatch({
-      from: current.start,
-      to: current.end,
-      compareFrom: previous?.start || applied.compareFrom,
-      compareTo: previous?.end || applied.compareTo,
-    });
+    applyPatch({ from: current.start, to: current.end });
   };
 
   return (
@@ -1825,24 +1844,25 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
 
         <section className={`${panel} overflow-visible p-4`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><Target size={17} /></span><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Vizsgált időszak és összehasonlítás</p><h2 className="mt-0.5 text-base">Mit hasonlítsunk össze?</h2></div></div>
+            <div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><Target size={17} /></span><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Időszak</p><h2 className="mt-0.5 text-base">Melyik időszakot nézzük?</h2></div></div>
             <div className="flex flex-wrap gap-1.5">
               {[
-                ["ytd", "Idén / tavaly"],
-                ["month", "Ez a hónap / tavaly"],
-                ["lastMonth", "Előző hónap / tavaly"],
-                ["fullYear", "Teljes év / tavaly"],
+                ["ytd", "Idén"],
+                ["month", "Ez a hónap"],
+                ["lastMonth", "Előző hónap"],
+                ["fullYear", "Teljes év"],
               ].map(([key, label]) => <button key={key} type="button" onClick={() => applyPreset(key as QuickPreset)} className={`h-8 rounded-lg border px-3 text-[10px] transition ${activePreset === key ? "border-[#9be9e5]/44 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.025] text-white/48 hover:border-white/18 hover:text-white"}`}>{label}</button>)}
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_1fr_220px_220px_auto]">
-            <div className="grid gap-2 rounded-2xl border border-[#7bd7d4]/14 bg-[#2a8d8b]/[0.045] p-3 sm:grid-cols-2"><DateControl label="Vizsgált ettől" value={draft.from} onChange={(value) => setDraft({ ...draft, from: value, to: draft.to < value ? value : draft.to })} /><DateControl label="Vizsgált eddig" value={draft.to} onChange={(value) => setDraft({ ...draft, to: value, from: draft.from > value ? value : draft.from })} /></div>
-            <div className="grid gap-2 rounded-2xl border border-amber-200/12 bg-amber-400/[0.035] p-3 sm:grid-cols-2"><DateControl label="Összehasonlítás ettől" value={draft.compareFrom} onChange={(value) => setDraft({ ...draft, compareFrom: value, compareTo: draft.compareTo < value ? value : draft.compareTo })} /><DateControl label="Összehasonlítás eddig" value={draft.compareTo} onChange={(value) => setDraft({ ...draft, compareTo: value, compareFrom: draft.compareFrom > value ? value : draft.compareFrom })} /></div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(360px,1.45fr)_220px_220px_auto]">
+            <div className="grid gap-2 rounded-2xl border border-white/14 bg-[#354153]/55 p-3 sm:grid-cols-2"><DateControl label="Ettől" value={draft.from} onChange={(value) => setDraft(automaticComparison({ ...draft, from: value, to: draft.to < value ? value : draft.to }))} /><DateControl label="Eddig" value={draft.to} onChange={(value) => setDraft(automaticComparison({ ...draft, to: value, from: draft.from > value ? value : draft.from }))} /></div>
             <FieldLabel label="Üzlet"><SelectControl value={draft.location} onChange={(value) => setDraft({ ...draft, location: value })} options={locationOptions} placeholder="Minden üzlet" /></FieldLabel>
             <FieldLabel label="Eladó"><SelectControl value={draft.employee} onChange={(value) => setDraft({ ...draft, employee: value })} options={employeeOptions} placeholder="Minden eladó" /></FieldLabel>
             <div className="flex items-end gap-2"><button type="button" className={`${primaryButton} min-w-[122px] flex-1`} onClick={applyFilters}><Search size={15} />Alkalmazás</button><button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/52 hover:border-[#7bd7d4]/26 hover:text-white" onClick={() => setFiltersOpen((current) => !current)} title="Részletes szűrők"><Filter size={16} /></button></div>
           </div>
+
+          <div className="mt-2 text-[9px] text-white/34">Előző év azonos időszaka automatikusan összehasonlításra kerül, ha van hozzá rögzített adat.</div>
 
           {filtersOpen ? <div className="mt-3 grid gap-3 border-t border-white/8 pt-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8"><FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel><FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Fizetési mód"><SelectControl value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Adatforrás"><SelectControl value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő eladások" }, { value: "history", label: "Csak történeti adatok" }]} placeholder="Minden" /></FieldLabel><FieldLabel label="Grafikon bontása"><SelectControl value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Automatikus" /></FieldLabel><FieldLabel label="Termék"><input className={control} value={draft.product} onChange={(event) => setDraft({ ...draft, product: event.target.value })} placeholder="Név vagy kód" /></FieldLabel><FieldLabel label="Szabad keresés"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/32" /><input className={`${control} pl-9`} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") applyFilters(); }} placeholder="Bizonylat, márka, termék..." /></div></FieldLabel></div> : null}
 
@@ -1851,31 +1871,30 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
 
         {error ? <div className="rounded-2xl border border-rose-300/28 bg-rose-500/13 px-4 py-3 text-sm text-rose-50"><AlertTriangle size={17} className="mr-2 inline" />{error}</div> : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-          <MetricCard title="Forgalom" value={money(summary?.revenue)} comparison={money(comparison?.revenue)} delta={delta?.revenue} icon={CircleDollarSign} hint={`${money(summary?.liveRevenue)} élő • ${money(summary?.historyRevenue)} történeti`} tone="success" active={chartMetric === "revenue"} onClick={() => setChartMetric("revenue")} />
-          <MetricCard title="Bruttó nyereség" value={money(summary?.grossProfit)} comparison={money(comparison?.grossProfit)} delta={delta?.grossProfit} icon={TrendingUp} hint="Nettó forgalom mínusz beszerzési érték" tone="success" active={chartMetric === "grossProfit"} onClick={() => setChartMetric("grossProfit")} warning={numberValue(summary?.costCoveragePercent) < 99 ? `A vizsgált forgalom vételár-lefedettsége ${percentage(summary?.costCoveragePercent)}. A hiányzó költségadatok miatt a nyereség becslés.` : undefined} />
-          <MetricCard title="Árrés" value={percentage(summary?.grossMargin)} comparison={percentage(comparison?.grossMargin)} delta={marginDelta} icon={Percent} hint="Bruttó nyereség / nettó forgalom" tone="accent" warning={numberValue(summary?.costCoveragePercent) < 99 ? "Az árrés a rendelkezésre álló vételár-adatokból számolódik." : undefined} />
-          <MetricCard title="Eladott darab" value={`${integer(summary?.itemsSold)} db`} comparison={`${integer(comparison?.itemsSold)} db`} delta={delta?.itemsSold} icon={ShoppingBag} hint="Eladás és csere nettó darabszáma" active={chartMetric === "itemsSold"} onClick={() => setChartMetric("itemsSold")} />
-          <MetricCard title="Tranzakció" value={integer(summary?.transactions)} comparison={integer(comparison?.transactions)} delta={delta?.transactions} icon={ReceiptText} hint="Egyedi bizonylatok és havi összesítések" active={chartMetric === "transactions"} onClick={() => setChartMetric("transactions")} />
-          <MetricCard title="Átlagkosár" value={money(summary?.averageBasket)} comparison={money(comparison?.averageBasket)} delta={delta?.averageBasket} icon={Target} hint="Forgalom / tranzakció" active={chartMetric === "averageBasket"} onClick={() => setChartMetric("averageBasket")} />
-          <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="Összes adott kedvezmény" tone={numberValue(summary?.discountTotal) > 0 ? "warning" : "normal"} active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} />
-          <MetricCard title="Kintlévőség" value={money(summary?.unpaidTotal)} comparison={money(comparison?.unpaidTotal)} delta={delta?.unpaidTotal} icon={WalletCards} hint="Nyitott fizetési összeg" tone={numberValue(summary?.unpaidTotal) > 0 ? "danger" : "normal"} active={chartMetric === "unpaidTotal"} onClick={() => setChartMetric("unpaidTotal")} />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+          <MetricCard title="Forgalom" value={money(summary?.revenue)} comparison={money(comparison?.revenue)} delta={delta?.revenue} icon={CircleDollarSign} hint={`${money(summary?.liveRevenue)} élő • ${money(summary?.historyRevenue)} történeti`} active={chartMetric === "revenue"} onClick={() => setChartMetric("revenue")} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Bruttó nyereség" value={money(summary?.grossProfit)} comparison={money(comparison?.grossProfit)} delta={delta?.grossProfit} icon={TrendingUp} hint="Nettó forgalom mínusz beszerzési érték" active={chartMetric === "grossProfit"} onClick={() => setChartMetric("grossProfit")} warning={numberValue(summary?.costCoveragePercent) < 99 ? `A vizsgált forgalom vételár-lefedettsége ${percentage(summary?.costCoveragePercent)}. A hiányzó költségadatok miatt a nyereség becslés.` : undefined} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Árrés" value={percentage(summary?.grossMargin)} comparison={percentage(comparison?.grossMargin)} delta={marginDelta} icon={Percent} hint="Bruttó nyereség / nettó forgalom" warning={numberValue(summary?.costCoveragePercent) < 99 ? "Az árrés a rendelkezésre álló vételár-adatokból számolódik." : undefined} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Eladott darab" value={`${integer(summary?.itemsSold)} db`} comparison={`${integer(comparison?.itemsSold)} db`} delta={delta?.itemsSold} icon={ShoppingBag} hint="Eladás és csere nettó darabszáma" active={chartMetric === "itemsSold"} onClick={() => setChartMetric("itemsSold")} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Tranzakció" value={integer(summary?.transactions)} comparison={integer(comparison?.transactions)} delta={delta?.transactions} icon={ReceiptText} hint="Egyedi bizonylatok és havi összesítések" active={chartMetric === "transactions"} onClick={() => setChartMetric("transactions")} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="Összes adott kedvezmény" active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Kintlévőség" value={money(summary?.unpaidTotal)} comparison={money(comparison?.unpaidTotal)} delta={delta?.unpaidTotal} icon={WalletCards} hint="Nyitott fizetési összeg" active={chartMetric === "unpaidTotal"} onClick={() => setChartMetric("unpaidTotal")} comparisonAvailable={comparisonAvailable} />
         </section>
 
         {data ? <CoverageStrip data={data} /> : null}
 
         <section className="grid gap-3 2xl:grid-cols-[1.72fr_0.88fr]">
-          <CompareChart data={data?.trend || { current: [], comparison: [] }} metric={chartMetric} onMetricChange={setChartMetric} currentLabel={currentPeriodLabel} comparisonLabel={comparisonPeriodLabel} onBucketClick={bucketClick} />
-          <EmployeeRanking rows={data?.employees || []} metric={chartMetric} selected={applied.employee} onSelect={(employee) => applyPatch({ employee })} />
+          <CompareChart data={data?.trend || { current: [], comparison: [] }} metric={chartMetric} onMetricChange={setChartMetric} currentLabel={currentPeriodLabel} comparisonLabel={comparisonPeriodLabel} onBucketClick={bucketClick} comparisonAvailable={comparisonAvailable} />
+          <EmployeeRanking rows={data?.employees || []} metric={chartMetric} selected={applied.employee} onSelect={(employee) => applyPatch({ employee })} comparisonAvailable={comparisonAvailable} />
         </section>
 
-        <DimensionPanel dimensions={data?.dimensions || ({ brand: [], category: [], subcategory: [], product: [], size: [], color: [], store: [], payment: [] } as AifSalesCommandOverviewResponse["dimensions"])} activeDimension={dimension} onDimensionChange={setDimension} metric={chartMetric} onDrill={drillDimension} />
+        <DimensionPanel dimensions={data?.dimensions || ({ brand: [], category: [], subcategory: [], product: [], size: [], color: [], store: [], payment: [] } as AifSalesCommandOverviewResponse["dimensions"])} activeDimension={dimension} onDimensionChange={setDimension} metric={chartMetric} onDrill={drillDimension} comparisonAvailable={comparisonAvailable} />
 
         <section className="space-y-2">
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             {(["revenue", "itemsSold", "transactions", "grossProfit"] as const).map((key) => <button key={key} type="button" onClick={() => setHeatmapMetric(key)} className={`h-7 rounded-lg border px-2.5 text-[9px] transition ${heatmapMetric === key ? "border-[#8ce7e2]/40 bg-[#2a8d8b] text-white" : "border-white/9 bg-white/[0.025] text-white/42 hover:text-white"}`}>{chartMetricConfig[key].short}</button>)}
           </div>
-          <Heatmap heatmap={data?.heatmap || { months: [], rows: [] }} metric={heatmapMetric} onCellClick={(employee, month) => { if (!month.currentStart || !month.currentEnd) return; applyPatch({ employee, from: month.currentStart, to: month.currentEnd, compareFrom: month.comparisonStart || applied.compareFrom, compareTo: month.comparisonEnd || applied.compareTo }); }} />
+          <Heatmap heatmap={data?.heatmap || { months: [], rows: [] }} metric={heatmapMetric} comparisonAvailable={comparisonAvailable} onCellClick={(employee, month) => { if (!month.currentStart || !month.currentEnd) return; applyPatch({ employee, from: month.currentStart, to: month.currentEnd }); }} />
         </section>
 
         <DetailsTable rows={data?.details || []} onOpen={setDetailTarget} />
