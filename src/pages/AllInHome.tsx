@@ -451,7 +451,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             hash="#allinsalescenter"
             icon={Activity}
             tone="accent"
-            badge="KPI • TRENDEK"
+            badge="ELEMZÉSEK"
           />
 
           <div className="my-3 border-t border-white/12" />
