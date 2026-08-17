@@ -1,0 +1,2006 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import * as XLSX from "xlsx";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  BarChart3,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleDollarSign,
+  Database,
+  Download,
+  FileSpreadsheet,
+  Filter,
+  Gauge,
+  Home,
+  Info,
+  Layers3,
+  Loader2,
+  PackageSearch,
+  Percent,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  ShoppingBag,
+  SlidersHorizontal,
+  Tags,
+  Target,
+  Trash2,
+  TrendingUp,
+  Upload,
+  UserRound,
+  Users,
+  WalletCards,
+  X,
+  Zap,
+} from "lucide-react";
+import {
+  apiAifCreateSalesHistoryImport,
+  apiAifDeleteSalesHistoryImport,
+  apiAifSalesCommandCenterOverview,
+  apiAifSalesHistoryImportDetail,
+  apiAifSalesHistoryImports,
+  type AifSalesCommandDetailItem,
+  type AifSalesCommandDimensionItem,
+  type AifSalesCommandDimensionKey,
+  type AifSalesCommandMetricRow,
+  type AifSalesCommandOverviewResponse,
+  type AifSalesHistoryImportSummary,
+  type AifSalesHistoryInputRow,
+} from "../lib/aif/api";
+
+type SourceFilter = "all" | "live" | "history";
+type BucketFilter = "auto" | "day" | "week" | "month";
+type ChartMetric =
+  | "revenue"
+  | "grossProfit"
+  | "itemsSold"
+  | "transactions"
+  | "averageBasket"
+  | "discountTotal"
+  | "unpaidTotal";
+type HistoryTab = "manual" | "file" | "imports";
+type QuickPreset = "ytd" | "month" | "lastMonth" | "fullYear";
+
+type FiltersState = {
+  from: string;
+  to: string;
+  compareFrom: string;
+  compareTo: string;
+  location: string;
+  employee: string;
+  brand: string;
+  category: string;
+  subcategory: string;
+  size: string;
+  color: string;
+  payment: string;
+  product: string;
+  search: string;
+  source: SourceFilter;
+  bucket: BucketFilter;
+};
+
+type SelectOption = { value: string; label: string; hint?: string };
+
+type ManualHistoryDraft = {
+  month: string;
+  location: string;
+  actor: string;
+  revenue: string;
+  quantity: string;
+  transactions: string;
+  estimatedCost: string;
+  discountTotal: string;
+  unpaidTotal: string;
+  note: string;
+};
+
+type FileMapKey =
+  | "soldOn"
+  | "location"
+  | "actor"
+  | "transactionKey"
+  | "brandName"
+  | "categoryName"
+  | "subcategoryName"
+  | "productTitle"
+  | "productCode"
+  | "colorName"
+  | "size"
+  | "quantity"
+  | "transactions"
+  | "revenue"
+  | "netRevenue"
+  | "salesBeforeDiscount"
+  | "discountTotal"
+  | "paidTotal"
+  | "unpaidTotal"
+  | "estimatedCost"
+  | "paymentMethod"
+  | "tvaRate"
+  | "note";
+
+type FileMapping = Record<FileMapKey, string>;
+
+type ImportedSheet = {
+  fileName: string;
+  extension: "xlsx" | "xls" | "csv" | "other";
+  sheetName: string;
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+};
+
+const panel =
+  "rounded-[22px] border border-white/12 bg-gradient-to-br from-[#223044]/96 via-[#1f2b3d]/96 to-[#1b2637]/96 shadow-[0_18px_46px_rgba(2,6,23,0.30)]";
+const control =
+  "h-11 w-full min-w-0 rounded-[13px] border border-white/14 bg-[#172334]/88 px-3 text-sm font-normal text-white outline-none transition placeholder:text-white/32 hover:border-white/24 focus:border-[#7bd7d4]/60 focus:ring-2 focus:ring-[#7bd7d4]/12 [color-scheme:dark]";
+const buttonBase =
+  "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-normal text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
+const primaryButton = `${buttonBase} border-[#9be9e5]/42 bg-gradient-to-r from-[#238985] to-[#2a9a96] shadow-[0_9px_22px_rgba(42,141,139,0.20)] hover:brightness-110`;
+const neutralButton = `${buttonBase} border-white/14 bg-white/[0.045] hover:border-[#8ce7e2]/30 hover:bg-white/[0.08]`;
+const dangerButton = `${buttonBase} border-rose-300/38 bg-rose-500/18 text-rose-50 hover:bg-rose-500/28`;
+
+const dimensionLabels: Record<AifSalesCommandDimensionKey, string> = {
+  brand: "Márkák",
+  category: "Főkategóriák",
+  subcategory: "Alkategóriák",
+  product: "Termékek",
+  size: "Méretek",
+  color: "Színek",
+  store: "Üzletek",
+  payment: "Fizetési módok",
+};
+
+const chartMetricConfig: Record<
+  ChartMetric,
+  { label: string; short: string; format: (value: number) => string }
+> = {
+  revenue: { label: "Forgalom", short: "Forgalom", format: money },
+  grossProfit: { label: "Bruttó nyereség", short: "Nyereség", format: money },
+  itemsSold: { label: "Eladott darab", short: "Darab", format: (value) => `${integer(value)} db` },
+  transactions: { label: "Tranzakció", short: "Tranzakció", format: integer },
+  averageBasket: { label: "Átlagkosár", short: "Átlagkosár", format: money },
+  discountTotal: { label: "Kedvezmény", short: "Kedvezmény", format: money },
+  unpaidTotal: { label: "Kintlévőség", short: "Kintlévőség", format: money },
+};
+
+const fileFields: Array<{
+  key: FileMapKey;
+  label: string;
+  required?: boolean;
+  aliases: string[];
+}> = [
+  { key: "soldOn", label: "Dátum / hónap", required: true, aliases: ["datum", "dátum", "date", "soldon", "soldat", "honap", "hónap", "month", "ido", "időpont"] },
+  { key: "location", label: "Üzlet", aliases: ["uzlet", "üzlet", "location", "store", "shop", "telephely", "magazin"] },
+  { key: "actor", label: "Eladó", aliases: ["elado", "eladó", "actor", "employee", "seller", "alkalmazott", "ertekesito", "értékesítő"] },
+  { key: "transactionKey", label: "Bizonylat", aliases: ["bizonylat", "bizonylatszam", "sale_number", "receipt", "receipt_number", "transaction", "transactionkey"] },
+  { key: "brandName", label: "Márka", aliases: ["marka", "márka", "brand", "brandname"] },
+  { key: "categoryName", label: "Főkategória", aliases: ["fokategoria", "főkategória", "category", "categoryname", "kategoria", "kategória"] },
+  { key: "subcategoryName", label: "Alkategória", aliases: ["alkategoria", "alkategória", "subcategory", "subcategoryname", "sub_category"] },
+  { key: "productTitle", label: "Termék", aliases: ["termek", "termék", "product", "producttitle", "product_name", "denumire", "articol"] },
+  { key: "productCode", label: "Termékkód", aliases: ["termekkod", "termékkód", "productcode", "product_code", "sku", "codprodus", "cod_produs"] },
+  { key: "colorName", label: "Szín", aliases: ["szin", "szín", "color", "colour", "colorname", "culoare"] },
+  { key: "size", label: "Méret", aliases: ["meret", "méret", "size", "marime", "mărime"] },
+  { key: "quantity", label: "Darab", aliases: ["darab", "qty", "quantity", "itemssold", "items_sold", "cantitate", "db"] },
+  { key: "transactions", label: "Tranzakciók", aliases: ["tranzakcio", "tranzakció", "transactions", "transactioncount", "vasarlasok", "vásárlások"] },
+  { key: "revenue", label: "Forgalom", required: true, aliases: ["forgalom", "revenue", "total", "bevetel", "bevétel", "ertek", "érték", "vanzare", "vânzare"] },
+  { key: "netRevenue", label: "Nettó forgalom", aliases: ["netto", "nettó", "netrevenue", "net_revenue", "net"] },
+  { key: "salesBeforeDiscount", label: "Kedvezmény előtti", aliases: ["salesbeforediscount", "sales_before_discount", "listaertek", "listaérték"] },
+  { key: "discountTotal", label: "Kedvezmény", aliases: ["kedvezmeny", "kedvezmény", "discount", "discounttotal", "discount_total"] },
+  { key: "paidTotal", label: "Fizetett", aliases: ["fizetett", "paid", "paidtotal", "paid_total"] },
+  { key: "unpaidTotal", label: "Kintlévőség", aliases: ["kintlevoseg", "kintlévőség", "unpaid", "unpaidtotal", "unpaid_total", "balancedue"] },
+  { key: "estimatedCost", label: "Beszerzési érték", aliases: ["beszerzes", "beszerzésiérték", "beszerzesiertek", "estimatedcost", "estimated_cost", "cost", "purchasecost"] },
+  { key: "paymentMethod", label: "Fizetési mód", aliases: ["fizetesimod", "fizetési mód", "payment", "paymentmethod", "payment_method", "metoda"] },
+  { key: "tvaRate", label: "TVA %", aliases: ["tva", "tvarate", "tva_rate", "vat", "vatrate"] },
+  { key: "note", label: "Megjegyzés", aliases: ["megjegyzes", "megjegyzés", "note", "notes", "observatii", "observații"] },
+];
+
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  let raw = String(value)
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, "")
+    .replace(/RON|LEI/gi, "")
+    .replace(/%$/, "");
+  const comma = raw.lastIndexOf(",");
+  const dot = raw.lastIndexOf(".");
+  if (comma >= 0 && dot >= 0) {
+    raw = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
+  } else if (comma >= 0) {
+    raw = raw.replace(/\./g, "").replace(",", ".");
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function money(value: unknown) {
+  return `${numberValue(value).toLocaleString("ro-RO", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} RON`;
+}
+
+function integer(value: unknown) {
+  return Math.round(numberValue(value)).toLocaleString("ro-RO");
+}
+
+function compactNumber(value: number) {
+  return new Intl.NumberFormat("hu-HU", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(numberValue(value));
+}
+
+function percentage(value: unknown, digits = 1) {
+  return `${numberValue(value).toLocaleString("hu-HU", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}%`;
+}
+
+function localIsoDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function monthStart(iso: string) {
+  return `${iso.slice(0, 7)}-01`;
+}
+
+function shiftYear(iso: string, amount: number) {
+  const [year, month, day] = iso.split("-").map(Number);
+  const targetYear = year + amount;
+  const maxDay = new Date(Date.UTC(targetYear, month, 0, 12)).getUTCDate();
+  return `${targetYear}-${String(month).padStart(2, "0")}-${String(Math.min(day, maxDay)).padStart(2, "0")}`;
+}
+
+function previousMonthRange(today: string) {
+  const date = new Date(`${monthStart(today)}T12:00:00Z`);
+  date.setUTCDate(0);
+  const to = date.toISOString().slice(0, 10);
+  return { from: monthStart(to), to };
+}
+
+function presetFilters(preset: QuickPreset, current = localIsoDate()): Pick<FiltersState, "from" | "to" | "compareFrom" | "compareTo"> {
+  const year = Number(current.slice(0, 4));
+  if (preset === "month") {
+    return {
+      from: monthStart(current),
+      to: current,
+      compareFrom: shiftYear(monthStart(current), -1),
+      compareTo: shiftYear(current, -1),
+    };
+  }
+  if (preset === "lastMonth") {
+    const range = previousMonthRange(current);
+    return {
+      ...range,
+      compareFrom: shiftYear(range.from, -1),
+      compareTo: shiftYear(range.to, -1),
+    };
+  }
+  if (preset === "fullYear") {
+    return {
+      from: `${year}-01-01`,
+      to: `${year}-12-31`,
+      compareFrom: `${year - 1}-01-01`,
+      compareTo: `${year - 1}-12-31`,
+    };
+  }
+  return {
+    from: `${year}-01-01`,
+    to: current,
+    compareFrom: `${year - 1}-01-01`,
+    compareTo: shiftYear(current, -1),
+  };
+}
+
+function huDate(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("hu-HU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function dateTime(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function normalizeHeader(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function emptyFileMapping(): FileMapping {
+  return Object.fromEntries(fileFields.map((field) => [field.key, ""])) as FileMapping;
+}
+
+function detectFileMapping(columns: string[]) {
+  const mapping = emptyFileMapping();
+  const normalized = columns.map((column) => ({ column, key: normalizeHeader(column) }));
+  for (const field of fileFields) {
+    const aliases = field.aliases.map(normalizeHeader);
+    const exact = normalized.find((column) => aliases.includes(column.key));
+    const partial = exact || normalized.find((column) => aliases.some((alias) => alias.length >= 5 && column.key.includes(alias)));
+    mapping[field.key] = partial?.column || "";
+  }
+  return mapping;
+}
+
+function metricValue(row: Partial<AifSalesCommandMetricRow> | undefined, metric: ChartMetric) {
+  return numberValue(row?.[metric]);
+}
+
+function deltaValue(current: number, comparison: number) {
+  if (Math.abs(comparison) < 0.000001) return Math.abs(current) < 0.000001 ? 0 : null;
+  return ((current - comparison) / Math.abs(comparison)) * 100;
+}
+
+function sourceLabel(source: string) {
+  if (source === "live_sale") return "Élő eladás";
+  if (source === "live_exchange") return "Csere új termék";
+  if (source === "live_exchange_return") return "Csere visszavétel";
+  if (source === "history") return "Történeti adat";
+  return source || "Ismeretlen";
+}
+
+function sourceBadge(source: string) {
+  if (source === "history") return "border-violet-300/24 bg-violet-400/12 text-violet-50";
+  if (source === "live_exchange" || source === "live_exchange_return") return "border-amber-200/24 bg-amber-400/12 text-amber-50";
+  return "border-[#8ce7e2]/24 bg-[#2a8d8b]/14 text-[#d7fffd]";
+}
+
+function paymentLabel(value?: string | null) {
+  const key = String(value || "").toLowerCase();
+  if (key === "cash") return "Készpénz";
+  if (key === "card") return "Kártya";
+  if (key === "bank_transfer") return "Banki átutalás";
+  if (key === "credit") return "Hitel";
+  if (key === "mixed") return "Vegyes";
+  if (key === "exchange") return "Csere";
+  return value || "Nincs adat";
+}
+
+function closeOnEscape(active: boolean, close: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const listener = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", listener, true);
+    return () => window.removeEventListener("keydown", listener, true);
+  }, [active, close]);
+}
+
+function FloatingHint({ children, content }: { children: ReactNode; content: ReactNode }) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  const update = useCallback(() => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(320, window.innerWidth - 20);
+    const left = Math.max(10, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 10));
+    const desiredTop = rect.top - 12;
+    setPosition({ left, top: desiredTop, width });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    update();
+    const listener = () => update();
+    window.addEventListener("resize", listener);
+    window.addEventListener("scroll", listener, true);
+    return () => {
+      window.removeEventListener("resize", listener);
+      window.removeEventListener("scroll", listener, true);
+    };
+  }, [open, update]);
+
+  return (
+    <>
+      <span
+        ref={ref}
+        className="inline-flex"
+        onMouseEnter={() => {
+          update();
+          setOpen(true);
+        }}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => {
+          update();
+          setOpen(true);
+        }}
+        onBlur={() => setOpen(false)}
+      >
+        {children}
+      </span>
+      {open && position
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-[1200] -translate-y-full rounded-xl border border-[#7bd7d4]/28 bg-[#111b2a]/[0.98] px-3 py-2.5 text-xs leading-5 text-white/82 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+              style={{ left: position.left, top: position.top, width: position.width }}
+            >
+              {content}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function SelectControl({
+  value,
+  options,
+  onChange,
+  placeholder,
+  disabled = false,
+}: {
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  placeholder: string;
+  disabled?: boolean;
+}) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const selected = options.find((option) => option.value === value);
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 10;
+    const width = Math.min(Math.max(rect.width, 240), window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const menuHeight = Math.min(380, 54 + options.length * 43);
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    if (roomBelow < Math.min(menuHeight, 230) && roomAbove > roomBelow) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + 7) });
+    } else {
+      setPosition({ left, width, top: Math.min(window.innerHeight - edge, rect.bottom + 7) });
+    }
+  }, [options.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const reposition = () => updatePosition();
+    document.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`group flex h-11 w-full min-w-0 items-center justify-between gap-2 rounded-[13px] border px-3 text-left text-sm text-white outline-none transition disabled:opacity-45 ${
+          open
+            ? "border-[#8ce7e2]/62 bg-[#20354a] ring-2 ring-[#7bd7d4]/12"
+            : "border-white/14 bg-[#172334]/88 hover:border-[#7bd7d4]/30 hover:bg-[#1d2b3e]"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${value ? "bg-[#63d8d3]" : "bg-white/22"}`} />
+          <span className={`truncate ${selected ? "text-white" : "text-white/42"}`}>{selected?.label || placeholder}</span>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="fixed z-[1050] overflow-hidden rounded-[17px] border border-[#7bd7d4]/34 bg-[#121d2c]/[0.99] p-2 shadow-[0_26px_70px_rgba(0,0,0,0.65)] backdrop-blur-xl"
+              style={{ left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+            >
+              <div className="max-h-[330px] space-y-1 overflow-y-auto pr-0.5">
+                {options.map((option) => {
+                  const active = option.value === value;
+                  return (
+                    <button
+                      key={`${option.value}:${option.label}`}
+                      type="button"
+                      onClick={() => {
+                        onChange(option.value);
+                        setOpen(false);
+                      }}
+                      className={`flex min-h-10 w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-sm transition ${
+                        active
+                          ? "border-[#8ce7e2]/38 bg-gradient-to-r from-[#2a8d8b] to-[#286f79] text-white"
+                          : "border-transparent bg-white/[0.025] text-white/78 hover:border-white/8 hover:bg-white/[0.07] hover:text-white"
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{option.label}</span>
+                        {option.hint ? <span className="mt-0.5 block truncate text-[9px] text-white/38">{option.hint}</span> : null}
+                      </span>
+                      {active ? <Check size={16} className="shrink-0 text-[#d8fffd]" /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function DateControl({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
+  return (
+    <label className="grid min-w-0 gap-1.5 text-[9px] uppercase tracking-[0.11em] text-white/42">
+      {label}
+      <span className="relative block">
+        <CalendarDays size={15} className="pointer-events-none absolute left-3 top-3.5 text-[#8ee6e2]" />
+        <input
+          type="date"
+          className={`${control} pl-9`}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </span>
+    </label>
+  );
+}
+
+function DeltaPill({ value, inverse = false }: { value: number | null | undefined; inverse?: boolean }) {
+  const neutral = value === null || value === undefined || Math.abs(value) < 0.05;
+  const rawPositive = !neutral && numberValue(value) > 0;
+  const positive = inverse ? !rawPositive : rawPositive;
+  const Icon = neutral ? Activity : rawPositive ? ArrowUpRight : ArrowDownRight;
+  return (
+    <span
+      className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[9px] ${
+        neutral
+          ? "border-white/10 bg-white/[0.04] text-white/46"
+          : positive
+            ? "border-emerald-200/20 bg-emerald-400/10 text-emerald-50"
+            : "border-rose-200/20 bg-rose-400/10 text-rose-50"
+      }`}
+    >
+      <Icon size={10} />
+      {value === null || value === undefined ? "új" : `${value > 0 ? "+" : ""}${numberValue(value).toFixed(1)}%`}
+    </span>
+  );
+}
+
+function MetricCard({
+  title,
+  value,
+  comparison,
+  delta,
+  icon: Icon,
+  hint,
+  active = false,
+  tone = "normal",
+  onClick,
+  warning,
+}: {
+  title: string;
+  value: string;
+  comparison: string;
+  delta: number | null | undefined;
+  icon: ComponentType<{ size?: number; className?: string }>;
+  hint: string;
+  active?: boolean;
+  tone?: "normal" | "success" | "warning" | "danger" | "accent";
+  onClick?: () => void;
+  warning?: string;
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "from-[#4a2633] via-[#382b3b] to-[#283145] border-rose-200/22"
+      : tone === "warning"
+        ? "from-[#4b4029] via-[#383a39] to-[#283145] border-amber-200/20"
+        : tone === "success"
+          ? "from-[#145f59] via-[#23515a] to-[#283145] border-[#8ce7e2]/28"
+          : tone === "accent"
+            ? "from-[#1d5563] via-[#27475a] to-[#283145] border-[#8ce7e2]/24"
+            : "from-[#2c3c51] via-[#263448] to-[#202c3d] border-white/12";
+
+  const content = (
+    <>
+      <span className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-[#bff8f5]/45 to-transparent" />
+      <span className="pointer-events-none absolute -right-8 -top-10 h-24 w-24 rounded-full bg-[#7bd7d4]/[0.07] blur-2xl" />
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-[9px] uppercase tracking-[0.14em] text-white/54">{title}</p>
+            {warning ? (
+              <FloatingHint content={warning}>
+                <span tabIndex={0} className="inline-flex cursor-help text-amber-100/75"><AlertTriangle size={12} /></span>
+              </FloatingHint>
+            ) : null}
+          </div>
+          <p className="mt-2 truncate text-[clamp(1.05rem,1.45vw,1.5rem)] font-medium tracking-tight text-white" title={value}>{value}</p>
+        </div>
+        <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${active ? "border-[#bff8f5]/48 bg-[#2a8d8b]/34 text-[#d8fffd]" : "border-white/12 bg-white/[0.045] text-[#bff8f5]"}`}>
+          <Icon size={17} />
+        </span>
+      </div>
+      <div className="relative mt-3 flex items-end justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-[10px] text-white/42" title={hint}>{hint}</p>
+          <p className="mt-1 truncate text-[9px] text-white/32" title={comparison}>Összehasonlítás: {comparison}</p>
+        </div>
+        <DeltaPill value={delta} inverse={title === "Kedvezmény" || title === "Kintlévőség"} />
+      </div>
+    </>
+  );
+
+  const className = `relative min-w-0 overflow-hidden rounded-[20px] border bg-gradient-to-br p-3.5 text-left shadow-[0_14px_34px_rgba(2,6,23,0.22)] ${toneClass} ${active ? "ring-2 ring-[#7bd7d4]/22" : ""}`;
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={`${className} w-full transition hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0`}>
+        {content}
+      </button>
+    );
+  }
+  return <article className={className}>{content}</article>;
+}
+
+function smoothPath(points: Array<{ x: number; y: number }>) {
+  if (!points.length) return "";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const midX = (previous.x + current.x) / 2;
+    path += ` C ${midX} ${previous.y}, ${midX} ${current.y}, ${current.x} ${current.y}`;
+  }
+  return path;
+}
+
+function CompareChart({
+  data,
+  metric,
+  onMetricChange,
+  currentLabel,
+  comparisonLabel,
+  onBucketClick,
+}: {
+  data: AifSalesCommandOverviewResponse["trend"];
+  metric: ChartMetric;
+  onMetricChange: (metric: ChartMetric) => void;
+  currentLabel: string;
+  comparisonLabel: string;
+  onBucketClick: (index: number) => void;
+}) {
+  const width = 980;
+  const height = 360;
+  const padding = { left: 62, right: 26, top: 28, bottom: 54 };
+  const current = data.current || [];
+  const comparison = data.comparison || [];
+  const count = Math.max(current.length, comparison.length, 1);
+  const values = [
+    ...current.map((item) => metricValue(item, metric)),
+    ...comparison.map((item) => metricValue(item, metric)),
+  ];
+  let min = Math.min(0, ...values);
+  let max = Math.max(0, ...values);
+  if (Math.abs(max - min) < 0.000001) max = min + 1;
+  const usableWidth = width - padding.left - padding.right;
+  const usableHeight = height - padding.top - padding.bottom;
+  const xAt = (index: number) => count <= 1 ? padding.left + usableWidth / 2 : padding.left + (index / (count - 1)) * usableWidth;
+  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * usableHeight;
+  const zeroY = yAt(0);
+  const currentPoints = current.map((item, index) => ({ x: xAt(index), y: yAt(metricValue(item, metric)), item, value: metricValue(item, metric) }));
+  const comparisonPoints = comparison.map((item, index) => ({ x: xAt(index), y: yAt(metricValue(item, metric)), item, value: metricValue(item, metric) }));
+  const currentLine = smoothPath(currentPoints);
+  const comparisonLine = smoothPath(comparisonPoints);
+  const currentArea = currentPoints.length
+    ? `${currentLine} L ${currentPoints[currentPoints.length - 1].x} ${zeroY} L ${currentPoints[0].x} ${zeroY} Z`
+    : "";
+  const comparisonArea = comparisonPoints.length
+    ? `${comparisonLine} L ${comparisonPoints[comparisonPoints.length - 1].x} ${zeroY} L ${comparisonPoints[0].x} ${zeroY} Z`
+    : "";
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const metricConfig = chartMetricConfig[metric];
+  const labelStep = Math.max(1, Math.ceil(count / 9));
+  const empty = values.every((value) => Math.abs(value) < 0.000001);
+
+  const move = (event: React.MouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const viewX = ((event.clientX - rect.left) / rect.width) * width;
+    const raw = count <= 1 ? 0 : Math.round(((viewX - padding.left) / usableWidth) * (count - 1));
+    setHoverIndex(Math.max(0, Math.min(count - 1, raw)));
+  };
+
+  const hoverCurrent = hoverIndex === null ? undefined : current[hoverIndex];
+  const hoverComparison = hoverIndex === null ? undefined : comparison[hoverIndex];
+  const hoverX = hoverIndex === null ? 0 : xAt(hoverIndex);
+  const tooltipLeft = hoverIndex === null ? 0 : `${Math.max(9, Math.min(91, (hoverX / width) * 100))}%`;
+
+  return (
+    <section className={`${panel} overflow-hidden p-4`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Idősoros összehasonlítás</p>
+          <h2 className="mt-1 text-lg text-white">{metricConfig.label} alakulása</h2>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {(Object.keys(chartMetricConfig) as ChartMetric[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onMetricChange(key)}
+              className={`h-8 rounded-lg border px-2.5 text-[10px] transition ${
+                metric === key
+                  ? "border-[#9be9e5]/46 bg-[#2a8d8b] text-white"
+                  : "border-white/10 bg-white/[0.035] text-white/52 hover:border-white/20 hover:text-white"
+              }`}
+            >
+              {chartMetricConfig[key].short}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/48">
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-5 rounded-full bg-[#58d7d0]" />{currentLabel}</span>
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-5 rounded-full bg-[#f0a43b]" />{comparisonLabel}</span>
+        </div>
+        <span>Kattints egy pontra a pontos időszak megnyitásához</span>
+      </div>
+
+      <div className="relative mt-3 overflow-hidden rounded-2xl border border-white/8 bg-[#111c2b]/70">
+        {empty ? (
+          <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+            <div className="rounded-2xl border border-white/10 bg-[#162235]/94 px-5 py-4 text-center shadow-xl">
+              <BarChart3 className="mx-auto text-[#7bd7d4]" size={26} />
+              <p className="mt-2 text-sm text-white">Ebben a két időszakban nincs megjeleníthető adat.</p>
+            </div>
+          </div>
+        ) : null}
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="h-[330px] w-full cursor-crosshair sm:h-[360px]"
+          onMouseMove={move}
+          onMouseLeave={() => setHoverIndex(null)}
+          onClick={() => hoverIndex !== null && onBucketClick(hoverIndex)}
+          role="img"
+          aria-label={`${metricConfig.label} összehasonlító diagram`}
+        >
+          <defs>
+            <linearGradient id="commandCurrentArea" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#58d7d0" stopOpacity="0.32" />
+              <stop offset="100%" stopColor="#58d7d0" stopOpacity="0.015" />
+            </linearGradient>
+            <linearGradient id="commandComparisonArea" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#f0a43b" stopOpacity="0.20" />
+              <stop offset="100%" stopColor="#f0a43b" stopOpacity="0.01" />
+            </linearGradient>
+          </defs>
+
+          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+            const value = min + (max - min) * ratio;
+            const y = yAt(value);
+            return (
+              <g key={ratio}>
+                <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="rgba(255,255,255,0.075)" />
+                <text x={padding.left - 10} y={y + 4} fill="rgba(255,255,255,0.35)" fontSize="10" textAnchor="end">
+                  {compactNumber(value)}
+                </text>
+              </g>
+            );
+          })}
+          {min < 0 && max > 0 ? <line x1={padding.left} x2={width - padding.right} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" /> : null}
+          {comparisonArea ? <path d={comparisonArea} fill="url(#commandComparisonArea)" /> : null}
+          {currentArea ? <path d={currentArea} fill="url(#commandCurrentArea)" /> : null}
+          {comparisonLine ? <path d={comparisonLine} fill="none" stroke="#f0a43b" strokeWidth="3" strokeLinecap="round" /> : null}
+          {currentLine ? <path d={currentLine} fill="none" stroke="#58d7d0" strokeWidth="4" strokeLinecap="round" /> : null}
+
+          {Array.from({ length: count }, (_, index) => {
+            const item = current[index] || comparison[index];
+            if (!item || (index % labelStep !== 0 && index !== count - 1)) return null;
+            return (
+              <text key={index} x={xAt(index)} y={height - 17} fill="rgba(255,255,255,0.42)" fontSize="10" textAnchor="middle">
+                {item.label}
+              </text>
+            );
+          })}
+
+          {hoverIndex !== null ? (
+            <g>
+              <line x1={hoverX} x2={hoverX} y1={padding.top} y2={height - padding.bottom} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
+              {hoverCurrent ? <circle cx={hoverX} cy={yAt(metricValue(hoverCurrent, metric))} r="6" fill="#d8fffd" stroke="#2a8d8b" strokeWidth="3" /> : null}
+              {hoverComparison ? <circle cx={hoverX} cy={yAt(metricValue(hoverComparison, metric))} r="5" fill="#fff4dc" stroke="#f0a43b" strokeWidth="3" /> : null}
+            </g>
+          ) : null}
+        </svg>
+
+        {hoverIndex !== null ? (
+          <div
+            className="pointer-events-none absolute top-4 z-20 w-[230px] -translate-x-1/2 rounded-xl border border-[#7bd7d4]/24 bg-[#0e1826]/[0.97] p-3 text-xs shadow-[0_18px_45px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+            style={{ left: tooltipLeft }}
+          >
+            <p className="text-[9px] uppercase tracking-[0.13em] text-white/38">{metricConfig.label}</p>
+            <div className="mt-2 space-y-2">
+              <div>
+                <div className="flex items-center justify-between gap-3"><span className="text-[#9ff3ee]">Vizsgált</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverCurrent, metric))}</strong></div>
+                <p className="mt-0.5 text-[9px] text-white/34">{hoverCurrent ? `${huDate(hoverCurrent.start)} – ${huDate(hoverCurrent.end)}` : "Nincs időszak"}</p>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-3"><span className="text-amber-100">Összehasonlítás</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverComparison, metric))}</strong></div>
+                <p className="mt-0.5 text-[9px] text-white/34">{hoverComparison ? `${huDate(hoverComparison.start)} – ${huDate(hoverComparison.end)}` : "Nincs időszak"}</p>
+              </div>
+              <div className="border-t border-white/8 pt-2">
+                <DeltaPill value={deltaValue(metricValue(hoverCurrent, metric), metricValue(hoverComparison, metric))} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function EmployeeRanking({
+  rows,
+  metric,
+  selected,
+  onSelect,
+}: {
+  rows: AifSalesCommandOverviewResponse["employees"];
+  metric: ChartMetric;
+  selected: string;
+  onSelect: (actor: string) => void;
+}) {
+  const visible = rows.slice(0, 12);
+  const max = Math.max(
+    1,
+    ...visible.flatMap((row) => [Math.abs(metricValue(row.current, metric)), Math.abs(metricValue(row.comparison, metric))]),
+  );
+  return (
+    <section className={`${panel} p-4`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Csapatrangsor</p>
+          <h2 className="mt-1 text-lg text-white">Eladók teljesítménye</h2>
+        </div>
+        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#cffffd]"><Users size={18} /></span>
+      </div>
+      <div className="mt-4 space-y-2.5">
+        {visible.map((row) => {
+          const currentValue = metricValue(row.current, metric);
+          const comparisonValue = metricValue(row.comparison, metric);
+          const active = selected.toLocaleLowerCase("hu-HU") === row.actor.toLocaleLowerCase("hu-HU");
+          return (
+            <button
+              key={row.actor}
+              type="button"
+              onClick={() => onSelect(active ? "" : row.actor)}
+              className={`group w-full rounded-2xl border p-3 text-left transition ${
+                active
+                  ? "border-[#8ce7e2]/46 bg-[#2a8d8b]/18 ring-1 ring-[#7bd7d4]/15"
+                  : "border-white/8 bg-white/[0.025] hover:border-white/16 hover:bg-white/[0.05]"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg border text-[10px] ${row.rank === 1 ? "border-amber-200/30 bg-amber-400/14 text-amber-50" : "border-white/10 bg-white/[0.04] text-white/52"}`}>{row.rank}</span>
+                  <span className="truncate text-xs text-white/84">{row.actor}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs text-white">{chartMetricConfig[metric].format(currentValue)}</span>
+                  <DeltaPill value={row.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
+                </span>
+              </div>
+              <div className="mt-2.5 space-y-1">
+                <div className="h-2 overflow-hidden rounded-full bg-[#101a28]">
+                  <div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(currentValue === 0 ? 0 : 3, Math.abs(currentValue) / max * 100)}%` }} />
+                </div>
+                <div className="h-1 overflow-hidden rounded-full bg-[#101a28]">
+                  <div className="h-full rounded-full bg-[#f0a43b]/80" style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / max * 100)}%` }} />
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[9px] text-white/34">
+                <span>{integer(row.current.itemsSold)} db • {integer(row.current.transactions)} eladás</span>
+                <span>Korábban: {chartMetricConfig[metric].format(comparisonValue)}</span>
+              </div>
+            </button>
+          );
+        })}
+        {!visible.length ? <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-xs text-white/38">Nincs rangsorolható eladói adat.</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function DimensionPanel({
+  dimensions,
+  activeDimension,
+  onDimensionChange,
+  metric,
+  onDrill,
+}: {
+  dimensions: AifSalesCommandOverviewResponse["dimensions"];
+  activeDimension: AifSalesCommandDimensionKey;
+  onDimensionChange: (dimension: AifSalesCommandDimensionKey) => void;
+  metric: ChartMetric;
+  onDrill: (dimension: AifSalesCommandDimensionKey, item: AifSalesCommandDimensionItem) => void;
+}) {
+  const items = dimensions?.[activeDimension] || [];
+  const max = Math.max(1, ...items.flatMap((item) => [Math.abs(metricValue(item.current, metric)), Math.abs(metricValue(item.comparison, metric))]));
+  return (
+    <section className={`${panel} overflow-hidden`}>
+      <div className="border-b border-white/8 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Termékintelligencia</p>
+            <h2 className="mt-1 text-lg text-white">Mi hajtja az eredményt?</h2>
+          </div>
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/12 text-[#cffffd]"><Layers3 size={18} /></span>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {(Object.keys(dimensionLabels) as AifSalesCommandDimensionKey[]).map((dimension) => (
+            <button
+              key={dimension}
+              type="button"
+              onClick={() => onDimensionChange(dimension)}
+              className={`h-8 rounded-lg border px-2.5 text-[10px] transition ${
+                activeDimension === dimension
+                  ? "border-[#9be9e5]/44 bg-[#2a8d8b] text-white"
+                  : "border-white/10 bg-white/[0.03] text-white/48 hover:border-white/18 hover:text-white"
+              }`}
+            >
+              {dimensionLabels[dimension]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid gap-2 p-4 md:grid-cols-2">
+        {items.slice(0, 16).map((item) => {
+          const currentValue = metricValue(item.current, metric);
+          const comparisonValue = metricValue(item.comparison, metric);
+          return (
+            <button
+              key={`${activeDimension}:${item.key}`}
+              type="button"
+              onClick={() => onDrill(activeDimension, item)}
+              className="group rounded-2xl border border-white/8 bg-white/[0.025] p-3 text-left transition hover:-translate-y-0.5 hover:border-[#7bd7d4]/28 hover:bg-white/[0.05] active:translate-y-0"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-xs text-white/84" title={item.name}>{item.rank}. {item.name}</span>
+                  <span className="mt-1 block truncate text-[9px] text-white/34">{item.meta || `${integer(item.current.itemsSold)} db • ${integer(item.current.transactions)} tranzakció`}</span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block text-xs text-white">{chartMetricConfig[metric].format(currentValue)}</span>
+                  <span className="mt-1 inline-flex"><DeltaPill value={item.deltaPercent?.[metric]} inverse={metric === "discountTotal" || metric === "unpaidTotal"} /></span>
+                </span>
+              </div>
+              <div className="mt-2.5 space-y-1">
+                <div className="h-2 overflow-hidden rounded-full bg-[#101a28]"><div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#64ddd7]" style={{ width: `${Math.max(currentValue === 0 ? 0 : 3, Math.abs(currentValue) / max * 100)}%` }} /></div>
+                <div className="h-1 overflow-hidden rounded-full bg-[#101a28]"><div className="h-full rounded-full bg-[#f0a43b]/75" style={{ width: `${Math.max(comparisonValue === 0 ? 0 : 2, Math.abs(comparisonValue) / max * 100)}%` }} /></div>
+              </div>
+            </button>
+          );
+        })}
+        {!items.length ? <div className="col-span-full rounded-2xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-white/38">Ebben a bontásban nincs megjeleníthető adat.</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function Heatmap({
+  heatmap,
+  metric,
+  onCellClick,
+}: {
+  heatmap: AifSalesCommandOverviewResponse["heatmap"];
+  metric: "revenue" | "itemsSold" | "transactions" | "grossProfit";
+  onCellClick: (actor: string, month: AifSalesCommandOverviewResponse["heatmap"]["months"][number]) => void;
+}) {
+  const values = heatmap.rows.flatMap((row) => row.values.map((value) => Math.abs(metricValue(value.current, metric))));
+  const max = Math.max(1, ...values);
+  const label = chartMetricConfig[metric].label;
+  return (
+    <section className={`${panel} overflow-hidden`}>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Havi hőtérkép</p>
+          <h2 className="mt-1 text-lg text-white">Ki mikor volt erős?</h2>
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-white/38">
+          <span>Gyengébb</span><span className="h-2.5 w-20 rounded-full bg-gradient-to-r from-[#172334] via-[#235d61] to-[#5ce0d9]" /><span>Erősebb</span>
+        </div>
+      </div>
+      <div className="overflow-x-auto p-4">
+        <div className="min-w-[760px]">
+          <div className="grid gap-1.5" style={{ gridTemplateColumns: `minmax(180px,1.3fr) repeat(${Math.max(1, heatmap.months.length)}, minmax(92px,1fr))` }}>
+            <div className="px-2 py-2 text-[9px] uppercase tracking-[0.12em] text-white/34">Eladó</div>
+            {heatmap.months.map((month) => <div key={month.index} className="px-2 py-2 text-center text-[9px] text-white/44">{month.label}</div>)}
+            {heatmap.rows.slice(0, 20).map((row) => (
+              <div key={row.actor} className="contents">
+                <div className="flex items-center gap-2 rounded-xl border border-white/7 bg-white/[0.025] px-3 py-2.5 text-xs text-white/76"><UserRound size={13} className="text-[#8ee6e2]" /><span className="truncate">{row.actor}</span></div>
+                {heatmap.months.map((month, index) => {
+                  const value = row.values[index];
+                  const currentValue = metricValue(value?.current, metric);
+                  const ratio = Math.min(1, Math.abs(currentValue) / max);
+                  const negative = currentValue < 0;
+                  const background = negative
+                    ? `rgba(225, 65, 92, ${0.12 + ratio * 0.65})`
+                    : `rgba(42, 141, 139, ${0.08 + ratio * 0.78})`;
+                  return (
+                    <FloatingHint
+                      key={`${row.actor}:${month.index}`}
+                      content={
+                        <div>
+                          <p className="font-medium text-white">{row.actor} • {month.label}</p>
+                          <p className="mt-1 text-[#aef4f0]">{label}: {chartMetricConfig[metric].format(currentValue)}</p>
+                          <p className="text-amber-100/82">Korábban: {chartMetricConfig[metric].format(metricValue(value?.comparison, metric))}</p>
+                          <p className="mt-1 text-white/45">{month.currentStart ? `${huDate(month.currentStart)} – ${huDate(month.currentEnd)}` : "Nincs vizsgált hónap"}</p>
+                        </div>
+                      }
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onCellClick(row.actor, month)}
+                        className="flex min-h-11 w-full items-center justify-center rounded-xl border border-white/7 px-2 text-[10px] text-white transition hover:border-[#bff8f5]/38 hover:brightness-125"
+                        style={{ background }}
+                      >
+                        <span className="truncate">{currentValue === 0 ? "–" : chartMetricConfig[metric].format(currentValue)}</span>
+                      </button>
+                    </FloatingHint>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          {!heatmap.rows.length ? <div className="rounded-2xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-white/38">Nincs hőtérképre tehető alkalmazotti adat.</div> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CoverageStrip({ data }: { data: AifSalesCommandOverviewResponse }) {
+  const items = [
+    {
+      label: "Vételár-lefedettség",
+      current: data.coverage.current.cost,
+      comparison: data.coverage.comparison.cost,
+      hint: "A nyereség csak azoknál a soroknál teljesen biztos, ahol van eladáskori vagy jelenlegi vételár.",
+    },
+    {
+      label: "Nettó-lefedettség",
+      current: data.coverage.current.net,
+      comparison: data.coverage.comparison.net,
+      hint: "A történeti sorok nettó értékéhez nettó forgalom vagy TVA-kulcs szükséges.",
+    },
+    {
+      label: "Történeti részletezettség",
+      current: data.coverage.current.historyDetail,
+      comparison: data.coverage.comparison.historyDetail,
+      hint: "A márka-, méret- és termékbontás csak a részletesen importált történeti forgalomra értelmezhető.",
+    },
+  ];
+  return (
+    <section className={`${panel} p-3.5`}>
+      <div className="grid gap-3 lg:grid-cols-[180px_repeat(3,1fr)] lg:items-center">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><ShieldCheck size={17} /></span>
+          <div><p className="text-[9px] uppercase tracking-[0.13em] text-white/38">Adatbiztonság</p><p className="mt-1 text-xs text-white/70">Mit tudunk biztosan?</p></div>
+        </div>
+        {items.map((item) => (
+          <FloatingHint key={item.label} content={item.hint}>
+            <div className="w-full rounded-xl border border-white/7 bg-white/[0.025] px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2 text-[9px]"><span className="truncate text-white/48">{item.label}</span><span className="text-white/76">{percentage(item.current, 0)}</span></div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#101a28]"><div className={`h-full rounded-full ${item.current >= 99 ? "bg-[#54d7ce]" : item.current >= 75 ? "bg-amber-400" : "bg-rose-500"}`} style={{ width: `${Math.max(0, Math.min(100, item.current))}%` }} /></div>
+              <p className="mt-1.5 text-[8px] text-white/28">Összehasonlítás: {percentage(item.comparison, 0)}</p>
+            </div>
+          </FloatingHint>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DetailDrawer({ item, onClose }: { item: AifSalesCommandDetailItem | null; onClose: () => void }) {
+  closeOnEscape(Boolean(item), onClose);
+  useEffect(() => {
+    if (!item) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [item]);
+  if (!item) return null;
+  const rows = [
+    ["Forrás", sourceLabel(item.source)],
+    ["Dátum", huDate(item.date)],
+    ["Üzlet", item.locationName || item.locationCode || "–"],
+    ["Eladó", item.actor || "–"],
+    ["Bizonylat", item.documentNumber || "Havi összesítő"],
+    ["Márka", item.brandName || "–"],
+    ["Főkategória", item.categoryName || "–"],
+    ["Alkategória", item.subcategoryName || "–"],
+    ["Termék", item.productTitle || "Összesített adat"],
+    ["Termékkód", item.productCode || "–"],
+    ["Szín", item.colorName || "–"],
+    ["Méret", item.size || "–"],
+    ["Fizetési mód", paymentLabel(item.paymentMethod)],
+  ];
+  return createPortal(
+    <div className="fixed inset-0 z-[1100] bg-slate-950/72 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[560px] flex-col border-l border-[#7bd7d4]/24 bg-[#172334] shadow-[-24px_0_80px_rgba(0,0,0,0.55)]">
+        <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#1c2d42] to-[#20505a] px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-[9px] uppercase tracking-[0.15em] text-white/42">Részletes adatkártya</p>
+            <h3 className="mt-1 truncate text-xl text-white">{item.productTitle || item.documentNumber || "Történeti összesítő"}</h3>
+            <p className="mt-1 text-xs text-white/42">{huDate(item.date)} • {item.actor}</p>
+          </div>
+          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              ["Forgalom", money(item.revenue), "text-white"],
+              ["Nettó", money(item.netRevenue), "text-[#bff8f5]"],
+              ["Nyereség", money(item.grossProfit), item.grossProfit >= 0 ? "text-emerald-100" : "text-rose-100"],
+              ["Darab", `${integer(item.quantity)} db`, "text-white"],
+              ["Kedvezmény", money(item.discountTotal), "text-amber-50"],
+              ["Kintlévőség", money(item.unpaidTotal), "text-rose-50"],
+            ].map(([label, value, tone]) => (
+              <div key={String(label)} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">{label}</p><p className={`mt-1.5 text-sm ${tone}`}>{value}</p></div>
+            ))}
+          </div>
+          <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
+            {rows.map(([label, value]) => <div key={label} className="grid grid-cols-[130px_1fr] gap-3 border-t border-white/7 px-4 py-3 first:border-t-0"><span className="text-[10px] uppercase tracking-[0.08em] text-white/34">{label}</span><span className="text-sm text-white/76">{value}</span></div>)}
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <div className={`rounded-xl border px-3 py-3 ${item.costCovered ? "border-emerald-200/18 bg-emerald-400/8" : "border-amber-200/18 bg-amber-400/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">Vételár</p><p className="mt-1 text-xs text-white/72">{item.costCovered ? `${money(item.estimatedCost)} • lefedett` : "Nincs biztos vételár-adat"}</p></div>
+            <div className={`rounded-xl border px-3 py-3 ${item.netCovered ? "border-emerald-200/18 bg-emerald-400/8" : "border-amber-200/18 bg-amber-400/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">Nettó érték</p><p className="mt-1 text-xs text-white/72">{item.netCovered ? "TVA-kezelés lefedett" : "A történeti TVA-adat hiányos"}</p></div>
+          </div>
+          {item.note ? <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">Megjegyzés</p><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-white/70">{item.note}</p></div> : null}
+        </div>
+      </aside>
+    </div>,
+    document.body,
+  );
+}
+
+function DetailsTable({
+  rows,
+  onOpen,
+}: {
+  rows: AifSalesCommandDetailItem[];
+  onOpen: (item: AifSalesCommandDetailItem) => void;
+}) {
+  const [limit, setLimit] = useState(80);
+  useEffect(() => setLimit(80), [rows]);
+  const visible = rows.slice(0, limit);
+  return (
+    <section className={`${panel} overflow-hidden`}>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Részletes eseménysor</p>
+          <h2 className="mt-1 text-lg text-white">Miből áll össze az eredmény?</h2>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] text-white/44">{rows.length} sor</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1180px] border-collapse text-xs">
+          <thead className="bg-[#152235] text-[9px] uppercase tracking-[0.08em] text-white/38">
+            <tr>
+              <th className="px-3 py-3 text-left">Forrás / dátum</th>
+              <th className="px-3 py-3 text-left">Termék</th>
+              <th className="px-3 py-3 text-left">Eladó / üzlet</th>
+              <th className="px-3 py-3 text-center">Darab</th>
+              <th className="px-3 py-3 text-right">Forgalom</th>
+              <th className="px-3 py-3 text-right">Nettó</th>
+              <th className="px-3 py-3 text-right">Nyereség</th>
+              <th className="px-3 py-3 text-right">Kedvezmény</th>
+              <th className="w-12 px-2 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((item) => (
+              <tr key={`${item.source}:${item.id}`} className="group border-t border-white/7 hover:bg-white/[0.035]">
+                <td className="whitespace-nowrap px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${sourceBadge(item.source)}`}>{sourceLabel(item.source)}</span><p className="mt-1.5 text-[10px] text-white/42">{huDate(item.date)}{item.documentNumber ? ` • ${item.documentNumber}` : ""}</p></td>
+                <td className="min-w-[260px] px-3 py-3"><p className="max-w-[310px] truncate text-white/84" title={item.productTitle || "Összesített adat"}>{item.productTitle || "Összesített havi adat"}</p><p className="mt-1 max-w-[310px] truncate text-[10px] text-white/38" title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}>{[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || item.granularity}</p></td>
+                <td className="min-w-[160px] px-3 py-3"><p className="text-white/72">{item.actor}</p><p className="mt-1 truncate text-[10px] text-white/36">{item.locationName || item.locationCode || "–"}</p></td>
+                <td className="px-3 py-3 text-center"><span className="rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1.5 text-[#d5fffd]">{integer(item.quantity)}</span></td>
+                <td className="whitespace-nowrap px-3 py-3 text-right text-white">{money(item.revenue)}</td>
+                <td className="whitespace-nowrap px-3 py-3 text-right text-[#bff8f5]/82">{money(item.netRevenue)}</td>
+                <td className={`whitespace-nowrap px-3 py-3 text-right ${item.grossProfit >= 0 ? "text-emerald-100" : "text-rose-100"}`}>{money(item.grossProfit)}</td>
+                <td className="whitespace-nowrap px-3 py-3 text-right text-amber-50">{money(item.discountTotal)}</td>
+                <td className="px-2 py-3 text-center"><button type="button" onClick={() => onOpen(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.035] text-white/52 transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/16 hover:text-white"><ChevronRight size={15} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!rows.length ? <div className="px-4 py-14 text-center"><PackageSearch className="mx-auto text-[#7bd7d4]/62" size={28} /><p className="mt-2 text-sm text-white/66">Nincs részletes adat a kiválasztott feltételekkel.</p></div> : null}
+      </div>
+      {limit < rows.length ? <div className="flex justify-center border-t border-white/8 p-3"><button type="button" className={neutralButton} onClick={() => setLimit((current) => current + 80)}>További sorok</button></div> : null}
+    </section>
+  );
+}
+
+function FieldLabel({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+  return <label className="grid min-w-0 gap-1.5 text-[9px] uppercase tracking-[0.1em] text-white/42"><span className="flex items-center gap-1.5">{label}{hint ? <FloatingHint content={hint}><Info size={11} className="cursor-help text-white/36" /></FloatingHint> : null}</span>{children}</label>;
+}
+
+function HistoryModal({
+  open,
+  onClose,
+  data,
+  onChanged,
+}: {
+  open: boolean;
+  onClose: () => void;
+  data: AifSalesCommandOverviewResponse | null;
+  onChanged: () => Promise<void>;
+}) {
+  const [tab, setTab] = useState<HistoryTab>("manual");
+  const [imports, setImports] = useState<AifSalesHistoryImportSummary[]>([]);
+  const [importsLoading, setImportsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<AifSalesHistoryImportSummary | null>(null);
+  const [detail, setDetail] = useState<{ item: AifSalesHistoryImportSummary; rows: AifSalesHistoryInputRow[] } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const today = localIsoDate();
+  const defaultMonth = `${Number(today.slice(0, 4)) - 1}-${today.slice(5, 7)}`;
+  const defaultLocation = data?.filterOptions.locations.find((location) => location.code === "main_warehouse")?.code
+    || data?.filterOptions.locations[0]?.code
+    || "main_warehouse";
+  const [manualSourceName, setManualSourceName] = useState("Visszamenőleges havi eladások");
+  const [manualRows, setManualRows] = useState<AifSalesHistoryInputRow[]>([]);
+  const [manualDraft, setManualDraft] = useState<ManualHistoryDraft>({
+    month: defaultMonth,
+    location: defaultLocation,
+    actor: "",
+    revenue: "",
+    quantity: "",
+    transactions: "",
+    estimatedCost: "",
+    discountTotal: "",
+    unpaidTotal: "",
+    note: "",
+  });
+
+  const [sheet, setSheet] = useState<ImportedSheet | null>(null);
+  const [sheetChoices, setSheetChoices] = useState<ImportedSheet[]>([]);
+  const [mapping, setMapping] = useState<FileMapping>(emptyFileMapping());
+  const [showOptionalMapping, setShowOptionalMapping] = useState(false);
+  const [fileSourceName, setFileSourceName] = useState("");
+  const [fileNote, setFileNote] = useState("");
+  const [fileDefaultLocation, setFileDefaultLocation] = useState(defaultLocation);
+  const [fileDefaultActor, setFileDefaultActor] = useState("");
+  const [fileDefaultTva, setFileDefaultTva] = useState(String(data?.salesTva.rate ?? 21));
+  const [fileDefaultGranularity, setFileDefaultGranularity] = useState<"monthly" | "daily" | "line">("line");
+  const [filePriceIncludesTva, setFilePriceIncludesTva] = useState(true);
+  const [allowDuplicate, setAllowDuplicate] = useState(false);
+
+  const loadImports = useCallback(async () => {
+    setImportsLoading(true);
+    try {
+      const response = await apiAifSalesHistoryImports(150);
+      setImports(response.items || []);
+    } catch (loadError: any) {
+      setError(loadError?.message || "Az importelőzmények nem tölthetők be.");
+    } finally {
+      setImportsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setError("");
+    setSuccess("");
+    void loadImports();
+  }, [open, loadImports]);
+
+  useEffect(() => {
+    if (!data) return;
+    const location = data.filterOptions.locations.find((item) => item.code === "main_warehouse")?.code
+      || data.filterOptions.locations[0]?.code
+      || defaultLocation;
+    setManualDraft((current) => ({ ...current, location: current.location || location }));
+    setFileDefaultLocation((current) => current || location);
+    setFileDefaultTva(String(data.salesTva.rate ?? 21));
+    setFilePriceIncludesTva(data.salesTva.priceIncludesTva !== false);
+  }, [data, defaultLocation]);
+
+  closeOnEscape(open && !deleteTarget, onClose);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [open]);
+
+  const locationOptions = useMemo<SelectOption[]>(() => [
+    ...(data?.filterOptions.locations || []).map((location) => ({ value: location.code, label: location.name, hint: location.code })),
+  ], [data?.filterOptions.locations]);
+
+  const columnOptions = useMemo<SelectOption[]>(() => [
+    { value: "", label: "Nincs oszlop" },
+    ...(sheet?.columns || []).map((column) => ({ value: column, label: column })),
+  ], [sheet?.columns]);
+
+  const mappedFileRows = useMemo<AifSalesHistoryInputRow[]>(() => {
+    if (!sheet) return [];
+    return sheet.rows.map((raw, index) => {
+      const row: Record<string, unknown> = { rowNo: index + 2 };
+      for (const field of fileFields) {
+        const column = mapping[field.key];
+        if (column) row[field.key] = raw[column];
+      }
+      if (!mapping.location && fileDefaultLocation) row.location = fileDefaultLocation;
+      if (!mapping.actor && fileDefaultActor.trim()) row.actor = fileDefaultActor.trim();
+      if (!mapping.tvaRate && fileDefaultTva.trim()) row.tvaRate = fileDefaultTva;
+      row.priceIncludesTva = filePriceIncludesTva;
+      row.sourceGranularity = fileDefaultGranularity;
+      return row as AifSalesHistoryInputRow;
+    });
+  }, [sheet, mapping, fileDefaultLocation, fileDefaultActor, fileDefaultTva, filePriceIncludesTva, fileDefaultGranularity]);
+
+  const fileValidation = useMemo(() => {
+    if (!sheet) return { errors: [] as string[], validRows: 0 };
+    const errors: string[] = [];
+    if (!mapping.soldOn) errors.push("A dátum vagy hónap oszlop nincs társítva.");
+    if (!mapping.revenue) errors.push("A forgalom oszlop nincs társítva.");
+    if (!mapping.location && !fileDefaultLocation) errors.push("Az üzlethez oszlop vagy alapérték szükséges.");
+    let validRows = 0;
+    mappedFileRows.forEach((row, index) => {
+      const date = String(row.soldOn ?? "").trim();
+      const revenue = nullableNumber(row.revenue);
+      const location = String(row.location ?? "").trim();
+      if (date && revenue !== null && location) validRows += 1;
+      else if (errors.length < 12) errors.push(`${index + 2}. sor: hiányos dátum, üzlet vagy forgalom.`);
+    });
+    return { errors: Array.from(new Set(errors)), validRows };
+  }, [sheet, mapping.soldOn, mapping.revenue, mapping.location, fileDefaultLocation, mappedFileRows]);
+
+  async function parseFile(file: File) {
+    setError("");
+    setSuccess("");
+    try {
+      const bytes = await file.arrayBuffer();
+      const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
+      const extensionRaw = (file.name.split(".").pop()?.toLowerCase() || "other") as ImportedSheet["extension"];
+      const extension: ImportedSheet["extension"] = ["xlsx", "xls", "csv"].includes(extensionRaw) ? extensionRaw : "other";
+      const choices = workbook.SheetNames.map((sheetName: string) => {
+        const worksheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+          defval: "",
+          raw: false,
+          dateNF: "yyyy-mm-dd",
+        });
+        return {
+          fileName: file.name,
+          extension,
+          sheetName,
+          columns: Array.from(new Set(rows.flatMap((row) => Object.keys(row)))),
+          rows,
+        } satisfies ImportedSheet;
+      }).filter((candidate: ImportedSheet) => candidate.rows.length > 0);
+      if (!choices.length) throw new Error("A fájl nem tartalmaz importálható adatsort.");
+      const nextSheet = choices[0];
+      setSheetChoices(choices);
+      setSheet(nextSheet);
+      setMapping(detectFileMapping(nextSheet.columns));
+      setFileSourceName(file.name.replace(/\.[^.]+$/, ""));
+      setShowOptionalMapping(false);
+    } catch (parseError: any) {
+      setSheet(null);
+      setSheetChoices([]);
+      setMapping(emptyFileMapping());
+      setError(parseError?.message || "A fájl nem olvasható.");
+    }
+  }
+
+  function chooseWorkbookSheet(sheetName: string) {
+    const next = sheetChoices.find((candidate) => candidate.sheetName === sheetName);
+    if (!next) return;
+    setSheet(next);
+    setMapping(detectFileMapping(next.columns));
+    setShowOptionalMapping(false);
+    setError("");
+  }
+
+  function downloadTemplate() {
+    const detailed = [
+      {
+        Dátum: "2025-08-01",
+        Üzlet: "main_warehouse",
+        Eladó: "Minta Eladó",
+        Bizonylat: "REGI-2025-0001",
+        Márka: "Under Armour",
+        Főkategória: "Ruházat",
+        Alkategória: "Pólók",
+        Termék: "Minta termék",
+        Termékkód: "MINTA-001",
+        Szín: "Fekete",
+        Méret: "M",
+        Darab: 1,
+        Tranzakciók: 1,
+        Forgalom: 199.99,
+        "Nettó forgalom": 165.28,
+        Kedvezmény: 0,
+        "Beszerzési érték": 82.5,
+        "Fizetési mód": "cash",
+        "TVA %": 21,
+        Megjegyzés: "",
+      },
+    ];
+    const monthly = [
+      {
+        Hónap: "2025-08",
+        Üzlet: "main_warehouse",
+        Eladó: "Minta Eladó",
+        Forgalom: 42850,
+        Darab: 164,
+        Tranzakciók: 91,
+        Kedvezmény: 1250,
+        Kintlévőség: 0,
+        "Beszerzési érték": 21400,
+        "TVA %": 21,
+        Megjegyzés: "Havi összesítő",
+      },
+    ];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailed), "Részletes sorok");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(monthly), "Havi összesítő");
+    XLSX.writeFile(workbook, "AllIn_torteneti_eladas_import_sablon.xlsx");
+  }
+
+  function addManualRow() {
+    setError("");
+    const revenue = nullableNumber(manualDraft.revenue);
+    if (!manualDraft.month || !manualDraft.location || !manualDraft.actor.trim() || revenue === null) {
+      setError("A hónap, üzlet, eladó és forgalom kötelező.");
+      return;
+    }
+    const row: AifSalesHistoryInputRow = {
+      rowNo: manualRows.length + 1,
+      soldOn: `${manualDraft.month}-01`,
+      location: manualDraft.location,
+      actor: manualDraft.actor.trim(),
+      sourceGranularity: "monthly",
+      revenue,
+      quantity: nullableNumber(manualDraft.quantity),
+      transactions: nullableNumber(manualDraft.transactions),
+      estimatedCost: nullableNumber(manualDraft.estimatedCost),
+      discountTotal: nullableNumber(manualDraft.discountTotal),
+      unpaidTotal: nullableNumber(manualDraft.unpaidTotal),
+      tvaRate: data?.salesTva.rate ?? 21,
+      priceIncludesTva: data?.salesTva.priceIncludesTva !== false,
+      note: manualDraft.note.trim() || null,
+    };
+    setManualRows((current) => [...current, row]);
+    setManualDraft((current) => ({
+      ...current,
+      revenue: "",
+      quantity: "",
+      transactions: "",
+      estimatedCost: "",
+      discountTotal: "",
+      unpaidTotal: "",
+      note: "",
+    }));
+  }
+
+  async function saveManualRows() {
+    if (!manualRows.length || saving) return;
+    setSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      await apiAifCreateSalesHistoryImport({
+        sourceName: manualSourceName.trim() || "Visszamenőleges havi eladások",
+        sourceKind: "manual",
+        rows: manualRows,
+      });
+      setSuccess(`${manualRows.length} havi sor sikeresen bekerült.`);
+      setManualRows([]);
+      await Promise.all([loadImports(), onChanged()]);
+    } catch (saveError: any) {
+      setError(saveError?.message || "A havi adatok mentése nem sikerült.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveFileRows() {
+    if (!sheet || saving || fileValidation.errors.length || !mappedFileRows.length) return;
+    setSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      await apiAifCreateSalesHistoryImport({
+        sourceName: fileSourceName.trim() || sheet.fileName,
+        sourceKind: sheet.extension,
+        originalFileName: sheet.fileName,
+        note: fileNote.trim() || null,
+        allowDuplicate,
+        defaults: {
+          location: fileDefaultLocation || undefined,
+          actor: fileDefaultActor.trim() || undefined,
+          tvaRate: nullableNumber(fileDefaultTva),
+          priceIncludesTva: filePriceIncludesTva,
+          granularity: fileDefaultGranularity,
+        },
+        rows: mappedFileRows,
+      });
+      setSuccess(`${mappedFileRows.length} történeti sor sikeresen importálva.`);
+      setSheet(null);
+      setSheetChoices([]);
+      setMapping(emptyFileMapping());
+      setFileSourceName("");
+      setFileNote("");
+      await Promise.all([loadImports(), onChanged()]);
+    } catch (saveError: any) {
+      const validation = saveError?.payload?.errors as Array<{ rowNo?: number; message?: string }> | undefined;
+      setError([
+        saveError?.message || "A fájl importálása nem sikerült.",
+        ...(validation || []).slice(0, 6).map((item) => `${item.rowNo || "?"}. sor: ${item.message || "hibás"}`),
+      ].join("\n"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openImportDetail(item: AifSalesHistoryImportSummary) {
+    setDetailLoading(true);
+    setError("");
+    try {
+      const response = await apiAifSalesHistoryImportDetail(item.id);
+      setDetail({ item: response.item, rows: response.rows || [] });
+    } catch (detailError: any) {
+      setError(detailError?.message || "Az import részlete nem tölthető be.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function deleteImport() {
+    if (!deleteTarget || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await apiAifDeleteSalesHistoryImport(deleteTarget.id);
+      setDeleteTarget(null);
+      if (detail?.item.id === deleteTarget.id) setDetail(null);
+      setSuccess("A történeti import törölve lett. Az élő készlethez és pénztárhoz a rendszer nem nyúlt.");
+      await Promise.all([loadImports(), onChanged()]);
+    } catch (deleteError: any) {
+      setError(deleteError?.message || "Az import törlése nem sikerült.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] bg-slate-950/78 p-2 backdrop-blur-md sm:p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !saving) onClose(); }}>
+      <section className="mx-auto flex h-full max-h-[94vh] w-full max-w-[1380px] flex-col overflow-hidden rounded-[28px] border border-[#8ce7e2]/26 bg-[#172334] text-white shadow-[0_38px_130px_rgba(0,0,0,0.70)]">
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#1c2d42] via-[#20384a] to-[#20505a] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/22 text-[#d7fffd]"><Database size={22} /></span>
+            <div className="min-w-0"><p className="text-[9px] uppercase tracking-[0.16em] text-white/42">Készletet és pénztárat nem módosító adatbevitel</p><h2 className="mt-1 truncate text-xl text-white sm:text-2xl">Történeti eladások</h2></div>
+          </div>
+          <div className="flex items-center gap-2"><button type="button" className={neutralButton} onClick={downloadTemplate}><Download size={15} />Import-sablon</button><button type="button" disabled={saving} onClick={onClose} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button></div>
+        </header>
+
+        <div className="flex gap-1.5 overflow-x-auto border-b border-white/8 bg-[#142033] px-4 py-2.5">
+          {[
+            ["manual", "Gyors havi bevitel", CalendarDays],
+            ["file", "Excel / CSV import", FileSpreadsheet],
+            ["imports", "Importelőzmények", Database],
+          ].map(([key, label, Icon]) => (
+            <button key={String(key)} type="button" onClick={() => { setTab(key as HistoryTab); setError(""); setSuccess(""); }} className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs transition ${tab === key ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-white/9 bg-white/[0.025] text-white/48 hover:text-white"}`}><Icon size={14} />{String(label)}</button>
+          ))}
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {error ? <div className="mb-4 whitespace-pre-line rounded-2xl border border-rose-300/28 bg-rose-500/13 px-4 py-3 text-sm leading-6 text-rose-50"><AlertTriangle size={17} className="mr-2 inline" />{error}</div> : null}
+          {success ? <div className="mb-4 rounded-2xl border border-emerald-200/24 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-50"><Check size={17} className="mr-2 inline" />{success}</div> : null}
+
+          {tab === "manual" ? (
+            <div className="grid gap-4 xl:grid-cols-[0.9fr_1.35fr]">
+              <section className={`${panel} p-4`}>
+                <div className="flex items-start justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Egy hónap / egy eladó</p><h3 className="mt-1 text-base">Új havi összesítő</h3></div><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><CalendarDays size={17} /></span></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <FieldLabel label="Hónap"><input type="month" className={control} value={manualDraft.month} onChange={(event) => setManualDraft({ ...manualDraft, month: event.target.value })} /></FieldLabel>
+                  <FieldLabel label="Üzlet"><SelectControl value={manualDraft.location} onChange={(value) => setManualDraft({ ...manualDraft, location: value })} options={locationOptions} placeholder="Válassz üzletet" /></FieldLabel>
+                  <FieldLabel label="Eladó"><input className={control} value={manualDraft.actor} onChange={(event) => setManualDraft({ ...manualDraft, actor: event.target.value })} placeholder="Alkalmazott neve" /></FieldLabel>
+                  <FieldLabel label="Forgalom"><input inputMode="decimal" className={control} value={manualDraft.revenue} onChange={(event) => setManualDraft({ ...manualDraft, revenue: event.target.value })} placeholder="0,00" /></FieldLabel>
+                  <FieldLabel label="Darab"><input inputMode="decimal" className={control} value={manualDraft.quantity} onChange={(event) => setManualDraft({ ...manualDraft, quantity: event.target.value })} placeholder="0" /></FieldLabel>
+                  <FieldLabel label="Tranzakció"><input inputMode="decimal" className={control} value={manualDraft.transactions} onChange={(event) => setManualDraft({ ...manualDraft, transactions: event.target.value })} placeholder="0" /></FieldLabel>
+                  <FieldLabel label="Beszerzési érték" hint="Ebből számolható a történeti nyereség."><input inputMode="decimal" className={control} value={manualDraft.estimatedCost} onChange={(event) => setManualDraft({ ...manualDraft, estimatedCost: event.target.value })} placeholder="0,00" /></FieldLabel>
+                  <FieldLabel label="Kedvezmény"><input inputMode="decimal" className={control} value={manualDraft.discountTotal} onChange={(event) => setManualDraft({ ...manualDraft, discountTotal: event.target.value })} placeholder="0,00" /></FieldLabel>
+                  <FieldLabel label="Kintlévőség"><input inputMode="decimal" className={control} value={manualDraft.unpaidTotal} onChange={(event) => setManualDraft({ ...manualDraft, unpaidTotal: event.target.value })} placeholder="0,00" /></FieldLabel>
+                  <FieldLabel label="Megjegyzés"><input className={control} value={manualDraft.note} onChange={(event) => setManualDraft({ ...manualDraft, note: event.target.value })} placeholder="Opcionális" /></FieldLabel>
+                </div>
+                <button type="button" className={`${primaryButton} mt-4 w-full`} onClick={addManualRow}><Check size={15} />Sor hozzáadása</button>
+              </section>
+
+              <section className={`${panel} overflow-hidden`}>
+                <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Mentés előtt ellenőrizhető</p><h3 className="mt-1 text-base">Előkészített havi sorok</h3></div><div className="w-full max-w-[350px]"><FieldLabel label="Import neve"><input className={control} value={manualSourceName} onChange={(event) => setManualSourceName(event.target.value)} /></FieldLabel></div></div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-xs"><thead className="bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Hónap</th><th className="px-3 py-3 text-left">Üzlet</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-center">Tranzakció</th><th className="px-3 py-3 text-right">Költség</th><th className="w-12"></th></tr></thead><tbody>{manualRows.map((row, index) => <tr key={index} className="border-t border-white/7"><td className="px-3 py-3">{String(row.soldOn).slice(0, 7)}</td><td className="px-3 py-3 text-white/62">{String(row.location)}</td><td className="px-3 py-3">{String(row.actor)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-center">{integer(row.transactions)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === null ? "–" : money(row.estimatedCost)}</td><td className="px-2 py-3"><button type="button" onClick={() => setManualRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/18 bg-rose-500/8 text-rose-100 hover:bg-rose-500/18"><Trash2 size={14} /></button></td></tr>)}</tbody></table>
+                  {!manualRows.length ? <div className="px-4 py-14 text-center text-xs text-white/36">A bal oldali űrlappal adj hozzá havi sorokat.</div> : null}
+                </div>
+                <div className="flex justify-end border-t border-white/8 p-4"><button type="button" className={primaryButton} disabled={!manualRows.length || saving} onClick={() => void saveManualRows()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}Mentés az elemzésekhez</button></div>
+              </section>
+            </div>
+          ) : null}
+
+          {tab === "file" ? (
+            <div className="space-y-4">
+              <section className={`${panel} p-4`}>
+                <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+                  <label className="group grid min-h-[122px] cursor-pointer place-items-center rounded-2xl border border-dashed border-[#7bd7d4]/30 bg-[#2a8d8b]/[0.055] px-4 text-center transition hover:border-[#8ce7e2]/55 hover:bg-[#2a8d8b]/[0.10]">
+                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void parseFile(file); event.currentTarget.value = ""; }} />
+                    <span><Upload className="mx-auto text-[#8ee6e2]" size={25} /><span className="mt-2 block text-sm text-white">Excel vagy CSV kiválasztása</span><span className="mt-1 block text-[10px] text-white/36">Az első munkalapot olvassuk be. Legfeljebb 25 000 sor.</span></span>
+                  </label>
+                  <button type="button" className={`${neutralButton} lg:h-[122px] lg:flex-col lg:px-6`} onClick={downloadTemplate}><Download size={20} />Sablon letöltése</button>
+                </div>
+                {sheet ? <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px]"><span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-1 text-[#cffffd]">{sheet.fileName}</span>{sheetChoices.length > 1 ? <div className="w-full max-w-[300px]"><SelectControl value={sheet.sheetName} onChange={chooseWorkbookSheet} options={sheetChoices.map((candidate) => ({ value: candidate.sheetName, label: candidate.sheetName, hint: `${candidate.rows.length} sor` }))} placeholder="Munkalap" /></div> : <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-white/44">{sheet.sheetName}</span>}<span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-white/44">{sheet.rows.length} sor • {sheet.columns.length} oszlop</span></div> : null}
+              </section>
+
+              {sheet ? (
+                <div className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
+                  <section className={`${panel} p-4`}>
+                    <div className="flex items-start justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Alapértékek</p><h3 className="mt-1 text-base">Import beállításai</h3></div><SlidersHorizontal size={18} className="text-[#8ee6e2]" /></div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                      <FieldLabel label="Import neve"><input className={control} value={fileSourceName} onChange={(event) => setFileSourceName(event.target.value)} /></FieldLabel>
+                      <FieldLabel label="Alapértelmezett üzlet"><SelectControl value={fileDefaultLocation} onChange={setFileDefaultLocation} options={[{ value: "", label: "Csak az Excelből" }, ...locationOptions]} placeholder="Válassz" /></FieldLabel>
+                      <FieldLabel label="Alapértelmezett eladó"><input className={control} value={fileDefaultActor} onChange={(event) => setFileDefaultActor(event.target.value)} placeholder="Ha nincs külön oszlop" /></FieldLabel>
+                      <FieldLabel label="Adat részletezettsége"><SelectControl value={fileDefaultGranularity} onChange={(value) => setFileDefaultGranularity(value as typeof fileDefaultGranularity)} options={[{ value: "line", label: "Terméksoros" }, { value: "daily", label: "Napi összesítő" }, { value: "monthly", label: "Havi összesítő" }]} placeholder="Részletezettség" /></FieldLabel>
+                      <FieldLabel label="TVA %"><input className={control} inputMode="decimal" value={fileDefaultTva} onChange={(event) => setFileDefaultTva(event.target.value)} /></FieldLabel>
+                      <FieldLabel label="Megjegyzés"><input className={control} value={fileNote} onChange={(event) => setFileNote(event.target.value)} placeholder="Opcionális" /></FieldLabel>
+                    </div>
+                    <div className="mt-4 space-y-2 rounded-2xl border border-white/8 bg-white/[0.025] p-3">
+                      <label className="flex cursor-pointer items-center justify-between gap-3 text-xs text-white/64"><span>Az árak tartalmazzák a TVA-t</span><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={filePriceIncludesTva} onChange={(event) => setFilePriceIncludesTva(event.target.checked)} /></label>
+                      <label className="flex cursor-pointer items-center justify-between gap-3 border-t border-white/7 pt-2 text-xs text-white/64"><span>Azonos adatcsomag ismételt engedélyezése</span><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={allowDuplicate} onChange={(event) => setAllowDuplicate(event.target.checked)} /></label>
+                    </div>
+                  </section>
+
+                  <section className={`${panel} overflow-hidden`}>
+                    <div className="flex items-start justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Oszloptársítás</p><h3 className="mt-1 text-base">Mit jelentenek az Excel oszlopai?</h3></div><span className={`rounded-full border px-3 py-1 text-[10px] ${fileValidation.errors.length ? "border-rose-200/22 bg-rose-500/10 text-rose-50" : "border-emerald-200/22 bg-emerald-400/10 text-emerald-50"}`}>{fileValidation.validRows}/{sheet.rows.length} használható</span></div>
+                    <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {fileFields.filter((field) => field.required || ["location", "actor"].includes(field.key)).map((field) => <FieldLabel key={field.key} label={`${field.label}${field.required ? " *" : ""}`}><SelectControl value={mapping[field.key]} onChange={(value) => setMapping({ ...mapping, [field.key]: value })} options={columnOptions} placeholder="Oszlop kiválasztása" /></FieldLabel>)}
+                    </div>
+                    <div className="border-t border-white/8 px-4 py-3"><button type="button" className={neutralButton} onClick={() => setShowOptionalMapping((current) => !current)}><ChevronDown size={14} className={`transition-transform ${showOptionalMapping ? "rotate-180" : ""}`} />További mezők</button></div>
+                    {showOptionalMapping ? <div className="grid gap-3 border-t border-white/8 p-4 sm:grid-cols-2 lg:grid-cols-3">{fileFields.filter((field) => !field.required && !["location", "actor"].includes(field.key)).map((field) => <FieldLabel key={field.key} label={field.label}><SelectControl value={mapping[field.key]} onChange={(value) => setMapping({ ...mapping, [field.key]: value })} options={columnOptions} placeholder="Nincs társítva" /></FieldLabel>)}</div> : null}
+                  </section>
+                </div>
+              ) : null}
+
+              {sheet ? (
+                <section className={`${panel} overflow-hidden`}>
+                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Előnézet</p><h3 className="mt-1 text-base">Az első feldolgozott sorok</h3></div>{fileValidation.errors.length ? <span className="max-w-[560px] text-right text-[10px] leading-5 text-rose-100/78">{fileValidation.errors.slice(0, 3).join(" • ")}</span> : <span className="text-[10px] text-emerald-100/70">Az alapellenőrzés rendben</span>}</div>
+                  <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-xs"><thead className="bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Dátum</th><th className="px-3 py-3 text-left">Üzlet</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Márka / méret</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-right">Költség</th></tr></thead><tbody>{mappedFileRows.slice(0, 8).map((row, index) => <tr key={index} className="border-t border-white/7"><td className="px-3 py-3">{String(row.soldOn || "–")}</td><td className="px-3 py-3 text-white/58">{String(row.location || "–")}</td><td className="px-3 py-3">{String(row.actor || "Ismeretlen")}</td><td className="px-3 py-3">{String(row.productTitle || row.productCode || "Összesített adat")}</td><td className="px-3 py-3 text-white/46">{[row.brandName, row.size].filter(Boolean).join(" • ") || "–"}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === undefined || row.estimatedCost === null || String(row.estimatedCost) === "" ? "–" : money(row.estimatedCost)}</td></tr>)}</tbody></table></div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/8 p-4"><p className="text-[10px] text-white/36">A mentés az összes {sheet.rows.length} sort egyszerre ellenőrzi. Hibánál semmi sem kerül be félig.</p><button type="button" className={primaryButton} disabled={saving || Boolean(fileValidation.errors.length)} onClick={() => void saveFileRows()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}Importálás</button></div>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+
+          {tab === "imports" ? (
+            <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+              <section className={`${panel} overflow-hidden`}>
+                <div className="flex items-start justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Visszakereshető és törölhető</p><h3 className="mt-1 text-base">Importelőzmények</h3></div><button type="button" className={neutralButton} onClick={() => void loadImports()} disabled={importsLoading}><RefreshCw size={14} className={importsLoading ? "animate-spin" : ""} />Frissítés</button></div>
+                <div className="max-h-[620px] space-y-2 overflow-y-auto p-3">
+                  {imports.map((item) => <button key={item.id} type="button" onClick={() => void openImportDetail(item)} className={`w-full rounded-2xl border p-3 text-left transition ${detail?.item.id === item.id ? "border-[#8ce7e2]/38 bg-[#2a8d8b]/15" : "border-white/8 bg-white/[0.025] hover:border-white/16 hover:bg-white/[0.05]"}`}><div className="flex items-start justify-between gap-3"><span className="min-w-0"><span className="block truncate text-sm text-white/82">{item.sourceName}</span><span className="mt-1 block text-[9px] text-white/34">{huDate(item.periodFrom)} – {huDate(item.periodTo)} • {item.rowCount} sor • {dateTime(item.createdAt)}</span></span><ChevronRight size={15} className="shrink-0 text-white/30" /></div><div className="mt-2 grid grid-cols-3 gap-2 text-[10px]"><span className="rounded-lg bg-white/[0.035] px-2 py-1.5 text-white/52">{money(item.revenue)}</span><span className="rounded-lg bg-white/[0.035] px-2 py-1.5 text-white/52">{integer(item.itemsSold)} db</span><span className="rounded-lg bg-white/[0.035] px-2 py-1.5 text-white/52">{integer(item.transactions)} eladás</span></div></button>)}
+                  {importsLoading ? <div className="flex items-center justify-center gap-2 py-12 text-xs text-white/42"><Loader2 size={17} className="animate-spin" />Betöltés...</div> : null}
+                  {!importsLoading && !imports.length ? <div className="py-14 text-center text-xs text-white/36">Még nincs történeti import.</div> : null}
+                </div>
+              </section>
+
+              <section className={`${panel} overflow-hidden`}>
+                {detailLoading ? <div className="flex h-full min-h-[360px] items-center justify-center gap-2 text-xs text-white/42"><Loader2 size={17} className="animate-spin" />Részletek betöltése...</div> : detail ? <><div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4"><div className="min-w-0"><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Import részlete</p><h3 className="mt-1 truncate text-base">{detail.item.sourceName}</h3><p className="mt-1 text-[10px] text-white/34">{detail.item.importedBy || "ADMIN"} • {dateTime(detail.item.createdAt)}</p></div><button type="button" className={dangerButton} onClick={() => setDeleteTarget(detail.item)}><Trash2 size={14} />Import törlése</button></div><div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-4">{[["Forgalom", money(detail.item.revenue)], ["Darab", `${integer(detail.item.itemsSold)} db`], ["Tranzakció", integer(detail.item.transactions)], ["Részletes sor", integer(detail.item.detailedRows)]].map(([label, value]) => <div key={label} className="rounded-xl border border-white/8 bg-white/[0.025] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.09em] text-white/32">{label}</p><p className="mt-1 text-sm text-white/78">{value}</p></div>)}</div><div className="max-h-[500px] overflow-auto border-t border-white/8"><table className="w-full min-w-[760px] text-xs"><thead className="sticky top-0 bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Dátum</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-right">Költség</th></tr></thead><tbody>{detail.rows.slice(0, 300).map((row, index) => <tr key={index} className="border-t border-white/7"><td className="px-3 py-3">{huDate(row.soldOn)}</td><td className="px-3 py-3">{row.actor || "–"}</td><td className="px-3 py-3">{row.productTitle || row.productCode || "Összesített adat"}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === null || row.estimatedCost === undefined ? "–" : money(row.estimatedCost)}</td></tr>)}</tbody></table></div></> : <div className="grid min-h-[420px] place-items-center px-6 text-center"><div><Database className="mx-auto text-[#7bd7d4]/58" size={30} /><p className="mt-3 text-sm text-white/62">Válassz ki egy importot a bal oldalon.</p></div></div>}
+              </section>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {deleteTarget ? <div className="fixed inset-0 z-[1150] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm"><section className="w-full max-w-[520px] overflow-hidden rounded-[24px] border border-rose-300/28 bg-[#202b3d] shadow-[0_30px_100px_rgba(0,0,0,0.65)]"><header className="flex items-start justify-between gap-3 border-b border-white/9 bg-gradient-to-r from-[#4a2633] to-[#263246] px-5 py-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-rose-100/52">Történeti import törlése</p><h3 className="mt-1 text-lg text-white">{deleteTarget.sourceName}</h3></div><button type="button" disabled={saving} onClick={() => setDeleteTarget(null)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04]"><X size={16} /></button></header><div className="p-5"><p className="text-sm leading-6 text-white/72">{deleteTarget.rowCount} történeti sor törlődik az elemzésekből. A jelenlegi eladásokhoz, készlethez, pénztárhoz és kliens-egyenlegekhez ez nem nyúl.</p></div><footer className="flex justify-end gap-2 border-t border-white/9 bg-[#192537] px-5 py-4"><button type="button" className={neutralButton} disabled={saving} onClick={() => setDeleteTarget(null)}>Mégse</button><button type="button" className={dangerButton} disabled={saving} onClick={() => void deleteImport()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}Végleges törlés</button></footer></section></div> : null}
+    </div>,
+    document.body,
+  );
+}
+
+export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: string; role?: "admin" | "shop" }) {
+  const initial = useMemo<FiltersState>(() => ({
+    ...presetFilters("ytd"),
+    location: "all",
+    employee: "",
+    brand: "",
+    category: "",
+    subcategory: "",
+    size: "",
+    color: "",
+    payment: "",
+    product: "",
+    search: "",
+    source: "all",
+    bucket: "auto",
+  }), []);
+  const [draft, setDraft] = useState<FiltersState>(initial);
+  const [applied, setApplied] = useState<FiltersState>(initial);
+  const [activePreset, setActivePreset] = useState<QuickPreset | "custom">("ytd");
+  const [data, setData] = useState<AifSalesCommandOverviewResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [chartMetric, setChartMetric] = useState<ChartMetric>("revenue");
+  const [dimension, setDimension] = useState<AifSalesCommandDimensionKey>("brand");
+  const [heatmapMetric, setHeatmapMetric] = useState<"revenue" | "itemsSold" | "transactions" | "grossProfit">("revenue");
+  const [detailTarget, setDetailTarget] = useState<AifSalesCommandDetailItem | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await apiAifSalesCommandCenterOverview(applied);
+      setData(response);
+    } catch (loadError: any) {
+      setError(loadError?.message || "A vezetői eladási központ nem tölthető be.");
+    } finally {
+      setLoading(false);
+    }
+  }, [applied]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  function applyPreset(preset: QuickPreset) {
+    const next = { ...draft, ...presetFilters(preset) };
+    setDraft(next);
+    setApplied(next);
+    setActivePreset(preset);
+  }
+
+  function applyFilters() {
+    const next = { ...draft };
+    if (next.from > next.to) [next.from, next.to] = [next.to, next.from];
+    if (next.compareFrom > next.compareTo) [next.compareFrom, next.compareTo] = [next.compareTo, next.compareFrom];
+    setDraft(next);
+    setApplied(next);
+    setActivePreset("custom");
+  }
+
+  function applyPatch(patch: Partial<FiltersState>) {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    setApplied(next);
+    setActivePreset("custom");
+  }
+
+  function clearDrillFilters() {
+    applyPatch({ employee: "", brand: "", category: "", subcategory: "", size: "", color: "", payment: "", product: "", location: "all", search: "", source: "all" });
+  }
+
+  function drillDimension(active: AifSalesCommandDimensionKey, item: AifSalesCommandDimensionItem) {
+    if (active === "brand") applyPatch({ brand: item.rawName || item.name });
+    else if (active === "category") applyPatch({ category: item.rawName || item.name });
+    else if (active === "subcategory") applyPatch({ subcategory: item.rawName || item.name });
+    else if (active === "size") applyPatch({ size: item.rawName || item.name });
+    else if (active === "color") applyPatch({ color: item.rawName || item.name });
+    else if (active === "payment") applyPatch({ payment: item.rawName || item.key });
+    else if (active === "store") applyPatch({ location: item.meta || item.key || item.rawName || item.name });
+    else if (active === "product") applyPatch({ product: item.meta || item.rawName || item.name });
+  }
+
+  const activeChips = useMemo(() => {
+    const values: Array<{ key: keyof FiltersState; label: string }> = [];
+    if (applied.location !== "all") values.push({ key: "location", label: data?.filterOptions.locations.find((item) => item.code === applied.location || item.id === applied.location)?.name || applied.location });
+    if (applied.employee) values.push({ key: "employee", label: applied.employee });
+    if (applied.brand) values.push({ key: "brand", label: applied.brand });
+    if (applied.category) values.push({ key: "category", label: applied.category });
+    if (applied.subcategory) values.push({ key: "subcategory", label: applied.subcategory });
+    if (applied.size) values.push({ key: "size", label: `Méret: ${applied.size}` });
+    if (applied.color) values.push({ key: "color", label: applied.color });
+    if (applied.payment) values.push({ key: "payment", label: paymentLabel(applied.payment) });
+    if (applied.product) values.push({ key: "product", label: applied.product });
+    if (applied.search) values.push({ key: "search", label: `Keresés: ${applied.search}` });
+    if (applied.source !== "all") values.push({ key: "source", label: applied.source === "live" ? "Csak élő" : "Csak történeti" });
+    return values;
+  }, [applied, data?.filterOptions.locations]);
+
+  const summary = data?.summary;
+  const comparison = data?.comparisonSummary;
+  const delta = data?.deltaPercent;
+  const currentPeriodLabel = data ? `${huDate(data.scope.from)} – ${huDate(data.scope.to)}` : `${huDate(applied.from)} – ${huDate(applied.to)}`;
+  const comparisonPeriodLabel = data ? `${huDate(data.scope.compareFrom)} – ${huDate(data.scope.compareTo)}` : `${huDate(applied.compareFrom)} – ${huDate(applied.compareTo)}`;
+  const marginDelta = deltaValue(numberValue(summary?.grossMargin), numberValue(comparison?.grossMargin));
+
+  const locationOptions = useMemo<SelectOption[]>(() => [
+    { value: "all", label: "Minden üzlet" },
+    ...(data?.filterOptions.locations || []).map((item) => ({ value: item.code, label: item.name, hint: item.code })),
+  ], [data?.filterOptions.locations]);
+  const employeeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden eladó" }, ...(data?.filterOptions.employees || []).map((value) => ({ value, label: value }))], [data?.filterOptions.employees]);
+  const brandOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden márka" }, ...(data?.filterOptions.brands || []).map((value) => ({ value, label: value }))], [data?.filterOptions.brands]);
+  const categoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden főkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.categories]);
+  const subcategoryOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.subcategories || []).map((value) => ({ value, label: value }))], [data?.filterOptions.subcategories]);
+  const sizeOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden méret" }, ...(data?.filterOptions.sizes || []).map((value) => ({ value, label: value }))], [data?.filterOptions.sizes]);
+  const colorOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden szín" }, ...(data?.filterOptions.colors || []).map((value) => ({ value, label: value }))], [data?.filterOptions.colors]);
+  const paymentOptions = useMemo<SelectOption[]>(() => [{ value: "", label: "Minden fizetési mód" }, ...Array.from(new Map((data?.dimensions.payment || []).map((item) => [item.rawName || item.key, { value: item.rawName || item.key, label: item.name }])).values())], [data?.dimensions.payment]);
+
+  const bucketClick = (index: number) => {
+    const current = data?.trend.current[index];
+    const previous = data?.trend.comparison[index];
+    if (!current) return;
+    applyPatch({
+      from: current.start,
+      to: current.end,
+      compareFrom: previous?.start || applied.compareFrom,
+      compareTo: previous?.end || applied.compareTo,
+    });
+  };
+
+  return (
+    <main
+      className="min-h-screen bg-[#101a29] p-2.5 text-white sm:p-4 lg:p-5"
+      style={{
+        backgroundImage:
+          "linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px), radial-gradient(circle at 12% 7%, rgba(42,141,139,0.24), transparent 26%), radial-gradient(circle at 88% 12%, rgba(59,130,246,0.10), transparent 22%), linear-gradient(145deg, #263449 0%, #1a2739 45%, #111c2b 100%)",
+        backgroundSize: "36px 36px, 36px 36px, auto, auto, auto",
+      }}
+    >
+      <div className="mx-auto max-w-[1760px] space-y-3.5">
+        <header className="relative overflow-hidden rounded-[28px] border border-[#9be9e5]/22 bg-gradient-to-r from-[#16253a] via-[#1c3145] to-[#18515a] px-4 py-4 shadow-[0_24px_70px_rgba(2,6,23,0.40)] sm:px-5">
+          <span className="pointer-events-none absolute inset-x-12 top-0 h-px bg-gradient-to-r from-transparent via-[#bff8f5]/72 to-transparent" />
+          <span className="pointer-events-none absolute -right-14 -top-20 h-48 w-48 rounded-full bg-[#7bd7d4]/[0.11] blur-3xl" />
+          <div className="relative flex flex-wrap items-center gap-4">
+            <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/38 bg-[#2a8d8b]/24 text-[#d8fffd] shadow-[0_0_36px_rgba(42,141,139,0.20)]"><Gauge size={28} /></span>
+            <div className="min-w-[260px] border-l-4 border-[#58d7d0] pl-3">
+              <div className="flex flex-wrap items-center gap-2"><p className="text-[9px] uppercase tracking-[0.19em] text-[#cffffd]/60">AllInFashion • vezetői elemzés</p><span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-0.5 text-[8px] uppercase tracking-[0.1em] text-[#cffffd]/64">Élő + történeti</span></div>
+              <h1 className="mt-1 text-2xl tracking-tight sm:text-3xl">Vezetői eladási központ</h1>
+              <p className="mt-1 text-xs text-white/42">Összehasonlítás, teljesítmény, termékigény és visszamenőleges adatok egy képernyőn.</p>
+            </div>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <span className="hidden rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] text-white/46 xl:inline-flex xl:items-center xl:gap-2"><Zap size={13} className="text-[#8ee6e2]" />{data?.generatedAt ? `Frissítve: ${dateTime(data.generatedAt)}` : actor}</span>
+              <button type="button" className={primaryButton} onClick={() => setHistoryOpen(true)}><Database size={15} />Történeti adatok</button>
+              <button type="button" className={neutralButton} onClick={() => void load()} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />Frissítés</button>
+              <button type="button" className={neutralButton} onClick={() => { window.location.hash = "#allin"; }}><Home size={15} />Kezdőlap</button>
+            </div>
+          </div>
+        </header>
+
+        <section className={`${panel} overflow-visible p-4`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><Target size={17} /></span><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Vizsgált időszak és összehasonlítás</p><h2 className="mt-0.5 text-base">Mit hasonlítsunk össze?</h2></div></div>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                ["ytd", "Idén / tavaly"],
+                ["month", "Ez a hónap / tavaly"],
+                ["lastMonth", "Előző hónap / tavaly"],
+                ["fullYear", "Teljes év / tavaly"],
+              ].map(([key, label]) => <button key={key} type="button" onClick={() => applyPreset(key as QuickPreset)} className={`h-8 rounded-lg border px-3 text-[10px] transition ${activePreset === key ? "border-[#9be9e5]/44 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.025] text-white/48 hover:border-white/18 hover:text-white"}`}>{label}</button>)}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_1fr_220px_220px_auto]">
+            <div className="grid gap-2 rounded-2xl border border-[#7bd7d4]/14 bg-[#2a8d8b]/[0.045] p-3 sm:grid-cols-2"><DateControl label="Vizsgált ettől" value={draft.from} onChange={(value) => setDraft({ ...draft, from: value, to: draft.to < value ? value : draft.to })} /><DateControl label="Vizsgált eddig" value={draft.to} onChange={(value) => setDraft({ ...draft, to: value, from: draft.from > value ? value : draft.from })} /></div>
+            <div className="grid gap-2 rounded-2xl border border-amber-200/12 bg-amber-400/[0.035] p-3 sm:grid-cols-2"><DateControl label="Összehasonlítás ettől" value={draft.compareFrom} onChange={(value) => setDraft({ ...draft, compareFrom: value, compareTo: draft.compareTo < value ? value : draft.compareTo })} /><DateControl label="Összehasonlítás eddig" value={draft.compareTo} onChange={(value) => setDraft({ ...draft, compareTo: value, compareFrom: draft.compareFrom > value ? value : draft.compareFrom })} /></div>
+            <FieldLabel label="Üzlet"><SelectControl value={draft.location} onChange={(value) => setDraft({ ...draft, location: value })} options={locationOptions} placeholder="Minden üzlet" /></FieldLabel>
+            <FieldLabel label="Eladó"><SelectControl value={draft.employee} onChange={(value) => setDraft({ ...draft, employee: value })} options={employeeOptions} placeholder="Minden eladó" /></FieldLabel>
+            <div className="flex items-end gap-2"><button type="button" className={`${primaryButton} min-w-[122px] flex-1`} onClick={applyFilters}><Search size={15} />Alkalmazás</button><button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/52 hover:border-[#7bd7d4]/26 hover:text-white" onClick={() => setFiltersOpen((current) => !current)} title="Részletes szűrők"><Filter size={16} /></button></div>
+          </div>
+
+          {filtersOpen ? <div className="mt-3 grid gap-3 border-t border-white/8 pt-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8"><FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel><FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Fizetési mód"><SelectControl value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Adatforrás"><SelectControl value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő eladások" }, { value: "history", label: "Csak történeti adatok" }]} placeholder="Minden" /></FieldLabel><FieldLabel label="Grafikon bontása"><SelectControl value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Automatikus" /></FieldLabel><FieldLabel label="Termék"><input className={control} value={draft.product} onChange={(event) => setDraft({ ...draft, product: event.target.value })} placeholder="Név vagy kód" /></FieldLabel><FieldLabel label="Szabad keresés"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/32" /><input className={`${control} pl-9`} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") applyFilters(); }} placeholder="Bizonylat, márka, termék..." /></div></FieldLabel></div> : null}
+
+          {activeChips.length ? <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-white/8 pt-3"><span className="mr-1 text-[9px] uppercase tracking-[0.1em] text-white/28">Aktív:</span>{activeChips.map((chip) => <button key={String(chip.key)} type="button" onClick={() => applyPatch({ [chip.key]: chip.key === "location" ? "all" : chip.key === "source" ? "all" : "" } as Partial<FiltersState>)} className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#7bd7d4]/18 bg-[#2a8d8b]/9 px-2.5 text-[9px] text-[#d7fffd]/72 hover:bg-[#2a8d8b]/18"><span className="max-w-[180px] truncate">{chip.label}</span><X size={10} /></button>)}<button type="button" onClick={clearDrillFilters} className="ml-1 h-7 rounded-full border border-white/10 px-2.5 text-[9px] text-white/42 hover:text-white">Összes törlése</button></div> : null}
+        </section>
+
+        {error ? <div className="rounded-2xl border border-rose-300/28 bg-rose-500/13 px-4 py-3 text-sm text-rose-50"><AlertTriangle size={17} className="mr-2 inline" />{error}</div> : null}
+
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+          <MetricCard title="Forgalom" value={money(summary?.revenue)} comparison={money(comparison?.revenue)} delta={delta?.revenue} icon={CircleDollarSign} hint={`${money(summary?.liveRevenue)} élő • ${money(summary?.historyRevenue)} történeti`} tone="success" active={chartMetric === "revenue"} onClick={() => setChartMetric("revenue")} />
+          <MetricCard title="Bruttó nyereség" value={money(summary?.grossProfit)} comparison={money(comparison?.grossProfit)} delta={delta?.grossProfit} icon={TrendingUp} hint="Nettó forgalom mínusz beszerzési érték" tone="success" active={chartMetric === "grossProfit"} onClick={() => setChartMetric("grossProfit")} warning={numberValue(summary?.costCoveragePercent) < 99 ? `A vizsgált forgalom vételár-lefedettsége ${percentage(summary?.costCoveragePercent)}. A hiányzó költségadatok miatt a nyereség becslés.` : undefined} />
+          <MetricCard title="Árrés" value={percentage(summary?.grossMargin)} comparison={percentage(comparison?.grossMargin)} delta={marginDelta} icon={Percent} hint="Bruttó nyereség / nettó forgalom" tone="accent" warning={numberValue(summary?.costCoveragePercent) < 99 ? "Az árrés a rendelkezésre álló vételár-adatokból számolódik." : undefined} />
+          <MetricCard title="Eladott darab" value={`${integer(summary?.itemsSold)} db`} comparison={`${integer(comparison?.itemsSold)} db`} delta={delta?.itemsSold} icon={ShoppingBag} hint="Eladás és csere nettó darabszáma" active={chartMetric === "itemsSold"} onClick={() => setChartMetric("itemsSold")} />
+          <MetricCard title="Tranzakció" value={integer(summary?.transactions)} comparison={integer(comparison?.transactions)} delta={delta?.transactions} icon={FileSpreadsheet} hint="Egyedi bizonylatok és havi összesítések" active={chartMetric === "transactions"} onClick={() => setChartMetric("transactions")} />
+          <MetricCard title="Átlagkosár" value={money(summary?.averageBasket)} comparison={money(comparison?.averageBasket)} delta={delta?.averageBasket} icon={Target} hint="Forgalom / tranzakció" active={chartMetric === "averageBasket"} onClick={() => setChartMetric("averageBasket")} />
+          <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="Összes adott kedvezmény" tone={numberValue(summary?.discountTotal) > 0 ? "warning" : "normal"} active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} />
+          <MetricCard title="Kintlévőség" value={money(summary?.unpaidTotal)} comparison={money(comparison?.unpaidTotal)} delta={delta?.unpaidTotal} icon={WalletCards} hint="Nyitott fizetési összeg" tone={numberValue(summary?.unpaidTotal) > 0 ? "danger" : "normal"} active={chartMetric === "unpaidTotal"} onClick={() => setChartMetric("unpaidTotal")} />
+        </section>
+
+        {data ? <CoverageStrip data={data} /> : null}
+
+        <section className="grid gap-3 2xl:grid-cols-[1.72fr_0.88fr]">
+          <CompareChart data={data?.trend || { current: [], comparison: [] }} metric={chartMetric} onMetricChange={setChartMetric} currentLabel={currentPeriodLabel} comparisonLabel={comparisonPeriodLabel} onBucketClick={bucketClick} />
+          <EmployeeRanking rows={data?.employees || []} metric={chartMetric} selected={applied.employee} onSelect={(employee) => applyPatch({ employee })} />
+        </section>
+
+        <DimensionPanel dimensions={data?.dimensions || ({ brand: [], category: [], subcategory: [], product: [], size: [], color: [], store: [], payment: [] } as AifSalesCommandOverviewResponse["dimensions"])} activeDimension={dimension} onDimensionChange={setDimension} metric={chartMetric} onDrill={drillDimension} />
+
+        <section className="space-y-2">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {(["revenue", "itemsSold", "transactions", "grossProfit"] as const).map((key) => <button key={key} type="button" onClick={() => setHeatmapMetric(key)} className={`h-7 rounded-lg border px-2.5 text-[9px] transition ${heatmapMetric === key ? "border-[#8ce7e2]/40 bg-[#2a8d8b] text-white" : "border-white/9 bg-white/[0.025] text-white/42 hover:text-white"}`}>{chartMetricConfig[key].short}</button>)}
+          </div>
+          <Heatmap heatmap={data?.heatmap || { months: [], rows: [] }} metric={heatmapMetric} onCellClick={(employee, month) => { if (!month.currentStart || !month.currentEnd) return; applyPatch({ employee, from: month.currentStart, to: month.currentEnd, compareFrom: month.comparisonStart || applied.compareFrom, compareTo: month.comparisonEnd || applied.compareTo }); }} />
+        </section>
+
+        <DetailsTable rows={data?.details || []} onOpen={setDetailTarget} />
+      </div>
+
+      <DetailDrawer item={detailTarget} onClose={() => setDetailTarget(null)} />
+      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} data={data} onChanged={load} />
+
+      {loading ? <div className="fixed inset-0 z-[900] grid place-items-center bg-slate-950/28 backdrop-blur-[2px]"><div className="flex items-center gap-3 rounded-2xl border border-[#7bd7d4]/24 bg-[#142033] px-5 py-4 text-sm text-white shadow-2xl"><Loader2 className="animate-spin text-[#8ee6e2]" size={22} />Vezetői adatok betöltése...</div></div> : null}
+    </main>
+  );
+}
