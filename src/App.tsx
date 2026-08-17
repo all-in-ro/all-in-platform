@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LogOut, UserRound, X } from "lucide-react";
 import Login from "./pages/Login";
 
@@ -65,6 +65,9 @@ type Screen = { name: ScreenName };
 type Session =
   | { role: "admin"; actor: string }
   | { role: "shop"; shopId: ShopId; actor: string };
+
+const INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
+const INACTIVITY_CHECK_MS = 15 * 1000;
 
 function normalizeHash(raw: string): string {
   const h = (raw || "").trim();
@@ -311,7 +314,7 @@ export default function App() {
     setLogoutOpen(true);
   };
 
-  const performLogout = async () => {
+  const performLogout = useCallback(async (automatic = false) => {
     setLogoutBusy(true);
     setLogoutError("");
 
@@ -320,6 +323,7 @@ export default function App() {
         method: "POST",
         credentials: "include",
         cache: "no-store",
+        keepalive: automatic,
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) {
@@ -332,11 +336,65 @@ export default function App() {
       setLogoutOpen(false);
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     } catch (error: any) {
-      setLogoutError(String(error?.message || error || "A kijelentkezés nem sikerült."));
+      if (automatic) {
+        // Inaktivitási kijelentkezésnél a felület akkor is lezár, ha a hálózat épp hibázik.
+        clearShopBrowserState();
+        setSession(null);
+        setScreen({ name: "login" });
+        setLogoutOpen(false);
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      } else {
+        setLogoutError(String(error?.message || error || "A kijelentkezés nem sikerült."));
+      }
     } finally {
       setLogoutBusy(false);
     }
-  };
+  }, [api]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    let lastActivityAt = Date.now();
+    let logoutStarted = false;
+
+    const markActivity = () => {
+      lastActivityAt = Date.now();
+    };
+
+    const checkInactivity = () => {
+      if (logoutStarted) return;
+      if (Date.now() - lastActivityAt < INACTIVITY_LOGOUT_MS) return;
+      logoutStarted = true;
+      void performLogout(true);
+    };
+
+    const activityEvents = [
+      "pointerdown",
+      "pointermove",
+      "keydown",
+      "scroll",
+      "wheel",
+      "touchstart",
+    ] as const;
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, markActivity, { passive: true });
+    });
+
+    const interval = window.setInterval(checkInactivity, INACTIVITY_CHECK_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") checkInactivity();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, markActivity);
+      });
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [performLogout, session]);
 
   if (!authReady) {
     return (
