@@ -25,6 +25,32 @@ type ParsedAccessCard = {
   code: string;
 };
 
+const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
+
+function rememberedLoginMode(): Mode {
+  if (typeof window === "undefined") return null;
+  try {
+    const saved = window.localStorage.getItem(LAST_LOGIN_MODE_KEY);
+    return saved === "admin" || saved === "csik" || saved === "kezdi" ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLoginMode(session: Session) {
+  if (typeof window === "undefined") return;
+  try {
+    const nextMode: LoginMode = session.role === "admin"
+      ? "admin"
+      : session.shopId === "csikszereda"
+        ? "csik"
+        : "kezdi";
+    window.localStorage.setItem(LAST_LOGIN_MODE_KEY, nextMode);
+  } catch {
+    // A belépés ettől még működjön, ha a böngésző tiltja a localStorage-ot.
+  }
+}
+
 class LoginRequestError extends Error {
   status: number;
   serverMessage: string;
@@ -62,9 +88,11 @@ function friendlyLoginError(error: unknown, targetMode: LoginMode) {
 }
 
 function inferInitialModeFromHash(): Mode {
-  const h = (typeof window !== "undefined" ? window.location.hash : "") || "";
+  const h = ((typeof window !== "undefined" ? window.location.hash : "") || "").toLowerCase();
   if (h === "#allinusers" || h === "#admin" || h === "#users") return "admin";
-  return null;
+  if (h.includes("magazinciuc") || h.includes("shop-ciuc") || h === "#csikszereda") return "csik";
+  if (h.includes("magazintargu") || h.includes("shop-targu") || h === "#kezdivasarhely") return "kezdi";
+  return rememberedLoginMode();
 }
 
 function parseAccessCard(value: string): ParsedAccessCard | null {
@@ -267,6 +295,7 @@ export default function Login({
               code: value,
             },
       );
+      rememberLoginMode(session);
       onLoggedIn(session);
     } catch (error: unknown) {
       setErr(friendlyLoginError(error, targetMode));
@@ -302,6 +331,7 @@ export default function Login({
             shopId: candidate === "csik" ? "csikszereda" : "kezdivasarhely",
             code: normalized.code,
           });
+          rememberLoginMode(session);
           onLoggedIn(session);
           return;
         } catch (error) {
