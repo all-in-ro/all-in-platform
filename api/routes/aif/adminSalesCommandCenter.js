@@ -552,6 +552,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(sl.subcategory_name,''),NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
         COALESCE(NULLIF(sl.product_title,''),NULLIF(m.title_ro,''),NULLIF(sl.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
+        COALESCE(NULLIF(sl.image_url,''),NULLIF(v.image_url,''),NULLIF(sl.raw->>'imageUrl',''),NULLIF(sl.raw->>'image_url','')) AS image_url,
         COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(sl.size,''),NULLIF(v.size,'')) AS size,
         sl.quantity::numeric AS quantity,
@@ -603,6 +604,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
         COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),NULLIF(el.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
+        COALESCE(NULLIF(el.image_url,''),NULLIF(v.image_url,'')) AS image_url,
         COALESCE(NULLIF(el.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(el.size,''),NULLIF(v.size,'')) AS size,
         el.quantity::numeric AS quantity,
@@ -649,6 +651,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(src.subcategory_name,''),NULLIF(subc.name_hu,''),NULLIF(subc.name_ro,'')) AS subcategory_name,
         COALESCE(NULLIF(src.product_title,''),NULLIF(m.title_ro,''),NULLIF(src.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(src.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
+        COALESCE(NULLIF(src.image_url,''),NULLIF(v.image_url,''),NULLIF(src.raw->>'imageUrl',''),NULLIF(src.raw->>'image_url','')) AS image_url,
         COALESCE(NULLIF(src.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(src.size,''),NULLIF(v.size,'')) AS size,
         (-e.returned_qty)::numeric AS quantity,
@@ -698,6 +701,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         h.subcategory_name,
         COALESCE(NULLIF(h.product_title,''),NULLIF(h.product_code,'')) AS product_title,
         h.product_code,
+        NULL::text AS image_url,
         h.color_name,
         h.size,
         COALESCE(h.quantity,0)::numeric AS quantity,
@@ -1020,14 +1024,14 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
 
   const detailsSelectSql = `SELECT
     source, record_id, import_id, happened_on, location_id, location_code, location_name,
-    actor, brand_name, category_name, subcategory_name, product_title, product_code,
+    actor, brand_name, category_name, subcategory_name, product_title, product_code, image_url,
     color_name, size, quantity, aggregate_transactions, revenue, net_revenue,
     sales_before_discount, discount_total, paid_total, unpaid_total, estimated_cost,
     cost_covered, net_covered, payment_method, source_granularity, document_number,
     customer_name, customer_phone, note
   FROM filtered
   ORDER BY happened_on DESC, document_number DESC NULLS LAST, record_id DESC
-  LIMIT 350`;
+  LIMIT 5000`;
 
   function mergeNamedRows(currentRows, comparisonRows, kind = "employee") {
     const map = new Map();
@@ -1127,6 +1131,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       subcategoryName: row.subcategory_name || null,
       productTitle: row.product_title || null,
       productCode: row.product_code || null,
+      imageUrl: row.image_url || null,
       colorName: row.color_name || null,
       size: row.size || null,
       quantity: numberValue(row.quantity),
@@ -1153,7 +1158,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
   async function filterOptions() {
     const now = Date.now();
     if (filterOptionsCache && filterOptionsCache.expiresAt > now) return filterOptionsCache.value;
-    const [locationsResult, yearsResult, employeesResult, brandsResult, categoriesResult, subcategoriesResult, sizesResult, colorsResult] = await Promise.all([
+    const [locationsResult, yearsResult, employeesResult, shopEmployeesResult, brandsResult, categoriesResult, subcategoriesResult, sizesResult, colorsResult] = await Promise.all([
       pool.query(`SELECT id::text AS id, code, name
         FROM aif_locations
         WHERE COALESCE(is_active,true)=true
@@ -1167,7 +1172,15 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         SELECT NULLIF(actor,'') AS value FROM aif_shop_sales
         UNION SELECT NULLIF(actor,'') AS value FROM aif_shop_exchanges
         UNION SELECT NULLIF(actor,'') AS value FROM aif_sales_history_rows
+        UNION SELECT NULLIF(btrim(name),'') AS value
+          FROM login_codes
       ) x WHERE value IS NOT NULL ORDER BY value ASC LIMIT 500`),
+      pool.query(`SELECT shop_id, min(btrim(name)) AS name
+        FROM login_codes
+        WHERE NULLIF(btrim(COALESCE(name,'')),'') IS NOT NULL
+          AND shop_id IN ('csikszereda','kezdivasarhely')
+        GROUP BY shop_id, lower(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g'))
+        ORDER BY shop_id, min(btrim(name)) ASC`),
       pool.query(`SELECT DISTINCT value FROM (
         SELECT NULLIF(brand_name,'') AS value FROM aif_shop_sale_lines
         UNION SELECT NULLIF(brand_name,'') AS value FROM aif_shop_exchange_lines
@@ -1198,6 +1211,10 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       locations: locationsResult.rows.map((row) => ({ id: row.id, code: row.code, name: row.name })),
       years: yearsResult.rows.map((row) => numberValue(row.year)),
       employees: employeesResult.rows.map((row) => row.value),
+      employeesByLocation: {
+        main_warehouse: shopEmployeesResult.rows.filter((row) => row.shop_id === 'csikszereda').map((row) => row.name),
+        magazin_targu_secuiesc: shopEmployeesResult.rows.filter((row) => row.shop_id === 'kezdivasarhely').map((row) => row.name),
+      },
       brands: brandsResult.rows.map((row) => row.value),
       categories: categoriesResult.rows.map((row) => row.value),
       subcategories: subcategoriesResult.rows.map((row) => row.value),
