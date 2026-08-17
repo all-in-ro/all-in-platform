@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BarChart3,
   CalendarDays,
   Boxes,
@@ -26,6 +27,10 @@ import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
 import AllInShopReservations from "./AllInShopReservations";
 import AllInShopIncoming from "./AllInShopIncoming";
 import AllInShopDocuments from "./AllInShopDocuments";
+import {
+  apiAifShopReservations,
+  type AifShopReservation,
+} from "../lib/aif/api";
 
 
 type Props = {
@@ -114,6 +119,61 @@ function formatDateTime(value: Date) {
   });
 }
 
+type ReservationDeadlineAlert = {
+  count: number;
+  date: string | null;
+  label: "LEJÁRT" | "MA LEJÁR" | null;
+};
+
+const EMPTY_RESERVATION_DEADLINE_ALERT: ReservationDeadlineAlert = {
+  count: 0,
+  date: null,
+  label: null,
+};
+
+function localIsoDate(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function normalizeDateOnly(value?: string | null) {
+  const iso = String(value || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+}
+
+function formatIsoDate(value?: string | null) {
+  const iso = normalizeDateOnly(value);
+  if (!iso) return "";
+  return new Intl.DateTimeFormat("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(`${iso}T12:00:00Z`));
+}
+
+function summarizeReservationDeadlines(items: AifShopReservation[]): ReservationDeadlineAlert {
+  const today = localIsoDate();
+  const urgentDates = (items || [])
+    .map((item) => normalizeDateOnly(item.expiresOn))
+    .filter((date): date is string => Boolean(date && date <= today))
+    .sort();
+
+  if (!urgentDates.length) return EMPTY_RESERVATION_DEADLINE_ALERT;
+
+  return {
+    count: urgentDates.length,
+    date: urgentDates[0],
+    label: urgentDates.some((date) => date < today) ? "LEJÁRT" : "MA LEJÁR",
+  };
+}
+
 const SHOP_ADMIN_UNLOCK_KEY = "allin:shop-administration-unlock:kezdivasarhely";
 
 function shopAdministrationUnlockExpiresAt() {
@@ -154,16 +214,47 @@ export default function AllInMagazinTargu({
   const [vacationsOpen, setVacationsOpen] = useState(false);
   const [returnsOpen, setReturnsOpen] = useState(false);
   const [reservationsOpen, setReservationsOpen] = useState(false);
+  const [reservationDeadlineAlert, setReservationDeadlineAlert] = useState<ReservationDeadlineAlert>(
+    EMPTY_RESERVATION_DEADLINE_ALERT,
+  );
   const [incomingOpen, setIncomingOpen] = useState(false);
   const [documentsOpen, setDocumentsOpen] = useState(false);
   const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
   const [administrationExpiresAt] = useState(() => role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt());
   const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
 
+  const refreshReservationDeadlineAlert = useCallback(async () => {
+    try {
+      const response = await apiAifShopReservations({
+        location: "magazin_targu_secuiesc",
+        mode: "active",
+      });
+      setReservationDeadlineAlert(summarizeReservationDeadlines(response.items || []));
+    } catch {
+      // Ne váljon hamisan zölddé egy valódi figyelmeztetés csak azért, mert egy lekérés átmenetileg hibázott.
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!administrationUnlocked) return;
+
+    void refreshReservationDeadlineAlert();
+    const timer = window.setInterval(() => {
+      void refreshReservationDeadlineAlert();
+    }, 30000);
+    const refreshOnFocus = () => void refreshReservationDeadlineAlert();
+    window.addEventListener("focus", refreshOnFocus);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
+  }, [administrationUnlocked, refreshReservationDeadlineAlert]);
 
 
   useEffect(() => {
@@ -197,6 +288,11 @@ export default function AllInMagazinTargu({
     window.location.hash = "magazintargusale";
   }
 
+  function closeReservations() {
+    setReservationsOpen(false);
+    void refreshReservationDeadlineAlert();
+  }
+
   function openModule(action: ActionCard) {
     if (action.key === "sale") {
       window.location.hash = "magazintargusale";
@@ -214,6 +310,7 @@ export default function AllInMagazinTargu({
     }
     if (action.key === "reserved") {
       setNotice("");
+      void refreshReservationDeadlineAlert();
       setReservationsOpen(true);
       return;
     }
@@ -329,31 +426,62 @@ export default function AllInMagazinTargu({
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {actions.map((action) => {
               const Icon = action.icon;
+              const reservationIsDanger =
+                action.key === "reserved" && reservationDeadlineAlert.count > 0;
+              const alertBadgeText = reservationIsDanger
+                ? reservationDeadlineAlert.count > 1
+                  ? `${reservationDeadlineAlert.count} SÜRGŐS`
+                  : reservationDeadlineAlert.label
+                : action.primary
+                  ? "Aktív modul"
+                  : "Következő lépés";
+
               return (
                 <button
                   key={action.key}
                   type="button"
                   onClick={() => openModule(action)}
                   className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
-                    action.primary
-                      ? "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
-                      : "border-white/16 bg-[#3d485a] hover:border-[#7bd7d4]/38 hover:bg-[#465366]"
+                    reservationIsDanger
+                      ? "border-[#ffbac2]/85 bg-gradient-to-br from-[#e0182f] via-[#c30d1c] to-[#8f0714] shadow-[0_18px_38px_rgba(134,7,20,0.42)] ring-2 ring-[#ffccd2]/28 hover:brightness-110"
+                      : action.primary
+                        ? "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
+                        : "border-white/16 bg-[#3d485a] hover:border-[#7bd7d4]/38 hover:bg-[#465366]"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl border ${
-                      action.primary
-                        ? "border-white/25 bg-white/14 text-white"
-                        : "border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#bdf8f5]"
+                      reservationIsDanger
+                        ? "border-white/38 bg-black/15 text-white shadow-[0_8px_20px_rgba(82,0,12,0.30)]"
+                        : action.primary
+                          ? "border-white/25 bg-white/14 text-white"
+                          : "border-[#7bd7d4]/28 bg-[#2a8d8b]/16 text-[#bdf8f5]"
                     }`}>
-                      <Icon size={24} strokeWidth={1.8} />
+                      <Icon size={24} strokeWidth={reservationIsDanger ? 2.2 : 1.8} />
                     </span>
-                    <span className="rounded-full border border-white/14 bg-black/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-white/55">
-                      {action.primary ? "Aktív modul" : "Következő lépés"}
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] ${
+                      reservationIsDanger
+                        ? "border-white/48 bg-white/18 font-semibold text-white shadow-[0_6px_16px_rgba(80,0,12,0.25)]"
+                        : "border-white/14 bg-black/10 text-white/55"
+                    }`}>
+                      {reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
+                      {alertBadgeText}
                     </span>
                   </div>
-                  <h3 className="mt-4 text-lg text-white">{action.title}</h3>
-                  <p className="mt-1.5 text-sm leading-snug text-white/58">{action.description}</p>
+                  <h3 className={`mt-4 text-lg text-white ${reservationIsDanger ? "font-semibold" : ""}`}>
+                    {action.title}
+                  </h3>
+                  <p className={`mt-1.5 text-sm leading-snug ${reservationIsDanger ? "text-white/84" : "text-white/58"}`}>
+                    {action.description}
+                  </p>
+                  {reservationIsDanger && reservationDeadlineAlert.date ? (
+                    <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/40 bg-black/20 px-3 py-2 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(74,0,10,0.24)]">
+                      <Clock3 size={17} strokeWidth={2.3} />
+                      <span>{reservationDeadlineAlert.label}</span>
+                      <span className="text-white/65">•</span>
+                      <span>{formatIsoDate(reservationDeadlineAlert.date)}</span>
+                    </div>
+                  ) : null}
                 </button>
               );
             })}
@@ -425,7 +553,7 @@ export default function AllInMagazinTargu({
         actor={actor}
         locationCode="magazin_targu_secuiesc"
         locationName="Magazin - Târgu Secuiesc"
-        onClose={() => setReservationsOpen(false)}
+        onClose={closeReservations}
       />
       <AllInShopIncoming
         open={incomingOpen}
