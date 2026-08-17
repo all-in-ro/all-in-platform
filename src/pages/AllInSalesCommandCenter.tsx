@@ -65,6 +65,7 @@ type ChartMetric =
   | "discountTotal"
   | "unpaidTotal";
 type QuickPreset = "ytd" | "month" | "lastMonth" | "fullYear";
+type PeriodMode = "month" | "range";
 
 type FiltersState = {
   from: string;
@@ -252,6 +253,25 @@ function automaticComparison(filters: FiltersState): FiltersState {
     compareFrom: shiftYear(filters.from, -1),
     compareTo: shiftYear(filters.to, -1),
   };
+}
+
+function monthSelectionRange(value: string, current = localIsoDate()) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  const fallback = current.slice(0, 7);
+  const safe = match ? value : fallback;
+  const [year, month] = safe.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0, 12)).getUTCDate();
+  const from = `${year}-${String(month).padStart(2, "0")}-01`;
+  const fullTo = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const to = safe === current.slice(0, 7) ? current : fullTo;
+  return { from, to };
+}
+
+function monthDisplayLabel(value: string) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return value;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1, 12));
+  return new Intl.DateTimeFormat("hu-HU", { year: "numeric", month: "long" }).format(date);
 }
 
 function huDate(value?: string | null) {
@@ -1429,6 +1449,75 @@ function DetailDrawer({ item, onClose }: { item: AifSalesCommandDetailItem | nul
   );
 }
 
+function ProductThumb({ src, alt }: { src?: string | null; alt: string }) {
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    setFailed(false);
+    setOpen(false);
+  }, [src]);
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const previewWidth = 290;
+    const previewHeight = 330;
+    const gap = 12;
+    const left = window.innerWidth - rect.right >= previewWidth + gap
+      ? rect.right + gap
+      : Math.max(gap, rect.left - previewWidth - gap);
+    const top = Math.max(gap, Math.min(rect.top - 14, window.innerHeight - previewHeight - gap));
+    setPosition({ left, top });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => updatePosition();
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition]);
+
+  if (!src || failed) {
+    return (
+      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-[#2b3749] text-white/28">
+        <PackageSearch size={17} />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white shadow-sm"
+        onMouseEnter={() => { updatePosition(); setOpen(true); }}
+        onMouseLeave={() => setOpen(false)}
+      >
+        <img src={src} alt={alt} className="h-full w-full object-contain" loading="lazy" onError={() => setFailed(true)} />
+      </div>
+      {open && position ? createPortal(
+        <div
+          className="pointer-events-none fixed z-[1250] overflow-hidden rounded-2xl border border-[#7bd7d4]/36 bg-[#253449] p-2.5 shadow-[0_26px_70px_rgba(2,6,23,0.68)]"
+          style={{ left: position.left, top: position.top, width: 290 }}
+        >
+          <div className="grid h-[270px] place-items-center overflow-hidden rounded-xl bg-white">
+            <img src={src} alt={alt} className="max-h-full max-w-full object-contain" />
+          </div>
+          <p className="mt-2 truncate px-1 text-[11px] text-white/76">{alt}</p>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 function DetailsTable({
   rows,
   onOpen,
@@ -1436,11 +1525,28 @@ function DetailsTable({
   rows: AifSalesCommandDetailItem[];
   onOpen: (item: AifSalesCommandDetailItem) => void;
 }) {
-  const [limit, setLimit] = useState(80);
-  useEffect(() => setLimit(80), [rows]);
-  const visible = rows.slice(0, limit);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const visible = rows.slice(startIndex, startIndex + pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows, pageSize]);
+
+  function goToPage(nextPage: number) {
+    const normalized = Math.max(1, Math.min(totalPages, nextPage));
+    setPage(normalized);
+    window.requestAnimationFrame(() => {
+      sectionRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+    });
+  }
+
   return (
-    <section className={`${panel} overflow-hidden`}>
+    <section ref={sectionRef} className={`${panel} scroll-mt-3 overflow-hidden`}>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4">
         <div>
           <p className="text-[9px] uppercase tracking-[0.16em] text-[#bff8f5]/44">Részletes eladási adatok</p>
@@ -1449,8 +1555,8 @@ function DetailsTable({
         <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] text-white/44">{rows.length} sor</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] border-collapse text-xs">
-          <thead className="bg-[#152235] text-[9px] uppercase tracking-[0.08em] text-white/38">
+        <table className="w-full min-w-[1240px] border-collapse text-xs">
+          <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/45">
             <tr>
               <th className="px-3 py-3 text-left">Forrás / dátum</th>
               <th className="px-3 py-3 text-left">Termék</th>
@@ -1464,24 +1570,56 @@ function DetailsTable({
             </tr>
           </thead>
           <tbody>
-            {visible.map((item) => (
-              <tr key={`${item.source}:${item.id}`} className="group border-t border-white/7 hover:bg-white/[0.035]">
-                <td className="whitespace-nowrap px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${sourceBadge(item.source)}`}>{sourceLabel(item.source)}</span><p className="mt-1.5 text-[10px] text-white/42">{huDate(item.date)}{item.documentNumber ? ` • ${item.documentNumber}` : ""}</p></td>
-                <td className="min-w-[260px] px-3 py-3"><p className="max-w-[310px] truncate text-white/84" title={item.productTitle || "Összesített adat"}>{item.productTitle || "Összesített havi adat"}</p><p className="mt-1 max-w-[310px] truncate text-[10px] text-white/38" title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}>{[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || item.granularity}</p></td>
-                <td className="min-w-[160px] px-3 py-3"><p className="text-white/72">{item.actor}</p><p className="mt-1 truncate text-[10px] text-white/36">{friendlyLocationLabel(item.locationCode, item.locationName)}</p></td>
-                <td className="px-3 py-3 text-center"><span className="rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1.5 text-[#d5fffd]">{integer(item.quantity)}</span></td>
-                <td className="whitespace-nowrap px-3 py-3 text-right text-white">{money(item.revenue)}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-right text-[#bff8f5]/82">{money(item.netRevenue)}</td>
-                <td className={`whitespace-nowrap px-3 py-3 text-right ${item.grossProfit >= 0 ? "text-emerald-100" : "text-rose-100"}`}>{money(item.grossProfit)}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-right text-amber-50">{money(item.discountTotal)}</td>
-                <td className="px-2 py-3 text-center"><button type="button" onClick={() => onOpen(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.035] text-white/52 transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/16 hover:text-white"><ChevronRight size={15} /></button></td>
-              </tr>
-            ))}
+            {visible.map((item) => {
+              const imageUrl = String((item as any).imageUrl || "").trim() || null;
+              return (
+                <tr key={`${item.source}:${item.id}`} className="group border-t border-white/8 hover:bg-white/[0.035]">
+                  <td className="whitespace-nowrap px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[9px] ${sourceBadge(item.source)}`}>{sourceLabel(item.source)}</span><p className="mt-1.5 text-[10px] text-white/42">{huDate(item.date)}{item.documentNumber ? ` • ${item.documentNumber}` : ""}</p></td>
+                  <td className="min-w-[330px] px-3 py-3">
+                    <div className="flex items-start gap-3">
+                      <ProductThumb src={imageUrl} alt={item.productTitle || item.productCode || "Termék"} />
+                      <div className="min-w-0 pt-0.5">
+                        <p className="max-w-[300px] truncate text-white/90" title={item.productTitle || "Összesített adat"}>{item.productTitle || "Összesített havi adat"}</p>
+                        <p className="mt-1 max-w-[300px] truncate text-[10px] text-white/48" title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}>{[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || item.granularity}</p>
+                        {item.productCode ? <p className="mt-1 max-w-[300px] truncate text-[10px] text-[#9be9e5]/65">Kód: {item.productCode}</p> : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="min-w-[160px] px-3 py-3"><p className="text-white/76">{item.actor}</p><p className="mt-1 truncate text-[10px] text-white/38">{friendlyLocationLabel(item.locationCode, item.locationName)}</p></td>
+                  <td className="px-3 py-3 text-center"><span className="rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1.5 text-[#d5fffd]">{integer(item.quantity)}</span></td>
+                  <td className="whitespace-nowrap px-3 py-3 text-right text-white">{money(item.revenue)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-right text-[#bff8f5]/82">{money(item.netRevenue)}</td>
+                  <td className={`whitespace-nowrap px-3 py-3 text-right ${item.grossProfit >= 0 ? "text-emerald-100" : "text-rose-100"}`}>{money(item.grossProfit)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-right text-white/76">{money(item.discountTotal)}</td>
+                  <td className="px-2 py-3 text-center"><button type="button" onClick={() => onOpen(item)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.035] text-white/52 transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/16 hover:text-white"><ChevronRight size={15} /></button></td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {!rows.length ? <div className="px-4 py-14 text-center"><PackageSearch className="mx-auto text-[#7bd7d4]/62" size={28} /><p className="mt-2 text-sm text-white/66">Nincs részletes adat a kiválasztott feltételekkel.</p></div> : null}
       </div>
-      {limit < rows.length ? <div className="flex justify-center border-t border-white/8 p-3"><button type="button" className={neutralButton} onClick={() => setLimit((current) => current + 80)}>További sorok</button></div> : null}
+      {rows.length ? (
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#303b4d] px-4 py-3">
+          <div className="flex items-center gap-2 text-[10px] text-white/46">
+            <span>Oldalanként</span>
+            <div className="w-[128px]">
+              <SelectControl
+                value={String(pageSize)}
+                onChange={(value) => setPageSize(Math.max(1, Number(value) || 20))}
+                options={[20, 50, 100].map((value) => ({ value: String(value), label: `${value} termék` }))}
+                placeholder="20 termék"
+              />
+            </div>
+            <span>{startIndex + 1}–{Math.min(startIndex + pageSize, rows.length)} / {rows.length}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className={neutralButton} disabled={safePage <= 1} onClick={() => goToPage(safePage - 1)}><ChevronLeft size={15} />Előző</button>
+            <span className="min-w-[86px] text-center text-[10px] text-white/58">{safePage} / {totalPages}. oldal</span>
+            <button type="button" className={neutralButton} disabled={safePage >= totalPages} onClick={() => goToPage(safePage + 1)}>Következő<ChevronRight size={15} /></button>
+          </div>
+        </footer>
+      ) : null}
     </section>
   );
 }
@@ -1506,7 +1644,7 @@ function HistoryModal({
   const [success, setSuccess] = useState("");
 
   const today = localIsoDate();
-  const defaultMonth = `${Number(today.slice(0, 4)) - 1}-${today.slice(5, 7)}`;
+  const defaultMonth = today.slice(0, 7);
   const defaultLocation = data?.filterOptions.locations.find((location) => location.code === "main_warehouse")?.code
     || data?.filterOptions.locations[0]?.code
     || "main_warehouse";
@@ -1559,6 +1697,15 @@ function HistoryModal({
       { value: "magazin_targu_secuiesc", label: "Kézdivásárhely" },
     ];
   }, [data?.filterOptions.locations]);
+
+  const historyEmployeeOptions = useMemo<SelectOption[]>(() => {
+    const byLocation = ((data?.filterOptions as any)?.employeesByLocation || {}) as Record<string, string[]>;
+    const locationEmployees = Array.isArray(byLocation[manualDraft.location]) ? byLocation[manualDraft.location] : [];
+    const allEmployees = Array.isArray(data?.filterOptions.employees) ? data!.filterOptions.employees : [];
+    const values = Array.from(new Set<string>((locationEmployees.length ? locationEmployees : allEmployees).map((value) => String(value || "").trim()).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, "hu"));
+    return values.map((value) => ({ value, label: value }));
+  }, [data, manualDraft.location]);
 
   function addManualRow() {
     setError("");
@@ -1652,8 +1799,8 @@ function HistoryModal({
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <FieldLabel label="Hónap"><HungarianMonthPicker value={manualDraft.month} onChange={(value) => setManualDraft({ ...manualDraft, month: value })} ariaLabel="Visszamenőleges eladás hónapja" /></FieldLabel>
-                <FieldLabel label="Üzlet"><SelectControl value={manualDraft.location} onChange={(value) => setManualDraft({ ...manualDraft, location: value })} options={locationOptions} placeholder="Válassz üzletet" /></FieldLabel>
-                <FieldLabel label="Eladó"><input className={control} value={manualDraft.actor} onChange={(event) => setManualDraft({ ...manualDraft, actor: event.target.value })} placeholder="Alkalmazott neve" /></FieldLabel>
+                <FieldLabel label="Üzlet"><SelectControl value={manualDraft.location} onChange={(value) => setManualDraft({ ...manualDraft, location: value, actor: "" })} options={locationOptions} placeholder="Válassz üzletet" /></FieldLabel>
+                <FieldLabel label="Eladó"><SelectControl value={manualDraft.actor} onChange={(value) => setManualDraft({ ...manualDraft, actor: value })} options={historyEmployeeOptions} placeholder="Válassz eladót" /></FieldLabel>
                 <FieldLabel label="Forgalom"><input inputMode="decimal" className={control} value={manualDraft.revenue} onChange={(event) => setManualDraft({ ...manualDraft, revenue: event.target.value })} placeholder="0,00" /></FieldLabel>
                 <FieldLabel label="Darab"><input inputMode="decimal" className={control} value={manualDraft.quantity} onChange={(event) => setManualDraft({ ...manualDraft, quantity: event.target.value })} placeholder="0" /></FieldLabel>
                 <FieldLabel label="Tranzakció"><input inputMode="decimal" className={control} value={manualDraft.transactions} onChange={(event) => setManualDraft({ ...manualDraft, transactions: event.target.value })} placeholder="0" /></FieldLabel>
@@ -1689,7 +1836,7 @@ function HistoryModal({
 
 export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: string; role?: "admin" | "shop" }) {
   const initial = useMemo<FiltersState>(() => ({
-    ...presetFilters("ytd"),
+    ...presetFilters("month"),
     location: "all",
     employee: "",
     brand: "",
@@ -1705,7 +1852,8 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   }), []);
   const [draft, setDraft] = useState<FiltersState>(initial);
   const [applied, setApplied] = useState<FiltersState>(initial);
-  const [activePreset, setActivePreset] = useState<QuickPreset | "custom">("ytd");
+  const [activePreset, setActivePreset] = useState<QuickPreset | "custom">("month");
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("month");
   const [data, setData] = useState<AifSalesCommandOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1733,9 +1881,25 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
 
   function applyPreset(preset: QuickPreset) {
     const next = automaticComparison({ ...draft, ...presetFilters(preset) });
+    setPeriodMode(preset === "month" || preset === "lastMonth" ? "month" : "range");
     setDraft(next);
     setApplied(next);
     setActivePreset(preset);
+  }
+
+  function switchPeriodMode(mode: PeriodMode) {
+    setPeriodMode(mode);
+    if (mode === "month") {
+      const range = monthSelectionRange(draft.from.slice(0, 7));
+      setDraft(automaticComparison({ ...draft, ...range }));
+    }
+    setActivePreset("custom");
+  }
+
+  function setSelectedMonth(value: string) {
+    const range = monthSelectionRange(value);
+    setDraft(automaticComparison({ ...draft, ...range }));
+    setActivePreset(value === localIsoDate().slice(0, 7) ? "month" : "custom");
   }
 
   function applyFilters() {
@@ -1845,7 +2009,11 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
         <section className={`${panel} overflow-visible p-4`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><Target size={17} /></span><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Időszak</p><h2 className="mt-0.5 text-base">Melyik időszakot nézzük?</h2></div></div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="mr-1 flex rounded-lg border border-white/10 bg-[#2d394b]/70 p-0.5">
+                <button type="button" onClick={() => switchPeriodMode("month")} className={`h-7 rounded-md px-2.5 text-[10px] transition ${periodMode === "month" ? "bg-[#2a8d8b] text-white" : "text-white/46 hover:text-white"}`}>Hónap</button>
+                <button type="button" onClick={() => switchPeriodMode("range")} className={`h-7 rounded-md px-2.5 text-[10px] transition ${periodMode === "range" ? "bg-[#2a8d8b] text-white" : "text-white/46 hover:text-white"}`}>Egyedi időszak</button>
+              </div>
               {[
                 ["ytd", "Idén"],
                 ["month", "Ez a hónap"],
@@ -1856,13 +2024,20 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
           </div>
 
           <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(360px,1.45fr)_220px_220px_auto]">
-            <div className="grid gap-2 rounded-2xl border border-white/14 bg-[#354153]/55 p-3 sm:grid-cols-2"><DateControl label="Ettől" value={draft.from} onChange={(value) => setDraft(automaticComparison({ ...draft, from: value, to: draft.to < value ? value : draft.to }))} /><DateControl label="Eddig" value={draft.to} onChange={(value) => setDraft(automaticComparison({ ...draft, to: value, from: draft.from > value ? value : draft.from }))} /></div>
+            {periodMode === "month" ? (
+              <div className="rounded-2xl border border-white/14 bg-[#354153]/55 p-3">
+                <FieldLabel label="Hónap"><HungarianMonthPicker value={draft.from.slice(0, 7)} onChange={setSelectedMonth} ariaLabel="Vizsgált hónap" /></FieldLabel>
+                <p className="mt-2 text-[10px] text-white/40">{monthDisplayLabel(draft.from.slice(0, 7))} ↔ {monthDisplayLabel(shiftYear(draft.from, -1).slice(0, 7))}</p>
+              </div>
+            ) : (
+              <div className="grid gap-2 rounded-2xl border border-white/14 bg-[#354153]/55 p-3 sm:grid-cols-2"><DateControl label="Ettől" value={draft.from} onChange={(value) => setDraft(automaticComparison({ ...draft, from: value, to: draft.to < value ? value : draft.to }))} /><DateControl label="Eddig" value={draft.to} onChange={(value) => setDraft(automaticComparison({ ...draft, to: value, from: draft.from > value ? value : draft.from }))} /></div>
+            )}
             <FieldLabel label="Üzlet"><SelectControl value={draft.location} onChange={(value) => setDraft({ ...draft, location: value })} options={locationOptions} placeholder="Minden üzlet" /></FieldLabel>
             <FieldLabel label="Eladó"><SelectControl value={draft.employee} onChange={(value) => setDraft({ ...draft, employee: value })} options={employeeOptions} placeholder="Minden eladó" /></FieldLabel>
             <div className="flex items-end gap-2"><button type="button" className={`${primaryButton} min-w-[122px] flex-1`} onClick={applyFilters}><Search size={15} />Alkalmazás</button><button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04] text-white/52 hover:border-[#7bd7d4]/26 hover:text-white" onClick={() => setFiltersOpen((current) => !current)} title="Részletes szűrők"><Filter size={16} /></button></div>
           </div>
 
-          <div className="mt-2 text-[9px] text-white/34">Előző év azonos időszaka automatikusan összehasonlításra kerül, ha van hozzá rögzített adat.</div>
+          <div className="mt-2 text-[9px] text-white/34">{periodMode === "month" ? "A kiválasztott hónapot az előző év azonos hónapjával hasonlítjuk." : "Az időszakot az előző év azonos időszakával hasonlítjuk."}</div>
 
           {filtersOpen ? <div className="mt-3 grid gap-3 border-t border-white/8 pt-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8"><FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel><FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Fizetési mód"><SelectControl value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Adatforrás"><SelectControl value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő eladások" }, { value: "history", label: "Csak történeti adatok" }]} placeholder="Minden" /></FieldLabel><FieldLabel label="Grafikon bontása"><SelectControl value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Automatikus" /></FieldLabel><FieldLabel label="Termék"><input className={control} value={draft.product} onChange={(event) => setDraft({ ...draft, product: event.target.value })} placeholder="Név vagy kód" /></FieldLabel><FieldLabel label="Szabad keresés"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/32" /><input className={`${control} pl-9`} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") applyFilters(); }} placeholder="Bizonylat, márka, termék..." /></div></FieldLabel></div> : null}
 
