@@ -81,6 +81,18 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
+  function isoDateOnly(value) {
+    if (!value) return null;
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return value.toISOString().slice(0, 10);
+    }
+    const raw = text(value);
+    const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (direct) return direct[1];
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+  }
+
   function normalizeDateInput(value) {
     if (value instanceof Date && !Number.isNaN(value.getTime())) {
       return value.toISOString().slice(0, 10);
@@ -442,8 +454,8 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       importedBy: row.imported_by || null,
       note: row.note || null,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-      periodFrom: row.period_from ? String(row.period_from).slice(0, 10) : null,
-      periodTo: row.period_to ? String(row.period_to).slice(0, 10) : null,
+      periodFrom: isoDateOnly(row.period_from),
+      periodTo: isoDateOnly(row.period_to),
       revenue: numberValue(row.revenue),
       itemsSold: numberValue(row.items_sold),
       transactions: numberValue(row.transactions),
@@ -925,7 +937,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
   }
 
   function completeTrend(rows, from, to, bucket) {
-    const byStart = new Map((rows || []).map((row) => [String(row.bucket_start).slice(0, 10), row]));
+    const byStart = new Map((rows || []).map((row) => [isoDateOnly(row.bucket_start), row]).filter(([key]) => Boolean(key)));
     return generateBucketStarts(from, to, bucket).map((start, index) => {
       const row = byStart.get(start) || {};
       const metrics = metricRow(row);
@@ -1071,12 +1083,14 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     for (const row of currentRows || []) {
       const actor = text(row.actor) || "Ismeretlen";
       actorNames.add(actor);
-      currentMap.set(`${actor.toLocaleLowerCase("hu-HU")}:${String(row.month_start).slice(0, 7)}`, metricRow(row));
+      const month = isoDateOnly(row.month_start);
+      if (month) currentMap.set(`${actor.toLocaleLowerCase("hu-HU")}:${month.slice(0, 7)}`, metricRow(row));
     }
     for (const row of comparisonRows || []) {
       const actor = text(row.actor) || "Ismeretlen";
       actorNames.add(actor);
-      comparisonMap.set(`${actor.toLocaleLowerCase("hu-HU")}:${String(row.month_start).slice(0, 7)}`, metricRow(row));
+      const month = isoDateOnly(row.month_start);
+      if (month) comparisonMap.set(`${actor.toLocaleLowerCase("hu-HU")}:${month.slice(0, 7)}`, metricRow(row));
     }
     const rows = Array.from(actorNames).map((actor) => {
       const key = actor.toLocaleLowerCase("hu-HU");
@@ -1103,7 +1117,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       id: String(row.record_id),
       source: row.source,
       importId: row.import_id ? String(row.import_id) : null,
-      date: row.happened_on ? String(row.happened_on).slice(0, 10) : null,
+      date: isoDateOnly(row.happened_on),
       locationId: row.location_id || null,
       locationCode: row.location_code || null,
       locationName: row.location_name || null,
@@ -1439,7 +1453,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         rows: rowsResult.rows.map((row) => ({
           id: String(row.id),
           rowNo: numberValue(row.row_no),
-          soldOn: String(row.sold_on).slice(0, 10),
+          soldOn: isoDateOnly(row.sold_on),
           locationId: row.location_id ? String(row.location_id) : null,
           locationCode: row.location_code || null,
           locationName: row.location_name || null,
