@@ -367,15 +367,33 @@ function closeOnEscape(active: boolean, close: () => void) {
 function FloatingHint({ children, content }: { children: ReactNode; content: ReactNode }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [position, setPosition] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    placement: "top" | "bottom";
+  } | null>(null);
 
   const update = useCallback(() => {
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
-    const width = Math.min(320, window.innerWidth - 20);
-    const left = Math.max(10, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 10));
-    const desiredTop = rect.top - 12;
-    setPosition({ left, top: desiredTop, width });
+
+    const edge = 16;
+    const gap = 10;
+    const width = Math.min(320, Math.max(220, window.innerWidth - edge * 2));
+    const triggerCenter = rect.left + rect.width / 2;
+
+    // A képernyő jobb felén lévő elemnél a tooltip balra, befelé nyíljon,
+    // a bal felén pedig jobbra. Így soha nem a monitor széle felé próbál terjeszkedni.
+    let left = triggerCenter >= window.innerWidth / 2
+      ? rect.right - width
+      : rect.left;
+    left = Math.max(edge, Math.min(left, window.innerWidth - width - edge));
+
+    const placement: "top" | "bottom" = rect.top >= 170 ? "top" : "bottom";
+    const top = placement === "top" ? rect.top - gap : rect.bottom + gap;
+
+    setPosition({ left, top, width, placement });
   }, []);
 
   useEffect(() => {
@@ -411,8 +429,14 @@ function FloatingHint({ children, content }: { children: ReactNode; content: Rea
       {open && position
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-[1200] -translate-y-full rounded-xl border border-[#7bd7d4]/28 bg-[#111b2a]/[0.98] px-3 py-2.5 text-xs leading-5 text-white/82 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl"
-              style={{ left: position.left, top: position.top, width: position.width }}
+              className="pointer-events-none fixed z-[1200] rounded-xl border border-[#7bd7d4]/28 bg-[#111b2a]/[0.98] px-3 py-2.5 text-xs leading-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+              style={{
+                left: position.left,
+                top: position.top,
+                width: position.width,
+                color: "#ffffff",
+                transform: position.placement === "top" ? "translateY(-100%)" : "none",
+              }}
             >
               {content}
             </div>,
@@ -1368,8 +1392,8 @@ function Heatmap({
                         <div>
                           <p className="font-medium text-white">{row.actor} • {month.label}</p>
                           <p className="mt-1 text-[#aef4f0]">{label}: {chartMetricConfig[metric].format(currentValue)}</p>
-                          {comparisonAvailable ? <p className="text-white/55">Előző év: {chartMetricConfig[metric].format(metricValue(value?.comparison, metric))}</p> : <p className="text-white/38">Előző év: nincs adat</p>}
-                          <p className="mt-1 text-white/45">{month.currentStart ? `${huDate(month.currentStart)} – ${huDate(month.currentEnd)}` : "Nincs vizsgált hónap"}</p>
+                          {comparisonAvailable ? <p style={{ color: "rgba(255,255,255,0.72)" }}>Előző év: {chartMetricConfig[metric].format(metricValue(value?.comparison, metric))}</p> : <p style={{ color: "rgba(255,255,255,0.62)" }}>Előző év: nincs adat</p>}
+                          <p className="mt-1" style={{ color: "rgba(255,255,255,0.58)" }}>{month.currentStart ? `${huDate(month.currentStart)} – ${huDate(month.currentEnd)}` : "Nincs vizsgált hónap"}</p>
                         </div>
                       }
                     >
