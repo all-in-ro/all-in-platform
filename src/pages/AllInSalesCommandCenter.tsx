@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import * as XLSX from "xlsx";
 import {
   Activity,
   AlertTriangle,
@@ -18,11 +17,10 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleDollarSign,
   Database,
-  Download,
-  FileSpreadsheet,
   Filter,
   Gauge,
   Home,
@@ -31,16 +29,15 @@ import {
   Loader2,
   PackageSearch,
   Percent,
+  ReceiptText,
   RefreshCw,
   Search,
   ShieldCheck,
   ShoppingBag,
-  SlidersHorizontal,
   Tags,
   Target,
   Trash2,
   TrendingUp,
-  Upload,
   UserRound,
   Users,
   WalletCards,
@@ -49,16 +46,12 @@ import {
 } from "lucide-react";
 import {
   apiAifCreateSalesHistoryImport,
-  apiAifDeleteSalesHistoryImport,
   apiAifSalesCommandCenterOverview,
-  apiAifSalesHistoryImportDetail,
-  apiAifSalesHistoryImports,
   type AifSalesCommandDetailItem,
   type AifSalesCommandDimensionItem,
   type AifSalesCommandDimensionKey,
   type AifSalesCommandMetricRow,
   type AifSalesCommandOverviewResponse,
-  type AifSalesHistoryImportSummary,
   type AifSalesHistoryInputRow,
 } from "../lib/aif/api";
 
@@ -72,7 +65,6 @@ type ChartMetric =
   | "averageBasket"
   | "discountTotal"
   | "unpaidTotal";
-type HistoryTab = "manual" | "file" | "imports";
 type QuickPreset = "ytd" | "month" | "lastMonth" | "fullYear";
 
 type FiltersState = {
@@ -109,40 +101,6 @@ type ManualHistoryDraft = {
   note: string;
 };
 
-type FileMapKey =
-  | "soldOn"
-  | "location"
-  | "actor"
-  | "transactionKey"
-  | "brandName"
-  | "categoryName"
-  | "subcategoryName"
-  | "productTitle"
-  | "productCode"
-  | "colorName"
-  | "size"
-  | "quantity"
-  | "transactions"
-  | "revenue"
-  | "netRevenue"
-  | "salesBeforeDiscount"
-  | "discountTotal"
-  | "paidTotal"
-  | "unpaidTotal"
-  | "estimatedCost"
-  | "paymentMethod"
-  | "tvaRate"
-  | "note";
-
-type FileMapping = Record<FileMapKey, string>;
-
-type ImportedSheet = {
-  fileName: string;
-  extension: "xlsx" | "xls" | "csv" | "other";
-  sheetName: string;
-  columns: string[];
-  rows: Array<Record<string, unknown>>;
-};
 
 const panel =
   "rounded-[22px] border border-white/12 bg-gradient-to-br from-[#223044]/96 via-[#1f2b3d]/96 to-[#1b2637]/96 shadow-[0_18px_46px_rgba(2,6,23,0.30)]";
@@ -152,7 +110,6 @@ const buttonBase =
   "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-normal text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
 const primaryButton = `${buttonBase} border-[#9be9e5]/42 bg-gradient-to-r from-[#238985] to-[#2a9a96] shadow-[0_9px_22px_rgba(42,141,139,0.20)] hover:brightness-110`;
 const neutralButton = `${buttonBase} border-white/14 bg-white/[0.045] hover:border-[#8ce7e2]/30 hover:bg-white/[0.08]`;
-const dangerButton = `${buttonBase} border-rose-300/38 bg-rose-500/18 text-rose-50 hover:bg-rose-500/28`;
 
 const dimensionLabels: Record<AifSalesCommandDimensionKey, string> = {
   brand: "Márkák",
@@ -178,36 +135,6 @@ const chartMetricConfig: Record<
   unpaidTotal: { label: "Kintlévőség", short: "Kintlévőség", format: money },
 };
 
-const fileFields: Array<{
-  key: FileMapKey;
-  label: string;
-  required?: boolean;
-  aliases: string[];
-}> = [
-  { key: "soldOn", label: "Dátum / hónap", required: true, aliases: ["datum", "dátum", "date", "soldon", "soldat", "honap", "hónap", "month", "ido", "időpont"] },
-  { key: "location", label: "Üzlet", aliases: ["uzlet", "üzlet", "location", "store", "shop", "telephely", "magazin"] },
-  { key: "actor", label: "Eladó", aliases: ["elado", "eladó", "actor", "employee", "seller", "alkalmazott", "ertekesito", "értékesítő"] },
-  { key: "transactionKey", label: "Bizonylat", aliases: ["bizonylat", "bizonylatszam", "sale_number", "receipt", "receipt_number", "transaction", "transactionkey"] },
-  { key: "brandName", label: "Márka", aliases: ["marka", "márka", "brand", "brandname"] },
-  { key: "categoryName", label: "Főkategória", aliases: ["fokategoria", "főkategória", "category", "categoryname", "kategoria", "kategória"] },
-  { key: "subcategoryName", label: "Alkategória", aliases: ["alkategoria", "alkategória", "subcategory", "subcategoryname", "sub_category"] },
-  { key: "productTitle", label: "Termék", aliases: ["termek", "termék", "product", "producttitle", "product_name", "denumire", "articol"] },
-  { key: "productCode", label: "Termékkód", aliases: ["termekkod", "termékkód", "productcode", "product_code", "sku", "codprodus", "cod_produs"] },
-  { key: "colorName", label: "Szín", aliases: ["szin", "szín", "color", "colour", "colorname", "culoare"] },
-  { key: "size", label: "Méret", aliases: ["meret", "méret", "size", "marime", "mărime"] },
-  { key: "quantity", label: "Darab", aliases: ["darab", "qty", "quantity", "itemssold", "items_sold", "cantitate", "db"] },
-  { key: "transactions", label: "Tranzakciók", aliases: ["tranzakcio", "tranzakció", "transactions", "transactioncount", "vasarlasok", "vásárlások"] },
-  { key: "revenue", label: "Forgalom", required: true, aliases: ["forgalom", "revenue", "total", "bevetel", "bevétel", "ertek", "érték", "vanzare", "vânzare"] },
-  { key: "netRevenue", label: "Nettó forgalom", aliases: ["netto", "nettó", "netrevenue", "net_revenue", "net"] },
-  { key: "salesBeforeDiscount", label: "Kedvezmény előtti", aliases: ["salesbeforediscount", "sales_before_discount", "listaertek", "listaérték"] },
-  { key: "discountTotal", label: "Kedvezmény", aliases: ["kedvezmeny", "kedvezmény", "discount", "discounttotal", "discount_total"] },
-  { key: "paidTotal", label: "Fizetett", aliases: ["fizetett", "paid", "paidtotal", "paid_total"] },
-  { key: "unpaidTotal", label: "Kintlévőség", aliases: ["kintlevoseg", "kintlévőség", "unpaid", "unpaidtotal", "unpaid_total", "balancedue"] },
-  { key: "estimatedCost", label: "Beszerzési érték", aliases: ["beszerzes", "beszerzésiérték", "beszerzesiertek", "estimatedcost", "estimated_cost", "cost", "purchasecost"] },
-  { key: "paymentMethod", label: "Fizetési mód", aliases: ["fizetesimod", "fizetési mód", "payment", "paymentmethod", "payment_method", "metoda"] },
-  { key: "tvaRate", label: "TVA %", aliases: ["tva", "tvarate", "tva_rate", "vat", "vatrate"] },
-  { key: "note", label: "Megjegyzés", aliases: ["megjegyzes", "megjegyzés", "note", "notes", "observatii", "observații"] },
-];
 
 function numberValue(value: unknown) {
   const parsed = Number(value);
@@ -346,29 +273,6 @@ function dateTime(value?: string | null) {
   });
 }
 
-function normalizeHeader(value: unknown) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
-}
-
-function emptyFileMapping(): FileMapping {
-  return Object.fromEntries(fileFields.map((field) => [field.key, ""])) as FileMapping;
-}
-
-function detectFileMapping(columns: string[]) {
-  const mapping = emptyFileMapping();
-  const normalized = columns.map((column) => ({ column, key: normalizeHeader(column) }));
-  for (const field of fileFields) {
-    const aliases = field.aliases.map(normalizeHeader);
-    const exact = normalized.find((column) => aliases.includes(column.key));
-    const partial = exact || normalized.find((column) => aliases.some((alias) => alias.length >= 5 && column.key.includes(alias)));
-    mapping[field.key] = partial?.column || "";
-  }
-  return mapping;
-}
 
 function metricValue(row: Partial<AifSalesCommandMetricRow> | undefined, metric: ChartMetric) {
   return numberValue(row?.[metric]);
@@ -597,20 +501,277 @@ function SelectControl({
   );
 }
 
+const HU_MONTHS = [
+  "január", "február", "március", "április", "május", "június",
+  "július", "augusztus", "szeptember", "október", "november", "december",
+] as const;
+const HU_WEEKDAYS = ["H", "K", "Sze", "Cs", "P", "Szo", "V"] as const;
+
+function isoDateParts(value?: string | null) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { year, month, day, date };
+}
+
+function isoFromUtcDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function huDateLabel(value?: string | null) {
+  const parsed = isoDateParts(value);
+  if (!parsed) return "Dátum választása";
+  return `${parsed.year}. ${String(parsed.month).padStart(2, "0")}. ${String(parsed.day).padStart(2, "0")}.`;
+}
+
+function HungarianDatePicker({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const parsed = isoDateParts(value);
+  const [viewYear, setViewYear] = useState(parsed?.year || new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState((parsed?.month || new Date().getMonth() + 1) - 1);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const todayIso = localIsoDate();
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 10;
+    const gap = 8;
+    const width = Math.min(336, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const estimatedHeight = 382;
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    if (roomBelow < estimatedHeight && roomAbove > roomBelow) {
+      setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    } else {
+      setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = isoDateParts(value);
+    if (current) {
+      setViewYear(current.year);
+      setViewMonth(current.month - 1);
+    }
+    updatePosition();
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const firstOfMonth = new Date(Date.UTC(viewYear, viewMonth, 1, 12));
+  const mondayOffset = (firstOfMonth.getUTCDay() + 6) % 7;
+  const gridStart = new Date(firstOfMonth);
+  gridStart.setUTCDate(1 - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart);
+    day.setUTCDate(gridStart.getUTCDate() + index);
+    return day;
+  });
+
+  function shiftMonth(delta: number) {
+    const next = new Date(Date.UTC(viewYear, viewMonth + delta, 1, 12));
+    setViewYear(next.getUTCFullYear());
+    setViewMonth(next.getUTCMonth());
+  }
+
+  function chooseDate(iso: string) {
+    onChange(iso);
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+        className={`group flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm text-white outline-none transition ${
+          open
+            ? "border-[#8ce7e2]/72 bg-[#20354a] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/14 bg-[#172334]/88 hover:border-[#7bd7d4]/34 hover:bg-[#1d2b3e]"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <CalendarDays size={15} className="shrink-0 text-[#8fe9e5]" />
+          <span className="truncate tracking-[0.02em]">{huDateLabel(value)}</span>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && position ? createPortal(
+        <div
+          ref={menuRef}
+          role="dialog"
+          aria-label={`${ariaLabel} naptár`}
+          className="fixed z-[1120] overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl"
+          style={{ left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+        >
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button type="button" onClick={() => shiftMonth(-1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white" aria-label="Előző hónap"><ChevronLeft size={17} /></button>
+            <div className="text-center"><p className="text-[9px] uppercase tracking-[0.16em] text-[#cffffd]/48">Naptár</p><p className="mt-0.5 text-sm font-medium text-white">{viewYear}. {HU_MONTHS[viewMonth]}</p></div>
+            <button type="button" onClick={() => shiftMonth(1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18 hover:text-white" aria-label="Következő hónap"><ChevronRight size={17} /></button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-7 gap-1">
+            {HU_WEEKDAYS.map((day, index) => <div key={day} className={`py-1 text-center text-[10px] font-medium uppercase tracking-[0.05em] ${index >= 5 ? "text-rose-100/55" : "text-[#cffffd]/60"}`}>{day}</div>)}
+            {days.map((day) => {
+              const iso = isoFromUtcDate(day);
+              const inMonth = day.getUTCMonth() === viewMonth;
+              const selected = iso === value;
+              const today = iso === todayIso;
+              const weekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+              return (
+                <button
+                  key={iso}
+                  type="button"
+                  onClick={() => chooseDate(iso)}
+                  className={`relative flex h-9 items-center justify-center rounded-lg border text-xs transition ${
+                    selected
+                      ? "border-[#bff8f5]/70 bg-gradient-to-br from-[#2a9a96] to-[#247b82] font-semibold text-white shadow-[0_6px_16px_rgba(42,141,139,0.30)]"
+                      : inMonth
+                        ? weekend
+                          ? "border-transparent bg-white/[0.025] text-rose-50/72 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                          : "border-transparent bg-white/[0.025] text-white/88 hover:border-[#7bd7d4]/22 hover:bg-white/[0.08] hover:text-white"
+                        : "border-transparent text-white/24 hover:bg-white/[0.04] hover:text-white/48"
+                  }`}
+                >
+                  {day.getUTCDate()}
+                  {today && !selected ? <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#7bd7d4]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/8 pt-3">
+            <span className="text-[10px] text-white/40">Hétfő az első nap.</span>
+            <button type="button" onClick={() => chooseDate(todayIso)} className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#8ce7e2]/30 bg-[#2a8d8b]/18 px-3 text-[11px] text-[#d8fffd] hover:bg-[#2a8d8b]/32"><CalendarDays size={13} />Ma</button>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
+function HungarianMonthPicker({ value, onChange, ariaLabel }: { value: string; onChange: (value: string) => void; ariaLabel: string }) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  const initialYear = match ? Number(match[1]) : new Date().getFullYear();
+  const [open, setOpen] = useState(false);
+  const [year, setYear] = useState(initialYear);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const edge = 10;
+    const gap = 8;
+    const width = Math.min(360, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    if (roomBelow < 330 && roomAbove > roomBelow) setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    else setPosition({ left, width, top: Math.max(edge, rect.bottom + gap) });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = String(value || "").match(/^(\d{4})-(\d{2})$/);
+    if (current) setYear(Number(current[1]));
+    updatePosition();
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, updatePosition, value]);
+
+  const selectedMonth = match ? Number(match[2]) - 1 : -1;
+  const selectedYear = match ? Number(match[1]) : -1;
+  const label = match ? `${match[1]}. ${HU_MONTHS[Number(match[2]) - 1]}` : "Hónap választása";
+
+  return (
+    <>
+      <button ref={triggerRef} type="button" aria-label={ariaLabel} onClick={() => { if (!open) updatePosition(); setOpen((current) => !current); }} className={`flex h-11 w-full items-center justify-between rounded-[13px] border px-3 text-left text-sm text-white transition ${open ? "border-[#8ce7e2]/72 bg-[#20354a] ring-2 ring-[#7bd7d4]/14" : "border-white/14 bg-[#172334]/88 hover:border-[#7bd7d4]/34 hover:bg-[#1d2b3e]"}`}>
+        <span className="flex min-w-0 items-center gap-2.5"><CalendarDays size={15} className="shrink-0 text-[#8fe9e5]" /><span className="truncate">{label}</span></span>
+        <ChevronDown size={14} className={`shrink-0 text-white/52 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && position ? createPortal(
+        <div ref={menuRef} className="fixed z-[1120] overflow-hidden rounded-[20px] border border-[#8ce7e2]/42 bg-[#202c3d]/[0.995] p-3 text-white shadow-[0_30px_80px_rgba(2,6,23,0.76)] backdrop-blur-xl" style={{ left: position.left, width: position.width, top: position.top, bottom: position.bottom }}>
+          <div className="flex items-center justify-between rounded-xl border border-white/8 bg-[#29374b] px-2 py-2">
+            <button type="button" onClick={() => setYear((current) => current - 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18"><ChevronLeft size={17} /></button>
+            <p className="text-sm font-medium text-white">{year}</p>
+            <button type="button" onClick={() => setYear((current) => current + 1)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/76 hover:border-[#7bd7d4]/35 hover:bg-[#2a8d8b]/18"><ChevronRight size={17} /></button>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {HU_MONTHS.map((month, index) => {
+              const active = selectedYear === year && selectedMonth === index;
+              return <button key={month} type="button" onClick={() => { onChange(`${year}-${String(index + 1).padStart(2, "0")}`); setOpen(false); }} className={`min-h-12 rounded-xl border px-2 text-xs transition ${active ? "border-[#bff8f5]/60 bg-[#2a8d8b] text-white" : "border-white/8 bg-white/[0.03] text-white/70 hover:border-[#7bd7d4]/28 hover:bg-white/[0.07] hover:text-white"}`}>{month}</button>;
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 function DateControl({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
   return (
-    <label className="grid min-w-0 gap-1.5 text-[9px] uppercase tracking-[0.11em] text-white/42">
-      {label}
-      <span className="relative block">
-        <CalendarDays size={15} className="pointer-events-none absolute left-3 top-3.5 text-[#8ee6e2]" />
-        <input
-          type="date"
-          className={`${control} pl-9`}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </span>
-    </label>
+    <div className="grid min-w-0 gap-1.5 text-[9px] uppercase tracking-[0.11em] text-white/42">
+      <span>{label}</span>
+      <HungarianDatePicker value={value} onChange={onChange} ariaLabel={label} />
+    </div>
   );
 }
 
@@ -1146,7 +1307,7 @@ function CoverageStrip({ data }: { data: AifSalesCommandOverviewResponse }) {
       label: "Történeti részletezettség",
       current: data.coverage.current.historyDetail,
       comparison: data.coverage.comparison.historyDetail,
-      hint: "A márka-, méret- és termékbontás csak a részletesen importált történeti forgalomra értelmezhető.",
+      hint: "A márka-, méret- és termékbontás csak a részletesen rögzített történeti forgalomra értelmezhető.",
     },
   ];
   return (
@@ -1305,22 +1466,15 @@ function HistoryModal({
   data: AifSalesCommandOverviewResponse | null;
   onChanged: () => Promise<void>;
 }) {
-  const [tab, setTab] = useState<HistoryTab>("manual");
-  const [imports, setImports] = useState<AifSalesHistoryImportSummary[]>([]);
-  const [importsLoading, setImportsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<AifSalesHistoryImportSummary | null>(null);
-  const [detail, setDetail] = useState<{ item: AifSalesHistoryImportSummary; rows: AifSalesHistoryInputRow[] } | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
 
   const today = localIsoDate();
   const defaultMonth = `${Number(today.slice(0, 4)) - 1}-${today.slice(5, 7)}`;
   const defaultLocation = data?.filterOptions.locations.find((location) => location.code === "main_warehouse")?.code
     || data?.filterOptions.locations[0]?.code
     || "main_warehouse";
-  const [manualSourceName, setManualSourceName] = useState("Visszamenőleges havi eladások");
   const [manualRows, setManualRows] = useState<AifSalesHistoryInputRow[]>([]);
   const [manualDraft, setManualDraft] = useState<ManualHistoryDraft>({
     month: defaultMonth,
@@ -1335,37 +1489,11 @@ function HistoryModal({
     note: "",
   });
 
-  const [sheet, setSheet] = useState<ImportedSheet | null>(null);
-  const [sheetChoices, setSheetChoices] = useState<ImportedSheet[]>([]);
-  const [mapping, setMapping] = useState<FileMapping>(emptyFileMapping());
-  const [showOptionalMapping, setShowOptionalMapping] = useState(false);
-  const [fileSourceName, setFileSourceName] = useState("");
-  const [fileNote, setFileNote] = useState("");
-  const [fileDefaultLocation, setFileDefaultLocation] = useState(defaultLocation);
-  const [fileDefaultActor, setFileDefaultActor] = useState("");
-  const [fileDefaultTva, setFileDefaultTva] = useState(String(data?.salesTva.rate ?? 21));
-  const [fileDefaultGranularity, setFileDefaultGranularity] = useState<"monthly" | "daily" | "line">("line");
-  const [filePriceIncludesTva, setFilePriceIncludesTva] = useState(true);
-  const [allowDuplicate, setAllowDuplicate] = useState(false);
-
-  const loadImports = useCallback(async () => {
-    setImportsLoading(true);
-    try {
-      const response = await apiAifSalesHistoryImports(150);
-      setImports(response.items || []);
-    } catch (loadError: any) {
-      setError(loadError?.message || "Az importelőzmények nem tölthetők be.");
-    } finally {
-      setImportsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     if (!open) return;
     setError("");
     setSuccess("");
-    void loadImports();
-  }, [open, loadImports]);
+  }, [open]);
 
   useEffect(() => {
     if (!data) return;
@@ -1373,12 +1501,9 @@ function HistoryModal({
       || data.filterOptions.locations[0]?.code
       || defaultLocation;
     setManualDraft((current) => ({ ...current, location: current.location || location }));
-    setFileDefaultLocation((current) => current || location);
-    setFileDefaultTva(String(data.salesTva.rate ?? 21));
-    setFilePriceIncludesTva(data.salesTva.priceIncludesTva !== false);
   }, [data, defaultLocation]);
 
-  closeOnEscape(open && !deleteTarget, onClose);
+  closeOnEscape(open, onClose);
   useEffect(() => {
     if (!open) return;
     const previous = document.body.style.overflow;
@@ -1386,144 +1511,22 @@ function HistoryModal({
     return () => { document.body.style.overflow = previous; };
   }, [open]);
 
-  const locationOptions = useMemo<SelectOption[]>(() => [
-    ...(data?.filterOptions.locations || []).map((location) => ({ value: location.code, label: location.name, hint: location.code })),
-  ], [data?.filterOptions.locations]);
-
-  const columnOptions = useMemo<SelectOption[]>(() => [
-    { value: "", label: "Nincs oszlop" },
-    ...(sheet?.columns || []).map((column) => ({ value: column, label: column })),
-  ], [sheet?.columns]);
-
-  const mappedFileRows = useMemo<AifSalesHistoryInputRow[]>(() => {
-    if (!sheet) return [];
-    return sheet.rows.map((raw, index) => {
-      const row: Record<string, unknown> = { rowNo: index + 2 };
-      for (const field of fileFields) {
-        const column = mapping[field.key];
-        if (column) row[field.key] = raw[column];
-      }
-      if (!mapping.location && fileDefaultLocation) row.location = fileDefaultLocation;
-      if (!mapping.actor && fileDefaultActor.trim()) row.actor = fileDefaultActor.trim();
-      if (!mapping.tvaRate && fileDefaultTva.trim()) row.tvaRate = fileDefaultTva;
-      row.priceIncludesTva = filePriceIncludesTva;
-      row.sourceGranularity = fileDefaultGranularity;
-      return row as AifSalesHistoryInputRow;
-    });
-  }, [sheet, mapping, fileDefaultLocation, fileDefaultActor, fileDefaultTva, filePriceIncludesTva, fileDefaultGranularity]);
-
-  const fileValidation = useMemo(() => {
-    if (!sheet) return { errors: [] as string[], validRows: 0 };
-    const errors: string[] = [];
-    if (!mapping.soldOn) errors.push("A dátum vagy hónap oszlop nincs társítva.");
-    if (!mapping.revenue) errors.push("A forgalom oszlop nincs társítva.");
-    if (!mapping.location && !fileDefaultLocation) errors.push("Az üzlethez oszlop vagy alapérték szükséges.");
-    let validRows = 0;
-    mappedFileRows.forEach((row, index) => {
-      const date = String(row.soldOn ?? "").trim();
-      const revenue = nullableNumber(row.revenue);
-      const location = String(row.location ?? "").trim();
-      if (date && revenue !== null && location) validRows += 1;
-      else if (errors.length < 12) errors.push(`${index + 2}. sor: hiányos dátum, üzlet vagy forgalom.`);
-    });
-    return { errors: Array.from(new Set(errors)), validRows };
-  }, [sheet, mapping.soldOn, mapping.revenue, mapping.location, fileDefaultLocation, mappedFileRows]);
-
-  async function parseFile(file: File) {
-    setError("");
-    setSuccess("");
-    try {
-      const bytes = await file.arrayBuffer();
-      const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
-      const extensionRaw = (file.name.split(".").pop()?.toLowerCase() || "other") as ImportedSheet["extension"];
-      const extension: ImportedSheet["extension"] = ["xlsx", "xls", "csv"].includes(extensionRaw) ? extensionRaw : "other";
-      const choices = workbook.SheetNames.map((sheetName: string) => {
-        const worksheet = workbook.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
-          defval: "",
-          raw: false,
-          dateNF: "yyyy-mm-dd",
-        });
-        return {
-          fileName: file.name,
-          extension,
-          sheetName,
-          columns: Array.from(new Set(rows.flatMap((row) => Object.keys(row)))),
-          rows,
-        } satisfies ImportedSheet;
-      }).filter((candidate: ImportedSheet) => candidate.rows.length > 0);
-      if (!choices.length) throw new Error("A fájl nem tartalmaz importálható adatsort.");
-      const nextSheet = choices[0];
-      setSheetChoices(choices);
-      setSheet(nextSheet);
-      setMapping(detectFileMapping(nextSheet.columns));
-      setFileSourceName(file.name.replace(/\.[^.]+$/, ""));
-      setShowOptionalMapping(false);
-    } catch (parseError: any) {
-      setSheet(null);
-      setSheetChoices([]);
-      setMapping(emptyFileMapping());
-      setError(parseError?.message || "A fájl nem olvasható.");
-    }
-  }
-
-  function chooseWorkbookSheet(sheetName: string) {
-    const next = sheetChoices.find((candidate) => candidate.sheetName === sheetName);
-    if (!next) return;
-    setSheet(next);
-    setMapping(detectFileMapping(next.columns));
-    setShowOptionalMapping(false);
-    setError("");
-  }
-
-  function downloadTemplate() {
-    const detailed = [
-      {
-        Dátum: "2025-08-01",
-        Üzlet: "main_warehouse",
-        Eladó: "Minta Eladó",
-        Bizonylat: "REGI-2025-0001",
-        Márka: "Under Armour",
-        Főkategória: "Ruházat",
-        Alkategória: "Pólók",
-        Termék: "Minta termék",
-        Termékkód: "MINTA-001",
-        Szín: "Fekete",
-        Méret: "M",
-        Darab: 1,
-        Tranzakciók: 1,
-        Forgalom: 199.99,
-        "Nettó forgalom": 165.28,
-        Kedvezmény: 0,
-        "Beszerzési érték": 82.5,
-        "Fizetési mód": "cash",
-        "TVA %": 21,
-        Megjegyzés: "",
-      },
+  const locationOptions = useMemo<SelectOption[]>(() => {
+    const fromServer = (data?.filterOptions.locations || []).map((location) => ({
+      value: location.code,
+      label: location.name,
+      hint: location.code,
+    }));
+    if (fromServer.length) return fromServer;
+    return [
+      { value: "main_warehouse", label: "Magazin - Miercurea Ciuc", hint: "main_warehouse" },
+      { value: "magazin_targu_secuiesc", label: "Magazin - Târgu Secuiesc", hint: "magazin_targu_secuiesc" },
     ];
-    const monthly = [
-      {
-        Hónap: "2025-08",
-        Üzlet: "main_warehouse",
-        Eladó: "Minta Eladó",
-        Forgalom: 42850,
-        Darab: 164,
-        Tranzakciók: 91,
-        Kedvezmény: 1250,
-        Kintlévőség: 0,
-        "Beszerzési érték": 21400,
-        "TVA %": 21,
-        Megjegyzés: "Havi összesítő",
-      },
-    ];
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailed), "Részletes sorok");
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(monthly), "Havi összesítő");
-    XLSX.writeFile(workbook, "AllIn_torteneti_eladas_import_sablon.xlsx");
-  }
+  }, [data?.filterOptions.locations]);
 
   function addManualRow() {
     setError("");
+    setSuccess("");
     const revenue = nullableNumber(manualDraft.revenue);
     if (!manualDraft.month || !manualDraft.location || !manualDraft.actor.trim() || revenue === null) {
       setError("A hónap, üzlet, eladó és forgalom kötelező.");
@@ -1564,85 +1567,20 @@ function HistoryModal({
     setError("");
     setSuccess("");
     try {
+      const firstMonth = String(manualRows[0]?.soldOn || "").slice(0, 7);
+      const lastMonth = String(manualRows[manualRows.length - 1]?.soldOn || "").slice(0, 7);
       await apiAifCreateSalesHistoryImport({
-        sourceName: manualSourceName.trim() || "Visszamenőleges havi eladások",
+        sourceName: firstMonth === lastMonth
+          ? `Kézi történeti adat ${firstMonth}`
+          : `Kézi történeti adatok ${firstMonth} – ${lastMonth}`,
         sourceKind: "manual",
         rows: manualRows,
       });
-      setSuccess(`${manualRows.length} havi sor sikeresen bekerült.`);
+      setSuccess(`${manualRows.length} havi sor elmentve. Az elemzések frissültek.`);
       setManualRows([]);
-      await Promise.all([loadImports(), onChanged()]);
+      await onChanged();
     } catch (saveError: any) {
-      setError(saveError?.message || "A havi adatok mentése nem sikerült.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveFileRows() {
-    if (!sheet || saving || fileValidation.errors.length || !mappedFileRows.length) return;
-    setSaving(true);
-    setError("");
-    setSuccess("");
-    try {
-      await apiAifCreateSalesHistoryImport({
-        sourceName: fileSourceName.trim() || sheet.fileName,
-        sourceKind: sheet.extension,
-        originalFileName: sheet.fileName,
-        note: fileNote.trim() || null,
-        allowDuplicate,
-        defaults: {
-          location: fileDefaultLocation || undefined,
-          actor: fileDefaultActor.trim() || undefined,
-          tvaRate: nullableNumber(fileDefaultTva),
-          priceIncludesTva: filePriceIncludesTva,
-          granularity: fileDefaultGranularity,
-        },
-        rows: mappedFileRows,
-      });
-      setSuccess(`${mappedFileRows.length} történeti sor sikeresen importálva.`);
-      setSheet(null);
-      setSheetChoices([]);
-      setMapping(emptyFileMapping());
-      setFileSourceName("");
-      setFileNote("");
-      await Promise.all([loadImports(), onChanged()]);
-    } catch (saveError: any) {
-      const validation = saveError?.payload?.errors as Array<{ rowNo?: number; message?: string }> | undefined;
-      setError([
-        saveError?.message || "A fájl importálása nem sikerült.",
-        ...(validation || []).slice(0, 6).map((item) => `${item.rowNo || "?"}. sor: ${item.message || "hibás"}`),
-      ].join("\n"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function openImportDetail(item: AifSalesHistoryImportSummary) {
-    setDetailLoading(true);
-    setError("");
-    try {
-      const response = await apiAifSalesHistoryImportDetail(item.id);
-      setDetail({ item: response.item, rows: response.rows || [] });
-    } catch (detailError: any) {
-      setError(detailError?.message || "Az import részlete nem tölthető be.");
-    } finally {
-      setDetailLoading(false);
-    }
-  }
-
-  async function deleteImport() {
-    if (!deleteTarget || saving) return;
-    setSaving(true);
-    setError("");
-    try {
-      await apiAifDeleteSalesHistoryImport(deleteTarget.id);
-      setDeleteTarget(null);
-      if (detail?.item.id === deleteTarget.id) setDetail(null);
-      setSuccess("A történeti import törölve lett. Az élő készlethez és pénztárhoz a rendszer nem nyúlt.");
-      await Promise.all([loadImports(), onChanged()]);
-    } catch (deleteError: any) {
-      setError(deleteError?.message || "Az import törlése nem sikerült.");
+      setError(saveError?.message || "A visszamenőleges adatok mentése nem sikerült.");
     } finally {
       setSaving(false);
     }
@@ -1650,132 +1588,64 @@ function HistoryModal({
 
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[1000] bg-slate-950/78 p-2 backdrop-blur-md sm:p-4" onMouseDown={(event) => { if (event.currentTarget === event.target && !saving) onClose(); }}>
-      <section className="mx-auto flex h-full max-h-[94vh] w-full max-w-[1380px] flex-col overflow-hidden rounded-[28px] border border-[#8ce7e2]/26 bg-[#172334] text-white shadow-[0_38px_130px_rgba(0,0,0,0.70)]">
+    <div
+      className="fixed inset-0 z-[1000] bg-slate-950/78 p-2 backdrop-blur-md sm:p-4"
+      onMouseDown={(event) => { if (event.currentTarget === event.target && !saving) onClose(); }}
+    >
+      <section className="mx-auto flex h-full max-h-[94vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-[28px] border border-[#8ce7e2]/26 bg-[#172334] text-white shadow-[0_38px_130px_rgba(0,0,0,0.70)]">
         <header className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#1c2d42] via-[#20384a] to-[#20505a] px-4 py-4 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
             <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#9be9e5]/32 bg-[#2a8d8b]/22 text-[#d7fffd]"><Database size={22} /></span>
-            <div className="min-w-0"><p className="text-[9px] uppercase tracking-[0.16em] text-white/42">Készletet és pénztárat nem módosító adatbevitel</p><h2 className="mt-1 truncate text-xl text-white sm:text-2xl">Történeti eladások</h2></div>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/42">Belső kézi adatbevitel • készlet és pénztár módosítása nélkül</p>
+              <h2 className="mt-1 truncate text-xl text-white sm:text-2xl">Visszamenőleges eladások</h2>
+            </div>
           </div>
-          <div className="flex items-center gap-2"><button type="button" className={neutralButton} onClick={downloadTemplate}><Download size={15} />Import-sablon</button><button type="button" disabled={saving} onClick={onClose} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button></div>
+          <button type="button" disabled={saving} onClick={onClose} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button>
         </header>
-
-        <div className="flex gap-1.5 overflow-x-auto border-b border-white/8 bg-[#142033] px-4 py-2.5">
-          {[
-            ["manual", "Gyors havi bevitel", CalendarDays],
-            ["file", "Excel / CSV import", FileSpreadsheet],
-            ["imports", "Importelőzmények", Database],
-          ].map(([key, label, Icon]) => (
-            <button key={String(key)} type="button" onClick={() => { setTab(key as HistoryTab); setError(""); setSuccess(""); }} className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs transition ${tab === key ? "border-[#8ce7e2]/42 bg-[#2a8d8b] text-white" : "border-white/9 bg-white/[0.025] text-white/48 hover:text-white"}`}><Icon size={14} />{String(label)}</button>
-          ))}
-        </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
           {error ? <div className="mb-4 whitespace-pre-line rounded-2xl border border-rose-300/28 bg-rose-500/13 px-4 py-3 text-sm leading-6 text-rose-50"><AlertTriangle size={17} className="mr-2 inline" />{error}</div> : null}
           {success ? <div className="mb-4 rounded-2xl border border-emerald-200/24 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-50"><Check size={17} className="mr-2 inline" />{success}</div> : null}
 
-          {tab === "manual" ? (
-            <div className="grid gap-4 xl:grid-cols-[0.9fr_1.35fr]">
-              <section className={`${panel} p-4`}>
-                <div className="flex items-start justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Egy hónap / egy eladó</p><h3 className="mt-1 text-base">Új havi összesítő</h3></div><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><CalendarDays size={17} /></span></div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <FieldLabel label="Hónap"><input type="month" className={control} value={manualDraft.month} onChange={(event) => setManualDraft({ ...manualDraft, month: event.target.value })} /></FieldLabel>
-                  <FieldLabel label="Üzlet"><SelectControl value={manualDraft.location} onChange={(value) => setManualDraft({ ...manualDraft, location: value })} options={locationOptions} placeholder="Válassz üzletet" /></FieldLabel>
-                  <FieldLabel label="Eladó"><input className={control} value={manualDraft.actor} onChange={(event) => setManualDraft({ ...manualDraft, actor: event.target.value })} placeholder="Alkalmazott neve" /></FieldLabel>
-                  <FieldLabel label="Forgalom"><input inputMode="decimal" className={control} value={manualDraft.revenue} onChange={(event) => setManualDraft({ ...manualDraft, revenue: event.target.value })} placeholder="0,00" /></FieldLabel>
-                  <FieldLabel label="Darab"><input inputMode="decimal" className={control} value={manualDraft.quantity} onChange={(event) => setManualDraft({ ...manualDraft, quantity: event.target.value })} placeholder="0" /></FieldLabel>
-                  <FieldLabel label="Tranzakció"><input inputMode="decimal" className={control} value={manualDraft.transactions} onChange={(event) => setManualDraft({ ...manualDraft, transactions: event.target.value })} placeholder="0" /></FieldLabel>
-                  <FieldLabel label="Beszerzési érték" hint="Ebből számolható a történeti nyereség."><input inputMode="decimal" className={control} value={manualDraft.estimatedCost} onChange={(event) => setManualDraft({ ...manualDraft, estimatedCost: event.target.value })} placeholder="0,00" /></FieldLabel>
-                  <FieldLabel label="Kedvezmény"><input inputMode="decimal" className={control} value={manualDraft.discountTotal} onChange={(event) => setManualDraft({ ...manualDraft, discountTotal: event.target.value })} placeholder="0,00" /></FieldLabel>
-                  <FieldLabel label="Kintlévőség"><input inputMode="decimal" className={control} value={manualDraft.unpaidTotal} onChange={(event) => setManualDraft({ ...manualDraft, unpaidTotal: event.target.value })} placeholder="0,00" /></FieldLabel>
-                  <FieldLabel label="Megjegyzés"><input className={control} value={manualDraft.note} onChange={(event) => setManualDraft({ ...manualDraft, note: event.target.value })} placeholder="Opcionális" /></FieldLabel>
-                </div>
-                <button type="button" className={`${primaryButton} mt-4 w-full`} onClick={addManualRow}><Check size={15} />Sor hozzáadása</button>
-              </section>
+          <div className="grid gap-4 xl:grid-cols-[0.9fr_1.35fr]">
+            <section className={`${panel} p-4`}>
+              <div className="flex items-start justify-between gap-3">
+                <div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Egy hónap / egy eladó</p><h3 className="mt-1 text-base">Havi összesítő rögzítése</h3></div>
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><CalendarDays size={17} /></span>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <FieldLabel label="Hónap"><HungarianMonthPicker value={manualDraft.month} onChange={(value) => setManualDraft({ ...manualDraft, month: value })} ariaLabel="Visszamenőleges eladás hónapja" /></FieldLabel>
+                <FieldLabel label="Üzlet"><SelectControl value={manualDraft.location} onChange={(value) => setManualDraft({ ...manualDraft, location: value })} options={locationOptions} placeholder="Válassz üzletet" /></FieldLabel>
+                <FieldLabel label="Eladó"><input className={control} value={manualDraft.actor} onChange={(event) => setManualDraft({ ...manualDraft, actor: event.target.value })} placeholder="Alkalmazott neve" /></FieldLabel>
+                <FieldLabel label="Forgalom"><input inputMode="decimal" className={control} value={manualDraft.revenue} onChange={(event) => setManualDraft({ ...manualDraft, revenue: event.target.value })} placeholder="0,00" /></FieldLabel>
+                <FieldLabel label="Darab"><input inputMode="decimal" className={control} value={manualDraft.quantity} onChange={(event) => setManualDraft({ ...manualDraft, quantity: event.target.value })} placeholder="0" /></FieldLabel>
+                <FieldLabel label="Tranzakció"><input inputMode="decimal" className={control} value={manualDraft.transactions} onChange={(event) => setManualDraft({ ...manualDraft, transactions: event.target.value })} placeholder="0" /></FieldLabel>
+                <FieldLabel label="Beszerzési érték" hint="Ebből számolható a történeti nyereség."><input inputMode="decimal" className={control} value={manualDraft.estimatedCost} onChange={(event) => setManualDraft({ ...manualDraft, estimatedCost: event.target.value })} placeholder="0,00" /></FieldLabel>
+                <FieldLabel label="Kedvezmény"><input inputMode="decimal" className={control} value={manualDraft.discountTotal} onChange={(event) => setManualDraft({ ...manualDraft, discountTotal: event.target.value })} placeholder="0,00" /></FieldLabel>
+                <FieldLabel label="Kintlévőség"><input inputMode="decimal" className={control} value={manualDraft.unpaidTotal} onChange={(event) => setManualDraft({ ...manualDraft, unpaidTotal: event.target.value })} placeholder="0,00" /></FieldLabel>
+                <FieldLabel label="Megjegyzés"><input className={control} value={manualDraft.note} onChange={(event) => setManualDraft({ ...manualDraft, note: event.target.value })} placeholder="Opcionális" /></FieldLabel>
+              </div>
+              <button type="button" className={`${primaryButton} mt-4 w-full`} onClick={addManualRow}><Check size={15} />Hozzáadás</button>
+            </section>
 
-              <section className={`${panel} overflow-hidden`}>
-                <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Mentés előtt ellenőrizhető</p><h3 className="mt-1 text-base">Előkészített havi sorok</h3></div><div className="w-full max-w-[350px]"><FieldLabel label="Import neve"><input className={control} value={manualSourceName} onChange={(event) => setManualSourceName(event.target.value)} /></FieldLabel></div></div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px] text-xs"><thead className="bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Hónap</th><th className="px-3 py-3 text-left">Üzlet</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-center">Tranzakció</th><th className="px-3 py-3 text-right">Költség</th><th className="w-12"></th></tr></thead><tbody>{manualRows.map((row, index) => <tr key={index} className="border-t border-white/7"><td className="px-3 py-3">{String(row.soldOn).slice(0, 7)}</td><td className="px-3 py-3 text-white/62">{String(row.location)}</td><td className="px-3 py-3">{String(row.actor)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-center">{integer(row.transactions)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === null ? "–" : money(row.estimatedCost)}</td><td className="px-2 py-3"><button type="button" onClick={() => setManualRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/18 bg-rose-500/8 text-rose-100 hover:bg-rose-500/18"><Trash2 size={14} /></button></td></tr>)}</tbody></table>
-                  {!manualRows.length ? <div className="px-4 py-14 text-center text-xs text-white/36">A bal oldali űrlappal adj hozzá havi sorokat.</div> : null}
-                </div>
-                <div className="flex justify-end border-t border-white/8 p-4"><button type="button" className={primaryButton} disabled={!manualRows.length || saving} onClick={() => void saveManualRows()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}Mentés az elemzésekhez</button></div>
-              </section>
-            </div>
-          ) : null}
-
-          {tab === "file" ? (
-            <div className="space-y-4">
-              <section className={`${panel} p-4`}>
-                <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-                  <label className="group grid min-h-[122px] cursor-pointer place-items-center rounded-2xl border border-dashed border-[#7bd7d4]/30 bg-[#2a8d8b]/[0.055] px-4 text-center transition hover:border-[#8ce7e2]/55 hover:bg-[#2a8d8b]/[0.10]">
-                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void parseFile(file); event.currentTarget.value = ""; }} />
-                    <span><Upload className="mx-auto text-[#8ee6e2]" size={25} /><span className="mt-2 block text-sm text-white">Excel vagy CSV kiválasztása</span><span className="mt-1 block text-[10px] text-white/36">Az első munkalapot olvassuk be. Legfeljebb 25 000 sor.</span></span>
-                  </label>
-                  <button type="button" className={`${neutralButton} lg:h-[122px] lg:flex-col lg:px-6`} onClick={downloadTemplate}><Download size={20} />Sablon letöltése</button>
-                </div>
-                {sheet ? <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px]"><span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-1 text-[#cffffd]">{sheet.fileName}</span>{sheetChoices.length > 1 ? <div className="w-full max-w-[300px]"><SelectControl value={sheet.sheetName} onChange={chooseWorkbookSheet} options={sheetChoices.map((candidate) => ({ value: candidate.sheetName, label: candidate.sheetName, hint: `${candidate.rows.length} sor` }))} placeholder="Munkalap" /></div> : <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-white/44">{sheet.sheetName}</span>}<span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-white/44">{sheet.rows.length} sor • {sheet.columns.length} oszlop</span></div> : null}
-              </section>
-
-              {sheet ? (
-                <div className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
-                  <section className={`${panel} p-4`}>
-                    <div className="flex items-start justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Alapértékek</p><h3 className="mt-1 text-base">Import beállításai</h3></div><SlidersHorizontal size={18} className="text-[#8ee6e2]" /></div>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                      <FieldLabel label="Import neve"><input className={control} value={fileSourceName} onChange={(event) => setFileSourceName(event.target.value)} /></FieldLabel>
-                      <FieldLabel label="Alapértelmezett üzlet"><SelectControl value={fileDefaultLocation} onChange={setFileDefaultLocation} options={[{ value: "", label: "Csak az Excelből" }, ...locationOptions]} placeholder="Válassz" /></FieldLabel>
-                      <FieldLabel label="Alapértelmezett eladó"><input className={control} value={fileDefaultActor} onChange={(event) => setFileDefaultActor(event.target.value)} placeholder="Ha nincs külön oszlop" /></FieldLabel>
-                      <FieldLabel label="Adat részletezettsége"><SelectControl value={fileDefaultGranularity} onChange={(value) => setFileDefaultGranularity(value as typeof fileDefaultGranularity)} options={[{ value: "line", label: "Terméksoros" }, { value: "daily", label: "Napi összesítő" }, { value: "monthly", label: "Havi összesítő" }]} placeholder="Részletezettség" /></FieldLabel>
-                      <FieldLabel label="TVA %"><input className={control} inputMode="decimal" value={fileDefaultTva} onChange={(event) => setFileDefaultTva(event.target.value)} /></FieldLabel>
-                      <FieldLabel label="Megjegyzés"><input className={control} value={fileNote} onChange={(event) => setFileNote(event.target.value)} placeholder="Opcionális" /></FieldLabel>
-                    </div>
-                    <div className="mt-4 space-y-2 rounded-2xl border border-white/8 bg-white/[0.025] p-3">
-                      <label className="flex cursor-pointer items-center justify-between gap-3 text-xs text-white/64"><span>Az árak tartalmazzák a TVA-t</span><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={filePriceIncludesTva} onChange={(event) => setFilePriceIncludesTva(event.target.checked)} /></label>
-                      <label className="flex cursor-pointer items-center justify-between gap-3 border-t border-white/7 pt-2 text-xs text-white/64"><span>Azonos adatcsomag ismételt engedélyezése</span><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={allowDuplicate} onChange={(event) => setAllowDuplicate(event.target.checked)} /></label>
-                    </div>
-                  </section>
-
-                  <section className={`${panel} overflow-hidden`}>
-                    <div className="flex items-start justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Oszloptársítás</p><h3 className="mt-1 text-base">Mit jelentenek az Excel oszlopai?</h3></div><span className={`rounded-full border px-3 py-1 text-[10px] ${fileValidation.errors.length ? "border-rose-200/22 bg-rose-500/10 text-rose-50" : "border-emerald-200/22 bg-emerald-400/10 text-emerald-50"}`}>{fileValidation.validRows}/{sheet.rows.length} használható</span></div>
-                    <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-                      {fileFields.filter((field) => field.required || ["location", "actor"].includes(field.key)).map((field) => <FieldLabel key={field.key} label={`${field.label}${field.required ? " *" : ""}`}><SelectControl value={mapping[field.key]} onChange={(value) => setMapping({ ...mapping, [field.key]: value })} options={columnOptions} placeholder="Oszlop kiválasztása" /></FieldLabel>)}
-                    </div>
-                    <div className="border-t border-white/8 px-4 py-3"><button type="button" className={neutralButton} onClick={() => setShowOptionalMapping((current) => !current)}><ChevronDown size={14} className={`transition-transform ${showOptionalMapping ? "rotate-180" : ""}`} />További mezők</button></div>
-                    {showOptionalMapping ? <div className="grid gap-3 border-t border-white/8 p-4 sm:grid-cols-2 lg:grid-cols-3">{fileFields.filter((field) => !field.required && !["location", "actor"].includes(field.key)).map((field) => <FieldLabel key={field.key} label={field.label}><SelectControl value={mapping[field.key]} onChange={(value) => setMapping({ ...mapping, [field.key]: value })} options={columnOptions} placeholder="Nincs társítva" /></FieldLabel>)}</div> : null}
-                  </section>
-                </div>
-              ) : null}
-
-              {sheet ? (
-                <section className={`${panel} overflow-hidden`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Előnézet</p><h3 className="mt-1 text-base">Az első feldolgozott sorok</h3></div>{fileValidation.errors.length ? <span className="max-w-[560px] text-right text-[10px] leading-5 text-rose-100/78">{fileValidation.errors.slice(0, 3).join(" • ")}</span> : <span className="text-[10px] text-emerald-100/70">Az alapellenőrzés rendben</span>}</div>
-                  <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-xs"><thead className="bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Dátum</th><th className="px-3 py-3 text-left">Üzlet</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-left">Márka / méret</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-right">Költség</th></tr></thead><tbody>{mappedFileRows.slice(0, 8).map((row, index) => <tr key={index} className="border-t border-white/7"><td className="px-3 py-3">{String(row.soldOn || "–")}</td><td className="px-3 py-3 text-white/58">{String(row.location || "–")}</td><td className="px-3 py-3">{String(row.actor || "Ismeretlen")}</td><td className="px-3 py-3">{String(row.productTitle || row.productCode || "Összesített adat")}</td><td className="px-3 py-3 text-white/46">{[row.brandName, row.size].filter(Boolean).join(" • ") || "–"}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === undefined || row.estimatedCost === null || String(row.estimatedCost) === "" ? "–" : money(row.estimatedCost)}</td></tr>)}</tbody></table></div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/8 p-4"><p className="text-[10px] text-white/36">A mentés az összes {sheet.rows.length} sort egyszerre ellenőrzi. Hibánál semmi sem kerül be félig.</p><button type="button" className={primaryButton} disabled={saving || Boolean(fileValidation.errors.length)} onClick={() => void saveFileRows()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}Importálás</button></div>
-                </section>
-              ) : null}
-            </div>
-          ) : null}
-
-          {tab === "imports" ? (
-            <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-              <section className={`${panel} overflow-hidden`}>
-                <div className="flex items-start justify-between gap-3 border-b border-white/8 p-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Visszakereshető és törölhető</p><h3 className="mt-1 text-base">Importelőzmények</h3></div><button type="button" className={neutralButton} onClick={() => void loadImports()} disabled={importsLoading}><RefreshCw size={14} className={importsLoading ? "animate-spin" : ""} />Frissítés</button></div>
-                <div className="max-h-[620px] space-y-2 overflow-y-auto p-3">
-                  {imports.map((item) => <button key={item.id} type="button" onClick={() => void openImportDetail(item)} className={`w-full rounded-2xl border p-3 text-left transition ${detail?.item.id === item.id ? "border-[#8ce7e2]/38 bg-[#2a8d8b]/15" : "border-white/8 bg-white/[0.025] hover:border-white/16 hover:bg-white/[0.05]"}`}><div className="flex items-start justify-between gap-3"><span className="min-w-0"><span className="block truncate text-sm text-white/82">{item.sourceName}</span><span className="mt-1 block text-[9px] text-white/34">{huDate(item.periodFrom)} – {huDate(item.periodTo)} • {item.rowCount} sor • {dateTime(item.createdAt)}</span></span><ChevronRight size={15} className="shrink-0 text-white/30" /></div><div className="mt-2 grid grid-cols-3 gap-2 text-[10px]"><span className="rounded-lg bg-white/[0.035] px-2 py-1.5 text-white/52">{money(item.revenue)}</span><span className="rounded-lg bg-white/[0.035] px-2 py-1.5 text-white/52">{integer(item.itemsSold)} db</span><span className="rounded-lg bg-white/[0.035] px-2 py-1.5 text-white/52">{integer(item.transactions)} eladás</span></div></button>)}
-                  {importsLoading ? <div className="flex items-center justify-center gap-2 py-12 text-xs text-white/42"><Loader2 size={17} className="animate-spin" />Betöltés...</div> : null}
-                  {!importsLoading && !imports.length ? <div className="py-14 text-center text-xs text-white/36">Még nincs történeti import.</div> : null}
-                </div>
-              </section>
-
-              <section className={`${panel} overflow-hidden`}>
-                {detailLoading ? <div className="flex h-full min-h-[360px] items-center justify-center gap-2 text-xs text-white/42"><Loader2 size={17} className="animate-spin" />Részletek betöltése...</div> : detail ? <><div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 p-4"><div className="min-w-0"><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Import részlete</p><h3 className="mt-1 truncate text-base">{detail.item.sourceName}</h3><p className="mt-1 text-[10px] text-white/34">{detail.item.importedBy || "ADMIN"} • {dateTime(detail.item.createdAt)}</p></div><button type="button" className={dangerButton} onClick={() => setDeleteTarget(detail.item)}><Trash2 size={14} />Import törlése</button></div><div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-4">{[["Forgalom", money(detail.item.revenue)], ["Darab", `${integer(detail.item.itemsSold)} db`], ["Tranzakció", integer(detail.item.transactions)], ["Részletes sor", integer(detail.item.detailedRows)]].map(([label, value]) => <div key={label} className="rounded-xl border border-white/8 bg-white/[0.025] px-3 py-2.5"><p className="text-[9px] uppercase tracking-[0.09em] text-white/32">{label}</p><p className="mt-1 text-sm text-white/78">{value}</p></div>)}</div><div className="max-h-[500px] overflow-auto border-t border-white/8"><table className="w-full min-w-[760px] text-xs"><thead className="sticky top-0 bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Dátum</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-left">Termék</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-right">Költség</th></tr></thead><tbody>{detail.rows.slice(0, 300).map((row, index) => <tr key={index} className="border-t border-white/7"><td className="px-3 py-3">{huDate(row.soldOn)}</td><td className="px-3 py-3">{row.actor || "–"}</td><td className="px-3 py-3">{row.productTitle || row.productCode || "Összesített adat"}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === null || row.estimatedCost === undefined ? "–" : money(row.estimatedCost)}</td></tr>)}</tbody></table></div></> : <div className="grid min-h-[420px] place-items-center px-6 text-center"><div><Database className="mx-auto text-[#7bd7d4]/58" size={30} /><p className="mt-3 text-sm text-white/62">Válassz ki egy importot a bal oldalon.</p></div></div>}
-              </section>
-            </div>
-          ) : null}
+            <section className={`${panel} overflow-hidden`}>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 p-4">
+                <div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Mentés előtt ellenőrizhető</p><h3 className="mt-1 text-base">Rögzítendő havi adatok</h3></div>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] text-white/44">{manualRows.length} sor</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-xs">
+                  <thead className="bg-[#142033] text-[9px] uppercase tracking-[0.08em] text-white/34"><tr><th className="px-3 py-3 text-left">Hónap</th><th className="px-3 py-3 text-left">Üzlet</th><th className="px-3 py-3 text-left">Eladó</th><th className="px-3 py-3 text-right">Forgalom</th><th className="px-3 py-3 text-center">Darab</th><th className="px-3 py-3 text-center">Tranzakció</th><th className="px-3 py-3 text-right">Költség</th><th className="w-12"></th></tr></thead>
+                  <tbody>{manualRows.map((row, index) => <tr key={`${row.soldOn}:${row.actor}:${index}`} className="border-t border-white/7"><td className="px-3 py-3">{String(row.soldOn).slice(0, 7)}</td><td className="px-3 py-3 text-white/62">{locationOptions.find((item) => item.value === String(row.location))?.label || String(row.location)}</td><td className="px-3 py-3">{String(row.actor)}</td><td className="px-3 py-3 text-right">{money(row.revenue)}</td><td className="px-3 py-3 text-center">{integer(row.quantity)}</td><td className="px-3 py-3 text-center">{integer(row.transactions)}</td><td className="px-3 py-3 text-right">{row.estimatedCost === null ? "–" : money(row.estimatedCost)}</td><td className="px-2 py-3"><button type="button" onClick={() => setManualRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-300/18 bg-rose-500/8 text-rose-100 hover:bg-rose-500/18"><Trash2 size={14} /></button></td></tr>)}</tbody>
+                </table>
+                {!manualRows.length ? <div className="px-4 py-16 text-center"><CalendarDays className="mx-auto text-[#7bd7d4]/55" size={28} /><p className="mt-3 text-sm text-white/55">A bal oldalon add hozzá a hónapokat.</p></div> : null}
+              </div>
+              <div className="flex justify-end border-t border-white/8 p-4"><button type="button" className={primaryButton} disabled={!manualRows.length || saving} onClick={() => void saveManualRows()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}Mentés az elemzésekhez</button></div>
+            </section>
+          </div>
         </div>
       </section>
-
-      {deleteTarget ? <div className="fixed inset-0 z-[1150] grid place-items-center bg-slate-950/78 px-4 backdrop-blur-sm"><section className="w-full max-w-[520px] overflow-hidden rounded-[24px] border border-rose-300/28 bg-[#202b3d] shadow-[0_30px_100px_rgba(0,0,0,0.65)]"><header className="flex items-start justify-between gap-3 border-b border-white/9 bg-gradient-to-r from-[#4a2633] to-[#263246] px-5 py-4"><div><p className="text-[9px] uppercase tracking-[0.14em] text-rose-100/52">Történeti import törlése</p><h3 className="mt-1 text-lg text-white">{deleteTarget.sourceName}</h3></div><button type="button" disabled={saving} onClick={() => setDeleteTarget(null)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.04]"><X size={16} /></button></header><div className="p-5"><p className="text-sm leading-6 text-white/72">{deleteTarget.rowCount} történeti sor törlődik az elemzésekből. A jelenlegi eladásokhoz, készlethez, pénztárhoz és kliens-egyenlegekhez ez nem nyúl.</p></div><footer className="flex justify-end gap-2 border-t border-white/9 bg-[#192537] px-5 py-4"><button type="button" className={neutralButton} disabled={saving} onClick={() => setDeleteTarget(null)}>Mégse</button><button type="button" className={dangerButton} disabled={saving} onClick={() => void deleteImport()}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}Végleges törlés</button></footer></section></div> : null}
     </div>,
     document.body,
   );
@@ -1972,7 +1842,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
           <MetricCard title="Bruttó nyereség" value={money(summary?.grossProfit)} comparison={money(comparison?.grossProfit)} delta={delta?.grossProfit} icon={TrendingUp} hint="Nettó forgalom mínusz beszerzési érték" tone="success" active={chartMetric === "grossProfit"} onClick={() => setChartMetric("grossProfit")} warning={numberValue(summary?.costCoveragePercent) < 99 ? `A vizsgált forgalom vételár-lefedettsége ${percentage(summary?.costCoveragePercent)}. A hiányzó költségadatok miatt a nyereség becslés.` : undefined} />
           <MetricCard title="Árrés" value={percentage(summary?.grossMargin)} comparison={percentage(comparison?.grossMargin)} delta={marginDelta} icon={Percent} hint="Bruttó nyereség / nettó forgalom" tone="accent" warning={numberValue(summary?.costCoveragePercent) < 99 ? "Az árrés a rendelkezésre álló vételár-adatokból számolódik." : undefined} />
           <MetricCard title="Eladott darab" value={`${integer(summary?.itemsSold)} db`} comparison={`${integer(comparison?.itemsSold)} db`} delta={delta?.itemsSold} icon={ShoppingBag} hint="Eladás és csere nettó darabszáma" active={chartMetric === "itemsSold"} onClick={() => setChartMetric("itemsSold")} />
-          <MetricCard title="Tranzakció" value={integer(summary?.transactions)} comparison={integer(comparison?.transactions)} delta={delta?.transactions} icon={FileSpreadsheet} hint="Egyedi bizonylatok és havi összesítések" active={chartMetric === "transactions"} onClick={() => setChartMetric("transactions")} />
+          <MetricCard title="Tranzakció" value={integer(summary?.transactions)} comparison={integer(comparison?.transactions)} delta={delta?.transactions} icon={ReceiptText} hint="Egyedi bizonylatok és havi összesítések" active={chartMetric === "transactions"} onClick={() => setChartMetric("transactions")} />
           <MetricCard title="Átlagkosár" value={money(summary?.averageBasket)} comparison={money(comparison?.averageBasket)} delta={delta?.averageBasket} icon={Target} hint="Forgalom / tranzakció" active={chartMetric === "averageBasket"} onClick={() => setChartMetric("averageBasket")} />
           <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="Összes adott kedvezmény" tone={numberValue(summary?.discountTotal) > 0 ? "warning" : "normal"} active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} />
           <MetricCard title="Kintlévőség" value={money(summary?.unpaidTotal)} comparison={money(comparison?.unpaidTotal)} delta={delta?.unpaidTotal} icon={WalletCards} hint="Nyitott fizetési összeg" tone={numberValue(summary?.unpaidTotal) > 0 ? "danger" : "normal"} active={chartMetric === "unpaidTotal"} onClick={() => setChartMetric("unpaidTotal")} />
