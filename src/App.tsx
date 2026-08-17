@@ -68,6 +68,21 @@ type Session =
 
 const INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
 const INACTIVITY_CHECK_MS = 15 * 1000;
+const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
+
+function rememberLoginMode(session: Session | null) {
+  if (typeof window === "undefined" || !session) return;
+  try {
+    const mode = session.role === "admin"
+      ? "admin"
+      : session.shopId === "csikszereda"
+        ? "csik"
+        : "kezdi";
+    window.localStorage.setItem(LAST_LOGIN_MODE_KEY, mode);
+  } catch {
+    // A belépés ettől még működjön, ha a böngésző tiltja a localStorage-ot.
+  }
+}
 
 function normalizeHash(raw: string): string {
   const h = (raw || "").trim();
@@ -267,6 +282,7 @@ export default function App() {
         }
 
         const nextSession = data.session as Session;
+        rememberLoginMode(nextSession);
         setLogoutOpen(false);
         setLogoutBusy(false);
         setLogoutError("");
@@ -415,6 +431,7 @@ export default function App() {
           setLogoutOpen(false);
           setLogoutBusy(false);
           setLogoutError("");
+          rememberLoginMode(nextSession);
           setSession(nextSession);
 
           if (nextSession.role === "shop") {
