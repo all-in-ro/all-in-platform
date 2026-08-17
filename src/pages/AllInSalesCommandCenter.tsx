@@ -1940,6 +1940,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const [heatmapMetric, setHeatmapMetric] = useState<"revenue" | "itemsSold" | "transactions" | "grossProfit">("revenue");
   const [detailTarget, setDetailTarget] = useState<AifSalesCommandDetailItem | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const filterSectionRef = useRef<HTMLElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1989,12 +1990,24 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     setActivePreset(value === localIsoDate().slice(0, 7) ? "month" : "custom");
   }
 
-  function applyPatch(patch: Partial<FiltersState>) {
+  const scrollToFilterSection = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const target = filterSectionRef.current;
+        if (!target) return;
+        const top = target.getBoundingClientRect().top + window.scrollY - 10;
+        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      });
+    });
+  }, []);
+
+  function applyPatch(patch: Partial<FiltersState>, bringFiltersIntoView = true) {
     let next = { ...draft, ...patch };
     if (patch.from !== undefined || patch.to !== undefined) next = automaticComparison(next);
     setDraft(next);
     setApplied(next);
     setActivePreset("custom");
+    if (bringFiltersIntoView) scrollToFilterSection();
   }
 
   function clearDrillFilters() {
@@ -2107,24 +2120,43 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
           </div>
         </header>
 
-        <section className={`${panel} overflow-visible p-4`}>
+        <section ref={filterSectionRef} className={`${panel} scroll-mt-3 overflow-visible p-4`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3"><span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><Target size={17} /></span><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Időszak</p><h2 className="mt-0.5 text-base">Melyik időszakot nézzük?</h2></div></div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <div className="mr-1 flex rounded-lg border border-white/10 bg-[#2d394b]/70 p-0.5">
-                <button type="button" onClick={() => switchPeriodMode("month")} className={`h-7 rounded-md px-2.5 text-[10px] transition ${periodMode === "month" ? "bg-[#2a8d8b] text-white" : "text-white/46 hover:text-white"}`}>Hónap</button>
-                <button type="button" onClick={() => switchPeriodMode("range")} className={`h-7 rounded-md px-2.5 text-[10px] transition ${periodMode === "range" ? "bg-[#2a8d8b] text-white" : "text-white/46 hover:text-white"}`}>Egyedi időszak</button>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 text-[#cffffd]"><Target size={17} /></span>
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.14em] text-white/36">Időszak és szűrés</p>
+                <h2 className="mt-0.5 text-base">Mit nézzünk?</h2>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <div className="flex rounded-lg border border-white/10 bg-[#2d394b]/70 p-0.5">
+                <button type="button" onClick={() => switchPeriodMode("month")} className={`h-8 rounded-md px-3 text-[10px] transition ${periodMode === "month" ? "bg-[#2a8d8b] text-white" : "text-white/46 hover:text-white"}`}>Hónap</button>
+                <button type="button" onClick={() => switchPeriodMode("range")} className={`h-8 rounded-md px-3 text-[10px] transition ${periodMode === "range" ? "bg-[#2a8d8b] text-white" : "text-white/46 hover:text-white"}`}>Egyedi időszak</button>
               </div>
               {[
                 ["month", "Ez a hónap"],
                 ["lastMonth", "Előző hónap"],
                 ["fullYear", "Teljes év"],
                 ["previousYear", "Előző év"],
-              ].map(([key, label]) => <button key={key} type="button" onClick={() => applyPreset(key as QuickPreset)} className={`h-8 rounded-lg border px-3 text-[10px] transition ${activePreset === key ? "border-[#9be9e5]/44 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.025] text-white/48 hover:border-white/18 hover:text-white"}`}>{label}</button>)}
+              ].map(([key, label]) => (
+                <button key={key} type="button" onClick={() => applyPreset(key as QuickPreset)} className={`h-8 rounded-lg border px-3 text-[10px] transition ${activePreset === key ? "border-[#9be9e5]/44 bg-[#2a8d8b] text-white" : "border-white/10 bg-white/[0.025] text-white/48 hover:border-white/18 hover:text-white"}`}>{label}</button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setFiltersOpen((current) => !current)}
+                className={`inline-flex h-8 items-center gap-2 rounded-lg border px-3 text-[10px] transition ${filtersOpen ? "border-[#9be9e5]/44 bg-[#2a8d8b] text-white" : "border-white/12 bg-white/[0.035] text-white/60 hover:border-[#7bd7d4]/28 hover:text-white"}`}
+                title="Részletes szűrők"
+              >
+                <Filter size={13} />
+                Szűrők
+                {activeChips.length ? <span className="grid h-5 min-w-5 place-items-center rounded-full bg-white/14 px-1 text-[9px] text-white">{activeChips.length}</span> : null}
+              </button>
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(360px,1.45fr)_220px_220px_auto]">
+          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(380px,1.65fr)_minmax(210px,0.55fr)_minmax(210px,0.55fr)] lg:items-end">
             {periodMode === "month" ? (
               <div className="rounded-2xl border border-white/14 bg-[#354153]/55 p-3">
                 <FieldLabel label="Hónap"><HungarianMonthPicker value={draft.from.slice(0, 7)} onChange={setSelectedMonth} ariaLabel="Vizsgált hónap" /></FieldLabel>
@@ -2135,12 +2167,33 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
             )}
             <FieldLabel label="Üzlet"><SelectControl value={draft.location} onChange={(value) => setDraft({ ...draft, location: value })} options={locationOptions} placeholder="Minden üzlet" /></FieldLabel>
             <FieldLabel label="Eladó"><SelectControl value={draft.employee} onChange={(value) => setDraft({ ...draft, employee: value })} options={employeeOptions} placeholder="Minden eladó" /></FieldLabel>
-            <div className="flex items-end"><button type="button" className={`${neutralButton} min-w-[122px]`} onClick={() => setFiltersOpen((current) => !current)} title="Részletes szűrők"><Filter size={16} />Szűrők</button></div>
           </div>
 
           <div className="mt-2 text-[9px] text-white/34">{periodMode === "month" ? "A kiválasztás azonnal szűr. A hónapot az előző év azonos hónapjával hasonlítjuk." : "A kiválasztás azonnal szűr. Az időszakot az előző év azonos időszakával hasonlítjuk."}</div>
 
-          {filtersOpen ? <div className="mt-3 grid gap-3 border-t border-white/8 pt-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8"><FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel><FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Fizetési mód"><SelectControl value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Minden" /></FieldLabel><FieldLabel label="Adatforrás"><SelectControl value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő eladások" }, { value: "history", label: "Csak történeti adatok" }]} placeholder="Minden" /></FieldLabel><FieldLabel label="Grafikon bontása"><SelectControl value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Automatikus" /></FieldLabel><FieldLabel label="Termék"><input className={control} value={draft.product} onChange={(event) => setDraft({ ...draft, product: event.target.value })} placeholder="Név vagy kód" /></FieldLabel><FieldLabel label="Szabad keresés"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/32" /><input className={`${control} pl-9`} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} placeholder="Bizonylat, márka, termék..." /></div></FieldLabel></div> : null}
+          {filtersOpen ? (
+            <div className="mt-3 rounded-2xl border border-white/10 bg-[#2d394b]/45 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-white/38">Részletes szűrők</p>
+                  <p className="mt-0.5 text-[10px] text-white/48">Minden választás azonnal érvényesül.</p>
+                </div>
+                {activeChips.length ? <button type="button" onClick={clearDrillFilters} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/12 bg-white/[0.035] px-2.5 text-[10px] text-white/58 hover:border-[#7bd7d4]/24 hover:text-white"><X size={12} />Szűrők törlése</button> : null}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5">
+                <FieldLabel label="Márka"><SelectControl value={draft.brand} onChange={(value) => setDraft({ ...draft, brand: value })} options={brandOptions} placeholder="Minden márka" /></FieldLabel>
+                <FieldLabel label="Főkategória"><SelectControl value={draft.category} onChange={(value) => setDraft({ ...draft, category: value })} options={categoryOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Alkategória"><SelectControl value={draft.subcategory} onChange={(value) => setDraft({ ...draft, subcategory: value })} options={subcategoryOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Méret"><SelectControl value={draft.size} onChange={(value) => setDraft({ ...draft, size: value })} options={sizeOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Szín"><SelectControl value={draft.color} onChange={(value) => setDraft({ ...draft, color: value })} options={colorOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Fizetési mód"><SelectControl value={draft.payment} onChange={(value) => setDraft({ ...draft, payment: value })} options={paymentOptions} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Adatforrás"><SelectControl value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő eladások" }, { value: "history", label: "Csak történeti adatok" }]} placeholder="Minden" /></FieldLabel>
+                <FieldLabel label="Grafikon bontása"><SelectControl value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Automatikus" /></FieldLabel>
+                <FieldLabel label="Termék"><input className={control} value={draft.product} onChange={(event) => setDraft({ ...draft, product: event.target.value })} placeholder="Név vagy kód" /></FieldLabel>
+                <FieldLabel label="Szabad keresés"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/32" /><input className={`${control} pl-9`} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} placeholder="Bizonylat, márka, termék..." /></div></FieldLabel>
+              </div>
+            </div>
+          ) : null}
 
           {activeChips.length ? <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-white/8 pt-3"><span className="mr-1 text-[9px] uppercase tracking-[0.1em] text-white/28">Aktív:</span>{activeChips.map((chip) => <button key={String(chip.key)} type="button" onClick={() => applyPatch({ [chip.key]: chip.key === "location" ? "all" : chip.key === "source" ? "all" : "" } as Partial<FiltersState>)} className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#7bd7d4]/18 bg-[#2a8d8b]/9 px-2.5 text-[9px] text-[#d7fffd]/72 hover:bg-[#2a8d8b]/18"><span className="max-w-[180px] truncate">{chip.label}</span><X size={10} /></button>)}<button type="button" onClick={clearDrillFilters} className="ml-1 h-7 rounded-full border border-white/10 px-2.5 text-[9px] text-white/42 hover:text-white">Összes törlése</button></div> : null}
         </section>
