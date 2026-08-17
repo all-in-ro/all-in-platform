@@ -185,6 +185,7 @@ function MenuGroup({
   items,
   onItemSelect,
   itemDecorations,
+  alertCount = 0,
 }: {
   title: string;
   count: number;
@@ -194,6 +195,7 @@ function MenuGroup({
   items: MenuItem[];
   onItemSelect?: (item: MenuItem) => void;
   itemDecorations?: Record<string, { tone?: "normal" | "warning" | "danger" | "accent"; badge?: string }>;
+  alertCount?: number;
 }) {
   return (
     <section>
@@ -211,6 +213,14 @@ function MenuGroup({
           <Icon className="h-4 w-4" />
         </span>
         <span className="min-w-0 flex-1 truncate text-sm uppercase tracking-[0.045em]">{title}</span>
+        {alertCount > 0 ? (
+          <span
+            className="inline-flex min-w-7 items-center justify-center rounded-full border border-orange-200/65 bg-[#d66b12] px-2 py-0.5 text-[10px] font-semibold text-white shadow-[0_4px_12px_rgba(234,88,12,0.24)]"
+            title={`${alertCount} figyelmeztetés az almenüben`}
+          >
+            ({alertCount})
+          </span>
+        ) : null}
         <span className="rounded-full border border-white/18 bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/62">
           {count}
         </span>
@@ -441,7 +451,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             hash="#allinsalescenter"
             icon={Activity}
             tone="accent"
-            badge="Élő + történeti"
+            badge="KPI • TRENDEK"
           />
 
           <div className="my-3 border-t border-white/12" />
@@ -455,6 +465,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             items={shopItems}
             onItemSelect={handleShopItem}
             itemDecorations={shopItemDecorations}
+            alertCount={reservationAlert.overdue + reservationAlert.today + reservationAlert.tomorrow}
           />
 
           <MenuGroup
