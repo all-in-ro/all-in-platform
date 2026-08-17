@@ -1463,12 +1463,12 @@ function DetailDrawer({ item, onClose }: { item: AifSalesCommandDetailItem | nul
   ];
   return createPortal(
     <div className="fixed inset-0 z-[1100] bg-slate-950/72 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[560px] flex-col border-l border-[#7bd7d4]/24 bg-[#172334] shadow-[-24px_0_80px_rgba(0,0,0,0.55)]">
+      <aside className="absolute right-0 top-0 flex h-full w-full max-w-[560px] flex-col border-l border-[#7bd7d4]/24 bg-[#172334] text-white shadow-[-24px_0_80px_rgba(0,0,0,0.55)]">
         <header className="flex items-start justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-[#1c2d42] to-[#20505a] px-5 py-4">
           <div className="min-w-0">
-            <p className="text-[9px] uppercase tracking-[0.15em] text-white/42">Részletes adatkártya</p>
+            <p className="text-[9px] uppercase tracking-[0.15em] text-white/60">Részletes adatkártya</p>
             <h3 className="mt-1 truncate text-xl text-white">{item.productTitle || item.documentNumber || "Történeti összesítő"}</h3>
-            <p className="mt-1 text-xs text-white/42">{huDate(item.date)} • {item.actor}</p>
+            <p className="mt-1 text-xs text-white/60">{huDate(item.date)} • {item.actor}</p>
           </div>
           <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/14 bg-white/[0.05] text-white hover:bg-white/[0.1]"><X size={18} /></button>
         </header>
@@ -1482,17 +1482,17 @@ function DetailDrawer({ item, onClose }: { item: AifSalesCommandDetailItem | nul
               ["Kedvezmény", money(item.discountTotal), "text-amber-50"],
               ["Kintlévőség", money(item.unpaidTotal), "text-rose-50"],
             ].map(([label, value, tone]) => (
-              <div key={String(label)} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">{label}</p><p className={`mt-1.5 text-sm ${tone}`}>{value}</p></div>
+              <div key={String(label)} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/60">{label}</p><p className={`mt-1.5 text-sm ${tone}`}>{value}</p></div>
             ))}
           </div>
           <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
-            {rows.map(([label, value]) => <div key={label} className="grid grid-cols-[130px_1fr] gap-3 border-t border-white/7 px-4 py-3 first:border-t-0"><span className="text-[10px] uppercase tracking-[0.08em] text-white/34">{label}</span><span className="text-sm text-white/76">{value}</span></div>)}
+            {rows.map(([label, value]) => <div key={label} className="grid grid-cols-[130px_1fr] gap-3 border-t border-white/7 px-4 py-3 first:border-t-0"><span className="text-[10px] uppercase tracking-[0.08em] text-white/60">{label}</span><span className="text-sm text-white">{value}</span></div>)}
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            <div className={`rounded-xl border px-3 py-3 ${item.costCovered ? "border-emerald-200/18 bg-emerald-400/8" : "border-amber-200/18 bg-amber-400/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">Vételár</p><p className="mt-1 text-xs text-white/72">{item.costCovered ? `${money(item.estimatedCost)} • lefedett` : "Nincs biztos vételár-adat"}</p></div>
-            <div className={`rounded-xl border px-3 py-3 ${item.netCovered ? "border-emerald-200/18 bg-emerald-400/8" : "border-amber-200/18 bg-amber-400/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">Nettó érték</p><p className="mt-1 text-xs text-white/72">{item.netCovered ? "TVA-kezelés lefedett" : "A történeti TVA-adat hiányos"}</p></div>
+            <div className={`rounded-xl border px-3 py-3 ${item.costCovered ? "border-emerald-200/18 bg-emerald-400/8" : "border-amber-200/18 bg-amber-400/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/60">Vételár</p><p className="mt-1 text-xs text-white/80">{item.costCovered ? `${money(item.estimatedCost)} • lefedett` : "Nincs biztos vételár-adat"}</p></div>
+            <div className={`rounded-xl border px-3 py-3 ${item.netCovered ? "border-emerald-200/18 bg-emerald-400/8" : "border-amber-200/18 bg-amber-400/8"}`}><p className="text-[9px] uppercase tracking-[0.1em] text-white/60">Nettó érték</p><p className="mt-1 text-xs text-white/80">{item.netCovered ? "TVA-kezelés lefedett" : "A történeti TVA-adat hiányos"}</p></div>
           </div>
-          {item.note ? <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/34">Megjegyzés</p><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-white/70">{item.note}</p></div> : null}
+          {item.note ? <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/60">Megjegyzés</p><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-white/90">{item.note}</p></div> : null}
         </div>
       </aside>
     </div>,
