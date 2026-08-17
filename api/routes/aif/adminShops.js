@@ -4,6 +4,7 @@ import createAifAdminCustomersOverviewRouter from "./adminCustomersOverview.js";
 import createAifAdminShopOverviewRouter from "./adminShopOverview.js";
 import createAifAdminSalesCommandCenterRouter from "./adminSalesCommandCenter.js";
 
+
 /**
  * /admin-shops modul gyűjtő.
  * Új admin-shop funkciót már külön route fájlba tegyünk és itt mountoljuk.
