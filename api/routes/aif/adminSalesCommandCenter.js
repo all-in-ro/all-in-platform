@@ -1218,13 +1218,11 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       let from = typeof aifValidIsoDate === "function" ? aifValidIsoDate(req.query.from, yearStart) : normalizeDateInput(req.query.from) || yearStart;
       let to = typeof aifValidIsoDate === "function" ? aifValidIsoDate(req.query.to, today) : normalizeDateInput(req.query.to) || today;
       if (from > to) [from, to] = [to, from];
-      let compareFrom = typeof aifValidIsoDate === "function"
-        ? aifValidIsoDate(req.query.compareFrom || req.query.compare_from, shiftYear(from, -1))
-        : normalizeDateInput(req.query.compareFrom || req.query.compare_from) || shiftYear(from, -1);
-      let compareTo = typeof aifValidIsoDate === "function"
-        ? aifValidIsoDate(req.query.compareTo || req.query.compare_to, shiftYear(to, -1))
-        : normalizeDateInput(req.query.compareTo || req.query.compare_to) || shiftYear(to, -1);
-      if (compareFrom > compareTo) [compareFrom, compareTo] = [compareTo, compareFrom];
+      // Egyetlen vizsgált időszak van. Az összehasonlítás mindig ugyanennek
+      // az időszaknak az előző évi párja. Régi vagy hibás frontend-érték így
+      // nem húzhat 2026-os eladást a 2025-ös összehasonlításba.
+      const compareFrom = shiftYear(from, -1);
+      const compareTo = shiftYear(to, -1);
 
       const filters = {
         location: text(req.query.location || "all") || "all",
