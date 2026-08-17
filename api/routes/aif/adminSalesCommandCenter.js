@@ -953,40 +953,46 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
   ORDER BY revenue DESC, transactions DESC
   LIMIT 100`;
 
-  const dimensionsSelectSql = `WITH expanded AS (
-    SELECT f.*, d.dimension, d.dimension_key, d.dimension_name, d.meta
-    FROM filtered f
-    CROSS JOIN LATERAL (VALUES
-      ('brand'::text, NULLIF(f.brand_name,''), NULLIF(f.brand_name,''), NULL::text),
-      ('category'::text, NULLIF(f.category_name,''), NULLIF(f.category_name,''), NULL::text),
-      ('subcategory'::text, NULLIF(f.subcategory_name,''), NULLIF(f.subcategory_name,''), NULL::text),
-      ('product'::text, COALESCE(NULLIF(f.product_code,''),NULLIF(f.product_title,'')), COALESCE(NULLIF(f.product_title,''),NULLIF(f.product_code,'')), NULLIF(f.product_code,'')),
-      ('size'::text, NULLIF(f.size,''), NULLIF(f.size,''), NULL::text),
-      ('color'::text, NULLIF(f.color_name,''), NULLIF(f.color_name,''), NULL::text),
-      ('store'::text, COALESCE(NULLIF(f.location_code,''),NULLIF(f.location_name,'')), COALESCE(NULLIF(f.location_name,''),NULLIF(f.location_code,'')), NULLIF(f.location_code,'')),
-      ('payment'::text, NULLIF(f.payment_method,''), NULLIF(f.payment_method,''), NULL::text)
-    ) d(dimension,dimension_key,dimension_name,meta)
-    WHERE d.dimension_key IS NOT NULL
-  ), grouped AS (
-    SELECT
-      dimension,
-      dimension_key AS key,
-      max(dimension_name) AS name,
-      max(meta) AS meta,
-      COALESCE(sum(revenue),0)::numeric AS revenue,
-      COALESCE(sum(net_revenue),0)::numeric AS net_revenue,
-      COALESCE(sum(estimated_cost),0)::numeric AS estimated_cost,
-      COALESCE(sum(quantity),0)::numeric AS items_sold,
-      ${transactionCountSql}::numeric AS transactions,
-      COALESCE(sum(discount_total),0)::numeric AS discount_total,
-      COALESCE(sum(unpaid_total),0)::numeric AS unpaid_total
-    FROM expanded
-    GROUP BY dimension, dimension_key
-  ), ranked AS (
-    SELECT grouped.*, row_number() OVER (PARTITION BY dimension ORDER BY revenue DESC, items_sold DESC, name ASC) AS rank
-    FROM grouped
-  )
-  SELECT * FROM ranked WHERE rank <= 18 ORDER BY dimension, rank`;
+  // Ezt szándékosan nem külön WITH-tel kezdjük. A buildFactsQuery már létrehozza
+  // a fact_rows és filtered CTE-ket, ezért egy második WITH közvetlenül utána
+  // PostgreSQL szintaktikai hibát okozott ("syntax error at or near WITH").
+  const dimensionsSelectSql = `SELECT *
+  FROM (
+    SELECT grouped.*,
+      row_number() OVER (PARTITION BY dimension ORDER BY revenue DESC, items_sold DESC, name ASC) AS rank
+    FROM (
+      SELECT
+        dimension,
+        dimension_key AS key,
+        max(dimension_name) AS name,
+        max(meta) AS meta,
+        COALESCE(sum(revenue),0)::numeric AS revenue,
+        COALESCE(sum(net_revenue),0)::numeric AS net_revenue,
+        COALESCE(sum(estimated_cost),0)::numeric AS estimated_cost,
+        COALESCE(sum(quantity),0)::numeric AS items_sold,
+        ${transactionCountSql}::numeric AS transactions,
+        COALESCE(sum(discount_total),0)::numeric AS discount_total,
+        COALESCE(sum(unpaid_total),0)::numeric AS unpaid_total
+      FROM (
+        SELECT f.*, d.dimension, d.dimension_key, d.dimension_name, d.meta
+        FROM filtered f
+        CROSS JOIN LATERAL (VALUES
+          ('brand'::text, NULLIF(f.brand_name,''), NULLIF(f.brand_name,''), NULL::text),
+          ('category'::text, NULLIF(f.category_name,''), NULLIF(f.category_name,''), NULL::text),
+          ('subcategory'::text, NULLIF(f.subcategory_name,''), NULLIF(f.subcategory_name,''), NULL::text),
+          ('product'::text, COALESCE(NULLIF(f.product_code,''),NULLIF(f.product_title,'')), COALESCE(NULLIF(f.product_title,''),NULLIF(f.product_code,'')), NULLIF(f.product_code,'')),
+          ('size'::text, NULLIF(f.size,''), NULLIF(f.size,''), NULL::text),
+          ('color'::text, NULLIF(f.color_name,''), NULLIF(f.color_name,''), NULL::text),
+          ('store'::text, COALESCE(NULLIF(f.location_code,''),NULLIF(f.location_name,'')), COALESCE(NULLIF(f.location_name,''),NULLIF(f.location_code,'')), NULLIF(f.location_code,'')),
+          ('payment'::text, NULLIF(f.payment_method,''), NULLIF(f.payment_method,''), NULL::text)
+        ) d(dimension,dimension_key,dimension_name,meta)
+        WHERE d.dimension_key IS NOT NULL
+      ) expanded
+      GROUP BY dimension, dimension_key
+    ) grouped
+  ) ranked
+  WHERE rank <= 18
+  ORDER BY dimension, rank`;
 
   const heatmapSelectSql = `SELECT
     COALESCE(NULLIF(actor,''),'Ismeretlen') AS actor,
