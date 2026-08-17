@@ -16,6 +16,7 @@ import AllInMagazinTarguSale from "./pages/AllInMagazinTarguSale";
 import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
+import AllInSalesCommandCenter from "./pages/AllInSalesCommandCenter";
 import AllInAdminClients from "./pages/AllInAdminClients";
 import AllInAdminClientsMobile from "./pages/AllInAdminClientsMobile";
 
@@ -43,6 +44,7 @@ type ScreenName =
   | "magazintargusale"
   | "adminmagazinciuc"
   | "adminmagazintargu"
+  | "salescenter"
   | "adminclients"
   | "incoming"
   | "orders"
@@ -134,6 +136,14 @@ function hashToScreen(rawHash: string): Screen {
     key === "allin-admin-magazin-targu" ||
     key === "admin-shop-targu"
   ) return { name: "adminmagazintargu" };
+  if (
+    key === "salescenter" ||
+    key === "allinsalescenter" ||
+    key === "allin-sales-center" ||
+    key === "sales-command-center" ||
+    key === "vezetoieladasikozpont" ||
+    key === "vezetoi-eladasi-kozpont"
+  ) return { name: "salescenter" };
   if (
     key === "adminclients" ||
     key === "allinadminclients" ||
@@ -487,6 +497,7 @@ export default function App() {
           otherCityName="Csíkszereda"
         />
       ) : <AllInAdminMagazinTargu {...(commonProps as any)} />)}
+      {screen.name === "salescenter" && <AllInSalesCommandCenter actor={session.actor} role={session.role} />}
       {screen.name === "adminclients" && (adminClientsMobile ? (
         <AllInAdminClientsMobile actor={session.actor} role={session.role} />
       ) : (
