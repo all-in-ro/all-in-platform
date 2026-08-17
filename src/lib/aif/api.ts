@@ -3815,6 +3815,341 @@ export function apiAifAdminShopOverview(options: {
   if (options.search?.trim()) q.set("search", options.search.trim());
   return fetchAifJSON<AifAdminShopOverviewResponse>(`/admin-shops/overview?${q.toString()}`);
 }
+
+
+export type AifSalesCommandMetricRow = {
+  revenue: number;
+  netRevenue: number;
+  estimatedCost: number;
+  grossProfit: number;
+  itemsSold: number;
+  transactions: number;
+  averageBasket: number;
+  discountTotal: number;
+  unpaidTotal: number;
+};
+
+export type AifSalesCommandSummary = AifSalesCommandMetricRow & {
+  tvaAmount: number;
+  salesBeforeDiscount: number;
+  paidTotal: number;
+  grossMargin: number;
+  costCoveragePercent: number;
+  netCoveragePercent: number;
+  historyDetailCoveragePercent: number;
+  liveRevenue: number;
+  historyRevenue: number;
+  liveRows: number;
+  historyRows: number;
+};
+
+export type AifSalesCommandDelta = {
+  revenue: number | null;
+  netRevenue: number | null;
+  estimatedCost: number | null;
+  grossProfit: number | null;
+  itemsSold: number | null;
+  transactions: number | null;
+  averageBasket: number | null;
+  discountTotal: number | null;
+  unpaidTotal: number | null;
+};
+
+export type AifSalesCommandTrendItem = AifSalesCommandMetricRow & {
+  index: number;
+  start: string;
+  end: string;
+  label: string;
+};
+
+export type AifSalesCommandEmployeeItem = {
+  actor: string;
+  rank: number;
+  current: AifSalesCommandMetricRow;
+  comparison: AifSalesCommandMetricRow;
+  deltaPercent: AifSalesCommandDelta;
+};
+
+export type AifSalesCommandDimensionKey =
+  | "brand"
+  | "category"
+  | "subcategory"
+  | "product"
+  | "size"
+  | "color"
+  | "store"
+  | "payment";
+
+export type AifSalesCommandDimensionItem = {
+  key: string;
+  name: string;
+  rawName?: string | null;
+  meta?: string | null;
+  rank: number;
+  current: AifSalesCommandMetricRow;
+  comparison: AifSalesCommandMetricRow;
+  deltaPercent: AifSalesCommandDelta;
+};
+
+export type AifSalesCommandHeatmapMonth = {
+  index: number;
+  label: string;
+  currentStart?: string | null;
+  currentEnd?: string | null;
+  comparisonStart?: string | null;
+  comparisonEnd?: string | null;
+};
+
+export type AifSalesCommandHeatmapRow = {
+  actor: string;
+  totalRevenue: number;
+  values: Array<{
+    index: number;
+    current: AifSalesCommandMetricRow;
+    comparison: AifSalesCommandMetricRow;
+    deltaPercent: AifSalesCommandDelta;
+  }>;
+};
+
+export type AifSalesCommandDetailItem = {
+  id: string;
+  source: "live_sale" | "live_exchange" | "live_exchange_return" | "history" | string;
+  importId?: string | null;
+  date?: string | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  actor: string;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  quantity: number;
+  transactions?: number | null;
+  revenue: number;
+  netRevenue: number;
+  salesBeforeDiscount: number;
+  discountTotal: number;
+  paidTotal: number;
+  unpaidTotal: number;
+  estimatedCost: number;
+  grossProfit: number;
+  costCovered: boolean;
+  netCovered: boolean;
+  paymentMethod?: string | null;
+  granularity: "monthly" | "daily" | "line" | string;
+  documentNumber?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  note?: string | null;
+};
+
+export type AifSalesCommandOverviewResponse = {
+  ok: true;
+  generatedAt: string;
+  scope: {
+    from: string;
+    to: string;
+    compareFrom: string;
+    compareTo: string;
+    days: number;
+    compareDays: number;
+    bucket: "day" | "week" | "month";
+    location: string;
+    employee?: string | null;
+    brand?: string | null;
+    category?: string | null;
+    subcategory?: string | null;
+    size?: string | null;
+    color?: string | null;
+    payment?: string | null;
+    product?: string | null;
+    search?: string | null;
+    source: "all" | "live" | "history";
+  };
+  salesTva: { rate: number; priceIncludesTva: boolean };
+  summary: AifSalesCommandSummary;
+  comparisonSummary: AifSalesCommandSummary;
+  deltaPercent: AifSalesCommandDelta;
+  trend: {
+    current: AifSalesCommandTrendItem[];
+    comparison: AifSalesCommandTrendItem[];
+  };
+  employees: AifSalesCommandEmployeeItem[];
+  dimensions: Record<AifSalesCommandDimensionKey, AifSalesCommandDimensionItem[]>;
+  heatmap: {
+    months: AifSalesCommandHeatmapMonth[];
+    rows: AifSalesCommandHeatmapRow[];
+  };
+  details: AifSalesCommandDetailItem[];
+  coverage: {
+    current: {
+      cost: number;
+      net: number;
+      historyDetail: number;
+      liveRevenue: number;
+      historyRevenue: number;
+      liveRows: number;
+      historyRows: number;
+    };
+    comparison: {
+      cost: number;
+      net: number;
+      historyDetail: number;
+      liveRevenue: number;
+      historyRevenue: number;
+      liveRows: number;
+      historyRows: number;
+    };
+  };
+  filterOptions: {
+    locations: Array<{ id: string; code: string; name: string }>;
+    years: number[];
+    employees: string[];
+    brands: string[];
+    categories: string[];
+    subcategories: string[];
+    sizes: string[];
+    colors: string[];
+  };
+};
+
+export type AifSalesHistoryInputRow = {
+  rowNo?: number;
+  soldOn?: string;
+  date?: string;
+  month?: string;
+  location?: string;
+  locationCode?: string;
+  actor?: string;
+  employee?: string;
+  sourceGranularity?: "monthly" | "daily" | "line";
+  transactionKey?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  quantity?: number | string | null;
+  transactions?: number | string | null;
+  revenue: number | string;
+  netRevenue?: number | string | null;
+  tvaRate?: number | string | null;
+  priceIncludesTva?: boolean;
+  salesBeforeDiscount?: number | string | null;
+  discountTotal?: number | string | null;
+  paidTotal?: number | string | null;
+  unpaidTotal?: number | string | null;
+  estimatedCost?: number | string | null;
+  paymentMethod?: string | null;
+  note?: string | null;
+  [key: string]: unknown;
+};
+
+export type AifSalesHistoryImportSummary = {
+  id: string;
+  sourceName: string;
+  sourceKind: "manual" | "xlsx" | "xls" | "csv" | "other" | string;
+  rowCount: number;
+  importedBy?: string | null;
+  note?: string | null;
+  createdAt?: string | null;
+  periodFrom?: string | null;
+  periodTo?: string | null;
+  revenue: number;
+  itemsSold: number;
+  transactions: number;
+  estimatedCost?: number | null;
+  detailedRows: number;
+  locations: string[];
+  employees: string[];
+};
+
+export function apiAifSalesCommandCenterOverview(options?: {
+  from?: string;
+  to?: string;
+  compareFrom?: string;
+  compareTo?: string;
+  location?: "all" | string;
+  employee?: string;
+  brand?: string;
+  category?: string;
+  subcategory?: string;
+  size?: string;
+  color?: string;
+  payment?: string;
+  product?: string;
+  search?: string;
+  source?: "all" | "live" | "history";
+  bucket?: "auto" | "day" | "week" | "month";
+}) {
+  const q = new URLSearchParams();
+  if (options?.from) q.set("from", options.from);
+  if (options?.to) q.set("to", options.to);
+  if (options?.compareFrom) q.set("compareFrom", options.compareFrom);
+  if (options?.compareTo) q.set("compareTo", options.compareTo);
+  q.set("location", options?.location || "all");
+  if (options?.employee?.trim()) q.set("employee", options.employee.trim());
+  if (options?.brand?.trim()) q.set("brand", options.brand.trim());
+  if (options?.category?.trim()) q.set("category", options.category.trim());
+  if (options?.subcategory?.trim()) q.set("subcategory", options.subcategory.trim());
+  if (options?.size?.trim()) q.set("size", options.size.trim());
+  if (options?.color?.trim()) q.set("color", options.color.trim());
+  if (options?.payment?.trim()) q.set("payment", options.payment.trim());
+  if (options?.product?.trim()) q.set("product", options.product.trim());
+  if (options?.search?.trim()) q.set("search", options.search.trim());
+  q.set("source", options?.source || "all");
+  q.set("bucket", options?.bucket || "auto");
+  return fetchAifJSON<AifSalesCommandOverviewResponse>(`/admin-shops/sales-command-center/overview?${q.toString()}`);
+}
+
+export function apiAifSalesHistoryImports(limit = 100) {
+  return fetchAifJSON<{ ok: true; items: AifSalesHistoryImportSummary[] }>(
+    `/admin-shops/sales-command-center/history/imports?limit=${encodeURIComponent(String(limit))}`,
+  );
+}
+
+export function apiAifSalesHistoryImportDetail(id: string) {
+  return fetchAifJSON<{
+    ok: true;
+    item: AifSalesHistoryImportSummary;
+    rows: AifSalesHistoryInputRow[];
+  }>(`/admin-shops/sales-command-center/history/imports/${encodeURIComponent(id)}`);
+}
+
+export function apiAifCreateSalesHistoryImport(input: {
+  sourceName: string;
+  sourceKind?: "manual" | "xlsx" | "xls" | "csv" | "other";
+  originalFileName?: string | null;
+  note?: string | null;
+  allowDuplicate?: boolean;
+  defaults?: {
+    location?: string;
+    actor?: string;
+    tvaRate?: number | string | null;
+    priceIncludesTva?: boolean;
+    granularity?: "monthly" | "daily" | "line";
+  };
+  rows: AifSalesHistoryInputRow[];
+}) {
+  return fetchAifJSON<{ ok: true; item: AifSalesHistoryImportSummary }>(
+    "/admin-shops/sales-command-center/history/imports",
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function apiAifDeleteSalesHistoryImport(id: string) {
+  return fetchAifJSON<{ ok: true; id: string; sourceName: string; deletedRows: number }>(
+    `/admin-shops/sales-command-center/history/imports/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
 export type AifAdminCustomerActivityFilter = "all" | "buyers" | "inactive" | "repeat" | "debt";
 export type AifAdminCustomerSort = "revenue" | "transactions" | "items" | "average" | "debt" | "last_sale" | "name";
 
