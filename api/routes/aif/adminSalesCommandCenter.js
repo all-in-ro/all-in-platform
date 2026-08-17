@@ -1358,9 +1358,24 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
           .filter((row) => row.dimension === key)
           .map((row, index) => ({
             key: row.key,
-            name: key === "payment" && typeof aifPaymentMethodLabel === "function"
-              ? aifPaymentMethodLabel(row.name)
-              : row.name,
+            name: key === "store"
+              ? (String(row.meta || row.key || "").toLowerCase() === "main_warehouse"
+                ? "Csíkszereda"
+                : String(row.meta || row.key || "").toLowerCase() === "magazin_targu_secuiesc"
+                  ? "Kézdivásárhely"
+                  : row.name)
+              : key === "payment"
+                ? (() => {
+                  const rawPayment = text(row.name).toLowerCase();
+                  if (rawPayment === "exchange") return "Csere";
+                  if (rawPayment === "mixed") return "Vegyes";
+                  if (rawPayment === "cash") return "Készpénz";
+                  if (rawPayment === "card") return "Bankkártya";
+                  if (rawPayment === "bank_transfer") return "Banki átutalás";
+                  if (rawPayment === "credit") return "Hitel";
+                  return typeof aifPaymentMethodLabel === "function" ? aifPaymentMethodLabel(row.name) : row.name;
+                })()
+                : row.name,
             rawName: row.name,
             meta: row.meta,
             rank: index + 1,
