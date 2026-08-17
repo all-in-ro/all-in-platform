@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  Activity,
   Bookmark,
   Building2,
   Calendar,
@@ -146,7 +147,7 @@ function ChildMenuButton({
 }: {
   item: MenuItem;
   onSelect?: (item: MenuItem) => void;
-  tone?: "normal" | "warning" | "danger";
+  tone?: "normal" | "warning" | "danger" | "accent";
   badge?: string;
 }) {
   const Icon = item.icon;
@@ -154,7 +155,9 @@ function ChildMenuButton({
     ? "border-red-300/55 bg-[#a7192a] hover:bg-[#b51d30]"
     : tone === "warning"
       ? "border-orange-200/70 bg-gradient-to-r from-[#e67817] to-[#bd5410] shadow-[0_7px_18px_rgba(234,88,12,0.24)] hover:from-[#f28724] hover:to-[#ce6016]"
-      : "border-white/14 bg-[#354153] hover:border-[#67d4d1]/55 hover:bg-[#3e4d63]";
+      : tone === "accent"
+        ? "border-[#7bd7d4]/55 bg-gradient-to-r from-[#247f7c] to-[#2c6674] shadow-[0_8px_20px_rgba(42,141,139,0.20)] hover:from-[#2b918d] hover:to-[#337989]"
+        : "border-white/14 bg-[#354153] hover:border-[#67d4d1]/55 hover:bg-[#3e4d63]";
 
   return (
     <button
@@ -190,7 +193,7 @@ function MenuGroup({
   onToggle: () => void;
   items: MenuItem[];
   onItemSelect?: (item: MenuItem) => void;
-  itemDecorations?: Record<string, { tone?: "normal" | "warning" | "danger"; badge?: string }>;
+  itemDecorations?: Record<string, { tone?: "normal" | "warning" | "danger" | "accent"; badge?: string }>;
 }) {
   return (
     <section>
@@ -246,7 +249,7 @@ function MainMenuButton({
   label: string;
   hash: string;
   icon: React.ComponentType<{ className?: string }>;
-  tone?: "normal" | "warning" | "danger";
+  tone?: "normal" | "warning" | "danger" | "accent";
   badge?: string;
 }) {
   const toneClass =
@@ -254,7 +257,9 @@ function MainMenuButton({
       ? "border-red-300/55 bg-[#c90d22] hover:bg-[#ad0b1d]"
       : tone === "warning"
         ? "border-amber-200/50 bg-[#7a6226] hover:bg-[#8b712c]"
-        : "border-white/30 bg-[#354153] hover:border-white/45 hover:bg-[#3c485b]";
+        : tone === "accent"
+          ? "border-[#7bd7d4]/55 bg-gradient-to-r from-[#247f7c] to-[#2c6674] hover:brightness-110"
+          : "border-white/30 bg-[#354153] hover:border-white/45 hover:bg-[#3c485b]";
 
   return (
     <button
@@ -405,7 +410,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         : undefined;
   const shopItemDecorations = {
     reservations: { tone: reservationTone, badge: reservationBadge },
-  } satisfies Record<string, { tone?: "normal" | "warning" | "danger"; badge?: string }>;
+  } satisfies Record<string, { tone?: "normal" | "warning" | "danger" | "accent"; badge?: string }>;
 
   const handleShopItem = (item: MenuItem) => {
     if (item.adminModule) {
@@ -431,6 +436,16 @@ export default function AllInHome(props: { onLogout?: () => void }) {
         </header>
 
         <div className="space-y-2.5">
+          <MainMenuButton
+            label="Vezetői eladási központ"
+            hash="#allinsalescenter"
+            icon={Activity}
+            tone="accent"
+            badge="Élő + történeti"
+          />
+
+          <div className="my-3 border-t border-white/12" />
+
           <MenuGroup
             title="Üzletek"
             count={shopItems.length}
