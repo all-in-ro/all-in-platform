@@ -2,6 +2,7 @@ import express from "express";
 import createAifAdminSaleLineDeleteRouter from "./adminSaleLineDelete.js";
 import createAifAdminCustomersOverviewRouter from "./adminCustomersOverview.js";
 import createAifAdminShopOverviewRouter from "./adminShopOverview.js";
+import createAifAdminSalesCommandCenterRouter from "./adminSalesCommandCenter.js";
 
 /**
  * /admin-shops modul gyűjtő.
@@ -12,5 +13,6 @@ export default function createAifAdminShopsRouter(deps) {
   router.use(createAifAdminSaleLineDeleteRouter(deps));
   router.use(createAifAdminCustomersOverviewRouter(deps));
   router.use(createAifAdminShopOverviewRouter(deps));
+  router.use(createAifAdminSalesCommandCenterRouter(deps));
   return router;
 }
