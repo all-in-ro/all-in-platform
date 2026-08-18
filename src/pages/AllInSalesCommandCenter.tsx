@@ -2133,11 +2133,11 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
             <div className="min-w-[260px] border-l-4 border-[#2a8d8b] pl-3">
               <div className="flex flex-wrap items-center gap-2"><p className="text-[9px] uppercase tracking-[0.19em] text-[#cffffd]/60">AllInFashion • vezetői elemzés</p><span className="rounded-full border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-2 py-0.5 text-[8px] uppercase tracking-[0.1em] text-[#cffffd]/64">Élő + történeti</span></div>
               <h1 className="mt-1 text-2xl tracking-tight sm:text-3xl">Vezetői eladási központ</h1>
-              <p className="mt-1 text-xs text-white/42">Forgalom, eladók, termékek és időszakok összehasonlítása egy képernyőn.</p>
+              <p className="mt-1 text-xs text-white/42">Forgalom, eladók, termékek és időszakok összehasonlítása.</p>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               <span className="hidden rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] text-white/46 xl:inline-flex xl:items-center xl:gap-2"><Zap size={13} className="text-[#8ee6e2]" />{data?.generatedAt ? `Frissítve: ${dateTime(data.generatedAt)}` : actor}</span>
-              <button type="button" className={primaryButton} onClick={() => setHistoryOpen(true)}><Database size={15} />Történeti adatok</button>
+              <button type="button" className={primaryButton} onClick={() => setHistoryOpen(true)}><Database size={15} />Eladási előzmények</button>
               <button type="button" className={neutralButton} onClick={() => void load()} disabled={loading}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />Frissítés</button>
               <button type="button" className={neutralButton} onClick={() => { window.location.hash = "#allin"; }}><Home size={15} />Kezdőlap</button>
             </div>
