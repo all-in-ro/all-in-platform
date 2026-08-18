@@ -1605,9 +1605,11 @@ function DetailDrawer({ item, onClose }: { item: AifSalesCommandDetailItem | nul
             {[
               ["Forgalom", money(item.revenue), "text-white"],
               ["Nettó", money(item.netRevenue), "text-[#bff8f5]"],
-              ["Nyereség", money(item.grossProfit), item.grossProfit >= 0 ? "text-emerald-100" : "text-rose-100"],
+              ["Profit", money(item.grossProfit), item.grossProfit >= 0 ? "text-emerald-100" : "text-rose-100"],
+              ["Profit %", item.costCovered && Math.abs(numberValue(item.estimatedCost)) > 0.000001 ? percentage(numberValue(item.grossProfit) / Math.abs(numberValue(item.estimatedCost)) * 100) : "–", "text-[#bff8f5]"],
               ["Darab", `${integer(item.quantity)} db`, "text-white"],
               ["Kedvezmény", money(item.discountTotal), "text-amber-50"],
+              ["TVA", money(numberValue(item.revenue) - numberValue(item.netRevenue)), "text-[#bff8f5]"],
               ["Kintlévőség", money(item.unpaidTotal), "text-rose-50"],
             ].map(([label, value, tone]) => (
               <div key={String(label)} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-3"><p className="text-[9px] uppercase tracking-[0.1em] text-white/60">{label}</p><p className={`mt-1.5 text-sm ${tone}`}>{value}</p></div>
@@ -2175,7 +2177,14 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   const currentPeriodLabel = data ? `${huDate(data.scope.from)} – ${huDate(data.scope.to)}` : `${huDate(applied.from)} – ${huDate(applied.to)}`;
   const comparisonPeriodLabel = data ? `${huDate(data.scope.compareFrom)} – ${huDate(data.scope.compareTo)}` : `${huDate(applied.compareFrom)} – ${huDate(applied.compareTo)}`;
   const comparisonAvailable = numberValue(comparison?.liveRows) + numberValue(comparison?.historyRows) > 0;
-  const marginDelta = comparisonAvailable ? deltaValue(numberValue(summary?.grossMargin), numberValue(comparison?.grossMargin)) : null;
+  const targetProfitPercent = numberValue((data as any)?.pricingRule?.targetProfitPercent || 65);
+  const salesTvaRate = numberValue(data?.salesTva?.rate || 21);
+  const currentProfitPercent = numberValue((summary as any)?.profitPercent);
+  const comparisonProfitPercent = numberValue((comparison as any)?.profitPercent);
+  const currentTvaAmount = numberValue((summary as any)?.tvaAmount ?? (summary as any)?.tvaPayable);
+  const comparisonTvaAmount = numberValue((comparison as any)?.tvaAmount ?? (comparison as any)?.tvaPayable);
+  const profitPercentDelta = comparisonAvailable ? deltaValue(currentProfitPercent, comparisonProfitPercent) : null;
+  const tvaDelta = comparisonAvailable ? deltaValue(currentTvaAmount, comparisonTvaAmount) : null;
 
   const locationOptions = useMemo<SelectOption[]>(() => [
     { value: "all", label: "Minden üzlet" },
@@ -2322,14 +2331,15 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
 
         {error ? <div className="rounded-2xl border border-rose-300/28 bg-rose-500/13 px-4 py-3 text-sm text-rose-50"><AlertTriangle size={17} className="mr-2 inline" />{error}</div> : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-4">
           <MetricCard title="Forgalom" value={money(summary?.revenue)} comparison={money(comparison?.revenue)} delta={delta?.revenue} icon={CircleDollarSign} hint={`${money(summary?.liveRevenue)} élő • ${money(summary?.historyRevenue)} történeti`} active={chartMetric === "revenue"} onClick={() => setChartMetric("revenue")} comparisonAvailable={comparisonAvailable} />
-          <MetricCard title="Bruttó nyereség" value={money(summary?.grossProfit)} comparison={money(comparison?.grossProfit)} delta={delta?.grossProfit} icon={TrendingUp} hint="Nettó forgalom mínusz beszerzési érték" active={chartMetric === "grossProfit"} onClick={() => setChartMetric("grossProfit")} warning={numberValue(summary?.costCoveragePercent) < 99 ? `A vizsgált forgalom vételár-lefedettsége ${percentage(summary?.costCoveragePercent)}. A hiányzó költségadatok miatt a nyereség becslés.` : undefined} comparisonAvailable={comparisonAvailable} />
-          <MetricCard title="Árrés" value={percentage(summary?.grossMargin)} comparison={percentage(comparison?.grossMargin)} delta={marginDelta} icon={Percent} hint="Bruttó nyereség / nettó forgalom" warning={numberValue(summary?.costCoveragePercent) < 99 ? "Az árrés a rendelkezésre álló vételár-adatokból számolódik." : undefined} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Profit érték" value={money(summary?.grossProfit)} comparison={money(comparison?.grossProfit)} delta={delta?.grossProfit} icon={TrendingUp} hint="Kedvezmény után: nettó eladás − vételár" active={chartMetric === "grossProfit"} onClick={() => setChartMetric("grossProfit")} warning={numberValue(summary?.costCoveragePercent) < 99 ? `A vizsgált forgalom vételár-lefedettsége ${percentage(summary?.costCoveragePercent)}. A hiányzó költségadatok miatt a profit becslés.` : undefined} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Profit %" value={percentage(currentProfitPercent)} comparison={percentage(comparisonProfitPercent)} delta={profitPercentDelta} icon={Percent} hint={`Alapképlet: vételár + ${integer(targetProfitPercent)}% profit + ${integer(salesTvaRate)}% TVA`} warning={numberValue(summary?.costCoveragePercent) < 99 ? "A profit százalék a rendelkezésre álló vételár-adatokból számolódik." : undefined} comparisonAvailable={comparisonAvailable} />
           <MetricCard title="Eladott darab" value={`${integer(summary?.itemsSold)} db`} comparison={`${integer(comparison?.itemsSold)} db`} delta={delta?.itemsSold} icon={ShoppingBag} hint="Eladás és csere nettó darabszáma" active={chartMetric === "itemsSold"} onClick={() => setChartMetric("itemsSold")} comparisonAvailable={comparisonAvailable} />
           <MetricCard title="Tranzakció" value={integer(summary?.transactions)} comparison={integer(comparison?.transactions)} delta={delta?.transactions} icon={ReceiptText} hint="Egyedi bizonylatok és havi összesítések" active={chartMetric === "transactions"} onClick={() => setChartMetric("transactions")} comparisonAvailable={comparisonAvailable} />
-          <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="Összes adott kedvezmény" active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Kedvezmény" value={money(summary?.discountTotal)} comparison={money(comparison?.discountTotal)} delta={delta?.discountTotal} icon={Tags} hint="A tényleges eladási árból levont kedvezmény" active={chartMetric === "discountTotal"} onClick={() => setChartMetric("discountTotal")} comparisonAvailable={comparisonAvailable} />
           <MetricCard title="Kintlévőség" value={money(summary?.unpaidTotal)} comparison={money(comparison?.unpaidTotal)} delta={delta?.unpaidTotal} icon={WalletCards} hint="Nyitott fizetési összeg" active={chartMetric === "unpaidTotal"} onClick={() => setChartMetric("unpaidTotal")} comparisonAvailable={comparisonAvailable} />
+          <MetricCard title="Befizetendő TVA" value={money(currentTvaAmount)} comparison={money(comparisonTvaAmount)} delta={tvaDelta} icon={ReceiptText} hint={`Kedvezmény utáni eladási TVA (${integer(salesTvaRate)}%) • levonható beszerzési TVA nélkül`} comparisonAvailable={comparisonAvailable} />
         </section>
 
         {data ? <CoverageStrip data={data} /> : null}
