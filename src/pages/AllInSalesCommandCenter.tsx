@@ -956,7 +956,6 @@ function CompareChart({
   onMetricChange,
   currentLabel,
   comparisonLabel,
-  onBucketClick,
   comparisonAvailable,
 }: {
   data: AifSalesCommandOverviewResponse["trend"];
@@ -964,7 +963,6 @@ function CompareChart({
   onMetricChange: (metric: ChartMetric) => void;
   currentLabel: string;
   comparisonLabel: string;
-  onBucketClick: (index: number) => void;
   comparisonAvailable: boolean;
 }) {
   const width = 980;
@@ -980,13 +978,26 @@ function CompareChart({
   let min = Math.min(0, ...values);
   let max = Math.max(0, ...values);
   if (Math.abs(max - min) < 0.000001) max = min + 1;
+
   const usableWidth = width - padding.left - padding.right;
   const usableHeight = height - padding.top - padding.bottom;
-  const xAt = (index: number) => count <= 1 ? padding.left + usableWidth / 2 : padding.left + (index / (count - 1)) * usableWidth;
+  const xAt = (index: number) => count <= 1
+    ? padding.left + usableWidth / 2
+    : padding.left + (index / (count - 1)) * usableWidth;
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * usableHeight;
   const zeroY = yAt(0);
-  const currentPoints = current.map((item, index) => ({ x: xAt(index), y: yAt(metricValue(item, metric)), item, value: metricValue(item, metric) }));
-  const comparisonPoints = comparison.map((item, index) => ({ x: xAt(index), y: yAt(metricValue(item, metric)), item, value: metricValue(item, metric) }));
+  const currentPoints = current.map((item, index) => ({
+    x: xAt(index),
+    y: yAt(metricValue(item, metric)),
+    item,
+    value: metricValue(item, metric),
+  }));
+  const comparisonPoints = comparison.map((item, index) => ({
+    x: xAt(index),
+    y: yAt(metricValue(item, metric)),
+    item,
+    value: metricValue(item, metric),
+  }));
   const currentLine = smoothPath(currentPoints);
   const comparisonLine = smoothPath(comparisonPoints);
   const currentArea = currentPoints.length
@@ -995,22 +1006,41 @@ function CompareChart({
   const comparisonArea = comparisonPoints.length
     ? `${comparisonLine} L ${comparisonPoints[comparisonPoints.length - 1].x} ${zeroY} L ${comparisonPoints[0].x} ${zeroY} Z`
     : "";
+
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
   const metricConfig = chartMetricConfig[metric];
   const labelStep = Math.max(1, Math.ceil(count / 9));
   const empty = values.every((value) => Math.abs(value) < 0.000001);
 
-  const move = (event: React.MouseEvent<SVGSVGElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const viewX = ((event.clientX - rect.left) / rect.width) * width;
-    const raw = count <= 1 ? 0 : Math.round(((viewX - padding.left) / usableWidth) * (count - 1));
-    setHoverIndex(Math.max(0, Math.min(count - 1, raw)));
-  };
+  useEffect(() => {
+    setHoverIndex(null);
+    setPinnedIndex(null);
+  }, [data]);
 
-  const hoverCurrent = hoverIndex === null ? undefined : current[hoverIndex];
-  const hoverComparison = hoverIndex === null ? undefined : comparison[hoverIndex];
-  const hoverX = hoverIndex === null ? 0 : xAt(hoverIndex);
-  const tooltipLeft = hoverIndex === null ? 0 : `${Math.max(9, Math.min(91, (hoverX / width) * 100))}%`;
+  const activeIndex = pinnedIndex ?? hoverIndex;
+  const activeCurrent = activeIndex === null ? undefined : current[activeIndex];
+  const activeComparison = activeIndex === null ? undefined : comparison[activeIndex];
+  const activeX = activeIndex === null ? 0 : xAt(activeIndex);
+  const activeAnchor = activeIndex === null ? 50 : (activeX / width) * 100;
+  const tooltipStyle: React.CSSProperties = activeAnchor < 28
+    ? { left: 12 }
+    : activeAnchor > 72
+      ? { right: 12 }
+      : { left: `${activeAnchor}%`, transform: "translateX(-50%)" };
+
+  function hitBounds(index: number) {
+    if (count <= 1) return { x: padding.left, width: usableWidth };
+    const center = xAt(index);
+    const previous = index === 0 ? padding.left : (xAt(index - 1) + center) / 2;
+    const next = index === count - 1 ? width - padding.right : (center + xAt(index + 1)) / 2;
+    return { x: previous, width: Math.max(1, next - previous) };
+  }
+
+  function togglePinned(index: number) {
+    setPinnedIndex((currentPinned) => currentPinned === index ? null : index);
+    setHoverIndex(index);
+  }
 
   return (
     <section className={`${panel} overflow-hidden p-4`}>
@@ -1046,7 +1076,7 @@ function CompareChart({
             <span className="inline-flex items-center gap-2 text-white/34"><span className="h-2.5 w-5 rounded-full bg-white/18" />Előző év: nincs adat</span>
           )}
         </div>
-        <span>Kattints egy pontra a pontos időszak megnyitásához</span>
+        <span>{pinnedIndex === null ? "Vidd az egeret a diagramra • kattintással rögzítheted az értéket" : "Az érték rögzítve van • kattints másik napra vagy zárd be"}</span>
       </div>
 
       <div className="relative mt-3 overflow-hidden rounded-2xl border border-white/8 bg-[#111c2b]/70">
@@ -1058,12 +1088,11 @@ function CompareChart({
             </div>
           </div>
         ) : null}
+
         <svg
           viewBox={`0 0 ${width} ${height}`}
-          className="h-[330px] w-full cursor-crosshair sm:h-[360px]"
-          onMouseMove={move}
+          className="h-[330px] w-full sm:h-[360px]"
           onMouseLeave={() => setHoverIndex(null)}
-          onClick={() => hoverIndex !== null && onBucketClick(hoverIndex)}
           role="img"
           aria-label={`${metricConfig.label} összehasonlító diagram`}
         >
@@ -1090,53 +1119,97 @@ function CompareChart({
               </g>
             );
           })}
+
           {min < 0 && max > 0 ? <line x1={padding.left} x2={width - padding.right} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" /> : null}
-          {comparisonArea ? <path d={comparisonArea} fill="url(#commandComparisonArea)" /> : null}
-          {currentArea ? <path d={currentArea} fill="url(#commandCurrentArea)" /> : null}
-          {comparisonLine ? <path d={comparisonLine} fill="none" stroke="#9aa7b7" strokeWidth="3" strokeLinecap="round" /> : null}
-          {currentLine ? <path d={currentLine} fill="none" stroke="#58d7d0" strokeWidth="4" strokeLinecap="round" /> : null}
+          {comparisonArea ? <path d={comparisonArea} fill="url(#commandComparisonArea)" pointerEvents="none" /> : null}
+          {currentArea ? <path d={currentArea} fill="url(#commandCurrentArea)" pointerEvents="none" /> : null}
+          {comparisonLine ? <path d={comparisonLine} fill="none" stroke="#9aa7b7" strokeWidth="3" strokeLinecap="round" pointerEvents="none" /> : null}
+          {currentLine ? <path d={currentLine} fill="none" stroke="#58d7d0" strokeWidth="4" strokeLinecap="round" pointerEvents="none" /> : null}
+
+          {comparisonPoints.map((point, index) => Math.abs(point.value) < 0.000001 ? null : (
+            <circle key={`comparison-dot-${index}`} cx={point.x} cy={point.y} r="2.8" fill="#cbd5df" opacity="0.72" pointerEvents="none" />
+          ))}
+          {currentPoints.map((point, index) => Math.abs(point.value) < 0.000001 ? null : (
+            <circle key={`current-dot-${index}`} cx={point.x} cy={point.y} r="3.2" fill="#a9fffa" stroke="#2a8d8b" strokeWidth="1.5" opacity="0.92" pointerEvents="none" />
+          ))}
 
           {Array.from({ length: count }, (_, index) => {
             const item = current[index] || comparison[index];
             if (!item || (index % labelStep !== 0 && index !== count - 1)) return null;
             return (
-              <text key={index} x={xAt(index)} y={height - 17} fill="rgba(255,255,255,0.42)" fontSize="10" textAnchor="middle">
+              <text key={index} x={xAt(index)} y={height - 17} fill="rgba(255,255,255,0.42)" fontSize="10" textAnchor="middle" pointerEvents="none">
                 {item.label}
               </text>
             );
           })}
 
-          {hoverIndex !== null ? (
-            <g>
-              <line x1={hoverX} x2={hoverX} y1={padding.top} y2={height - padding.bottom} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
-              {hoverCurrent ? <circle cx={hoverX} cy={yAt(metricValue(hoverCurrent, metric))} r="6" fill="#d8fffd" stroke="#2a8d8b" strokeWidth="3" /> : null}
-              {hoverComparison ? <circle cx={hoverX} cy={yAt(metricValue(hoverComparison, metric))} r="5" fill="#f4f7fa" stroke="#9aa7b7" strokeWidth="3" /> : null}
+          {activeIndex !== null ? (
+            <g pointerEvents="none">
+              <line x1={activeX} x2={activeX} y1={padding.top} y2={height - padding.bottom} stroke={pinnedIndex === activeIndex ? "rgba(169,255,250,0.58)" : "rgba(255,255,255,0.30)"} strokeDasharray="4 5" />
+              {activeCurrent ? <circle cx={activeX} cy={yAt(metricValue(activeCurrent, metric))} r={pinnedIndex === activeIndex ? 7 : 6} fill="#d8fffd" stroke="#2a8d8b" strokeWidth="3" /> : null}
+              {activeComparison ? <circle cx={activeX} cy={yAt(metricValue(activeComparison, metric))} r={pinnedIndex === activeIndex ? 6 : 5} fill="#f4f7fa" stroke="#9aa7b7" strokeWidth="3" /> : null}
             </g>
           ) : null}
+
+          {Array.from({ length: count }, (_, index) => {
+            const bounds = hitBounds(index);
+            return (
+              <rect
+                key={`hit-${index}`}
+                x={bounds.x}
+                y={padding.top}
+                width={bounds.width}
+                height={usableHeight}
+                fill="transparent"
+                className="cursor-pointer"
+                onMouseEnter={() => setHoverIndex(index)}
+                onClick={() => togglePinned(index)}
+              />
+            );
+          })}
         </svg>
 
-        {hoverIndex !== null ? (
+        {activeIndex !== null ? (
           <div
-            className="pointer-events-none absolute top-4 z-20 w-[230px] -translate-x-1/2 rounded-xl border border-[#7bd7d4]/24 bg-[#0e1826]/[0.97] p-3 text-xs shadow-[0_18px_45px_rgba(0,0,0,0.55)] backdrop-blur-xl"
-            style={{ left: tooltipLeft }}
+            className={`absolute top-4 z-20 w-[238px] rounded-xl border border-[#7bd7d4]/24 bg-[#0e1826]/[0.97] p-3 text-xs text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)] backdrop-blur-xl ${pinnedIndex === null ? "pointer-events-none" : "pointer-events-auto"}`}
+            style={tooltipStyle}
           >
-            <p className="text-[9px] uppercase tracking-[0.13em] text-white/38">{metricConfig.label}</p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.13em]" style={{ color: "rgba(255,255,255,0.62)" }}>{metricConfig.label}</p>
+                {pinnedIndex !== null ? <p className="mt-0.5 text-[9px] text-[#9ff3ee]">Rögzített érték</p> : null}
+              </div>
+              {pinnedIndex !== null ? (
+                <button
+                  type="button"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/12 bg-white/[0.05] text-white/70 transition hover:bg-white/[0.10] hover:text-white"
+                  onClick={() => { setPinnedIndex(null); setHoverIndex(null); }}
+                  title="Bezárás"
+                >
+                  <X size={12} />
+                </button>
+              ) : null}
+            </div>
+
             <div className="mt-2 space-y-2">
               <div>
-                <div className="flex items-center justify-between gap-3"><span className="text-[#9ff3ee]">Vizsgált</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverCurrent, metric))}</strong></div>
-                <p className="mt-0.5 text-[9px] text-white/34">{hoverCurrent ? `${huDate(hoverCurrent.start)} – ${huDate(hoverCurrent.end)}` : "Nincs időszak"}</p>
+                <div className="flex items-center justify-between gap-3"><span className="text-[#9ff3ee]">Vizsgált</span><strong className="font-medium text-white">{metricConfig.format(metricValue(activeCurrent, metric))}</strong></div>
+                <p className="mt-0.5 text-[9px]" style={{ color: "rgba(255,255,255,0.62)" }}>{activeCurrent ? `${huDate(activeCurrent.start)} – ${huDate(activeCurrent.end)}` : "Nincs időszak"}</p>
               </div>
               {comparisonAvailable ? (
                 <>
                   <div>
-                    <div className="flex items-center justify-between gap-3"><span className="text-white/60">Előző év</span><strong className="font-medium text-white">{metricConfig.format(metricValue(hoverComparison, metric))}</strong></div>
-                    <p className="mt-0.5 text-[9px] text-white/34">{hoverComparison ? `${huDate(hoverComparison.start)} – ${huDate(hoverComparison.end)}` : "Nincs adat"}</p>
+                    <div className="flex items-center justify-between gap-3"><span style={{ color: "rgba(255,255,255,0.72)" }}>Előző év</span><strong className="font-medium text-white">{metricConfig.format(metricValue(activeComparison, metric))}</strong></div>
+                    <p className="mt-0.5 text-[9px]" style={{ color: "rgba(255,255,255,0.58)" }}>{activeComparison ? `${huDate(activeComparison.start)} – ${huDate(activeComparison.end)}` : "Nincs adat"}</p>
                   </div>
                   <div className="border-t border-white/8 pt-2">
-                    <DeltaPill value={deltaValue(metricValue(hoverCurrent, metric), metricValue(hoverComparison, metric))} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
+                    <DeltaPill value={deltaValue(metricValue(activeCurrent, metric), metricValue(activeComparison, metric))} inverse={metric === "discountTotal" || metric === "unpaidTotal"} />
                   </div>
                 </>
-              ) : <p className="border-t border-white/8 pt-2 text-[10px] text-white/38">Az előző év azonos időszakához még nincs rögzített adat.</p>}
+              ) : (
+                <p className="border-t border-white/8 pt-2 text-[10px]" style={{ color: "rgba(255,255,255,0.66)" }}>Az előző év azonos időszakához még nincs rögzített adat.</p>
+              )}
+              {pinnedIndex === null ? <p className="border-t border-white/8 pt-2 text-[9px]" style={{ color: "rgba(255,255,255,0.48)" }}>Kattints, ha ezt az értéket a képernyőn akarod tartani.</p> : <p className="border-t border-white/8 pt-2 text-[9px]" style={{ color: "rgba(255,255,255,0.48)" }}>Másik napra kattintva azonnal átvált. Nem módosítja a teljes oldal szűrését.</p>}
             </div>
           </div>
         ) : null}
@@ -2110,12 +2183,6 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     else if (dimension === "store") applyPatch({ location: "all" });
   }
 
-  const bucketClick = (index: number) => {
-    const current = data?.trend.current[index];
-    if (!current) return;
-    applyPatch({ from: current.start, to: current.end });
-  };
-
   return (
     <main
       className="min-h-screen bg-[#4e5969] p-3 text-white sm:p-4 lg:p-6"
@@ -2237,7 +2304,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
         {data ? <CoverageStrip data={data} /> : null}
 
         <section className="grid gap-3 2xl:grid-cols-[1.72fr_0.88fr]">
-          <CompareChart data={data?.trend || { current: [], comparison: [] }} metric={chartMetric} onMetricChange={setChartMetric} currentLabel={currentPeriodLabel} comparisonLabel={comparisonPeriodLabel} onBucketClick={bucketClick} comparisonAvailable={comparisonAvailable} />
+          <CompareChart data={data?.trend || { current: [], comparison: [] }} metric={chartMetric} onMetricChange={setChartMetric} currentLabel={currentPeriodLabel} comparisonLabel={comparisonPeriodLabel} comparisonAvailable={comparisonAvailable} />
           <EmployeeRanking rows={data?.employees || []} metric={chartMetric} selected={applied.employee} onSelect={(employee) => applyPatch({ employee })} comparisonAvailable={comparisonAvailable} />
         </section>
 
