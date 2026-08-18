@@ -834,11 +834,21 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     const transactions = numberValue(row.transactions);
     const totalAbsRevenue = numberValue(row.total_abs_revenue);
     const historyAbsRevenue = numberValue(row.history_abs_revenue);
+    // A főnöki képlet logikája:
+    // vételár + 65% profit + TVA. A tényleges bevétel már a kedvezmény UTÁNI
+    // összeg, ezért a megmaradt profit = nettó eladás - vételár,
+    // a megmaradt profit % pedig ezt a vételárhoz viszonyítja.
     const grossProfit = netRevenue - estimatedCost;
+    const profitPercent = Math.abs(estimatedCost) > 0.000001
+      ? grossProfit / Math.abs(estimatedCost) * 100
+      : 0;
+    const tvaAmount = revenue - netRevenue;
     return {
       revenue,
       netRevenue,
-      tvaAmount: revenue - netRevenue,
+      tvaAmount,
+      tvaPayable: tvaAmount,
+      profitPercent,
       salesBeforeDiscount: numberValue(row.sales_before_discount),
       discountTotal: numberValue(row.discount_total),
       paidTotal: numberValue(row.paid_total),
@@ -864,11 +874,16 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     const netRevenue = numberValue(row.net_revenue);
     const estimatedCost = numberValue(row.estimated_cost);
     const transactions = numberValue(row.transactions);
+    const grossProfit = netRevenue - estimatedCost;
     return {
       revenue,
       netRevenue,
+      tvaAmount: revenue - netRevenue,
       estimatedCost,
-      grossProfit: netRevenue - estimatedCost,
+      grossProfit,
+      profitPercent: Math.abs(estimatedCost) > 0.000001
+        ? grossProfit / Math.abs(estimatedCost) * 100
+        : 0,
       itemsSold: numberValue(row.items_sold),
       transactions,
       averageBasket: transactions !== 0 ? revenue / transactions : 0,
@@ -886,7 +901,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
 
   function comparisonObject(current, comparison) {
     const result = {};
-    for (const key of ["revenue", "netRevenue", "estimatedCost", "grossProfit", "itemsSold", "transactions", "averageBasket", "discountTotal", "unpaidTotal"]) {
+    for (const key of ["revenue", "netRevenue", "tvaAmount", "estimatedCost", "grossProfit", "profitPercent", "itemsSold", "transactions", "averageBasket", "discountTotal", "unpaidTotal"]) {
       result[key] = deltaPercent(current?.[key], comparison?.[key]);
     }
     return result;
@@ -1399,6 +1414,11 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
           ...filters,
         },
         salesTva: { rate: salesTvaRate, priceIncludesTva },
+        pricingRule: {
+          targetProfitPercent: 65,
+          tvaRate: salesTvaRate,
+          formula: `vételár + 65% profit + ${salesTvaRate}% TVA`,
+        },
         summary,
         comparisonSummary,
         deltaPercent: comparisonObject(summary, comparisonSummary),
