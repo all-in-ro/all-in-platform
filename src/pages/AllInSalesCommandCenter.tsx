@@ -979,12 +979,44 @@ function CompareChart({
   let max = Math.max(0, ...values);
   if (Math.abs(max - min) < 0.000001) max = min + 1;
 
+  // Darab és tranzakció darabszámok: a tengelyen nincs 0,8 póló vagy 2,3 tranzakció.
+  // Ezeknél mindig egész léptékű, emberileg értelmes skálát használunk.
+  const integerAxis = metric === "itemsSold" || metric === "transactions";
+  const niceIntegerStep = (span: number) => {
+    if (span <= 5) return 1;
+    const rough = Math.max(1, span / 5);
+    const magnitude = 10 ** Math.floor(Math.log10(rough));
+    const normalized = rough / magnitude;
+    const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+    return Math.max(1, factor * magnitude);
+  };
+
+  let axisMin = min;
+  let axisMax = max;
+  let yTicks: number[];
+
+  if (integerAxis) {
+    const integerMin = Math.floor(min);
+    const integerMax = Math.ceil(max);
+    const step = niceIntegerStep(Math.max(1, integerMax - integerMin));
+    axisMin = Math.min(0, Math.floor(integerMin / step) * step);
+    axisMax = Math.max(step, Math.ceil(integerMax / step) * step);
+    if (axisMax <= axisMin) axisMax = axisMin + step;
+
+    yTicks = [];
+    for (let value = axisMin; value <= axisMax + step * 0.001; value += step) {
+      yTicks.push(Math.round(value));
+    }
+  } else {
+    yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => axisMin + (axisMax - axisMin) * ratio);
+  }
+
   const usableWidth = width - padding.left - padding.right;
   const usableHeight = height - padding.top - padding.bottom;
   const xAt = (index: number) => count <= 1
     ? padding.left + usableWidth / 2
     : padding.left + (index / (count - 1)) * usableWidth;
-  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * usableHeight;
+  const yAt = (value: number) => padding.top + ((axisMax - value) / (axisMax - axisMin)) * usableHeight;
   const zeroY = yAt(0);
   const currentPoints = current.map((item, index) => ({
     x: xAt(index),
@@ -1107,20 +1139,19 @@ function CompareChart({
             </linearGradient>
           </defs>
 
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-            const value = min + (max - min) * ratio;
+          {yTicks.map((value) => {
             const y = yAt(value);
             return (
-              <g key={ratio}>
+              <g key={`y-${value}`}>
                 <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="rgba(255,255,255,0.075)" />
                 <text x={padding.left - 10} y={y + 4} fill="rgba(255,255,255,0.35)" fontSize="10" textAnchor="end">
-                  {compactNumber(value)}
+                  {integerAxis ? integer(value) : compactNumber(value)}
                 </text>
               </g>
             );
           })}
 
-          {min < 0 && max > 0 ? <line x1={padding.left} x2={width - padding.right} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" /> : null}
+          {axisMin < 0 && axisMax > 0 ? <line x1={padding.left} x2={width - padding.right} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" /> : null}
           {comparisonArea ? <path d={comparisonArea} fill="url(#commandComparisonArea)" pointerEvents="none" /> : null}
           {currentArea ? <path d={currentArea} fill="url(#commandCurrentArea)" pointerEvents="none" /> : null}
           {comparisonLine ? <path d={comparisonLine} fill="none" stroke="#9aa7b7" strokeWidth="3" strokeLinecap="round" pointerEvents="none" /> : null}
