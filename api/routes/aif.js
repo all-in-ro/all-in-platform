@@ -7234,6 +7234,1506 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Régi rendszer / ForIT migráció
+  // ---------------------------------------------------------------------------
+  // Ez szándékosan NEM receptió és NEM beszállítói import. A régi ForIT
+  // terméktörzs teljes egészében átjöhet (0 készlettel is), a kiválasztott
+  // hely készlete pedig pontos nyitóállapotra áll. A beszállítói eredet csak
+  // audit-metaadat, így a régi rendszer nem szennyezi az új beszállítói riportot.
+  let aifLegacyMigrationSchemaPromise = null;
+
+  async function ensureAifLegacyMigrationSchema(client = pool) {
+    const run = async () => {
+      await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_legacy_migrations (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        source_system text NOT NULL DEFAULT 'ForIT',
+        source_date date NULL,
+        target_location_id uuid NOT NULL REFERENCES aif_locations(id) ON DELETE RESTRICT,
+        source_file_name text NULL,
+        payload_hash text NOT NULL,
+        status text NOT NULL DEFAULT 'prepared' CHECK (status IN ('prepared','committing','committed','failed','cancelled')),
+        row_count integer NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+        processed_rows integer NOT NULL DEFAULT 0 CHECK (processed_rows >= 0),
+        total_qty integer NOT NULL DEFAULT 0,
+        note text NULL,
+        created_by text NULL,
+        stats jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        committed_at timestamptz NULL
+      )`);
+      await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS aif_legacy_migrations_payload_location_uq
+        ON aif_legacy_migrations (payload_hash, target_location_id)
+        WHERE status <> 'cancelled'`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_legacy_migrations_created_idx
+        ON aif_legacy_migrations (created_at DESC)`);
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_legacy_migration_rows (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        migration_id uuid NOT NULL REFERENCES aif_legacy_migrations(id) ON DELETE CASCADE,
+        row_no integer NOT NULL,
+        source_row text NULL,
+        source_status text NULL,
+        issues text NULL,
+        legacy_barcode text NULL,
+        legacy_product_code text NULL,
+        legacy_original_code text NULL,
+        title text NULL,
+        original_title text NULL,
+        brand_name text NULL,
+        model_code text NULL,
+        color_code text NULL,
+        color_name text NULL,
+        size text NOT NULL,
+        subcategory_name text NULL,
+        gender text NULL,
+        buy_price numeric(14,4) NULL,
+        sell_price numeric(14,4) NULL,
+        raw_qty integer NOT NULL DEFAULT 0,
+        target_qty integer NOT NULL DEFAULT 0 CHECK (target_qty >= 0),
+        legacy_supplier text NULL,
+        tva_status text NULL,
+        tva_rate numeric(7,3) NULL,
+        preview_action text NOT NULL DEFAULT 'new' CHECK (preview_action IN ('new','existing','conflict')),
+        preview_message text NULL,
+        variant_id uuid NULL REFERENCES aif_product_variants(id) ON DELETE SET NULL,
+        existing_stock_qty integer NULL,
+        existing_reserved_qty integer NULL,
+        warning_count integer NOT NULL DEFAULT 0 CHECK (warning_count >= 0),
+        process_status text NOT NULL DEFAULT 'pending' CHECK (process_status IN ('pending','done','error','skipped')),
+        process_error text NULL,
+        stock_before integer NULL,
+        stock_after integer NULL,
+        payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+        processed_at timestamptz NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (migration_id, row_no)
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_legacy_migration_rows_status_idx
+        ON aif_legacy_migration_rows (migration_id, process_status, row_no)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_legacy_migration_rows_barcode_idx
+        ON aif_legacy_migration_rows (lower(legacy_barcode)) WHERE legacy_barcode IS NOT NULL`);
+      return true;
+    };
+
+    if (client !== pool) return run();
+    if (!aifLegacyMigrationSchemaPromise) {
+      aifLegacyMigrationSchemaPromise = run().catch((error) => {
+        aifLegacyMigrationSchemaPromise = null;
+        throw error;
+      });
+    }
+    return aifLegacyMigrationSchemaPromise;
+  }
+
+  function legacyValue(row, key) {
+    if (!row || typeof row !== 'object') return '';
+    const direct = row[key];
+    if (direct !== undefined && direct !== null) return text(direct);
+    const wanted = normCode(key);
+    for (const [candidate, value] of Object.entries(row)) {
+      if (normCode(candidate) === wanted) return text(value);
+    }
+    return '';
+  }
+
+  function legacyNumber(value, fallback = 0) {
+    const raw = text(value).replace(/\s+/g, '').replace(',', '.');
+    if (!raw) return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function legacyPreparedRow(input, index) {
+    const sourceRow = legacyValue(input, 'SOURCE_ROW') || String(index + 1);
+    const issues = legacyValue(input, 'ISSUES');
+    const sourceStatus = (legacyValue(input, 'IMPORT_STATUS') || 'OK').toUpperCase();
+    const originalTitle = legacyValue(input, 'DENUMIRE_ORIGINAL');
+    const title = legacyValue(input, 'DENUMIRE') || originalTitle || legacyValue(input, 'CODPRODUS') || legacyValue(input, 'BARCODE') || `ForIT ${sourceRow}`;
+    const productCode = legacyValue(input, 'CODPRODUS') || legacyValue(input, 'FORIT_COD_ORIGINAL') || `FORIT-${sourceRow}`;
+    const originalProductCode = legacyValue(input, 'FORIT_COD_ORIGINAL') || productCode;
+    const duplicateRekeyed = /DUPLICATE_FORIT_CODE_REKEYED/i.test(issues);
+    const baseModelCode = legacyValue(input, 'S_N_COD') || originalProductCode || productCode;
+    // A ForIT ugyanazt a cikkszámot néha több külön barcode-dal tárolta. Az előkészített
+    // CSV ezeket egyedi CODPRODUS-szal jelöli; külön modellkulcs kell, különben egy variánsba olvadnának.
+    const modelCode = duplicateRekeyed ? productCode : baseModelCode;
+    const rawSize = legacyValue(input, 'MARIME');
+    const size = rawSize || `N/A-${sourceRow}`;
+    const barcodeValid = (legacyValue(input, 'BARCODE_VALID') || 'YES').toUpperCase() !== 'NO';
+    const barcode = barcodeValid ? emptyToNull(legacyValue(input, 'BARCODE')) : null;
+    const rawQtyNumber = legacyNumber(legacyValue(input, 'QTY'), 0);
+    const rawQty = Number.isFinite(rawQtyNumber) ? Math.trunc(rawQtyNumber) : 0;
+    const targetQty = Math.max(0, rawQty);
+    const buyPriceRaw = legacyValue(input, 'PRET_ACHIZITIE_RON');
+    const sellPriceRaw = legacyValue(input, 'PRET_VANZARE_RON');
+    const buyPrice = buyPriceRaw ? legacyNumber(buyPriceRaw, null) : null;
+    const sellPrice = sellPriceRaw ? legacyNumber(sellPriceRaw, null) : null;
+    const brandName = emptyToNull(legacyValue(input, 'BRAND'));
+    const colorCode = emptyToNull(legacyValue(input, 'NR_CULOARE'));
+    const colorName = emptyToNull(legacyValue(input, 'CULOARE'));
+    const subcategoryName = emptyToNull(legacyValue(input, 'RODESCR'));
+    const gender = emptyToNull(legacyValue(input, 'GEN') || legacyValue(input, 'GEN_ORIGINAL'));
+    const legacySupplier = emptyToNull(legacyValue(input, 'FURNIZOR_ISTORIC') || legacyValue(input, 'FURNIZOR_RAW'));
+    const tvaStatus = emptyToNull(legacyValue(input, 'TVA_ACHIZITIE_STATUS'));
+    const tvaRateText = legacyValue(input, 'TVA_ACHIZITIE_RATE');
+    const tvaRate = tvaRateText ? legacyNumber(tvaRateText, null) : null;
+    const warnings = [];
+    if (sourceStatus === 'REVIEW') warnings.push('A ForIT előkészítés ellenőrzendőnek jelölte.');
+    if (sourceStatus === 'STOP') warnings.push('A ForIT előkészítés STOP jelzést adott; a termék átjön, a negatív készlet 0-ra normalizálódik.');
+    if (issues) warnings.push(issues);
+    if (!barcode) warnings.push('Nincs használható vonalkód.');
+    if (!brandName) warnings.push('A márka nem volt biztosan azonosítható.');
+    if (!rawSize) warnings.push(`Méret nem volt azonosítható; ideiglenes méret: ${size}.`);
+    if (rawQty < 0) warnings.push(`Régi negatív készlet (${rawQty}) → nyitókészlet 0.`);
+
+    return {
+      rowNo: index + 1,
+      sourceRow,
+      sourceStatus,
+      issues: issues || null,
+      barcode,
+      productCode,
+      originalProductCode,
+      title,
+      originalTitle: originalTitle || null,
+      brandName,
+      modelCode,
+      snCod: emptyToNull(legacyValue(input, 'S_N_COD')),
+      colorCode,
+      colorName,
+      size,
+      rawSize: rawSize || null,
+      subcategoryName,
+      gender,
+      buyPrice,
+      sellPrice,
+      rawQty,
+      targetQty,
+      legacySupplier,
+      tvaStatus,
+      tvaRate,
+      activeFlag: (legacyValue(input, 'ACTIVE') || '').toUpperCase() === 'YES',
+      warnings,
+      raw: input && typeof input === 'object' ? input : {},
+    };
+  }
+
+  function legacyCandidateIdentity(candidate) {
+    const modelToken = normCode(candidate?.model_token || candidate?.model_code || '');
+    const color = normCode(candidate?.color_code || candidate?.color_name || '');
+    const size = normCode(candidate?.size || '');
+    return `${modelToken}|${color}|${size}`;
+  }
+
+  function legacyIncomingIdentity(row) {
+    return `${normCode(row.modelCode)}|${normCode(row.colorCode || row.colorName || '')}|${normCode(row.size)}`;
+  }
+
+  function uniqueLegacyCandidates(rows = []) {
+    const map = new Map();
+    for (const row of rows || []) {
+      const id = text(row?.id);
+      if (id && !map.has(id)) map.set(id, row);
+    }
+    return Array.from(map.values());
+  }
+
+  function pushLegacyMap(map, key, value) {
+    const safe = text(key).toLowerCase();
+    if (!safe) return;
+    const items = map.get(safe) || [];
+    items.push(value);
+    map.set(safe, items);
+  }
+
+  async function loadLegacyExistingCandidates(client, preparedRows, targetLocationId) {
+    const barcodes = Array.from(new Set(preparedRows.map((row) => text(row.barcode).toLowerCase()).filter(Boolean)));
+    const productCodes = Array.from(new Set(preparedRows.flatMap((row) => [row.productCode, row.originalProductCode]).map((value) => text(value).toLowerCase()).filter(Boolean)));
+    const modelTokens = Array.from(new Set(preparedRows.map((row) => normCode(row.modelCode)).filter(Boolean)));
+    if (!barcodes.length && !productCodes.length && !modelTokens.length) return [];
+
+    const result = await client.query(
+      `SELECT DISTINCT
+         v.id::text AS id,
+         v.model_id::text AS model_id,
+         v.internal_sku,
+         v.barcode,
+         v.color_code,
+         v.color_name,
+         v.size,
+         v.status,
+         m.model_code,
+         CASE
+           WHEN position(':' in COALESCE(m.model_code,'')) > 0 THEN split_part(lower(m.model_code), ':', 2)
+           ELSE lower(COALESCE(m.model_code,''))
+         END AS model_token,
+         m.title_ro,
+         m.status AS model_status,
+         b.code AS brand_code,
+         b.name AS brand_name,
+         sc.supplier_product_code,
+         COALESCE(st.qty,0)::int AS target_stock_qty,
+         COALESCE(st.reserved_qty,0)::int AS target_reserved_qty
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_variant_supplier_codes sc ON sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+       LEFT JOIN aif_stock st ON st.variant_id=v.id AND st.location_id=$5
+       WHERE lower(btrim(COALESCE(v.barcode,''))) = ANY($1::text[])
+          OR lower(btrim(COALESCE(v.internal_sku,''))) = ANY($2::text[])
+          OR lower(btrim(COALESCE(sc.supplier_product_code,''))) = ANY($3::text[])
+          OR (CASE
+                WHEN position(':' in COALESCE(m.model_code,'')) > 0 THEN split_part(lower(m.model_code), ':', 2)
+                ELSE lower(COALESCE(m.model_code,''))
+              END) = ANY($4::text[])`,
+      [barcodes, productCodes, productCodes, modelTokens, targetLocationId]
+    );
+    return result.rows || [];
+  }
+
+  function buildLegacyPreview(preparedRows, candidates) {
+    const byBarcode = new Map();
+    const bySku = new Map();
+    const bySupplierCode = new Map();
+    const byIdentity = new Map();
+    for (const candidate of candidates || []) {
+      pushLegacyMap(byBarcode, candidate.barcode, candidate);
+      pushLegacyMap(bySku, candidate.internal_sku, candidate);
+      pushLegacyMap(bySupplierCode, candidate.supplier_product_code, candidate);
+      pushLegacyMap(byIdentity, legacyCandidateIdentity(candidate), candidate);
+    }
+
+    return preparedRows.map((row) => {
+      let match = null;
+      let action = 'new';
+      const messages = [...row.warnings];
+      const barcodeCandidates = row.barcode ? uniqueLegacyCandidates(byBarcode.get(String(row.barcode).toLowerCase()) || []) : [];
+      const skuCandidates = uniqueLegacyCandidates(bySku.get(String(row.productCode).toLowerCase()) || []);
+      const supplierCandidates = uniqueLegacyCandidates([
+        ...(bySupplierCode.get(String(row.productCode).toLowerCase()) || []),
+        ...(bySupplierCode.get(String(row.originalProductCode).toLowerCase()) || []),
+      ]);
+      let identityCandidates = uniqueLegacyCandidates(byIdentity.get(legacyIncomingIdentity(row).toLowerCase()) || []);
+      if (row.brandName && identityCandidates.length > 1) {
+        const brandKey = normCode(row.brandName);
+        const brandScoped = identityCandidates.filter((candidate) => [candidate.brand_code, candidate.brand_name].some((value) => normCode(value) === brandKey));
+        if (brandScoped.length) identityCandidates = brandScoped;
+      }
+
+      if (barcodeCandidates.length > 1) {
+        action = 'conflict';
+        messages.push(`A ${row.barcode} vonalkód több AllIn variánshoz tartozik.`);
+      } else if (barcodeCandidates.length === 1) {
+        match = barcodeCandidates[0];
+        action = 'existing';
+        if (row.rawSize && match.size && normCode(row.size) !== normCode(match.size)) messages.push(`Barcode egyezik, de a méret eltér: ForIT ${row.size} / AllIn ${match.size}.`);
+        if (row.colorCode && match.color_code && normCode(row.colorCode) !== normCode(match.color_code)) messages.push(`Barcode egyezik, de a színkód eltér: ForIT ${row.colorCode} / AllIn ${match.color_code}.`);
+      } else if (skuCandidates.length === 1) {
+        match = skuCandidates[0];
+        action = 'existing';
+        messages.push('Meglévő AllIn variáns termékkód alapján.');
+      } else if (supplierCandidates.length === 1) {
+        match = supplierCandidates[0];
+        action = 'existing';
+        messages.push('Meglévő AllIn variáns korábbi termékkód alapján.');
+      } else if (identityCandidates.length === 1) {
+        const candidate = identityCandidates[0];
+        if (row.barcode && candidate.barcode && text(candidate.barcode).toLowerCase() !== text(row.barcode).toLowerCase()) {
+          action = 'conflict';
+          messages.push(`Azonos modell/szín/méret már létezik másik barcode-dal: ${candidate.barcode}.`);
+        } else {
+          match = candidate;
+          action = 'existing';
+          messages.push('Meglévő AllIn variáns modell + szín + méret alapján.');
+        }
+      } else if (identityCandidates.length > 1 || skuCandidates.length > 1 || supplierCandidates.length > 1) {
+        action = 'conflict';
+        messages.push('A sor több meglévő AllIn variánshoz is illeszkedik; automatikusan nem dönthető el.');
+      }
+
+      if (match && Number(match.target_reserved_qty || 0) > row.targetQty) {
+        action = 'conflict';
+        messages.push(`Az AllInban ${match.target_reserved_qty} db foglalt, de a ForIT célkészlet csak ${row.targetQty} db.`);
+      }
+      if (match && Number(match.target_stock_qty || 0) !== row.targetQty) {
+        messages.push(`Célhely készlet: AllIn ${Number(match.target_stock_qty || 0)} → ForIT ${row.targetQty}.`);
+      }
+
+      return {
+        ...row,
+        previewAction: action,
+        previewMessage: messages.join(' • ') || null,
+        warningCount: messages.length,
+        variantId: match?.id || null,
+        existingStockQty: match ? Number(match.target_stock_qty || 0) : 0,
+        existingReservedQty: match ? Number(match.target_reserved_qty || 0) : 0,
+      };
+    });
+  }
+
+  function legacySummaryFromCompactRows(rows) {
+    const summary = {
+      rowCount: rows.length,
+      newRows: 0,
+      existingRows: 0,
+      reviewRows: 0,
+      conflictRows: 0,
+      zeroStockRows: 0,
+      positiveStockRows: 0,
+      normalizedNegativeRows: 0,
+      missingBarcodeRows: 0,
+      missingBrandRows: 0,
+      missingSizeRows: 0,
+      totalQty: 0,
+      purchaseValueRon: 0,
+      retailValueRon: 0,
+      processedRows: 0,
+      doneRows: 0,
+      errorRows: 0,
+      stockChangedRows: 0,
+      createdVariants: 0,
+      matchedVariants: 0,
+      canCommit: true,
+    };
+    for (const row of rows || []) {
+      if (row.previewAction === 'new') summary.newRows++;
+      if (row.previewAction === 'existing') summary.existingRows++;
+      if (row.previewAction === 'conflict') summary.conflictRows++;
+      if (row.sourceStatus === 'REVIEW' || row.sourceStatus === 'STOP' || Number(row.warningCount || 0) > 0) summary.reviewRows++;
+      if (Number(row.targetStockQty ?? row.target_qty ?? 0) > 0) summary.positiveStockRows++;
+      else summary.zeroStockRows++;
+      if (Number(row.rawQty ?? row.raw_qty ?? 0) < 0) summary.normalizedNegativeRows++;
+      if (!text(row.barcode ?? row.legacy_barcode)) summary.missingBarcodeRows++;
+      if (!text(row.brandName ?? row.brand_name)) summary.missingBrandRows++;
+      if (String(row.size || '').startsWith('N/A-')) summary.missingSizeRows++;
+      const qty = Number(row.targetStockQty ?? row.target_qty ?? 0);
+      summary.totalQty += qty;
+      const buy = Number(row.buyPrice ?? row.buy_price ?? 0);
+      const sell = Number(row.sellPrice ?? row.sell_price ?? 0);
+      if (Number.isFinite(buy)) summary.purchaseValueRon += qty * buy;
+      if (Number.isFinite(sell)) summary.retailValueRon += qty * sell;
+      const process = row.processStatus ?? row.process_status;
+      if (process && process !== 'pending') summary.processedRows++;
+      if (process === 'done') summary.doneRows++;
+      if (process === 'error') summary.errorRows++;
+      if (process === 'done' && Number(row.stockBefore ?? row.stock_before ?? 0) !== Number(row.stockAfter ?? row.stock_after ?? 0)) summary.stockChangedRows++;
+      if (process === 'done' && row.previewAction === 'new') summary.createdVariants++;
+      if (process === 'done' && row.previewAction === 'existing') summary.matchedVariants++;
+    }
+    summary.purchaseValueRon = Math.round(summary.purchaseValueRon * 100) / 100;
+    summary.retailValueRon = Math.round(summary.retailValueRon * 100) / 100;
+    summary.canCommit = summary.conflictRows === 0;
+    return summary;
+  }
+
+  function legacyCompactDbRow(row = {}) {
+    return {
+      rowNo: Number(row.row_no || 0),
+      sourceRow: row.source_row || null,
+      sourceStatus: row.source_status || null,
+      previewAction: row.preview_action || 'new',
+      processStatus: row.process_status || 'pending',
+      warningCount: Number(row.warning_count || 0),
+      rawQty: Number(row.raw_qty || 0),
+      targetStockQty: Number(row.target_qty || 0),
+      existingStockQty: row.existing_stock_qty === null || row.existing_stock_qty === undefined ? null : Number(row.existing_stock_qty),
+      existingReservedQty: row.existing_reserved_qty === null || row.existing_reserved_qty === undefined ? null : Number(row.existing_reserved_qty),
+      title: row.title || null,
+      originalTitle: row.original_title || null,
+      brandName: row.brand_name || null,
+      modelCode: row.model_code || null,
+      productCode: row.legacy_product_code || null,
+      originalProductCode: row.legacy_original_code || null,
+      barcode: row.legacy_barcode || null,
+      colorCode: row.color_code || null,
+      colorName: row.color_name || null,
+      size: row.size || null,
+      message: row.preview_message || null,
+      processError: row.process_error || null,
+      variantId: row.variant_id ? String(row.variant_id) : null,
+      buyPrice: row.buy_price === null || row.buy_price === undefined ? null : Number(row.buy_price),
+      sellPrice: row.sell_price === null || row.sell_price === undefined ? null : Number(row.sell_price),
+      stockBefore: row.stock_before === null || row.stock_before === undefined ? null : Number(row.stock_before),
+      stockAfter: row.stock_after === null || row.stock_after === undefined ? null : Number(row.stock_after),
+    };
+  }
+
+  function legacyMigrationItem(row = {}) {
+    return {
+      id: String(row.id || ''),
+      sourceSystem: row.source_system || 'ForIT',
+      sourceDate: row.source_date ? String(row.source_date).slice(0, 10) : null,
+      targetLocationId: row.target_location_id ? String(row.target_location_id) : '',
+      locationCode: row.location_code || null,
+      locationName: row.location_name || null,
+      sourceFileName: row.source_file_name || null,
+      payloadHash: row.payload_hash || null,
+      status: row.status || 'prepared',
+      rowCount: Number(row.row_count || 0),
+      processedRows: Number(row.processed_rows || 0),
+      totalQty: Number(row.total_qty || 0),
+      note: row.note || null,
+      createdBy: row.created_by || null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      committedAt: row.committed_at ? new Date(row.committed_at).toISOString() : null,
+    };
+  }
+
+  async function readLegacyMigrationDetail(client, id) {
+    await ensureAifLegacyMigrationSchema(client === pool ? pool : client);
+    const itemResult = await client.query(
+      `SELECT m.*, l.code AS location_code, l.name AS location_name
+       FROM aif_legacy_migrations m
+       JOIN aif_locations l ON l.id=m.target_location_id
+       WHERE m.id::text=$1
+       LIMIT 1`,
+      [id]
+    );
+    if (!itemResult.rowCount) return null;
+    const rowsResult = await client.query(
+      `SELECT * FROM aif_legacy_migration_rows WHERE migration_id=$1 ORDER BY row_no ASC`,
+      [itemResult.rows[0].id]
+    );
+    const compactRows = rowsResult.rows.map(legacyCompactDbRow);
+    const summary = legacySummaryFromCompactRows(compactRows);
+    return { ok: true, item: legacyMigrationItem(itemResult.rows[0]), summary, rows: compactRows };
+  }
+
+  async function insertLegacyPreparedRows(client, migrationId, rows) {
+    const columns = [
+      'migration_id','row_no','source_row','source_status','issues','legacy_barcode','legacy_product_code','legacy_original_code',
+      'title','original_title','brand_name','model_code','color_code','color_name','size','subcategory_name','gender',
+      'buy_price','sell_price','raw_qty','target_qty','legacy_supplier','tva_status','tva_rate','preview_action','preview_message',
+      'variant_id','existing_stock_qty','existing_reserved_qty','warning_count','payload'
+    ];
+    const batchSize = 180;
+    for (let offset = 0; offset < rows.length; offset += batchSize) {
+      const batch = rows.slice(offset, offset + batchSize);
+      const args = [];
+      const values = batch.map((row, batchIndex) => {
+        const data = [
+          migrationId,row.rowNo,row.sourceRow,row.sourceStatus,row.issues,row.barcode,row.productCode,row.originalProductCode,
+          row.title,row.originalTitle,row.brandName,row.modelCode,row.colorCode,row.colorName,row.size,row.subcategoryName,row.gender,
+          row.buyPrice,row.sellPrice,row.rawQty,row.targetQty,row.legacySupplier,row.tvaStatus,row.tvaRate,row.previewAction,row.previewMessage,
+          row.variantId,row.existingStockQty,row.existingReservedQty,row.warningCount,
+          JSON.stringify({
+            sourceSystem: 'ForIT', sourceRow: row.sourceRow, sourceStatus: row.sourceStatus, issues: row.issues,
+            originalTitle: row.originalTitle, originalProductCode: row.originalProductCode, productCode: row.productCode,
+            modelCode: row.modelCode, snCod: row.snCod, rawSize: row.rawSize, brandName: row.brandName,
+            colorCode: row.colorCode, colorName: row.colorName, size: row.size, subcategoryName: row.subcategoryName,
+            gender: row.gender, legacySupplier: row.legacySupplier, tvaStatus: row.tvaStatus, tvaRate: row.tvaRate,
+            rawQty: row.rawQty, targetQty: row.targetQty, activeFlag: row.activeFlag, raw: row.raw,
+          })
+        ];
+        const base = batchIndex * columns.length;
+        args.push(...data);
+        return `(${data.map((_, index) => `$${base + index + 1}${index === columns.length - 1 ? '::jsonb' : ''}`).join(',')})`;
+      });
+      await client.query(`INSERT INTO aif_legacy_migration_rows (${columns.join(',')}) VALUES ${values.join(',')}`, args);
+    }
+  }
+
+  router.post('/legacy-imports/start', requireAdminOrSecret, async (req, res) => {
+    const body = req.body || {};
+    const rowsInput = Array.isArray(body.rows) ? body.rows : [];
+    if (!rowsInput.length) return res.status(400).json({ error: 'Nincs migrálható ForIT sor.' });
+    if (rowsInput.length > 30000) return res.status(400).json({ error: 'Egy migráció legfeljebb 30 000 sort tartalmazhat.' });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      const location = await findByIdOrCode(client, 'aif_locations', body.targetLocationId || body.target_location_id || body.location);
+      if (!location || location.is_active === false) return res.status(400).json({ error: 'Érvényes célhely kiválasztása kötelező.' });
+
+      const prepared = rowsInput.map(legacyPreparedRow);
+      const hashPayload = prepared.map((row) => ({
+        sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, originalProductCode: row.originalProductCode,
+        modelCode: row.modelCode, title: row.title, brandName: row.brandName, colorCode: row.colorCode, size: row.size,
+        buyPrice: row.buyPrice, sellPrice: row.sellPrice, rawQty: row.rawQty, targetQty: row.targetQty,
+      }));
+      const basePayloadHash = createHash('sha256').update(JSON.stringify(hashPayload)).digest('hex');
+      const forceNew = boolFrom(body.forceNew ?? body.force_new, false);
+      const payloadHash = forceNew
+        ? createHash('sha256').update(`${basePayloadHash}:${Date.now()}:${actorFrom(req)}`).digest('hex')
+        : basePayloadHash;
+      const duplicate = await client.query(
+        `SELECT id FROM aif_legacy_migrations
+         WHERE payload_hash=$1 AND target_location_id=$2 AND status <> 'cancelled'
+         ORDER BY created_at DESC LIMIT 1`,
+        [payloadHash, location.id]
+      );
+      if (duplicate.rowCount && !forceNew) {
+        const detail = await readLegacyMigrationDetail(client, duplicate.rows[0].id);
+        return res.json({ ...detail, duplicate: true });
+      }
+
+      const candidates = await loadLegacyExistingCandidates(client, prepared, location.id);
+      const previewRows = buildLegacyPreview(prepared, candidates);
+      const summary = legacySummaryFromCompactRows(previewRows.map((row) => ({
+        ...row,
+        sourceStatus: row.sourceStatus,
+        previewAction: row.previewAction,
+        processStatus: 'pending',
+        warningCount: row.warningCount,
+        rawQty: row.rawQty,
+        targetStockQty: row.targetQty,
+        barcode: row.barcode,
+        brandName: row.brandName,
+        size: row.size,
+        buyPrice: row.buyPrice,
+        sellPrice: row.sellPrice,
+      })));
+
+      await client.query('BEGIN');
+      const migrationResult = await client.query(
+        `INSERT INTO aif_legacy_migrations (
+           source_system, source_date, target_location_id, source_file_name, payload_hash, status,
+           row_count, processed_rows, total_qty, note, created_by, stats
+         ) VALUES ($1,$2,$3,$4,$5,'prepared',$6,0,$7,$8,$9,$10::jsonb)
+         RETURNING id`,
+        [
+          text(body.sourceSystem || body.source_system || 'ForIT') || 'ForIT',
+          emptyToNull(body.sourceDate || body.source_date || legacyValue(rowsInput[0], 'SOURCE_DATE')),
+          location.id,
+          emptyToNull(body.sourceFileName || body.source_file_name),
+          payloadHash,
+          previewRows.length,
+          summary.totalQty,
+          emptyToNull(body.note),
+          actorFrom(req),
+          JSON.stringify(summary),
+        ]
+      );
+      const migrationId = migrationResult.rows[0].id;
+      await insertLegacyPreparedRows(client, migrationId, previewRows);
+      await client.query('COMMIT');
+
+      const detail = await readLegacyMigrationDetail(client, migrationId);
+      return res.json({ ...detail, duplicate: false });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      if (error?.code === '23505') {
+        try {
+          const location = await findByIdOrCode(client, 'aif_locations', body.targetLocationId || body.target_location_id || body.location);
+          if (location) {
+            const prepared = rowsInput.map(legacyPreparedRow);
+            const payloadHash = createHash('sha256').update(JSON.stringify(prepared.map((row) => ({ sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, targetQty: row.targetQty })))).digest('hex');
+            const existing = await client.query(`SELECT id FROM aif_legacy_migrations WHERE payload_hash=$1 AND target_location_id=$2 ORDER BY created_at DESC LIMIT 1`, [payloadHash, location.id]);
+            if (existing.rowCount) {
+              const detail = await readLegacyMigrationDetail(client, existing.rows[0].id);
+              return res.json({ ...detail, duplicate: true });
+            }
+          }
+        } catch {}
+      }
+      console.error('AIF legacy migration start failed', error);
+      return res.status(Number(error?.statusCode || 500)).json({ error: error?.message || 'A ForIT migráció előkészítése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get('/legacy-imports', requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
+      const result = await pool.query(
+        `SELECT m.*, l.code AS location_code, l.name AS location_name
+         FROM aif_legacy_migrations m
+         JOIN aif_locations l ON l.id=m.target_location_id
+         ORDER BY m.created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+      return res.json({ ok: true, items: result.rows.map((row) => legacyMigrationItem(row)) });
+    } catch (error) {
+      console.error('AIF legacy migrations list failed', error);
+      return res.status(500).json({ error: 'A régi rendszer migrációk nem tölthetők be.' });
+    }
+  });
+
+  router.get('/legacy-imports/:id', requireAdminOrSecret, async (req, res) => {
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      const detail = await readLegacyMigrationDetail(pool, text(req.params.id));
+      if (!detail) return res.status(404).json({ error: 'A migráció nem található.' });
+      return res.json(detail);
+    } catch (error) {
+      console.error('AIF legacy migration detail failed', error);
+      return res.status(500).json({ error: 'A régi rendszer migráció nem tölthető be.' });
+    }
+  });
+
+  async function resolveLegacyVariantNow(client, row) {
+    if (row.variant_id) {
+      const byId = await client.query(
+        `SELECT v.id, v.model_id, v.barcode, v.internal_sku, v.status,
+                COALESCE(st.qty,0)::int AS stock_qty, COALESCE(st.reserved_qty,0)::int AS reserved_qty
+         FROM aif_product_variants v
+         LEFT JOIN aif_stock st ON st.variant_id=v.id AND st.location_id=(SELECT target_location_id FROM aif_legacy_migrations WHERE id=$2)
+         WHERE v.id=$1 LIMIT 1`,
+        [row.variant_id, row.migration_id]
+      );
+      if (byId.rowCount) return byId.rows[0];
+    }
+    if (row.legacy_barcode) {
+      const byBarcode = await client.query(
+        `SELECT v.id, v.model_id, v.barcode, v.internal_sku, v.status,
+                COALESCE(st.qty,0)::int AS stock_qty, COALESCE(st.reserved_qty,0)::int AS reserved_qty
+         FROM aif_product_variants v
+         LEFT JOIN aif_stock st ON st.variant_id=v.id AND st.location_id=(SELECT target_location_id FROM aif_legacy_migrations WHERE id=$2)
+         WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+         ORDER BY v.created_at ASC LIMIT 2`,
+        [row.legacy_barcode, row.migration_id]
+      );
+      if (byBarcode.rowCount > 1) throw Object.assign(new Error(`A ${row.legacy_barcode} vonalkód több AllIn variánshoz tartozik.`), { code: 'legacy_barcode_conflict' });
+      if (byBarcode.rowCount) return byBarcode.rows[0];
+    }
+    if (row.legacy_product_code) {
+      const bySku = await client.query(
+        `SELECT v.id, v.model_id, v.barcode, v.internal_sku, v.status,
+                COALESCE(st.qty,0)::int AS stock_qty, COALESCE(st.reserved_qty,0)::int AS reserved_qty
+         FROM aif_product_variants v
+         LEFT JOIN aif_stock st ON st.variant_id=v.id AND st.location_id=(SELECT target_location_id FROM aif_legacy_migrations WHERE id=$2)
+         WHERE lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1))
+         ORDER BY v.created_at ASC LIMIT 2`,
+        [row.legacy_product_code, row.migration_id]
+      );
+      if (bySku.rowCount === 1) return bySku.rows[0];
+    }
+    return null;
+  }
+
+  async function assignLegacyInternalSku(client, variantId, desired, migrationId, rowNo) {
+    const current = await client.query(`SELECT internal_sku FROM aif_product_variants WHERE id=$1 FOR UPDATE`, [variantId]);
+    const existing = text(current.rows[0]?.internal_sku);
+    if (existing) return existing;
+    const cleanDesired = text(desired).slice(0, 180);
+    if (cleanDesired) {
+      const assigned = await client.query(
+        `UPDATE aif_product_variants v
+         SET internal_sku=$2, updated_at=now()
+         WHERE v.id=$1
+           AND NULLIF(btrim(COALESCE(v.internal_sku,'')),'') IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM aif_product_variants other
+             WHERE other.id<>v.id AND lower(btrim(COALESCE(other.internal_sku,'')))=lower(btrim($2))
+           )
+         RETURNING internal_sku`,
+        [variantId, cleanDesired]
+      );
+      if (assigned.rowCount) return assigned.rows[0].internal_sku;
+    }
+    const suffix = createHash('sha1').update(`${migrationId}:${rowNo}:${desired || ''}`).digest('hex').slice(0, 8).toUpperCase();
+    const fallback = `FORIT-${String(rowNo).padStart(5, '0')}-${suffix}`;
+    await client.query(`UPDATE aif_product_variants SET internal_sku=COALESCE(NULLIF(internal_sku,''),$2), updated_at=now() WHERE id=$1`, [variantId, fallback]);
+    return fallback;
+  }
+
+  async function applyLegacyCategoryToModel(client, modelId, normalized) {
+    const subcategoryId = await findSubcategoryId(client, normalized);
+    if (!subcategoryId) return;
+    const parent = await client.query(`SELECT parent_id FROM aif_categories WHERE id=$1 LIMIT 1`, [subcategoryId]);
+    const parentId = parent.rows[0]?.parent_id || null;
+    await client.query(
+      `UPDATE aif_product_models
+       SET subcategory_id=COALESCE(subcategory_id,$2),
+           category_id=CASE
+             WHEN category_id IS NULL OR category_id=$2 THEN COALESCE($3, category_id, $2)
+             ELSE category_id
+           END,
+           updated_at=now()
+       WHERE id=$1`,
+      [modelId, subcategoryId, parentId]
+    );
+  }
+
+  async function normalizeLegacyBrandReference(client, normalized) {
+    const raw = emptyToNull(normalized?.brandName || normalized?.brandCode);
+    if (!raw) {
+      normalized.brandCode = null;
+      return null;
+    }
+    const found = await client.query(
+      `SELECT id, code, name FROM aif_brands
+       WHERE id::text=$1 OR code=$1 OR lower(name)=lower($1)
+       ORDER BY is_active DESC, name ASC
+       LIMIT 1`,
+      [raw]
+    );
+    if (found.rowCount) {
+      normalized.brandCode = found.rows[0].code;
+      normalized.brandName = found.rows[0].name;
+      return found.rows[0];
+    }
+    normalized.brandCode = normCode(raw);
+    return null;
+  }
+
+  async function updateExistingLegacyVariant(client, variantId, row, normalized, migration) {
+    await normalizeLegacyBrandReference(client, normalized);
+    const brandId = await ensureBrand(client, normalized, '');
+    await client.query(
+      `UPDATE aif_product_variants
+       SET barcode=CASE WHEN NULLIF(btrim(COALESCE(barcode,'')),'') IS NULL THEN $2 ELSE barcode END,
+           sn_cod=COALESCE(NULLIF(sn_cod,''),$3),
+           color_code=COALESCE(NULLIF(color_code,''),$4),
+           color_name=COALESCE(NULLIF(color_name,''),$5),
+           color_hex=COALESCE(NULLIF(color_hex,''),$11),
+           size=COALESCE(NULLIF(size,''),$6),
+           buy_price=COALESCE(buy_price,$7),
+           sell_price=COALESCE(sell_price,$8),
+           attributes=COALESCE(attributes,'{}'::jsonb) || $9::jsonb,
+           status=CASE WHEN $10::int > 0 THEN 'active' WHEN status='archived' THEN 'inactive' ELSE status END,
+           updated_at=now()
+       WHERE id=$1`,
+      [variantId, normalized.barcode, normalized.snCod, normalized.colorCode, normalized.colorName, normalized.size, normalized.buyPrice, normalized.sellPrice, JSON.stringify(normalized.attributes || {}), row.target_qty, normalized.colorHex || null]
+    );
+    const variant = await client.query(`SELECT model_id FROM aif_product_variants WHERE id=$1 LIMIT 1`, [variantId]);
+    const modelId = variant.rows[0]?.model_id;
+    if (modelId) {
+      await client.query(
+        `UPDATE aif_product_models
+         SET brand_id=COALESCE(brand_id,$2),
+             title_ro=CASE WHEN NULLIF(btrim(COALESCE(title_ro,'')),'') IS NULL THEN $3 ELSE title_ro END,
+             gender=CASE WHEN NULLIF(btrim(COALESCE(gender,'')),'') IS NULL THEN $4 ELSE gender END,
+             product_type=COALESCE(NULLIF(product_type,''),$5),
+             status=CASE WHEN status='archived' THEN 'active' ELSE status END,
+             updated_at=now()
+         WHERE id=$1`,
+        [modelId, brandId, normalized.titleRo, normalized.gender, normalized.productType]
+      );
+      await applyLegacyCategoryToModel(client, modelId, normalized);
+    }
+    return modelId;
+  }
+
+  async function setLegacyOpeningStock(client, { migration, row, variantId, actor }) {
+    const current = await client.query(
+      `SELECT qty, reserved_qty FROM aif_stock WHERE location_id=$1 AND variant_id=$2 FOR UPDATE`,
+      [migration.target_location_id, variantId]
+    );
+    const before = current.rowCount ? Number(current.rows[0].qty || 0) : 0;
+    const beforeReserved = current.rowCount ? Number(current.rows[0].reserved_qty || 0) : 0;
+    const after = Math.max(0, Number(row.target_qty || 0));
+    const afterReserved = Math.min(beforeReserved, after);
+    if (beforeReserved > after) {
+      const error = new Error(`A célhelyen ${beforeReserved} db foglalt, a ForIT nyitókészlet viszont csak ${after} db.`);
+      error.code = 'legacy_reserved_stock_conflict';
+      throw error;
+    }
+
+    if (current.rowCount || after > 0) {
+      await client.query(
+        `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+         VALUES ($1,$2,$3,$4,now())
+         ON CONFLICT (location_id, variant_id)
+         DO UPDATE SET qty=$3, reserved_qty=$4, updated_at=now()`,
+        [migration.target_location_id, variantId, after, afterReserved]
+      );
+    }
+
+    const diff = after - before;
+    if (diff !== 0) {
+      await insertStockMovementSafe(client, {
+        movementType: diff > 0 ? 'incoming' : 'manual_adjustment',
+        sourceType: 'legacy_migration',
+        sourcePrefix: 'legacy',
+        fallbackSourceType: 'manual_stock_edit',
+        sourceId: String(migration.id),
+        locationId: migration.target_location_id,
+        variantId,
+        qtyDelta: diff,
+        qtyBefore: before,
+        qtyAfter: after,
+        actor,
+        raw: {
+          reason: 'legacy_opening_stock',
+          sourceSystem: migration.source_system,
+          sourceDate: migration.source_date ? String(migration.source_date).slice(0, 10) : null,
+          migrationId: String(migration.id),
+          migrationRowId: String(row.id),
+          sourceRow: row.source_row,
+          legacyRawQty: Number(row.raw_qty || 0),
+          targetQty: after,
+          legacyProductCode: row.legacy_product_code,
+          legacyOriginalCode: row.legacy_original_code,
+          legacyBarcode: row.legacy_barcode,
+          stockMode: 'set_exact',
+        },
+      });
+    }
+    return { before, after };
+  }
+
+  async function processLegacyMigrationRow(client, migration, row, actor) {
+    if (row.preview_action === 'conflict') throw Object.assign(new Error(row.preview_message || 'Ütköző migrációs sor.'), { code: 'legacy_preview_conflict' });
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    const legacyAttributes = {
+      legacySourceSystem: migration.source_system || 'ForIT',
+      legacySourceDate: migration.source_date ? String(migration.source_date).slice(0, 10) : null,
+      legacyMigrationId: String(migration.id),
+      legacySourceRow: row.source_row || String(row.row_no),
+      legacyPreparedStatus: row.source_status || null,
+      legacyIssues: row.issues || null,
+      legacyOriginalTitle: row.original_title || null,
+      legacyOriginalProductCode: row.legacy_original_code || null,
+      legacyProductCode: row.legacy_product_code || null,
+      legacyHistoricSupplier: row.legacy_supplier || null,
+      legacyPurchaseTvaStatus: row.tva_status || null,
+      legacyPurchaseTvaRate: row.tva_rate === null || row.tva_rate === undefined ? null : Number(row.tva_rate),
+      legacyRawQty: Number(row.raw_qty || 0),
+      legacyOpeningQty: Number(row.target_qty || 0),
+      legacyImportedAt: new Date().toISOString(),
+    };
+    const normalized = {
+      brandName: emptyToNull(row.brand_name),
+      brandCode: emptyToNull(row.brand_name),
+      modelCode: emptyToNull(row.model_code || row.legacy_product_code),
+      titleRo: emptyToNull(row.title || row.legacy_product_code) || `ForIT ${row.source_row || row.row_no}`,
+      descriptionRo: null,
+      genderRaw: emptyToNull(row.gender),
+      gender: canonicalGender(row.gender || 'unisex'),
+      productType: emptyToNull(row.subcategory_name),
+      subcategoryName: emptyToNull(row.subcategory_name),
+      subCategoryName: emptyToNull(row.subcategory_name),
+      colorCode: emptyToNull(row.color_code),
+      supplierColorCode: emptyToNull(row.color_code),
+      colorName: emptyToNull(row.color_name),
+      size: text(row.size) || `N/A-${row.source_row || row.row_no}`,
+      supplierSize: text(row.size) || `N/A-${row.source_row || row.row_no}`,
+      barcode: emptyToNull(row.legacy_barcode),
+      snCod: emptyToNull(payload.snCod || row.model_code),
+      sn_cod: emptyToNull(payload.snCod || row.model_code),
+      buyPrice: row.buy_price === null || row.buy_price === undefined ? null : Number(row.buy_price),
+      sellPrice: row.sell_price === null || row.sell_price === undefined ? null : Number(row.sell_price),
+      supplierProductCode: emptyToNull(row.legacy_product_code),
+      modelStatus: 'active',
+      variantStatus: Number(row.target_qty || 0) > 0 ? 'active' : 'inactive',
+      attributes: legacyAttributes,
+    };
+
+    await normalizeLegacyBrandReference(client, normalized);
+    const nr = { normalized, raw: payload.raw || payload, rowNo: row.row_no, errors: [], status: 'parsed' };
+    await enrichNormalizedRow(client, nr);
+    nr.normalized.attributes = { ...(nr.normalized.attributes || {}), ...legacyAttributes };
+
+    let existing = await resolveLegacyVariantNow(client, row);
+    let variantId;
+    let modelId;
+    let created = false;
+    if (existing) {
+      if (row.legacy_barcode && existing.barcode && text(row.legacy_barcode).toLowerCase() !== text(existing.barcode).toLowerCase()) {
+        throw Object.assign(new Error(`A meglévő variáns barcode-ja (${existing.barcode}) nem egyezik a ForIT barcode-dal (${row.legacy_barcode}).`), { code: 'legacy_barcode_mismatch' });
+      }
+      variantId = existing.id;
+      modelId = await updateExistingLegacyVariant(client, variantId, row, nr.normalized, migration);
+    } else {
+      modelId = await upsertModel(client, { supplierCode: '', normalized: nr.normalized, createStatus: 'active', updateStatus: null });
+      await applyLegacyCategoryToModel(client, modelId, nr.normalized);
+      variantId = await upsertVariant(client, { modelId, normalized: nr.normalized, createStatus: Number(row.target_qty || 0) > 0 ? 'active' : 'inactive', updateStatus: null });
+      created = true;
+      await client.query(
+        `UPDATE aif_product_variants
+         SET attributes=COALESCE(attributes,'{}'::jsonb) || $2::jsonb,
+             status=CASE WHEN $3::int > 0 THEN 'active' WHEN status='archived' THEN 'inactive' ELSE status END,
+             updated_at=now()
+         WHERE id=$1`,
+        [variantId, JSON.stringify(legacyAttributes), Number(row.target_qty || 0)]
+      );
+    }
+
+    await assignLegacyInternalSku(client, variantId, row.legacy_product_code, migration.id, row.row_no);
+    const stock = await setLegacyOpeningStock(client, { migration, row, variantId, actor });
+    return { variantId, modelId, created, stockBefore: stock.before, stockAfter: stock.after };
+  }
+
+
+  async function buildLegacyFastContext(client, migrationRows) {
+    const [brandsResult, categoriesResult, colorTypesResult, brandColorsResult, sizeTypesResult, brandSizesResult] = await Promise.all([
+      client.query(`SELECT id, code, name, is_active FROM aif_brands ORDER BY is_active DESC, name ASC`),
+      client.query(`SELECT id, code, parent_id, name_ro, name_hu, aliases, is_active FROM aif_categories ORDER BY is_active DESC, parent_id NULLS FIRST, sort_order ASC`),
+      client.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, is_active FROM aif_color_types ORDER BY is_active DESC, sort_order ASC`),
+      client.query(`SELECT bcc.brand_id, bcc.color_code, c.code AS color_type_code, c.name_ro, c.hex
+                    FROM aif_brand_color_codes bcc
+                    JOIN aif_color_types c ON c.id=bcc.color_type_id
+                    WHERE bcc.is_active=true AND c.is_active=true`),
+      client.query(`SELECT id, code, name, aliases, is_active FROM aif_size_types ORDER BY is_active DESC, sort_order ASC`),
+      client.query(`SELECT bsc.brand_id, bsc.size_code, st.code AS size_type_code, st.name AS size_name
+                    FROM aif_brand_size_codes bsc
+                    JOIN aif_size_types st ON st.id=bsc.size_type_id
+                    WHERE bsc.is_active=true AND st.is_active=true`),
+    ]);
+
+    const brandByKey = new Map();
+    const registerBrand = (brand) => {
+      for (const value of [brand.id, brand.code, brand.name]) {
+        const key = normCode(value);
+        if (key && !brandByKey.has(key)) brandByKey.set(key, brand);
+      }
+    };
+    brandsResult.rows.forEach(registerBrand);
+
+    // A valódi, név szerint ismert márkákat egyszer hozzuk létre, nem soronként.
+    const wantedBrands = Array.from(new Set(migrationRows.map((row) => text(row.brand_name)).filter(Boolean)));
+    for (const brandName of wantedBrands) {
+      const key = normCode(brandName);
+      if (brandByKey.has(key)) continue;
+      const code = normCode(brandName);
+      if (!code) continue;
+      const inserted = await client.query(
+        `INSERT INTO aif_brands (code, name, is_active)
+         VALUES ($1,$2,true)
+         ON CONFLICT (code) DO UPDATE SET is_active=true, updated_at=now()
+         RETURNING id, code, name, is_active`,
+        [code, brandName]
+      );
+      registerBrand(inserted.rows[0]);
+    }
+
+    const categoryByKey = new Map();
+    for (const category of categoriesResult.rows) {
+      const values = [category.id, category.code, category.name_ro, category.name_hu, ...(Array.isArray(category.aliases) ? category.aliases : [])];
+      for (const value of values) {
+        const key = normCode(value);
+        if (key && !categoryByKey.has(key)) categoryByKey.set(key, category);
+      }
+    }
+
+    const colorByKey = new Map();
+    for (const color of colorTypesResult.rows) {
+      const values = [color.code, color.name_ro, color.name_hu, color.name_en, color.name_de, ...(Array.isArray(color.aliases) ? color.aliases : [])];
+      for (const value of values) {
+        const key = normCode(value);
+        if (key && !colorByKey.has(key)) colorByKey.set(key, color);
+      }
+    }
+    const brandColorByKey = new Map();
+    for (const item of brandColorsResult.rows) brandColorByKey.set(`${item.brand_id}:${normCode(item.color_code)}`, item);
+
+    const sizeByKey = new Map();
+    for (const size of sizeTypesResult.rows) {
+      const values = [size.code, size.name, ...(Array.isArray(size.aliases) ? size.aliases : [])];
+      for (const value of values) {
+        const key = normCode(value);
+        if (key && !sizeByKey.has(key)) sizeByKey.set(key, size);
+      }
+    }
+    const brandSizeByKey = new Map();
+    for (const item of brandSizesResult.rows) brandSizeByKey.set(`${item.brand_id}:${normCode(item.size_code)}`, item);
+
+    const existingVariantIds = Array.from(new Set(migrationRows.map((row) => row.variant_id ? String(row.variant_id) : '').filter(Boolean)));
+    const existingVariantById = new Map();
+    if (existingVariantIds.length) {
+      const result = await client.query(
+        `SELECT id::text AS id, model_id::text AS model_id, barcode, internal_sku, color_code, color_name, size, status
+         FROM aif_product_variants
+         WHERE id::text = ANY($1::text[])`,
+        [existingVariantIds]
+      );
+      result.rows.forEach((row) => existingVariantById.set(String(row.id), row));
+    }
+
+    return {
+      brandByKey,
+      categoryByKey,
+      colorByKey,
+      brandColorByKey,
+      sizeByKey,
+      brandSizeByKey,
+      existingVariantById,
+      modelByCode: new Map(),
+      modelTouched: new Set(),
+      reactivatedModelIds: new Set(),
+    };
+  }
+
+  function legacyFastNormalized(row, migration, context) {
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    const brand = context.brandByKey.get(normCode(row.brand_name || '')) || null;
+    const rawColorCode = emptyToNull(row.color_code);
+    const rawColorName = emptyToNull(row.color_name);
+    const brandColor = brand && rawColorCode ? context.brandColorByKey.get(`${brand.id}:${normCode(rawColorCode)}`) : null;
+    const genericColor = !brandColor && rawColorName ? context.colorByKey.get(normCode(rawColorName)) : null;
+    const rawSize = text(row.size) || `N/A-${row.source_row || row.row_no}`;
+    const brandSize = brand ? context.brandSizeByKey.get(`${brand.id}:${normCode(rawSize)}`) : null;
+    const genericSize = !brandSize ? context.sizeByKey.get(normCode(rawSize)) : null;
+    const category = context.categoryByKey.get(normCode(row.subcategory_name || '')) || null;
+    const subcategoryId = category?.parent_id ? category.id : null;
+    const categoryId = category?.parent_id ? category.parent_id : category?.id || null;
+    const legacyAttributes = {
+      legacySourceSystem: migration.source_system || 'ForIT',
+      legacySourceDate: migration.source_date ? String(migration.source_date).slice(0, 10) : null,
+      legacyMigrationId: String(migration.id),
+      legacySourceRow: row.source_row || String(row.row_no),
+      legacyPreparedStatus: row.source_status || null,
+      legacyIssues: row.issues || null,
+      legacyOriginalTitle: row.original_title || null,
+      legacyOriginalProductCode: row.legacy_original_code || null,
+      legacyProductCode: row.legacy_product_code || null,
+      legacyHistoricSupplier: row.legacy_supplier || null,
+      legacyPurchaseTvaStatus: row.tva_status || null,
+      legacyPurchaseTvaRate: row.tva_rate === null || row.tva_rate === undefined ? null : Number(row.tva_rate),
+      legacyRawQty: Number(row.raw_qty || 0),
+      legacyOpeningQty: Number(row.target_qty || 0),
+      legacyImportedAt: new Date().toISOString(),
+    };
+    return {
+      brand,
+      categoryId,
+      subcategoryId,
+      modelCodeRaw: text(row.model_code || row.legacy_product_code || row.source_row),
+      titleRo: text(row.title || row.legacy_product_code || `ForIT ${row.source_row || row.row_no}`),
+      gender: canonicalGender(row.gender || 'unisex'),
+      productType: emptyToNull(row.subcategory_name),
+      colorCode: rawColorCode,
+      colorName: brandColor?.name_ro || genericColor?.name_ro || rawColorName,
+      colorHex: brandColor?.hex || genericColor?.hex || null,
+      size: brandSize?.size_name || genericSize?.name || rawSize,
+      barcode: emptyToNull(row.legacy_barcode),
+      snCod: emptyToNull(payload.snCod || row.model_code),
+      buyPrice: row.buy_price === null || row.buy_price === undefined ? null : Number(row.buy_price),
+      sellPrice: row.sell_price === null || row.sell_price === undefined ? null : Number(row.sell_price),
+      internalSku: emptyToNull(row.legacy_product_code),
+      attributes: legacyAttributes,
+    };
+  }
+
+  async function ensureLegacyModelFast(client, normalized, context) {
+    const brandKey = normalized.brand?.code || (normalized.brand ? normCode(normalized.brand.name) : 'aif');
+    const modelCode = `${brandKey || 'aif'}:${normCode(normalized.modelCodeRaw || normalized.titleRo)}`;
+    if (context.modelByCode.has(modelCode)) return context.modelByCode.get(modelCode);
+
+    const existing = await client.query(
+      `SELECT id::text AS id, model_code, status FROM aif_product_models WHERE model_code=$1 LIMIT 1`,
+      [modelCode]
+    );
+    if (existing.rowCount) {
+      const model = existing.rows[0];
+      if (!context.modelTouched.has(String(model.id))) {
+        await client.query(
+          `UPDATE aif_product_models
+           SET brand_id=COALESCE(brand_id,$2),
+               category_id=COALESCE(category_id,$3),
+               subcategory_id=COALESCE(subcategory_id,$4),
+               title_ro=CASE WHEN NULLIF(btrim(COALESCE(title_ro,'')),'') IS NULL THEN $5 ELSE title_ro END,
+               gender=CASE WHEN NULLIF(btrim(COALESCE(gender,'')),'') IS NULL THEN $6 ELSE gender END,
+               product_type=COALESCE(NULLIF(product_type,''),$7),
+               shopify_title=COALESCE(NULLIF(shopify_title,''),$5),
+               status=CASE WHEN status='archived' THEN 'active' ELSE status END,
+               updated_at=now()
+           WHERE id::text=$1`,
+          [model.id, normalized.brand?.id || null, normalized.categoryId, normalized.subcategoryId, normalized.titleRo, normalized.gender, normalized.productType]
+        );
+        context.modelTouched.add(String(model.id));
+      }
+      context.modelByCode.set(modelCode, model);
+      return model;
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO aif_product_models (
+         brand_id, category_id, subcategory_id, model_code, title_ro, gender, product_type, shopify_title, status
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,'active')
+       RETURNING id::text AS id, model_code, status`,
+      [normalized.brand?.id || null, normalized.categoryId, normalized.subcategoryId, modelCode, normalized.titleRo, normalized.gender, normalized.productType]
+    );
+    const model = inserted.rows[0];
+    context.modelByCode.set(modelCode, model);
+    context.modelTouched.add(String(model.id));
+    return model;
+  }
+
+  async function insertLegacyVariantFast(client, modelId, normalized, row) {
+    const desiredSku = text(normalized.internalSku).slice(0, 180) || null;
+    const fallbackSku = `FORIT-${String(row.row_no).padStart(5, '0')}-${createHash('sha1').update(`${row.migration_id}:${row.row_no}`).digest('hex').slice(0, 8).toUpperCase()}`;
+    const insertWithSku = async (sku) => client.query(
+      `INSERT INTO aif_product_variants (
+         model_id, internal_sku, barcode, color_code, color_name, color_hex, size,
+         buy_price, sell_price, sn_cod, attributes, status
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+       ON CONFLICT DO NOTHING
+       RETURNING id::text AS id, model_id::text AS model_id, barcode, internal_sku, status`,
+      [
+        modelId, sku, normalized.barcode, normalized.colorCode, normalized.colorName, normalized.colorHex,
+        normalized.size, normalized.buyPrice, normalized.sellPrice, normalized.snCod,
+        JSON.stringify(normalized.attributes || {}), Number(row.target_qty || 0) > 0 ? 'active' : 'inactive'
+      ]
+    );
+
+    let inserted = await insertWithSku(desiredSku);
+    if (inserted.rowCount) return { ...inserted.rows[0], created: true };
+
+    if (normalized.barcode) {
+      const barcodeOwner = await client.query(
+        `SELECT id::text AS id, model_id::text AS model_id, barcode, internal_sku, color_code, color_name, size, status
+         FROM aif_product_variants
+         WHERE lower(btrim(COALESCE(barcode,'')))=lower(btrim($1))
+         ORDER BY created_at ASC LIMIT 2`,
+        [normalized.barcode]
+      );
+      if (barcodeOwner.rowCount === 1) {
+        const owner = barcodeOwner.rows[0];
+        if (String(owner.model_id) === String(modelId) && normCode(owner.size) === normCode(normalized.size)) return { ...owner, created: false };
+        throw Object.assign(new Error(`A ${normalized.barcode} barcode közben egy másik AllIn variánshoz került.`), { code: 'legacy_barcode_conflict' });
+      }
+      if (barcodeOwner.rowCount > 1) throw Object.assign(new Error(`A ${normalized.barcode} barcode több AllIn variánshoz tartozik.`), { code: 'legacy_barcode_conflict' });
+    }
+
+    const identity = await client.query(
+      `SELECT id::text AS id, model_id::text AS model_id, barcode, internal_sku, color_code, color_name, size, status
+       FROM aif_product_variants
+       WHERE model_id=$1
+         AND (
+           (NULLIF(btrim(COALESCE($2,'')),'') IS NOT NULL AND lower(btrim(COALESCE(color_code,'')))=lower(btrim($2)))
+           OR
+           (NULLIF(btrim(COALESCE($2,'')),'') IS NULL AND lower(btrim(COALESCE(color_name,'')))=lower(btrim(COALESCE($4,''))))
+         )
+         AND lower(btrim(COALESCE(size,'')))=lower(btrim($3))
+       ORDER BY created_at ASC LIMIT 2`,
+      [modelId, normalized.colorCode || '', normalized.size, normalized.colorName || '']
+    );
+    if (identity.rowCount === 1) {
+      const owner = identity.rows[0];
+      if (!owner.barcode || !normalized.barcode || text(owner.barcode).toLowerCase() === text(normalized.barcode).toLowerCase()) return { ...owner, created: false };
+      throw Object.assign(new Error(`Azonos modell/szín/méret már létezik másik barcode-dal: ${owner.barcode}.`), { code: 'legacy_identity_conflict' });
+    }
+    if (identity.rowCount > 1) throw Object.assign(new Error('Azonos modell/szín/méret több variánshoz tartozik.'), { code: 'legacy_identity_conflict' });
+
+    if (desiredSku !== fallbackSku) {
+      inserted = await insertWithSku(fallbackSku);
+      if (inserted.rowCount) return { ...inserted.rows[0], created: true };
+    }
+    throw Object.assign(new Error('A legacy variáns egyedi kulccsal ütközött, és nem volt biztonságosan feloldható.'), { code: 'legacy_unique_conflict' });
+  }
+
+  async function processLegacyProductFast(client, migration, row, context) {
+    if (row.preview_action === 'conflict') throw Object.assign(new Error(row.preview_message || 'Ütköző migrációs sor.'), { code: 'legacy_preview_conflict' });
+    const normalized = legacyFastNormalized(row, migration, context);
+    let existing = row.variant_id ? context.existingVariantById.get(String(row.variant_id)) : null;
+    let variantId;
+    let modelId;
+    let created = false;
+
+    if (existing) {
+      if (normalized.barcode && existing.barcode && text(normalized.barcode).toLowerCase() !== text(existing.barcode).toLowerCase()) {
+        throw Object.assign(new Error(`A meglévő variáns barcode-ja (${existing.barcode}) nem egyezik a ForIT barcode-dal (${normalized.barcode}).`), { code: 'legacy_barcode_mismatch' });
+      }
+      variantId = existing.id;
+      modelId = existing.model_id;
+      await client.query(
+        `UPDATE aif_product_variants v
+         SET barcode=CASE WHEN NULLIF(btrim(COALESCE(v.barcode,'')),'') IS NULL THEN $2 ELSE v.barcode END,
+             internal_sku=CASE
+               WHEN NULLIF(btrim(COALESCE(v.internal_sku,'')),'') IS NULL
+                AND NULLIF(btrim(COALESCE($3,'')),'') IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM aif_product_variants other WHERE other.id<>v.id AND lower(btrim(COALESCE(other.internal_sku,'')))=lower(btrim($3)))
+               THEN $3 ELSE v.internal_sku END,
+             sn_cod=COALESCE(NULLIF(sn_cod,''),$4),
+             color_code=COALESCE(NULLIF(color_code,''),$5),
+             color_name=COALESCE(NULLIF(color_name,''),$6),
+             color_hex=COALESCE(NULLIF(color_hex,''),$7),
+             size=COALESCE(NULLIF(size,''),$8),
+             buy_price=COALESCE(buy_price,$9),
+             sell_price=COALESCE(sell_price,$10),
+             attributes=COALESCE(attributes,'{}'::jsonb) || $11::jsonb,
+             status=CASE WHEN $12::int > 0 THEN 'active' WHEN status='archived' THEN 'inactive' ELSE status END,
+             updated_at=now()
+         WHERE v.id::text=$1`,
+        [variantId, normalized.barcode, normalized.internalSku, normalized.snCod, normalized.colorCode, normalized.colorName, normalized.colorHex, normalized.size, normalized.buyPrice, normalized.sellPrice, JSON.stringify(normalized.attributes || {}), Number(row.target_qty || 0)]
+      );
+      if (modelId) context.reactivatedModelIds.add(String(modelId));
+    } else {
+      const model = await ensureLegacyModelFast(client, normalized, context);
+      modelId = model.id;
+      const variant = await insertLegacyVariantFast(client, modelId, normalized, row);
+      variantId = variant.id;
+      created = Boolean(variant.created);
+      if (!created) context.existingVariantById.set(String(variantId), variant);
+    }
+
+    return { row, variantId: String(variantId), modelId: modelId ? String(modelId) : null, created };
+  }
+
+  async function applyLegacyOpeningStockBatch(client, migration, prepared, actor) {
+    if (!prepared.length) return { successful: [], failed: [] };
+    const variantIds = Array.from(new Set(prepared.map((item) => item.variantId).filter(Boolean)));
+    const stockResult = variantIds.length ? await client.query(
+      `SELECT variant_id::text AS variant_id, qty, reserved_qty
+       FROM aif_stock
+       WHERE location_id=$1 AND variant_id::text = ANY($2::text[])
+       FOR UPDATE`,
+      [migration.target_location_id, variantIds]
+    ) : { rows: [] };
+    const stockByVariant = new Map((stockResult.rows || []).map((row) => [String(row.variant_id), row]));
+    const successful = [];
+    const failed = [];
+
+    for (const item of prepared) {
+      const current = stockByVariant.get(String(item.variantId));
+      const before = current ? Number(current.qty || 0) : 0;
+      const reserved = current ? Number(current.reserved_qty || 0) : 0;
+      const after = Math.max(0, Number(item.row.target_qty || 0));
+      if (reserved > after) {
+        failed.push({ ...item, error: `A célhelyen ${reserved} db foglalt, a ForIT nyitókészlet viszont csak ${after} db.` });
+        continue;
+      }
+      successful.push({ ...item, stockBefore: before, stockAfter: after, reservedAfter: Math.min(reserved, after), hadStockRow: Boolean(current) });
+    }
+
+    const stockWrites = successful.filter((item) => item.hadStockRow || item.stockAfter > 0);
+    if (stockWrites.length) {
+      const args = [];
+      const values = stockWrites.map((item, index) => {
+        const base = index * 4;
+        args.push(migration.target_location_id, item.variantId, item.stockAfter, item.reservedAfter);
+        return `($${base + 1},$${base + 2}::uuid,$${base + 3}::int,$${base + 4}::int,now())`;
+      });
+      await client.query(
+        `INSERT INTO aif_stock (location_id, variant_id, qty, reserved_qty, updated_at)
+         VALUES ${values.join(',')}
+         ON CONFLICT (location_id, variant_id)
+         DO UPDATE SET qty=EXCLUDED.qty, reserved_qty=EXCLUDED.reserved_qty, updated_at=now()`,
+        args
+      );
+    }
+
+    const movementWrites = successful.filter((item) => item.stockAfter !== item.stockBefore);
+    if (movementWrites.length) {
+      const args = [];
+      const values = movementWrites.map((item, index) => {
+        const diff = item.stockAfter - item.stockBefore;
+        const sourceId = `legacy:${String(migration.id).slice(0, 8)}:${item.row.row_no}`.slice(0, 60);
+        const raw = {
+          reason: 'legacy_opening_stock',
+          sourceSystem: migration.source_system,
+          sourceDate: migration.source_date ? String(migration.source_date).slice(0, 10) : null,
+          migrationId: String(migration.id),
+          migrationRowId: String(item.row.id),
+          sourceRow: item.row.source_row,
+          legacyRawQty: Number(item.row.raw_qty || 0),
+          targetQty: item.stockAfter,
+          legacyProductCode: item.row.legacy_product_code,
+          legacyOriginalCode: item.row.legacy_original_code,
+          legacyBarcode: item.row.legacy_barcode,
+          stockMode: 'set_exact',
+        };
+        const base = index * 10;
+        args.push(diff > 0 ? 'incoming' : 'manual_adjustment', 'manual_stock_edit', sourceId, migration.target_location_id, item.variantId, diff, item.stockBefore, item.stockAfter, actor, JSON.stringify(raw));
+        return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5}::uuid,$${base + 6}::int,$${base + 7}::int,$${base + 8}::int,$${base + 9},$${base + 10}::jsonb)`;
+      });
+      await client.query(
+        `INSERT INTO aif_stock_movements (
+           movement_type, source_type, source_id, location_id, variant_id,
+           qty_delta, qty_before, qty_after, actor, raw
+         ) VALUES ${values.join(',')}`,
+        args
+      );
+    }
+
+    if (successful.length) {
+      const args = [];
+      const values = successful.map((item, index) => {
+        const base = index * 4;
+        args.push(item.row.id, item.variantId, item.stockBefore, item.stockAfter);
+        return `($${base + 1}::uuid,$${base + 2}::uuid,$${base + 3}::int,$${base + 4}::int)`;
+      });
+      await client.query(
+        `UPDATE aif_legacy_migration_rows r
+         SET process_status='done', process_error=NULL, variant_id=x.variant_id,
+             stock_before=x.stock_before, stock_after=x.stock_after,
+             processed_at=now(), updated_at=now()
+         FROM (VALUES ${values.join(',')}) AS x(id,variant_id,stock_before,stock_after)
+         WHERE r.id=x.id`,
+        args
+      );
+    }
+
+    for (const item of failed) {
+      await client.query(
+        `UPDATE aif_legacy_migration_rows
+         SET process_status='error', process_error=$2, variant_id=$3, processed_at=now(), updated_at=now()
+         WHERE id=$1`,
+        [item.row.id, item.error, item.variantId]
+      );
+    }
+
+    return { successful, failed };
+  }
+
+
+  router.post('/legacy-imports/:id/commit-chunk', requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const limit = Math.min(300, Math.max(1, Number(req.body?.limit || 200)));
+    const retryErrors = boolFrom(req.body?.retryErrors ?? req.body?.retry_errors, false);
+    const client = await pool.connect();
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      await client.query('BEGIN');
+      const migrationResult = await client.query(`SELECT * FROM aif_legacy_migrations WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!migrationResult.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'A migráció nem található.' });
+      }
+      const migration = migrationResult.rows[0];
+      if (migration.status === 'cancelled') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Törölt migráció nem folytatható.' });
+      }
+      if (migration.status === 'committed') {
+        await client.query('COMMIT');
+        const detail = await readLegacyMigrationDetail(pool, migration.id);
+        return res.json({
+          ok: true, id: String(migration.id), status: 'committed', done: true,
+          rowCount: detail.summary.rowCount, processedRows: detail.summary.processedRows || detail.summary.rowCount,
+          progressPercent: 100, summary: detail.summary, changedRows: [], firstError: null,
+        });
+      }
+
+      if (retryErrors) {
+        await client.query(`UPDATE aif_legacy_migration_rows SET process_status='pending', process_error=NULL, updated_at=now() WHERE migration_id=$1 AND process_status='error'`, [migration.id]);
+      }
+      const conflictCount = await client.query(`SELECT count(*)::int AS c FROM aif_legacy_migration_rows WHERE migration_id=$1 AND preview_action='conflict'`, [migration.id]);
+      if (Number(conflictCount.rows[0]?.c || 0) > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `${conflictCount.rows[0].c} ütköző sor miatt a migráció nem véglegesíthető.`, code: 'legacy_conflicts_present' });
+      }
+
+      await client.query(`UPDATE aif_legacy_migrations SET status='committing', updated_at=now() WHERE id=$1`, [migration.id]);
+      const rowsResult = await client.query(
+        `SELECT * FROM aif_legacy_migration_rows
+         WHERE migration_id=$1 AND process_status='pending'
+         ORDER BY row_no ASC
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED`,
+        [migration.id, limit]
+      );
+      const changedRows = [];
+      const actor = actorFrom(req);
+      const context = await buildLegacyFastContext(client, rowsResult.rows);
+      const preparedProducts = [];
+
+      for (const row of rowsResult.rows) {
+        const savepoint = `legacy_${String(row.row_no).replace(/[^0-9]/g, '').slice(0, 12) || 'row'}`;
+        try {
+          await client.query(`SAVEPOINT ${savepoint}`);
+          const preparedProduct = await processLegacyProductFast(client, migration, row, context);
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          preparedProducts.push(preparedProduct);
+        } catch (rowError) {
+          try { await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`); } catch {}
+          try { await client.query(`RELEASE SAVEPOINT ${savepoint}`); } catch {}
+          const errorMessage = rowError?.message || String(rowError);
+          await client.query(
+            `UPDATE aif_legacy_migration_rows
+             SET process_status='error', process_error=$2, processed_at=now(), updated_at=now()
+             WHERE id=$1`,
+            [row.id, errorMessage]
+          );
+          changedRows.push(legacyCompactDbRow({ ...row, process_status: 'error', process_error: errorMessage }));
+          console.error('AIF legacy migration product row failed', { migrationId: String(migration.id), rowNo: row.row_no, error: errorMessage, code: rowError?.code || null });
+        }
+      }
+
+      if (context.reactivatedModelIds.size) {
+        await client.query(
+          `UPDATE aif_product_models SET status='active', updated_at=now()
+           WHERE id::text = ANY($1::text[]) AND status='archived'`,
+          [Array.from(context.reactivatedModelIds)]
+        );
+      }
+
+      const stockResult = await applyLegacyOpeningStockBatch(client, migration, preparedProducts, actor);
+      for (const item of stockResult.successful) {
+        changedRows.push(legacyCompactDbRow({
+          ...item.row,
+          process_status: 'done',
+          process_error: null,
+          variant_id: item.variantId,
+          stock_before: item.stockBefore,
+          stock_after: item.stockAfter,
+        }));
+      }
+      for (const item of stockResult.failed) {
+        changedRows.push(legacyCompactDbRow({
+          ...item.row,
+          process_status: 'error',
+          process_error: item.error,
+          variant_id: item.variantId,
+        }));
+        console.error('AIF legacy migration stock row failed', { migrationId: String(migration.id), rowNo: item.row.row_no, error: item.error });
+      }
+
+      const state = await client.query(
+        `SELECT
+           count(*)::int AS row_count,
+           count(*) FILTER (WHERE process_status <> 'pending')::int AS processed_rows,
+           count(*) FILTER (WHERE process_status='done')::int AS done_rows,
+           count(*) FILTER (WHERE process_status='error')::int AS error_rows,
+           count(*) FILTER (WHERE process_status='pending')::int AS pending_rows,
+           count(*) FILTER (WHERE process_status='done' AND stock_before IS DISTINCT FROM stock_after)::int AS stock_changed_rows,
+           count(*) FILTER (WHERE process_status='done' AND preview_action='new')::int AS created_variants,
+           count(*) FILTER (WHERE process_status='done' AND preview_action='existing')::int AS matched_variants,
+           min(process_error) FILTER (WHERE process_status='error') AS first_error
+         FROM aif_legacy_migration_rows
+         WHERE migration_id=$1`,
+        [migration.id]
+      );
+      const st = state.rows[0] || {};
+      const rowCount = Number(st.row_count || 0);
+      const processedRows = Number(st.processed_rows || 0);
+      const pendingRows = Number(st.pending_rows || 0);
+      const errorRows = Number(st.error_rows || 0);
+      const done = pendingRows <= 0;
+      const nextStatus = done ? (errorRows > 0 ? 'failed' : 'committed') : 'committing';
+      await client.query(
+        `UPDATE aif_legacy_migrations
+         SET status=$2, processed_rows=$3, updated_at=now(),
+             committed_at=CASE WHEN $2='committed' THEN COALESCE(committed_at,now()) ELSE committed_at END
+         WHERE id=$1`,
+        [migration.id, nextStatus, processedRows]
+      );
+      await client.query('COMMIT');
+
+      const baseSummary = migration.stats && typeof migration.stats === 'object' ? migration.stats : {};
+      const summary = {
+        ...baseSummary,
+        rowCount,
+        processedRows,
+        doneRows: Number(st.done_rows || 0),
+        errorRows,
+        stockChangedRows: Number(st.stock_changed_rows || 0),
+        createdVariants: Number(st.created_variants || 0),
+        matchedVariants: Number(st.matched_variants || 0),
+        canCommit: Number(baseSummary.conflictRows || 0) === 0,
+      };
+      return res.json({
+        ok: true,
+        id: String(migration.id),
+        status: nextStatus,
+        done,
+        rowCount,
+        processedRows,
+        progressPercent: rowCount > 0 ? processedRows / rowCount * 100 : 100,
+        firstError: st.first_error || null,
+        summary,
+        changedRows,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF legacy migration commit chunk failed', error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ error: error?.message || 'A ForIT migráció véglegesítése nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
+
+
   router.patch("/variants/:id/stock", requireAuthed, async (req, res) => {
     const id = text(req.params.id);
     const rowsInput = Array.isArray(req.body?.rows)
@@ -9125,7 +10625,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const includeZero = ["1", "true", "yes"].includes(text(req.query.includeZero || req.query.include_zero).toLowerCase());
-    const limit = Math.min(5000, Math.max(1, Number(req.query.limit || 200)));
+    const limit = Math.min(25000, Math.max(1, Number(req.query.limit || 200)));
     const args = [];
     const where = [
       `COALESCE(v.status,'active') <> 'archived'`,
@@ -9134,7 +10634,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const tariffExpr = customsTariffSql('v');
 
     if (!includeZero) {
-      where.push(`(COALESCE(st.total_qty,0) <> 0 OR COALESCE(st.total_reserved_qty,0) <> 0 OR ci.variant_id IS NOT NULL)`);
+      where.push(`(COALESCE(st.total_qty,0) <> 0 OR COALESCE(st.total_reserved_qty,0) <> 0 OR ci.variant_id IS NOT NULL OR NULLIF(v.attributes->>'legacySourceSystem','') IS NOT NULL)`);
     }
 
     if (search) {
@@ -9146,6 +10646,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         OR COALESCE(m.title_hu,'') ILIKE ${p}
         OR COALESCE(m.shopify_title,'') ILIKE ${p}
         OR COALESCE(v.internal_sku,'') ILIKE ${p}
+        OR COALESCE(v.attributes->>'legacyProductCode','') ILIKE ${p}
+        OR COALESCE(v.attributes->>'legacyOriginalProductCode','') ILIKE ${p}
+        OR COALESCE(v.attributes->>'legacyOriginalTitle','') ILIKE ${p}
         OR COALESCE(v.barcode,'') ILIKE ${p}
         OR COALESCE(v.sn_cod,'') ILIKE ${p}
         OR ${tariffExpr} ILIKE ${p}
@@ -9329,8 +10832,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          v.status AS status,
          m.id AS model_id,
          COALESCE(NULLIF(m.model_code,''), NULLIF(lid.normalized->>'modelCode',''), lid.supplier_product_code) AS model_code,
-         COALESCE(NULLIF(si.supplier_product_code,''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS supplier_product_code,
-         COALESCE(NULLIF(si.supplier_product_code,''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS "supplierProductCode",
+         COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS supplier_product_code,
+         COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), lid.supplier_product_code, NULLIF(lid.normalized->>'supplierProductCode',''), NULLIF(lid.normalized->>'productCode','')) AS "supplierProductCode",
          COALESCE(NULLIF(si.supplier_variant_code,''), NULLIF(lid.normalized->>'supplierVariantCode',''), NULLIF(lid.normalized->>'variantCode','')) AS supplier_variant_code,
          COALESCE(NULLIF(si.supplier_color_code,''), lid.supplier_color_code, NULLIF(lid.normalized->>'supplierColorCode',''), NULLIF(lid.normalized->>'colorCode','')) AS supplier_color_code,
          COALESCE(NULLIF(si.supplier_size,''), lid.supplier_size, NULLIF(lid.normalized->>'supplierSize',''), NULLIF(lid.normalized->>'size','')) AS supplier_size,
