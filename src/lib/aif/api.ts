@@ -897,6 +897,147 @@ export function apiAifDeleteImportBatchHistory(batchId: string) {
   );
 }
 
+
+export type AifLegacyImportSummary = {
+  rowCount: number;
+  newRows: number;
+  existingRows: number;
+  reviewRows: number;
+  conflictRows: number;
+  zeroStockRows: number;
+  positiveStockRows: number;
+  normalizedNegativeRows: number;
+  missingBarcodeRows: number;
+  missingBrandRows: number;
+  missingSizeRows: number;
+  totalQty: number;
+  purchaseValueRon: number;
+  retailValueRon: number;
+  processedRows?: number;
+  doneRows?: number;
+  errorRows?: number;
+  stockChangedRows?: number;
+  createdVariants?: number;
+  matchedVariants?: number;
+  canCommit: boolean;
+};
+
+export type AifLegacyImportCompactRow = {
+  rowNo: number;
+  sourceRow?: string | null;
+  sourceStatus?: string | null;
+  previewAction: "new" | "existing" | "conflict" | string;
+  processStatus: "pending" | "done" | "error" | "skipped" | string;
+  warningCount: number;
+  rawQty: number;
+  targetStockQty: number;
+  existingStockQty?: number | null;
+  existingReservedQty?: number | null;
+  title?: string | null;
+  originalTitle?: string | null;
+  brandName?: string | null;
+  modelCode?: string | null;
+  productCode?: string | null;
+  originalProductCode?: string | null;
+  barcode?: string | null;
+  colorCode?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  message?: string | null;
+  processError?: string | null;
+  variantId?: string | null;
+};
+
+export type AifLegacyImportItem = {
+  id: string;
+  sourceSystem: string;
+  sourceDate?: string | null;
+  targetLocationId: string;
+  locationCode?: string | null;
+  locationName?: string | null;
+  sourceFileName?: string | null;
+  payloadHash?: string | null;
+  status: "prepared" | "committing" | "committed" | "failed" | "cancelled" | string;
+  rowCount: number;
+  processedRows: number;
+  totalQty: number;
+  note?: string | null;
+  createdBy?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  committedAt?: string | null;
+};
+
+export type AifLegacyImportDetailResponse = {
+  ok: true;
+  duplicate?: boolean;
+  item: AifLegacyImportItem;
+  summary: AifLegacyImportSummary;
+  rows: AifLegacyImportCompactRow[];
+};
+
+export function apiAifStartLegacyImport(input: {
+  sourceSystem?: string;
+  sourceDate?: string | null;
+  sourceFileName?: string | null;
+  targetLocationId: string;
+  note?: string | null;
+  forceNew?: boolean;
+  rows: Array<Record<string, unknown>>;
+}) {
+  return fetchAifJSON<AifLegacyImportDetailResponse>("/legacy-imports/start", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function apiAifListLegacyImports(limit = 20) {
+  return fetchAifJSON<{
+    ok: true;
+    items: Array<{
+      id: string;
+      status: string;
+      sourceSystem: string;
+      sourceDate?: string | null;
+      sourceFileName?: string | null;
+      targetLocationId: string;
+      locationCode?: string | null;
+      locationName?: string | null;
+      rowCount: number;
+      processedRows: number;
+      totalQty: number;
+      createdAt?: string | null;
+      updatedAt?: string | null;
+      committedAt?: string | null;
+    }>;
+  }>(`/legacy-imports?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export function apiAifGetLegacyImport(id: string) {
+  return fetchAifJSON<AifLegacyImportDetailResponse>(`/legacy-imports/${encodeURIComponent(id)}`);
+}
+
+export function apiAifCommitLegacyImportChunk(id: string, options?: { limit?: number; retryErrors?: boolean }) {
+  return fetchAifJSON<{
+    ok: true;
+    id: string;
+    status: string;
+    done: boolean;
+    rowCount: number;
+    processedRows: number;
+    progressPercent: number;
+    firstError?: string | null;
+    summary: AifLegacyImportSummary;
+    changedRows?: AifLegacyImportCompactRow[];
+  }>(`/legacy-imports/${encodeURIComponent(id)}/commit-chunk`, {
+    method: "POST",
+    body: JSON.stringify({
+      limit: options?.limit || 200,
+      retryErrors: options?.retryErrors === true,
+    }),
+  });
+}
+
 export function apiAifInventory(search = "", limit = 5000, options?: { snCod?: string }) {
   const q = new URLSearchParams();
   if (search.trim()) q.set("search", search.trim());
