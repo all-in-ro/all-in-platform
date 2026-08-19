@@ -1,8 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowLeft,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Database,
   FileSpreadsheet,
   Home,
@@ -47,6 +50,144 @@ const primaryBtn = `${btnBase} border-[#9be9e5]/48 bg-gradient-to-r from-[#23898
 const neutralBtn = `${btnBase} border-white/18 bg-[#3a475a]/90 hover:border-[#8ce7e2]/28 hover:bg-[#445369]`;
 const dangerBtn = `${btnBase} border-red-300/30 bg-[#b71528] hover:bg-[#ca1830]`;
 const statCard = "rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]";
+
+
+type LegacySelectOption = { value: string; label: string; hint?: string };
+
+function LegacySmartSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+  disabled = false,
+  compact = false,
+  ariaLabel,
+}: {
+  value: string;
+  options: LegacySelectOption[];
+  onChange: (value: string) => void;
+  placeholder: string;
+  disabled?: boolean;
+  compact?: boolean;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((item) => String(item.value) === String(value)) || (value ? { value, label: value } : null);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current || typeof window === "undefined") return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = compact ? 5 : 8;
+    const rowHeight = compact ? 34 : 46;
+    const desiredHeight = Math.min(compact ? 280 : 350, 58 + Math.max(1, options.length) * rowHeight);
+    const width = Math.min(Math.max(rect.width, compact ? 210 : 250), window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge));
+    const roomBelow = window.innerHeight - rect.bottom - edge;
+    const roomAbove = rect.top - edge;
+    const openUpward = roomBelow < Math.min(desiredHeight, compact ? 180 : 240) && roomAbove > roomBelow;
+    if (openUpward) setPosition({ left, width, bottom: Math.max(edge, window.innerHeight - rect.top + gap) });
+    else setPosition({ left, width, top: Math.min(window.innerHeight - edge, rect.bottom + gap) });
+  }, [compact, options.length]);
+
+  useEffect(() => {
+    if (!open || disabled) return;
+    updatePosition();
+    const outside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const reposition = () => updatePosition();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, disabled, updatePosition]);
+
+  const triggerHeight = compact ? "h-11 rounded-[13px] px-3 text-sm" : "h-11 rounded-[13px] px-3 text-sm";
+  return (
+    <div className="min-w-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel || placeholder}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`group flex w-full min-w-0 items-center justify-between gap-2 overflow-hidden border text-left font-normal text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition disabled:cursor-not-allowed disabled:opacity-50 ${triggerHeight} ${
+          open
+            ? "border-[#8ce7e2]/72 bg-gradient-to-b from-[#315268] to-[#2b4054] ring-2 ring-[#7bd7d4]/14"
+            : "border-white/18 bg-gradient-to-b from-[#2d394b] to-[#293548] hover:border-[#7bd7d4]/35 hover:from-[#324157] hover:to-[#2c3a4e]"
+        }`}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) updatePosition();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span className={`h-2 w-2 shrink-0 rounded-full transition ${open ? "bg-[#8ff4ee] shadow-[0_0_12px_rgba(123,215,212,0.9)]" : value ? "bg-[#63d8d3]" : "bg-white/28"}`} />
+          <span title={selected?.label || placeholder} className="min-w-0 flex-1 truncate" style={{ color: selected?.label ? "#ffffff" : "rgba(255,255,255,0.55)" }}>
+            {selected?.label || placeholder}
+          </span>
+        </span>
+        <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${open ? "border-[#9be9e5]/48 bg-[#2a8d8b]/34 text-[#d7fffd]" : "border-white/10 bg-white/[0.035] text-white/62 group-hover:border-[#7bd7d4]/25 group-hover:text-white"}`}>
+          <ChevronDown size={14} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+
+      {open && position && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={menuRef}
+          className="overflow-hidden rounded-[18px] border border-[#7bd7d4]/42 bg-[#202c3d]/[0.995] p-2 text-white shadow-[0_28px_70px_rgba(2,6,23,0.72)] backdrop-blur-xl"
+          style={{ position: "fixed", zIndex: 1800, left: position.left, width: position.width, top: position.top, bottom: position.bottom }}
+          role="listbox"
+          aria-label={ariaLabel || placeholder}
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-3 px-2 py-1.5">
+            <span className="text-[9px] uppercase tracking-[0.16em]" style={{ color: "rgba(215,255,253,0.64)" }}>Válassz</span>
+            <span className="rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[9px]" style={{ color: "rgba(255,255,255,0.52)" }}>{Math.max(0, options.filter((item) => item.value).length)} lehetőség</span>
+          </div>
+          <div className="max-h-[310px] space-y-1 overflow-y-auto pr-0.5">
+            {options.map((option, index) => {
+              const active = String(option.value) === String(value);
+              return (
+                <button
+                  key={`${option.value || "__empty"}-${index}`}
+                  type="button"
+                  className={`group/item flex min-h-10 w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left text-sm font-normal transition ${active ? "border-[#8ce7e2]/44 bg-gradient-to-r from-[#2a8d8b] to-[#287b82] shadow-[0_8px_18px_rgba(42,141,139,0.18)]" : "border-transparent bg-[#2e3b4f] hover:border-white/10 hover:bg-[#3a4a61]"}`}
+                  onClick={() => { onChange(option.value); setOpen(false); }}
+                  role="option"
+                  aria-selected={active}
+                  title={option.hint || option.label}
+                >
+                  <span className={`h-6 w-1 shrink-0 rounded-full transition ${active ? "bg-[#bff8f5]" : "bg-white/0 group-hover/item:bg-white/18"}`} />
+                  <span className="min-w-0 flex-1 truncate" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.88)" }}>{option.label}</span>
+                  {option.hint ? <span className="max-w-[90px] shrink-0 truncate text-[9px] text-white/42">{option.hint}</span> : null}
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center">
+                    {active ? <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#d8fffd] text-[#176b69] shadow-[0_4px_12px_rgba(0,0,0,0.18)]"><Check size={17} strokeWidth={2.8} /></span> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </div>
+  );
+}
 
 function clearLegacyMode() {
   try { window.sessionStorage.removeItem(LEGACY_MODE_KEY); } catch {}
@@ -392,10 +533,17 @@ export default function AllInLegacyImport() {
           <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.5fr_auto] lg:items-end">
             <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
               Cél üzlet / hely
-              <select className={input} value={locationId} onChange={(event) => { setLocationId(event.target.value); setMigration(null); setConfirmExactStock(false); }} disabled={committing}>
-                <option value="">Válassz célhelyet</option>
-                {locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
-              </select>
+              <LegacySmartSelect
+                value={locationId}
+                onChange={(value) => { setLocationId(value); setMigration(null); setConfirmExactStock(false); }}
+                placeholder="Válassz célhelyet"
+                disabled={committing}
+                ariaLabel="Cél üzlet / hely"
+                options={[
+                  { value: "", label: "Válassz célhelyet" },
+                  ...locations.map((location) => ({ value: String(location.id), label: location.name })),
+                ]}
+              />
             </label>
             <div>
               <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/48">Előkészített migrációs CSV</p>
@@ -470,15 +618,24 @@ export default function AllInLegacyImport() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <div className="relative min-w-[240px] flex-1"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/35" /><input className={`${input} pl-9`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Név, barcode, kód, márka..." /></div>
-                <select className={`${input} w-auto min-w-[170px]`} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}>
-                  <option value="all">Minden sor</option>
-                  <option value="new">Új</option>
-                  <option value="existing">Meglévő</option>
-                  <option value="review">Ellenőrzendő</option>
-                  <option value="conflict">Ütközés</option>
-                  <option value="done">Kész</option>
-                  <option value="error">Hibás</option>
-                </select>
+                <div className="w-[190px] min-w-[190px]">
+                  <LegacySmartSelect
+                    value={statusFilter}
+                    onChange={(value) => setStatusFilter(value as StatusFilter)}
+                    placeholder="Minden sor"
+                    compact
+                    ariaLabel="Sorok szűrése állapot szerint"
+                    options={[
+                      { value: "all", label: "Minden sor" },
+                      { value: "new", label: "Új" },
+                      { value: "existing", label: "Meglévő" },
+                      { value: "review", label: "Ellenőrzendő" },
+                      { value: "conflict", label: "Ütközés" },
+                      { value: "done", label: "Kész" },
+                      { value: "error", label: "Hibás" },
+                    ]}
+                  />
+                </div>
               </div>
             </div>
 
