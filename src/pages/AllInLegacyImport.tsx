@@ -21,6 +21,7 @@ import {
   apiAifGetLegacyImport,
   apiAifListLegacyImports,
   apiAifMeta,
+  apiAifResolveLegacyImportConflicts,
   apiAifStartLegacyImport,
   type AifLegacyImportCompactRow,
   type AifLegacyImportDetailResponse,
@@ -283,6 +284,23 @@ function sourceNeedsReview(row: AifLegacyImportCompactRow) {
   return row.sourceStatus === "REVIEW" || Boolean(row.warningCount) || row.rawQty < 0;
 }
 
+function humanizeLegacyMessage(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const replacements: Array<[RegExp, string]> = [
+    [/DUPLICATE_FORIT_CODE_REKEYED/gi, "Duplikált ForIT termékkód volt; az import egyedi kódot adott neki"],
+    [/MISSING_CATEGORY/gi, "Hiányzik a kategória"],
+    [/MISSING_GENDER/gi, "Hiányzik a nem"],
+    [/UNKNOWN_BRAND/gi, "A márka nem azonosítható biztosan"],
+    [/MISSING_BARCODE/gi, "Hiányzik a vonalkód"],
+    [/MISSING_PRODUCT_CODE/gi, "Hiányzik a termékkód"],
+    [/NEGATIVE_STOCK/gi, "Negatív régi készlet, 0-ra normalizálva"],
+  ];
+  let out = raw;
+  for (const [pattern, label] of replacements) out = out.replace(pattern, label);
+  return out.replace(/;+/g, " • ").replace(/\s*•\s*•+/g, " • ").trim();
+}
+
 export default function AllInLegacyImport() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [locations, setLocations] = useState<AifLocation[]>([]);
@@ -295,6 +313,7 @@ export default function AllInLegacyImport() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [resolvingConflicts, setResolvingConflicts] = useState(false);
   const [confirmExactStock, setConfirmExactStock] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -433,6 +452,39 @@ export default function AllInLegacyImport() {
       setError(e?.message || "A migráció szerveres ellenőrzése nem sikerült.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function resolveConflicts() {
+    const id = migration?.item?.id;
+    if (!id || !summary?.conflictRows) return;
+    setResolvingConflicts(true);
+    setError("");
+    setMessage(`${summary.conflictRows} ütközés biztonságos feloldása folyamatban...`);
+    try {
+      const response = await apiAifResolveLegacyImportConflicts(id);
+      setMigration(response);
+      setConfirmExactStock(false);
+      const r = response.resolution;
+      const parts = [
+        `${r.resolved} ütközés feloldva`,
+        r.matchedExisting ? `${r.matchedExisting} meglévő AllIn variánshoz kötve` : "",
+        r.separatedNew ? `${r.separatedNew} külön ForIT legacy variánsként marad` : "",
+        r.reservedProtected ? `${r.reservedProtected} sornál a meglévő foglalás védve` : "",
+        r.duplicateBarcodeCanonicalized ? `${r.duplicateBarcodeCanonicalized} régi AllIn barcode-duplikáció elsődleges rekordhoz kötve` : "",
+      ].filter(Boolean);
+      if (r.remaining > 0) {
+        setError(`${parts.join(" • ")}. Még ${r.remaining} valódi, kézi döntést igénylő ütközés maradt.`);
+        setStatusFilter("conflict");
+      } else {
+        setMessage(`${parts.join(" • ")}. A migráció most véglegesíthető.`);
+        setStatusFilter("all");
+      }
+      await loadHistory();
+    } catch (e: any) {
+      setError(e?.message || "Az ütközések feloldása nem sikerült.");
+    } finally {
+      setResolvingConflicts(false);
     }
   }
 
@@ -579,10 +631,24 @@ export default function AllInLegacyImport() {
                 <h2 className="mt-1 text-lg text-white">Mit fog csinálni az AllIn?</h2>
                 <p className="mt-1 text-sm text-white/58">Vonalkód az elsődleges egyezési kulcs. Beszállító nem jön létre; a régi beszállító csak legacy információként marad.</p>
               </div>
-              <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${summary.canCommit ? "border-emerald-200/30 bg-emerald-400/10 text-emerald-50" : "border-red-200/35 bg-red-500/12 text-red-50"}`}>
-                {summary.canCommit ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                {summary.canCommit ? "Véglegesíthető" : `${summary.conflictRows} ütközés blokkolja`}
-              </span>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${summary.canCommit ? "border-emerald-200/30 bg-emerald-400/10 text-emerald-50" : "border-red-200/35 bg-red-500/12 text-red-50"}`}>
+                  {summary.canCommit ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+                  {summary.canCommit ? "Véglegesíthető" : `${summary.conflictRows} ütközés blokkolja`}
+                </span>
+                {!summary.canCommit && summary.conflictRows > 0 ? (
+                  <button
+                    className={primaryBtn}
+                    type="button"
+                    onClick={() => void resolveConflicts()}
+                    disabled={busy || committing || resolvingConflicts}
+                    title="A biztos barcode-egyezéseket meglévő termékhez köti; a bizonytalan, de saját barcode-os ForIT sorokat külön legacy variánsként viszi át."
+                  >
+                    {resolvingConflicts ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                    {resolvingConflicts ? "Ütközések rendezése..." : `${summary.conflictRows} ütközés rendezése`}
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
@@ -602,6 +668,12 @@ export default function AllInLegacyImport() {
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Barcode nélkül</p><p className="mt-1 text-sm">{integer(summary.missingBarcodeRows)} sor</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Márka nélkül</p><p className="mt-1 text-sm">{integer(summary.missingBrandRows)} sor</p></div>
             </div>
+
+            {!summary.canCommit && summary.conflictRows > 0 ? (
+              <div className="mt-4 rounded-2xl border border-red-200/28 bg-red-500/10 p-3 text-sm leading-6 text-red-50">
+                <strong>Nem kell 33 sort kézzel végigkattintani.</strong> Az „ütközés rendezése” a valódi barcode-egyezést meglévő AllIn variánshoz köti. Ha csak a modell/szín/méret ütközik, de a ForIT barcode külön és szabad, külön legacy variánst készít, így nem ír rá egy másik termékre. Meglévő foglalást soha nem vág a készlet alá.
+              </div>
+            ) : null}
 
             <div className="mt-4 rounded-2xl border border-amber-200/28 bg-amber-300/8 p-3 text-sm leading-6 text-amber-50">
               <strong>Készletlogika:</strong> a kiválasztott célhely készlete <strong>pontosan</strong> a CSV `QTY` értékére áll. Nem hozzáadjuk a ForIT darabot az AllIn jelenlegi darabjához. A régi negatív készletű {summary.normalizedNegativeRows} sor terméke is létrejön, de a nyitókészlete 0 lesz; az eredeti negatív érték az auditban megmarad.
@@ -648,7 +720,7 @@ export default function AllInLegacyImport() {
                   {visibleRows.map((row) => (
                     <tr key={row.rowNo} className="border-t border-white/8 bg-[#344154] align-top">
                       <td className="px-3 py-2.5 text-white/55">{row.sourceRow || row.rowNo}</td>
-                      <td className="px-3 py-2.5"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] ${actionClass(row)}`}>{actionLabel(row)}</span>{sourceNeedsReview(row) ? <span className="ml-1 inline-flex rounded-full border border-amber-200/20 bg-amber-300/8 px-2 py-1 text-[10px] text-amber-50">review</span> : null}</td>
+                      <td className="px-3 py-2.5"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] ${actionClass(row)}`}>{actionLabel(row)}</span>{sourceNeedsReview(row) ? <span className="ml-1 inline-flex rounded-full border border-amber-200/20 bg-amber-300/8 px-2 py-1 text-[10px] text-amber-50">ellenőrzendő</span> : null}</td>
                       <td className="px-3 py-2.5 text-white">{row.title || "-"}</td>
                       <td className="px-3 py-2.5 text-white/72">{row.brandName || "-"}</td>
                       <td className="px-3 py-2.5 font-mono text-white/76">{row.productCode || "-"}</td>
@@ -656,7 +728,7 @@ export default function AllInLegacyImport() {
                       <td className="px-3 py-2.5 text-white/72">{[row.colorCode || row.colorName, row.size].filter(Boolean).join(" • ") || "-"}</td>
                       <td className={`px-3 py-2.5 text-right ${row.rawQty < 0 ? "text-amber-100" : "text-white"}`}>{row.rawQty}</td>
                       <td className="px-3 py-2.5 text-right text-white/80">{row.existingStockQty ?? 0} → {row.targetStockQty}</td>
-                      <td className="max-w-[360px] px-3 py-2.5 text-white/58">{row.processError || row.message || "-"}</td>
+                      <td className="max-w-[360px] px-3 py-2.5 text-white/58">{humanizeLegacyMessage(row.processError || row.message)}</td>
                     </tr>
                   ))}
                   {!visibleRows.length ? <tr><td colSpan={10} className="px-4 py-10 text-center text-white/42">Nincs ilyen sor.</td></tr> : null}
@@ -685,7 +757,7 @@ export default function AllInLegacyImport() {
               <div className="mt-4 rounded-2xl border border-white/12 bg-[#2b3749] p-4">
                 <label className="flex cursor-pointer items-start gap-3 text-sm text-white/84">
                   <input className="mt-1 h-4 w-4 accent-[#2a8d8b]" type="checkbox" checked={confirmExactStock} onChange={(event) => setConfirmExactStock(event.target.checked)} disabled={committing || !summary.canCommit} />
-                  <span><strong>Értem és jóváhagyom:</strong> a kiválasztott üzlet készlete a ForIT CSV szerinti pontos darabszámra áll. Ez nyitókészlet-migráció, nem normál bevételezés és nem összeadás.</span>
+                  <span><strong>Értem és jóváhagyom:</strong> a kiválasztott üzlet készlete a ForIT CSV szerinti nyitó darabszámra áll. Ha egy már meglévő AllIn foglalás ennél nagyobb, a rendszer a foglalt darabszámot védi, és azt nem csökkenti. Ez nyitókészlet-migráció, nem normál bevételezés és nem összeadás.</span>
                 </label>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-[280px] flex-1">
