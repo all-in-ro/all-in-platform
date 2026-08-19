@@ -1017,6 +1017,25 @@ export function apiAifGetLegacyImport(id: string) {
   return fetchAifJSON<AifLegacyImportDetailResponse>(`/legacy-imports/${encodeURIComponent(id)}`);
 }
 
+export type AifLegacyConflictResolutionResult = AifLegacyImportDetailResponse & {
+  resolution: {
+    requested: number;
+    resolved: number;
+    matchedExisting: number;
+    separatedNew: number;
+    reservedProtected: number;
+    duplicateBarcodeCanonicalized: number;
+    remaining: number;
+  };
+};
+
+export function apiAifResolveLegacyImportConflicts(id: string) {
+  return fetchAifJSON<AifLegacyConflictResolutionResult>(
+    `/legacy-imports/${encodeURIComponent(id)}/resolve-conflicts`,
+    { method: "POST", body: JSON.stringify({ mode: "safe" }) },
+  );
+}
+
 export function apiAifCommitLegacyImportChunk(id: string, options?: { limit?: number; retryErrors?: boolean }) {
   return fetchAifJSON<{
     ok: true;
