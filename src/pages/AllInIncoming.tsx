@@ -73,6 +73,7 @@ import {
   applyAifColumnMapping,
   readAifWorkbookWithAnalysis,
 } from "../lib/aif/xls";
+import AllInLegacyImport from "./AllInLegacyImport";
 
 type Props = { onLogout?: () => void };
 
@@ -202,8 +203,13 @@ function loadIncomingZxingBrowser(): Promise<IncomingZxingBrowserGlobal | null> 
   return aifIncomingZxingPromise;
 }
 
-async function apiIncomingInventoryLookupItems() {
-  const response = await fetch(`/api/aif/inventory?limit=5000&_=${Date.now()}`, {
+async function apiIncomingInventoryLookupItems(search = "") {
+  const query = new URLSearchParams();
+  query.set("limit", search.trim() ? "80" : "5000");
+  query.set("includeZero", "1");
+  if (search.trim()) query.set("search", search.trim());
+  query.set("_", String(Date.now()));
+  const response = await fetch(`/api/aif/inventory?${query.toString()}`, {
     credentials: "include",
     cache: "no-store",
   });
@@ -1877,7 +1883,18 @@ function importBarcodeConflictMessage(conflicts: AifImportBarcodeConflict[]) {
   return `Vonalkód ütközés: a ${first.barcode} több külön termékvariánshoz került. ${examples}.${more} Javítsd a vonalkód-oszlop társítását vagy a hibás sorokat mentés előtt.`;
 }
 
-export default function AllInIncoming(_props: Props) {
+const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
+
+function legacyImportModeRequested() {
+  if (typeof window === "undefined") return false;
+  try { return window.sessionStorage.getItem(AIF_LEGACY_IMPORT_MODE_KEY) === "1"; } catch { return false; }
+}
+
+export default function AllInIncoming(props: Props) {
+  return legacyImportModeRequested() ? <AllInLegacyImport /> : <AllInIncomingReception {...props} />;
+}
+
+function AllInIncomingReception(_props: Props) {
   const [suppliers, setSuppliers] = useState<AifSupplier[]>([]);
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [locationTypes, setLocationTypes] = useState<AifLocationType[]>([]);
@@ -2966,12 +2983,10 @@ export default function AllInIncoming(_props: Props) {
     setManualBarcodeLookupBusy(true);
     setManualBarcodeScannerStatus(`Termék keresése: ${code}`);
     try {
-      const cache = manualBarcodeInventoryCacheRef.current;
-      let inventoryItems = cache.items;
-      if (!inventoryItems.length || Date.now() - cache.loadedAt > 30000) {
-        inventoryItems = await apiIncomingInventoryLookupItems();
-        manualBarcodeInventoryCacheRef.current = { loadedAt: Date.now(), items: inventoryItems };
-      }
+      // A keresés szerveroldalon történik, és a 0 készletes legacy termékeket is kéri.
+      // Így 14 000+ régi variánsnál sem az első 5000 sorból próbálunk okoskodni.
+      const inventoryItems = await apiIncomingInventoryLookupItems(code);
+      manualBarcodeInventoryCacheRef.current = { loadedAt: Date.now(), items: inventoryItems };
 
       const activeItems = inventoryItems.filter((item) =>
         String(item.variant_status || "active").toLowerCase() !== "archived" &&
