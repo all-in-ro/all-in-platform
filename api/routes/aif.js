@@ -7868,6 +7868,209 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  function legacyBarcodeCandidateScore(row, candidate) {
+    let score = 0;
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    const expectedModel = normCode(row.model_code || payload.modelCode || row.legacy_original_code || row.legacy_product_code || '');
+    const candidateModelRaw = text(candidate.model_code || '');
+    const candidateModel = normCode(candidateModelRaw.includes(':') ? candidateModelRaw.split(':').slice(1).join(':') : candidateModelRaw);
+    const expectedSize = normCode(row.size || '');
+    const candidateSize = normCode(candidate.size || '');
+    const expectedColor = normCode(row.color_code || row.color_name || '');
+    const candidateColor = normCode(candidate.color_code || candidate.color_name || '');
+    const expectedBrand = normCode(row.brand_name || '');
+    const candidateBrand = normCode(candidate.brand_code || candidate.brand_name || '');
+
+    if (expectedModel && candidateModel && expectedModel === candidateModel) score += 100;
+    if (expectedSize && candidateSize && expectedSize === candidateSize) score += 40;
+    if (expectedColor && candidateColor && expectedColor === candidateColor) score += 25;
+    if (expectedBrand && candidateBrand && expectedBrand === candidateBrand) score += 15;
+    if (text(candidate.status || 'active') !== 'archived') score += 3;
+    if (text(candidate.model_status || 'active') !== 'archived') score += 2;
+    return score;
+  }
+
+  async function legacyBarcodeOwnersForResolution(client, migration, row) {
+    if (!row.legacy_barcode) return [];
+    const result = await client.query(
+      `SELECT v.id, v.model_id, v.barcode, v.internal_sku, v.color_code, v.color_name, v.size, v.status,
+              m.model_code, m.status AS model_status,
+              b.code AS brand_code, b.name AS brand_name,
+              COALESCE(st.qty,0)::int AS stock_qty,
+              COALESCE(st.reserved_qty,0)::int AS reserved_qty
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_stock st ON st.variant_id=v.id AND st.location_id=$2
+       WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+       ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END,
+                v.created_at ASC, v.id ASC`,
+      [row.legacy_barcode, migration.target_location_id]
+    );
+    return result.rows || [];
+  }
+
+  function appendLegacyResolutionMessage(existingMessage, resolutionMessage) {
+    const base = text(existingMessage);
+    const addition = text(resolutionMessage);
+    if (!base) return addition || null;
+    if (!addition || base.includes(addition)) return base;
+    return `${base} • ${addition}`;
+  }
+
+  router.post('/legacy-imports/:id/resolve-conflicts', requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      await client.query('BEGIN');
+      const migrationResult = await client.query(`SELECT * FROM aif_legacy_migrations WHERE id::text=$1 FOR UPDATE`, [id]);
+      if (!migrationResult.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'A migráció nem található.' });
+      }
+      const migration = migrationResult.rows[0];
+      if (['committing','committed','cancelled'].includes(String(migration.status || ''))) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Ezt a migrációt ebben az állapotban már nem lehet újra feloldani.' });
+      }
+
+      const conflictResult = await client.query(
+        `SELECT * FROM aif_legacy_migration_rows
+         WHERE migration_id=$1 AND preview_action='conflict' AND process_status='pending'
+         ORDER BY row_no ASC
+         FOR UPDATE`,
+        [migration.id]
+      );
+
+      let resolved = 0;
+      let matchedExisting = 0;
+      let separatedNew = 0;
+      let reservedProtected = 0;
+      let duplicateBarcodeCanonicalized = 0;
+      let remaining = 0;
+
+      for (const row of conflictResult.rows || []) {
+        const owners = await legacyBarcodeOwnersForResolution(client, migration, row);
+        let chosen = null;
+
+        let duplicateBarcodeCanonical = false;
+        if (owners.length === 1) {
+          chosen = owners[0];
+        } else if (owners.length > 1) {
+          const ranked = owners
+            .map((candidate) => ({ candidate, score: legacyBarcodeCandidateScore(row, candidate) }))
+            .sort((a, b) => b.score - a.score);
+          if (ranked.length && ranked[0].score > 0 && (ranked.length === 1 || ranked[0].score > ranked[1].score)) {
+            chosen = ranked[0].candidate;
+          } else {
+            // Ugyanaz a barcode több régi AllIn rekordban maradt. A barcode az elsődleges fizikai kulcs,
+            // ezért a lekérdezésben első (aktív, legrégebbi) rekordot tekintjük kanonikusnak. A sor továbbra
+            // ellenőrzendő marad, de ettől nem bénul le a teljes 14 ezres nyitókészlet-migráció.
+            chosen = owners[0];
+            duplicateBarcodeCanonical = true;
+          }
+        }
+
+        if (chosen) {
+          const originalTarget = Math.max(0, Number(row.target_qty || 0));
+          const reserved = Math.max(0, Number(chosen.reserved_qty || 0));
+          const protectedTarget = Math.max(originalTarget, reserved);
+          const reserveNote = reserved > originalTarget
+            ? `Foglalás védve: ForIT ${originalTarget} db helyett ${protectedTarget} db lesz a nyitókészlet, mert ${reserved} db már foglalt az AllInban.`
+            : duplicateBarcodeCanonical
+              ? `A barcode több régi AllIn rekordban is szerepel; az aktív/elsődleges rekordhoz kötöttük (${chosen.id}). Ellenőrzendő, de nem blokkolja a migrációt.`
+              : 'Ütközés feloldva: a vonalkód alapján egyértelmű meglévő AllIn variánshoz kötve.';
+          const payload = row.payload && typeof row.payload === 'object' ? { ...row.payload } : {};
+          payload.conflictResolution = reserved > originalTarget
+            ? 'barcode_existing_reserved_floor'
+            : duplicateBarcodeCanonical
+              ? 'duplicate_barcode_canonical_existing'
+              : 'barcode_existing';
+          payload.originalTargetQtyBeforeConflictResolution = originalTarget;
+          payload.resolvedVariantId = String(chosen.id);
+          await client.query(
+            `UPDATE aif_legacy_migration_rows
+             SET preview_action='existing', variant_id=$2, target_qty=$3,
+                 existing_stock_qty=$4, existing_reserved_qty=$5,
+                 preview_message=$6, warning_count=warning_count+1,
+                 payload=$7::jsonb, updated_at=now()
+             WHERE id=$1`,
+            [row.id, chosen.id, protectedTarget, Number(chosen.stock_qty || 0), reserved,
+             appendLegacyResolutionMessage(row.preview_message, reserveNote), JSON.stringify(payload)]
+          );
+          resolved++;
+          matchedExisting++;
+          if (reserved > originalTarget) reservedProtected++;
+          if (duplicateBarcodeCanonical) duplicateBarcodeCanonicalized++;
+          continue;
+        }
+
+        // Nincs olyan egyértelmű AllIn barcode-tulajdonos, amelyhez biztonságosan köthetnénk.
+        // Ilyenkor a ForIT sort külön legacy modellként visszük át. Ez megőrzi a saját barcode-ját,
+        // és nem ír rá egy hasonló, de másik AllIn variánsra.
+        if (owners.length === 0) {
+          const payload = row.payload && typeof row.payload === 'object' ? { ...row.payload } : {};
+          const originalModelCode = text(row.model_code || row.legacy_original_code || row.legacy_product_code || `FORIT-${row.row_no}`);
+          const distinctModelCode = `${originalModelCode}__FORIT__${String(row.row_no).padStart(5, '0')}`.slice(0, 180);
+          payload.conflictResolution = 'separate_legacy_variant';
+          payload.originalModelCodeBeforeConflictResolution = originalModelCode;
+          await client.query(
+            `UPDATE aif_legacy_migration_rows
+             SET preview_action='new', variant_id=NULL, model_code=$2,
+                 existing_stock_qty=0, existing_reserved_qty=0,
+                 preview_message=$3, warning_count=warning_count+1,
+                 payload=$4::jsonb, updated_at=now()
+             WHERE id=$1`,
+            [row.id, distinctModelCode,
+             appendLegacyResolutionMessage(row.preview_message, 'Ütközés feloldva: külön ForIT legacy variánsként kerül át, a saját vonalkódja megmarad.'),
+             JSON.stringify(payload)]
+          );
+          resolved++;
+          separatedNew++;
+          continue;
+        }
+
+        remaining++;
+      }
+
+      const rowsNow = await client.query(`SELECT * FROM aif_legacy_migration_rows WHERE migration_id=$1 ORDER BY row_no ASC`, [migration.id]);
+      const compactRows = rowsNow.rows.map(legacyCompactDbRow);
+      const summary = legacySummaryFromCompactRows(compactRows);
+      await client.query(
+        `UPDATE aif_legacy_migrations
+         SET stats=$2::jsonb, total_qty=$3, status='prepared', updated_at=now()
+         WHERE id=$1`,
+        [migration.id, JSON.stringify(summary), Number(summary.totalQty || 0)]
+      );
+      await client.query('COMMIT');
+
+      const detail = await readLegacyMigrationDetail(pool, migration.id);
+      return res.json({
+        ...detail,
+        resolution: {
+          requested: Number(conflictResult.rowCount || 0),
+          resolved,
+          matchedExisting,
+          separatedNew,
+          reservedProtected,
+          duplicateBarcodeCanonicalized,
+          remaining: Number(detail?.summary?.conflictRows || remaining || 0),
+        },
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF legacy conflict resolution failed', error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || 'A ForIT ütközések feloldása nem sikerült.',
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   async function resolveLegacyVariantNow(client, row) {
     if (row.variant_id) {
       const byId = await client.query(
@@ -8448,9 +8651,29 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       );
       if (modelId) context.reactivatedModelIds.add(String(modelId));
     } else {
-      const model = await ensureLegacyModelFast(client, normalized, context);
+      let model = await ensureLegacyModelFast(client, normalized, context);
       modelId = model.id;
-      const variant = await insertLegacyVariantFast(client, modelId, normalized, row);
+      let variant;
+      try {
+        variant = await insertLegacyVariantFast(client, modelId, normalized, row);
+      } catch (insertError) {
+        const safeFallbackCodes = new Set(['legacy_identity_conflict','legacy_unique_conflict']);
+        if (!safeFallbackCodes.has(String(insertError?.code || ''))) throw insertError;
+
+        // A ForIT barcode egyedi és nem tartozik meglévő AllIn sorhoz, viszont a modell/szín/méret
+        // kulcs összeakadt egy régi AllIn variánssal. Külön legacy modellre tesszük, nem írjuk felül.
+        const fallbackNormalized = {
+          ...normalized,
+          modelCodeRaw: `${normalized.modelCodeRaw || row.legacy_product_code || row.row_no}__FORIT__${String(row.row_no).padStart(5, '0')}`,
+          attributes: {
+            ...(normalized.attributes || {}),
+            conflictResolutionAtCommit: 'separate_legacy_model_fallback',
+          },
+        };
+        model = await ensureLegacyModelFast(client, fallbackNormalized, context);
+        modelId = model.id;
+        variant = await insertLegacyVariantFast(client, modelId, fallbackNormalized, row);
+      }
       variantId = variant.id;
       created = Boolean(variant.created);
       if (!created) context.existingVariantById.set(String(variantId), variant);
