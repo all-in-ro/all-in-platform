@@ -24,6 +24,7 @@ import {
 import AllInAdminShopWorkflows, { type AllInAdminShopWorkflowMode } from "./AllInAdminShopWorkflows";
 
 const API = (import.meta as any).env?.VITE_API_BASE || "/api";
+const AIF_LEGACY_IMPORT_MODE_KEY = "allinfashion:incoming:legacy-import:v1";
 
 const LOGO_URL =
   "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo-w.png";
@@ -68,10 +69,11 @@ const warehouseItems: MenuItem[] = [
 ];
 
 const incomingItems: MenuItem[] = [
-  { label: "Új bevételezés", hash: "#allinincoming", icon: Truck },
-  { label: "Receptiók", hash: "#allinreceptions", icon: ClipboardList },
-  { label: "Beszállítók", hash: "#allinsuppliers", icon: Building2 },
-  { label: "Rendelések", hash: "#allinorderhistory", icon: History },
+  { key: "incoming_new", label: "Új bevételezés", hash: "#allinincoming", icon: Truck },
+  { key: "receptions", label: "Receptiók", hash: "#allinreceptions", icon: ClipboardList },
+  { key: "suppliers", label: "Beszállítók", hash: "#allinsuppliers", icon: Building2 },
+  { key: "orders", label: "Rendelések", hash: "#allinorderhistory", icon: History },
+  { key: "legacy_import", label: "Régi rendszer import", hash: "#allinincoming", icon: History },
 ];
 
 function justDate(value?: string | null): string | undefined {
@@ -430,6 +432,16 @@ export default function AllInHome(props: { onLogout?: () => void }) {
     if (item.hash) navigate(item.hash);
   };
 
+  const handleIncomingItem = (item: MenuItem) => {
+    try {
+      if (item.key === "legacy_import") window.sessionStorage.setItem(AIF_LEGACY_IMPORT_MODE_KEY, "1");
+      else window.sessionStorage.removeItem(AIF_LEGACY_IMPORT_MODE_KEY);
+    } catch {
+      // A sessionStorage hiánya nem akadályozhatja a navigációt.
+    }
+    if (item.hash) navigate(item.hash);
+  };
+
   return (
     <main className="min-h-screen bg-[#474c59] px-3 py-4 font-normal text-white sm:grid sm:place-items-center sm:py-6">
       <div className="mx-auto w-full max-w-lg rounded-2xl border border-white/20 bg-white/[0.045] p-4 shadow-[0_18px_50px_rgba(15,23,42,0.22)] sm:p-5">
@@ -484,6 +496,7 @@ export default function AllInHome(props: { onLogout?: () => void }) {
             open={openGroup === "incoming"}
             onToggle={() => toggleGroup("incoming")}
             items={incomingItems}
+            onItemSelect={handleIncomingItem}
           />
 
           <div className="my-3 border-t border-white/12" />
