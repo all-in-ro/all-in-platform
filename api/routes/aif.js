@@ -7421,6 +7421,188 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     };
   }
 
+  function normalizeLegacyInferenceText(value) {
+    return text(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  const LEGACY_EXPLICIT_BRANDS = [
+    { name: 'Mayo Chix', aliases: ['mayo chix', 'mayochix'] },
+    { name: 'Under Armour', aliases: ['under armour'] },
+    { name: 'Adidas', aliases: ['adidas'] },
+    { name: 'Nike', aliases: ['nike'] },
+    { name: 'Puma', aliases: ['puma'] },
+    { name: 'Skechers', aliases: ['skechers'] },
+    { name: '4F', aliases: ['4f'] },
+    { name: 'Fundango', aliases: ['fundango', 'fundang'] },
+    { name: 'Blue Nature', aliases: ['blue nature'] },
+    { name: 'Columbia', aliases: ['columbia'] },
+    { name: 'Converse', aliases: ['converse'] },
+    { name: 'David Jones', aliases: ['david jones'] },
+    { name: 'Extyn', aliases: ['extyn'] },
+    { name: 'Ruci', aliases: ['ruci'] },
+    { name: 'Tara', aliases: ['tara'] },
+    { name: 'Rouge', aliases: ['rouge'] },
+    { name: 'Viktory', aliases: ['viktory'] },
+    { name: 'XOXO', aliases: ['xoxo'] },
+    { name: "What's Up", aliases: ['what s up', 'whats up'] },
+    { name: 'The North Face', aliases: ['the north face', 'north face'] },
+    { name: 'Lafuma', aliases: ['lafuma'] },
+  ];
+
+  function explicitLegacyBrand(row) {
+    const haystack = ` ${normalizeLegacyInferenceText([row?.originalTitle, row?.title].filter(Boolean).join(' '))} `;
+    if (!haystack.trim()) return null;
+    for (const brand of LEGACY_EXPLICIT_BRANDS) {
+      for (const alias of brand.aliases) {
+        const token = normalizeLegacyInferenceText(alias);
+        if (token && haystack.includes(` ${token} `)) return brand.name;
+      }
+    }
+    return null;
+  }
+
+  function legacyUniqueBrandFromCounter(counter, minEvidence = 1) {
+    if (!counter || !(counter instanceof Map) || counter.size !== 1) return null;
+    const [[brand, count]] = Array.from(counter.entries());
+    return Number(count || 0) >= minEvidence ? brand : null;
+  }
+
+  function addLegacyBrandEvidence(map, key, brand) {
+    const safeKey = text(key).toLowerCase();
+    const safeBrand = text(brand);
+    if (!safeKey || !safeBrand) return;
+    const counter = map.get(safeKey) || new Map();
+    counter.set(safeBrand, Number(counter.get(safeBrand) || 0) + 1);
+    map.set(safeKey, counter);
+  }
+
+  function legacySizeFromKnownSuffix(row) {
+    if (row?.rawSize) return null;
+    const oneSizeMap = new Map([
+      ['NS', 'OSFM'],
+      ['OS', 'OSFM'],
+      ['UNI', 'UNI'],
+      ['UNIVERSAL', 'UNI'],
+      ['ONESIZE', 'ONE SIZE'],
+      ['ONE SIZE', 'ONE SIZE'],
+      ['OSFM', 'OSFM'],
+      ['OSFA', 'OSFA'],
+      ['OSFY', 'OSFY'],
+    ]);
+    const colorToken = text(row?.colorCode).toUpperCase();
+    if (oneSizeMap.has(colorToken)) {
+      return { size: oneSizeMap.get(colorToken), clearColorCode: true, evidence: `ForIT kódsuffix: ${colorToken}` };
+    }
+
+    const code = text(row?.originalProductCode || row?.productCode).toUpperCase();
+    const last = code.split('-').filter(Boolean).pop() || '';
+    if (oneSizeMap.has(last)) {
+      return { size: oneSizeMap.get(last), clearColorCode: false, evidence: `ForIT termékkód vége: ${last}` };
+    }
+
+    const title = text(row?.originalTitle || row?.title).toUpperCase();
+    const titleLast = title.split(/\s+/).filter(Boolean).pop() || '';
+    if (oneSizeMap.has(titleLast)) {
+      return { size: oneSizeMap.get(titleLast), clearColorCode: colorToken === titleLast, evidence: `ForIT név vége: ${titleLast}` };
+    }
+
+    const apparelMatch = code.match(/-(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|XS\/S|S\/M|M\/L|L\/XL|XL\/XXL)(?:-(?:REG|R))?$/i);
+    if (apparelMatch) {
+      return { size: apparelMatch[1].toUpperCase(), clearColorCode: false, evidence: `ForIT termékkódból: ${apparelMatch[1].toUpperCase()}` };
+    }
+    return null;
+  }
+
+  function inferLegacyBrandsAndSizes(preparedRows = []) {
+    const modelEvidence = new Map();
+    const barcode6Evidence = new Map();
+
+    // Első kör: a névben egyértelműen szereplő márka felülírja a régi CODE-becslést.
+    // A korábbi ForIT előkészítő például néhány MAYO-CHIX sort N-/S- kód miatt Under Armournak nézett.
+    // Ilyen adatból ne építsünk magabiztosan új törzsadatot, mert az már művészet lenne.
+    for (const row of preparedRows) {
+      const explicitBrand = explicitLegacyBrand(row);
+      const rawBrandSource = normCode(legacyValue(row.raw, 'BRAND_SOURCE'));
+      if (explicitBrand) {
+        const before = row.brandName;
+        row.brandName = explicitBrand;
+        if (before && normCode(before) !== normCode(explicitBrand)) {
+          row.warnings = (row.warnings || []).filter((message) => !/márka nem volt biztosan azonosítható/i.test(String(message)));
+          row.warnings.push(`Régi márkabecslés javítva: ${before} → ${explicitBrand} (terméknév alapján).`);
+        }
+      }
+      row.brandSource = explicitBrand ? 'explicit_name' : rawBrandSource || (row.brandName ? 'legacy' : 'unknown');
+    }
+
+    // Csak megbízható forrásból tanulunk márka-szignatúrát: név, beszállító vagy explicit név.
+    for (const row of preparedRows) {
+      if (!row.brandName) continue;
+      if (!['name', 'supplier', 'explicit_name'].includes(row.brandSource)) continue;
+      const modelKey = text(row.modelCode).toUpperCase();
+      if (modelKey) addLegacyBrandEvidence(modelEvidence, modelKey, row.brandName);
+      const barcode = text(row.barcode);
+      if (barcode.length >= 6) addLegacyBrandEvidence(barcode6Evidence, barcode.slice(0, 6), row.brandName);
+    }
+
+    let inferredBrands = 0;
+    let correctedBrands = 0;
+    let inferredSizes = 0;
+    for (const row of preparedRows) {
+      const beforeBrand = row.brandName;
+      const oldSource = row.brandSource;
+      const explicitBrand = explicitLegacyBrand(row);
+      let inferredBrand = explicitBrand;
+      let brandEvidence = explicitBrand ? 'terméknév' : '';
+
+      const needsInference = !row.brandName || ['code', 'unknown'].includes(oldSource);
+      if (!inferredBrand && needsInference) {
+        const modelCounter = modelEvidence.get(text(row.modelCode).toUpperCase());
+        inferredBrand = legacyUniqueBrandFromCounter(modelCounter, 1);
+        if (inferredBrand) brandEvidence = 'azonos modellkód';
+      }
+      if (!inferredBrand && needsInference && text(row.barcode).length >= 6) {
+        const prefix = text(row.barcode).slice(0, 6);
+        const prefixCounter = barcode6Evidence.get(prefix);
+        inferredBrand = legacyUniqueBrandFromCounter(prefixCounter, 3);
+        if (inferredBrand) brandEvidence = `azonos vonalkódcsalád (${prefix})`;
+      }
+
+      if (inferredBrand) {
+        if (!beforeBrand) inferredBrands++;
+        else if (normCode(beforeBrand) !== normCode(inferredBrand)) correctedBrands++;
+        row.brandName = inferredBrand;
+        row.brandSource = brandEvidence === 'terméknév' ? 'explicit_name' : 'inferred';
+        row.warnings = (row.warnings || []).filter((message) => !/márka nem volt biztosan azonosítható/i.test(String(message)));
+        if (!beforeBrand) row.warnings.push(`Márka automatikusan azonosítva: ${inferredBrand} (${brandEvidence} alapján).`);
+        else if (normCode(beforeBrand) !== normCode(inferredBrand)) row.warnings.push(`Márka automatikusan javítva: ${beforeBrand} → ${inferredBrand} (${brandEvidence} alapján).`);
+        if (row.issues) {
+          row.issues = row.issues.split(';').map((part) => part.trim()).filter((part) => part && part !== 'UNKNOWN_BRAND').join('; ') || null;
+        }
+      }
+
+      const inferredSize = legacySizeFromKnownSuffix(row);
+      if (inferredSize) {
+        row.size = inferredSize.size;
+        row.rawSize = inferredSize.size;
+        if (inferredSize.clearColorCode) row.colorCode = null;
+        row.warnings = (row.warnings || []).filter((message) => !/Méret nem volt azonosítható/i.test(String(message)));
+        row.warnings.push(`Méret automatikusan felismerve: ${inferredSize.size} (${inferredSize.evidence}).`);
+        if (row.issues) {
+          row.issues = row.issues.split(';').map((part) => part.trim()).filter((part) => part && part !== 'SIZE_NOT_PARSED').join('; ') || null;
+        }
+        inferredSizes++;
+      }
+    }
+
+    return { rows: preparedRows, inferredBrands, correctedBrands, inferredSizes };
+  }
+
   function legacyCandidateIdentity(candidate) {
     const modelToken = normCode(candidate?.model_token || candidate?.model_code || '');
     const color = normCode(candidate?.color_code || candidate?.color_name || '');
@@ -7749,7 +7931,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const location = await findByIdOrCode(client, 'aif_locations', body.targetLocationId || body.target_location_id || body.location);
       if (!location || location.is_active === false) return res.status(400).json({ error: 'Érvényes célhely kiválasztása kötelező.' });
 
-      const prepared = rowsInput.map(legacyPreparedRow);
+      const preparedBase = rowsInput.map(legacyPreparedRow);
+      const inferredLegacy = inferLegacyBrandsAndSizes(preparedBase);
+      const prepared = inferredLegacy.rows;
       const hashPayload = prepared.map((row) => ({
         sourceRow: row.sourceRow, barcode: row.barcode, productCode: row.productCode, originalProductCode: row.originalProductCode,
         modelCode: row.modelCode, title: row.title, brandName: row.brandName, colorCode: row.colorCode, size: row.size,
@@ -7787,6 +7971,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         buyPrice: row.buyPrice,
         sellPrice: row.sellPrice,
       })));
+
+      summary.inferredBrandRows = Number(inferredLegacy.inferredBrands || 0);
+      summary.correctedBrandRows = Number(inferredLegacy.correctedBrands || 0);
+      summary.inferredSizeRows = Number(inferredLegacy.inferredSizes || 0);
 
       await client.query('BEGIN');
       const migrationResult = await client.query(
