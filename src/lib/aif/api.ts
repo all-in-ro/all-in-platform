@@ -900,6 +900,8 @@ export function apiAifDeleteImportBatchHistory(batchId: string) {
 
 export type AifLegacyImportSummary = {
   rowCount: number;
+  importRows?: number;
+  excludedRows?: number;
   newRows: number;
   existingRows: number;
   reviewRows: number;
@@ -926,6 +928,7 @@ export type AifLegacyImportCompactRow = {
   rowNo: number;
   sourceRow?: string | null;
   sourceStatus?: string | null;
+  issues?: string | null;
   previewAction: "new" | "existing" | "conflict" | string;
   processStatus: "pending" | "done" | "error" | "skipped" | string;
   warningCount: number;
@@ -1034,6 +1037,21 @@ export function apiAifResolveLegacyImportConflicts(id: string) {
     `/legacy-imports/${encodeURIComponent(id)}/resolve-conflicts`,
     { method: "POST", body: JSON.stringify({ mode: "safe" }) },
   );
+}
+
+export function apiAifSetLegacyImportRowsExcluded(
+  id: string,
+  input: { rowNos: number[]; excluded: boolean },
+) {
+  return fetchAifJSON<AifLegacyImportDetailResponse & {
+    exclusion?: { changed: number; excluded: boolean; rowNos: number[] };
+  }>(`/legacy-imports/${encodeURIComponent(id)}/rows/exclusion`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      rowNos: input.rowNos,
+      excluded: input.excluded,
+    }),
+  });
 }
 
 export function apiAifCommitLegacyImportChunk(id: string, options?: { limit?: number; retryErrors?: boolean }) {
