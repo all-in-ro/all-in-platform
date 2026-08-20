@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNod
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   AlertTriangle,
   Barcode,
   CalendarDays,
@@ -547,6 +549,51 @@ function StatCard({ label, value, hint, icon, tone = "neutral" }: { label: strin
   );
 }
 
+function HoverZoomImage({ src, title }: { src?: string | null; title: string }) {
+  const clean = String(src || "").trim();
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+
+  const previewStyle = useMemo(() => {
+    if (!pointer || typeof window === "undefined") return null;
+    const width = 300;
+    const height = 360;
+    const gap = 18;
+    const edge = 14;
+    const left = pointer.x + gap + width <= window.innerWidth - edge
+      ? pointer.x + gap
+      : Math.max(edge, pointer.x - width - gap);
+    const top = Math.max(edge, Math.min(pointer.y - height / 2, window.innerHeight - height - edge));
+    return { left, top, width, height };
+  }, [pointer]);
+
+  return (
+    <>
+      <div
+        className={`grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/14 bg-white/90 shadow-sm ${clean ? "cursor-zoom-in" : ""}`}
+        onMouseEnter={(event) => clean && setPointer({ x: event.clientX, y: event.clientY })}
+        onMouseMove={(event) => clean && setPointer({ x: event.clientX, y: event.clientY })}
+        onMouseLeave={() => setPointer(null)}
+        title={clean ? "Nagyítás" : undefined}
+      >
+        {clean ? <img src={clean} alt="" className="h-full w-full object-contain" loading="lazy" /> : <ImageIcon size={18} className="text-slate-400" />}
+      </div>
+      {clean && pointer && previewStyle && typeof document !== "undefined" ? createPortal(
+        <div
+          className="pointer-events-none overflow-hidden rounded-[22px] border border-[#9ee4e2]/45 bg-[#202a3a] p-2.5 shadow-[0_28px_80px_rgba(2,6,23,0.72)]"
+          style={{ position: "fixed", zIndex: 2400, ...previewStyle }}
+        >
+          <div className="grid h-[302px] place-items-center overflow-hidden rounded-2xl bg-white">
+            <img src={clean} alt="" className="h-full w-full object-contain p-2" />
+          </div>
+          <div className="mt-2 truncate px-1 text-sm font-semibold text-white">{title}</div>
+          <div className="px-1 text-[10px] uppercase tracking-[0.12em] text-[#9ee4e2]/70">Termékkép</div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 export default function AllInInventory() {
   const [locations, setLocations] = useState<AifLocation[]>([]);
   const [location, setLocation] = useState("");
@@ -571,6 +618,8 @@ export default function AllInInventory() {
   const [scannerStatus, setScannerStatus] = useState("");
   const [pendingScan, setPendingScan] = useState<PendingScan | null>(null);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [linePageSize, setLinePageSize] = useState<20 | 50 | 100>(20);
+  const [linePage, setLinePage] = useState(1);
 
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
@@ -582,6 +631,7 @@ export default function AllInInventory() {
   const pendingScanRef = useRef<PendingScan | null>(null);
   const manualBarcodeInputRef = useRef<HTMLInputElement | null>(null);
   const countValueLoadingRef = useRef<Set<string>>(new Set());
+  const inventoryLinesTopRef = useRef<HTMLDivElement | null>(null);
 
   const currentLocation = useMemo(() => locations.find((x) => x.id === location || x.code === location) || null, [locations, location]);
 
@@ -729,6 +779,28 @@ export default function AllInInventory() {
       return true;
     });
   }, [active, categoryFilter, lineFilter, drafts, search]);
+
+  const lineTotalPages = Math.max(1, Math.ceil(filteredLines.length / linePageSize));
+  const visibleInventoryLines = useMemo(() => {
+    const start = (linePage - 1) * linePageSize;
+    return filteredLines.slice(start, start + linePageSize);
+  }, [filteredLines, linePage, linePageSize]);
+
+  useEffect(() => {
+    setLinePage(1);
+  }, [active?.item.id, search, categoryFilter, lineFilter, linePageSize]);
+
+  useEffect(() => {
+    if (linePage > lineTotalPages) setLinePage(lineTotalPages);
+  }, [linePage, lineTotalPages]);
+
+  function changeLinePage(nextPage: number) {
+    const safePage = Math.max(1, Math.min(lineTotalPages, nextPage));
+    setLinePage(safePage);
+    window.setTimeout(() => {
+      inventoryLinesTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }
 
   function valueSnapshotFromLines(lines: InventoryCountLine[]): CountValueSnapshot {
     let countedSellValue = 0;
@@ -1378,8 +1450,8 @@ export default function AllInInventory() {
           </div>
         </div>
 
-        <div className="grid gap-2">
-          {filteredLines.map((line) => {
+        <div ref={inventoryLinesTopRef} className="grid gap-2" style={{ scrollMarginTop: 92 }}>
+          {visibleInventoryLines.map((line) => {
             const diff = lineDiff(line, drafts);
             const img = getImageSrc(line);
             const counted = drafts[line.id]?.countedQty || "";
@@ -1429,6 +1501,20 @@ export default function AllInInventory() {
             );
           })}
           {!filteredLines.length ? <div className="rounded-2xl border border-white/14 bg-white/[0.05] p-4 text-center text-sm text-white/62">Nincs találat a jelenlegi szűrésre.</div> : null}
+          {filteredLines.length > 0 ? (
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-2xl border border-white/12 bg-[#303a4c] p-2">
+              <div className="flex gap-1">
+                {([20, 50, 100] as const).map((size) => (
+                  <button key={size} type="button" className={linePageSize === size ? chipActive : chipIdle} onClick={() => setLinePageSize(size)}>{size}</button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                <button className={btnSoft} type="button" disabled={linePage <= 1} onClick={() => changeLinePage(linePage - 1)}><ChevronLeft size={15} /></button>
+                <span className="px-2 text-xs text-white/55">{linePage}/{lineTotalPages}</span>
+                <button className={btnSoft} type="button" disabled={linePage >= lineTotalPages} onClick={() => changeLinePage(linePage + 1)}><ChevronRight size={15} /></button>
+              </div>
+            </div>
+          ) : null}
         </div>
       </section>
     );
@@ -1735,31 +1821,39 @@ export default function AllInInventory() {
               </div>
             </div>
 
-            <div className="hidden overflow-auto lg:block">
-              <table className="w-full min-w-[1120px] border-collapse text-sm">
-                <thead className="bg-[#263247] text-xs uppercase tracking-wide text-white">
+            <div ref={inventoryLinesTopRef} className="hidden overflow-auto lg:block" style={{ scrollMarginTop: 92 }}>
+              <table className="w-full min-w-[1180px] table-fixed border-collapse text-sm">
+                <colgroup>
+                  <col style={{ width: "31%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "7%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "17%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "10%" }} />
+                </colgroup>
+                <thead className="bg-[#263247] text-[11px] uppercase tracking-[0.08em] text-white">
                   <tr>
-                    <th className="px-4 py-3 text-left">Termék</th>
-                    <th className="px-4 py-3 text-left">Szín</th>
-                    <th className="px-4 py-3 text-left">Méret</th>
-                    <th className="px-4 py-3 text-right">Rendszer</th>
-                    <th className="px-4 py-3 text-right">Talált</th>
-                    <th className="px-4 py-3 text-right">Eltérés</th>
-                    <th className="px-4 py-3 text-right">Érték</th>
-                    <th className="px-4 py-3 text-left">Megjegyzés</th>
+                    <th className="px-3 py-3 text-left">Termék</th>
+                    <th className="px-3 py-3 text-left">Szín</th>
+                    <th className="px-3 py-3 text-center">Méret</th>
+                    <th className="px-3 py-3 text-center">Rendszer</th>
+                    <th className="px-3 py-3 text-center">Talált</th>
+                    <th className="px-3 py-3 text-center">Eltérés</th>
+                    <th className="px-3 py-3 text-center">Érték</th>
+                    <th className="px-3 py-3 text-left">Megjegyzés</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredLines.map((line) => {
+                  {visibleInventoryLines.map((line, rowIndex) => {
                     const diff = lineDiff(line, drafts);
                     const img = getImageSrc(line);
                     return (
-                      <tr key={line.id} className="border-t border-white/10 hover:bg-white/[0.04]">
-                        <td className="px-4 py-3">
+                      <tr key={line.id} className={`border-t border-white/10 transition hover:bg-[#445064] ${rowIndex % 2 ? "bg-white/[0.018]" : "bg-transparent"}`}> 
+                        <td className="px-3 py-3">
                           <div className="flex items-center gap-3">
-                            <div className="grid h-12 w-12 place-items-center overflow-hidden rounded-xl border border-white/14 bg-white/90">
-                              {img ? <img src={img} alt="" className="h-full w-full object-contain" /> : <ImageIcon size={18} className="text-slate-400" />}
-                            </div>
+                            <HoverZoomImage src={img} title={productTitle(line)} />
                             <div>
                               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#9ee4e2]">{line.brand_name || "-"} <span className="text-white/50 normal-case">{line.category_name_ro || ""}</span></div>
                               <div className="font-semibold text-white">{productTitle(line)}</div>
@@ -1767,11 +1861,11 @@ export default function AllInInventory() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-white/85">{line.color_name || line.color_code || "-"}</td>
-                        <td className="px-4 py-3 text-white/85">{line.size || "-"}</td>
-                        <td className="px-4 py-3 text-right font-semibold tabular-nums">{formatQty(line.expected_qty)}</td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="inline-grid grid-cols-[34px_96px_34px] items-center gap-1">
+                        <td className="px-3 py-3 text-left text-white/85">{line.color_name || line.color_code || "-"}</td>
+                        <td className="px-3 py-3 text-center text-white/85">{line.size || "-"}</td>
+                        <td className="px-3 py-3 text-center font-semibold tabular-nums">{formatQty(line.expected_qty)}</td>
+                        <td className="px-3 py-3 text-center">
+                          <div className="mx-auto inline-grid grid-cols-[34px_96px_34px] items-center gap-1">
                             <button
                               className="h-10 rounded-xl border border-white/14 bg-white/[0.08] text-base text-white hover:bg-white/[0.12] disabled:opacity-40"
                               type="button"
@@ -1795,14 +1889,41 @@ export default function AllInInventory() {
                             >+</button>
                           </div>
                         </td>
-                        <td className={`px-4 py-3 text-right font-semibold tabular-nums ${diff === null ? "text-white/45" : diff < 0 ? "text-red-200" : diff > 0 ? "text-emerald-200" : "text-white"}`}>{diff === null ? "-" : `${diff > 0 ? "+" : ""}${formatQty(diff)}`}</td>
-                        <td className={`px-4 py-3 text-right tabular-nums ${diff === null ? "text-white/45" : diff < 0 ? "text-red-200" : diff > 0 ? "text-emerald-200" : "text-white/72"}`}>{diff === null ? "-" : `${formatMoney(diff * n(line.sell_price))} RON`}</td>
-                        <td className="px-4 py-3"><input className={`${input} w-full`} disabled={!canEditActive} value={drafts[line.id]?.note || ""} onChange={(e) => updateDraft(line.id, { note: e.target.value })} placeholder="Megjegyzés" /></td>
+                        <td className={`px-3 py-3 text-center font-semibold tabular-nums ${diff === null ? "text-white/45" : diff < 0 ? "text-red-200" : diff > 0 ? "text-emerald-200" : "text-white"}`}>{diff === null ? "-" : `${diff > 0 ? "+" : ""}${formatQty(diff)}`}</td>
+                        <td className={`px-3 py-3 text-center tabular-nums ${diff === null ? "text-white/45" : diff < 0 ? "text-red-200" : diff > 0 ? "text-emerald-200" : "text-white/72"}`}>{diff === null ? "-" : `${formatMoney(diff * n(line.sell_price))} RON`}</td>
+                        <td className="px-3 py-3"><input className={`${input} w-full`} disabled={!canEditActive} value={drafts[line.id]?.note || ""} onChange={(e) => updateDraft(line.id, { note: e.target.value })} placeholder="Megjegyzés" /></td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+            </div>
+
+            <div className="hidden items-center justify-between gap-3 border-t border-white/10 bg-[#303a4c]/55 px-4 py-3 lg:flex">
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-white/55">
+                  {filteredLines.length ? `${((linePage - 1) * linePageSize + 1).toLocaleString("hu-HU")}–${Math.min(linePage * linePageSize, filteredLines.length).toLocaleString("hu-HU")} / ${filteredLines.length.toLocaleString("hu-HU")} termék` : "0 termék"}
+                </span>
+                <div className="w-[138px]">
+                  <CompactSelect
+                    value={String(linePageSize)}
+                    onChange={(value) => setLinePageSize(Number(value) as 20 | 50 | 100)}
+                    size="compact"
+                    menuMinWidth={138}
+                    ariaLabel="Termékek száma oldalanként"
+                    options={[
+                      { value: "20", label: "20 / oldal" },
+                      { value: "50", label: "50 / oldal" },
+                      { value: "100", label: "100 / oldal" },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="min-w-[92px] text-center text-xs text-white/55">{linePage} / {lineTotalPages}. oldal</span>
+                <button className={btnSoft} type="button" disabled={linePage <= 1} onClick={() => changeLinePage(linePage - 1)}><ChevronLeft size={15} /> Előző</button>
+                <button className={btnSoft} type="button" disabled={linePage >= lineTotalPages} onClick={() => changeLinePage(linePage + 1)}>Következő <ChevronRight size={15} /></button>
+              </div>
             </div>
 
             <div className="grid gap-3 p-4 lg:hidden">
