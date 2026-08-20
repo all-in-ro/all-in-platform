@@ -503,7 +503,8 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
   const [scannerStatus, setScannerStatus] = useState("");
   const [pendingScan, setPendingScan] = useState<PendingScan | null>(null);
   const [imagePreview, setImagePreview] = useState<{ src: string; title: string } | null>(null);
-  const [visibleCount, setVisibleCount] = useState(35);
+  const [linePageSize, setLinePageSize] = useState<20 | 50 | 100>(20);
+  const [linePage, setLinePage] = useState(1);
 
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
@@ -518,6 +519,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const manualBarcodeInputRef = useRef<HTMLInputElement | null>(null);
   const countValueLoadingRef = useRef<Set<string>>(new Set());
+  const inventoryLinesTopRef = useRef<HTMLElement | null>(null);
 
   async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const method = String(init?.method || "GET").toUpperCase();
@@ -556,7 +558,6 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
       setMessage(null);
-      setVisibleCount(35);
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "A leltár betöltése nem sikerült." });
     } finally {
@@ -672,7 +673,25 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
     });
   }, [active, categoryFilter, lineFilter, drafts, search]);
 
-  const visibleLines = useMemo(() => filteredLines.slice(0, visibleCount), [filteredLines, visibleCount]);
+  const lineTotalPages = Math.max(1, Math.ceil(filteredLines.length / linePageSize));
+  const visibleLines = useMemo(() => {
+    const start = (linePage - 1) * linePageSize;
+    return filteredLines.slice(start, start + linePageSize);
+  }, [filteredLines, linePage, linePageSize]);
+
+  useEffect(() => {
+    setLinePage(1);
+  }, [active?.item.id, search, categoryFilter, lineFilter, linePageSize]);
+
+  useEffect(() => {
+    if (linePage > lineTotalPages) setLinePage(lineTotalPages);
+  }, [linePage, lineTotalPages]);
+
+  function changeLinePage(nextPage: number) {
+    const safePage = Math.max(1, Math.min(lineTotalPages, nextPage));
+    setLinePage(safePage);
+    window.setTimeout(() => inventoryLinesTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }
 
   function valueSnapshotFromLines(lines: InventoryCountLine[]): CountValueSnapshot {
     let countedSellValue = 0;
@@ -1437,7 +1456,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
               </div>
             </section>
 
-            <section className="grid gap-2">
+            <section ref={inventoryLinesTopRef} className="grid gap-2" style={{ scrollMarginTop: 96 }}>
               {visibleLines.map((line) => {
                 const diff = lineDiff(line, drafts);
                 const img = getImageSrc(line);
@@ -1474,8 +1493,24 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 );
               })}
               {!filteredLines.length ? <div className="rounded-2xl border border-white/14 bg-white/[0.05] p-4 text-center text-sm text-white/62">Nincs találat a jelenlegi szűrésre.</div> : null}
-              {filteredLines.length > visibleLines.length && (
-                <button className={softBtn} type="button" onClick={() => setVisibleCount((current) => current + 35)}>További sorok betöltése ({formatQty(filteredLines.length - visibleLines.length)})</button>
+              {filteredLines.length > 0 && (
+                <div className="mt-1 rounded-[22px] border border-white/14 bg-[#303a4c] p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-white/55">{((linePage - 1) * linePageSize + 1).toLocaleString("hu-HU")}–{Math.min(linePage * linePageSize, filteredLines.length).toLocaleString("hu-HU")} / {filteredLines.length.toLocaleString("hu-HU")}</span>
+                    <span className="text-[11px] text-white/55">{linePage} / {lineTotalPages}. oldal</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {([20, 50, 100] as const).map((size) => (
+                        <button key={size} type="button" className={linePageSize === size ? chipActive : chipIdle} onClick={() => setLinePageSize(size)}>{size}</button>
+                      ))}
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button className={iconBtn} type="button" disabled={linePage <= 1} onClick={() => changeLinePage(linePage - 1)}><ChevronLeft size={18} /></button>
+                      <button className={iconBtn} type="button" disabled={linePage >= lineTotalPages} onClick={() => changeLinePage(linePage + 1)}><ChevronRight size={18} /></button>
+                    </div>
+                  </div>
+                </div>
               )}
             </section>
           </>
