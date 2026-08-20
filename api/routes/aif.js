@@ -7759,6 +7759,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   function legacySummaryFromCompactRows(rows) {
     const summary = {
       rowCount: rows.length,
+      importRows: 0,
+      excludedRows: 0,
       newRows: 0,
       existingRows: 0,
       reviewRows: 0,
@@ -7781,23 +7783,35 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       canCommit: true,
     };
     for (const row of rows || []) {
-      if (row.previewAction === 'new') summary.newRows++;
-      if (row.previewAction === 'existing') summary.existingRows++;
-      if (row.previewAction === 'conflict') summary.conflictRows++;
-      if (row.sourceStatus === 'REVIEW' || row.sourceStatus === 'STOP' || Number(row.warningCount || 0) > 0) summary.reviewRows++;
-      if (Number(row.targetStockQty ?? row.target_qty ?? 0) > 0) summary.positiveStockRows++;
-      else summary.zeroStockRows++;
-      if (Number(row.rawQty ?? row.raw_qty ?? 0) < 0) summary.normalizedNegativeRows++;
-      if (!text(row.barcode ?? row.legacy_barcode)) summary.missingBarcodeRows++;
-      if (!text(row.brandName ?? row.brand_name)) summary.missingBrandRows++;
-      if (String(row.size || '').startsWith('N/A-')) summary.missingSizeRows++;
-      const qty = Number(row.targetStockQty ?? row.target_qty ?? 0);
-      summary.totalQty += qty;
-      const buy = Number(row.buyPrice ?? row.buy_price ?? 0);
-      const sell = Number(row.sellPrice ?? row.sell_price ?? 0);
-      if (Number.isFinite(buy)) summary.purchaseValueRon += qty * buy;
-      if (Number.isFinite(sell)) summary.retailValueRon += qty * sell;
       const process = row.processStatus ?? row.process_status;
+      const excluded = process === 'skipped';
+      if (excluded) summary.excludedRows++;
+      else summary.importRows++;
+
+      if (!excluded) {
+        if (row.previewAction === 'new') summary.newRows++;
+        if (row.previewAction === 'existing') summary.existingRows++;
+        if (row.previewAction === 'conflict') summary.conflictRows++;
+        const issueText = text(row.issues || row.message || row.preview_message || '').toUpperCase();
+        const missingBrand = !text(row.brandName ?? row.brand_name) || issueText.includes('UNKNOWN_BRAND');
+        const missingSize = String(row.size || '').startsWith('N/A-') || issueText.includes('SIZE_NOT_PARSED') || issueText.includes('MISSING_SIZE');
+        const meaningfulReview = missingBrand || missingSize || Number(row.rawQty ?? row.raw_qty ?? 0) < 0 ||
+          ['MISSING_CATEGORY','MISSING_GENDER','MISSING_BARCODE','MISSING_PRODUCT_CODE','NEGATIVE_STOCK'].some((code) => issueText.includes(code));
+        if (meaningfulReview) summary.reviewRows++;
+        if (Number(row.targetStockQty ?? row.target_qty ?? 0) > 0) summary.positiveStockRows++;
+        else summary.zeroStockRows++;
+        if (Number(row.rawQty ?? row.raw_qty ?? 0) < 0) summary.normalizedNegativeRows++;
+        if (!text(row.barcode ?? row.legacy_barcode)) summary.missingBarcodeRows++;
+        if (!text(row.brandName ?? row.brand_name)) summary.missingBrandRows++;
+        if (String(row.size || '').startsWith('N/A-')) summary.missingSizeRows++;
+        const qty = Number(row.targetStockQty ?? row.target_qty ?? 0);
+        summary.totalQty += qty;
+        const buy = Number(row.buyPrice ?? row.buy_price ?? 0);
+        const sell = Number(row.sellPrice ?? row.sell_price ?? 0);
+        if (Number.isFinite(buy)) summary.purchaseValueRon += qty * buy;
+        if (Number.isFinite(sell)) summary.retailValueRon += qty * sell;
+      }
+
       if (process && process !== 'pending') summary.processedRows++;
       if (process === 'done') summary.doneRows++;
       if (process === 'error') summary.errorRows++;
@@ -7816,6 +7830,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       rowNo: Number(row.row_no || 0),
       sourceRow: row.source_row || null,
       sourceStatus: row.source_status || null,
+      issues: row.issues || null,
       previewAction: row.preview_action || 'new',
       processStatus: row.process_status || 'pending',
       warningCount: Number(row.warning_count || 0),
@@ -8105,6 +8120,81 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!addition || base.includes(addition)) return base;
     return `${base} • ${addition}`;
   }
+
+  router.patch('/legacy-imports/:id/rows/exclusion', requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    const sourceRowNos = Array.isArray(req.body?.rowNos)
+      ? req.body.rowNos
+      : Array.isArray(req.body?.row_nos)
+        ? req.body.row_nos
+        : [req.body?.rowNo ?? req.body?.row_no];
+    const rowNos = Array.from(new Set(sourceRowNos.map((value) => toInt(value)).filter((value) => Number.isFinite(value) && value > 0))).slice(0, 1000);
+    const excluded = boolFrom(req.body?.excluded ?? req.body?.skip ?? true, true);
+    if (!rowNos.length) return res.status(400).json({ error: 'Legalább egy migrációs sor szükséges.' });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      await client.query('BEGIN');
+      const migrationResult = await client.query(
+        `SELECT * FROM aif_legacy_migrations WHERE id::text=$1 FOR UPDATE`,
+        [id]
+      );
+      if (!migrationResult.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'A migráció nem található.' });
+      }
+      const migration = migrationResult.rows[0];
+      if (['committed','cancelled','committing'].includes(String(migration.status || ''))) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Folyamatban lévő vagy lezárt migráció sorai már nem módosíthatók.' });
+      }
+
+      let changed;
+      if (excluded) {
+        changed = await client.query(
+          `UPDATE aif_legacy_migration_rows
+           SET process_status='skipped', process_error=NULL, processed_at=now(), updated_at=now()
+           WHERE migration_id=$1
+             AND row_no = ANY($2::int[])
+             AND process_status IN ('pending','error','skipped')`,
+          [migration.id, rowNos]
+        );
+      } else {
+        changed = await client.query(
+          `UPDATE aif_legacy_migration_rows
+           SET process_status='pending', process_error=NULL, processed_at=NULL, updated_at=now()
+           WHERE migration_id=$1
+             AND row_no = ANY($2::int[])
+             AND process_status='skipped'`,
+          [migration.id, rowNos]
+        );
+      }
+
+      const rowsNow = await client.query(`SELECT * FROM aif_legacy_migration_rows WHERE migration_id=$1 ORDER BY row_no ASC`, [migration.id]);
+      const compactRows = rowsNow.rows.map(legacyCompactDbRow);
+      const summary = legacySummaryFromCompactRows(compactRows);
+      await client.query(
+        `UPDATE aif_legacy_migrations
+         SET processed_rows=$2, total_qty=$3, stats=$4::jsonb, updated_at=now()
+         WHERE id=$1`,
+        [migration.id, Number(summary.processedRows || 0), Number(summary.totalQty || 0), JSON.stringify(summary)]
+      );
+      await client.query('COMMIT');
+
+      const detail = await readLegacyMigrationDetail(pool, migration.id);
+      return res.json({
+        ...detail,
+        exclusion: { changed: Number(changed.rowCount || 0), excluded, rowNos },
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF legacy row exclusion failed', error);
+      return res.status(500).json({ error: error?.message || 'A migrációs sor kihagyása nem sikerült.', code: error?.code || null });
+    } finally {
+      client.release();
+    }
+  });
 
   router.post('/legacy-imports/:id/resolve-conflicts', requireAdminOrSecret, async (req, res) => {
     const id = text(req.params.id);
@@ -9008,7 +9098,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       if (retryErrors) {
         await client.query(`UPDATE aif_legacy_migration_rows SET process_status='pending', process_error=NULL, updated_at=now() WHERE migration_id=$1 AND process_status='error'`, [migration.id]);
       }
-      const conflictCount = await client.query(`SELECT count(*)::int AS c FROM aif_legacy_migration_rows WHERE migration_id=$1 AND preview_action='conflict'`, [migration.id]);
+      const conflictCount = await client.query(`SELECT count(*)::int AS c FROM aif_legacy_migration_rows WHERE migration_id=$1 AND preview_action='conflict' AND process_status <> 'skipped'`, [migration.id]);
       if (Number(conflictCount.rows[0]?.c || 0) > 0) {
         await client.query('ROLLBACK');
         return res.status(409).json({ error: `${conflictCount.rows[0].c} ütköző sor miatt a migráció nem véglegesíthető.`, code: 'legacy_conflicts_present' });
