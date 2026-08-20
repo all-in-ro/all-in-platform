@@ -8071,6 +8071,86 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.delete('/legacy-imports/:id', requireAdminOrSecret, async (req, res) => {
+    const id = text(req.params.id);
+    if (!id) return res.status(400).json({ error: 'A migráció azonosítója hiányzik.' });
+
+    const client = await pool.connect();
+    try {
+      await ensureAifLegacyMigrationSchema(pool);
+      await client.query('BEGIN');
+
+      const migrationResult = await client.query(
+        `SELECT id, status, row_count, processed_rows
+         FROM aif_legacy_migrations
+         WHERE id::text=$1
+         FOR UPDATE`,
+        [id]
+      );
+      if (!migrationResult.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'A migráció nem található.' });
+      }
+
+      const migration = migrationResult.rows[0];
+      if (String(migration.status || '') !== 'prepared') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'Csak még el nem indított, előkészített import törölhető véglegesen. A már megkezdett vagy lezárt migrációt a készletvédelem miatt nem törlöm.',
+          code: 'legacy_import_delete_not_allowed',
+        });
+      }
+
+      const rowState = await client.query(
+        `SELECT
+           count(*)::int AS rows,
+           count(*) FILTER (WHERE process_status='done')::int AS done_rows
+         FROM aif_legacy_migration_rows
+         WHERE migration_id=$1`,
+        [migration.id]
+      );
+      const movementState = await client.query(
+        `SELECT count(*)::int AS movements
+         FROM aif_stock_movements
+         WHERE raw->>'migrationId'=$1`,
+        [String(migration.id)]
+      );
+
+      const deletedRows = Number(rowState.rows[0]?.rows || 0);
+      const doneRows = Number(rowState.rows[0]?.done_rows || 0);
+      const movementCount = Number(movementState.rows[0]?.movements || 0);
+      if (doneRows > 0 || movementCount > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'Ehhez az importhoz már termék- vagy készletfeldolgozás kapcsolódik, ezért az előzmény nem törölhető biztonságosan.',
+          code: 'legacy_import_has_effects',
+          doneRows,
+          movementCount,
+        });
+      }
+
+      await client.query(`DELETE FROM aif_legacy_migrations WHERE id=$1`, [migration.id]);
+      await client.query('COMMIT');
+
+      return res.json({
+        ok: true,
+        mode: 'deleted',
+        id: String(migration.id),
+        deletedRows,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF legacy migration delete failed', error);
+      const status = Number(error?.statusCode || 500);
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: error?.message || 'Az import előzmény törlése nem sikerült.',
+        code: error?.code || null,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   function legacyBarcodeCandidateScore(row, candidate) {
     let score = 0;
     const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
