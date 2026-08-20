@@ -1020,6 +1020,17 @@ export function apiAifGetLegacyImport(id: string) {
   return fetchAifJSON<AifLegacyImportDetailResponse>(`/legacy-imports/${encodeURIComponent(id)}`);
 }
 
+export function apiAifDeleteLegacyImport(id: string) {
+  return fetchAifJSON<{
+    ok: true;
+    mode: "deleted";
+    id: string;
+    deletedRows: number;
+  }>(`/legacy-imports/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 export type AifLegacyConflictResolutionResult = AifLegacyImportDetailResponse & {
   resolution: {
     requested: number;
