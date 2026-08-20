@@ -13,11 +13,13 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Trash2,
   UploadCloud,
   XCircle,
 } from "lucide-react";
 import {
   apiAifCommitLegacyImportChunk,
+  apiAifDeleteLegacyImport,
   apiAifGetLegacyImport,
   apiAifListLegacyImports,
   apiAifMeta,
@@ -314,7 +316,7 @@ function humanizeLegacyMessage(value: unknown) {
   const raw = String(value || "").trim();
   if (!raw) return "-";
   const replacements: Array<[RegExp, string]> = [
-    [/DUPLICATE_FORIT_CODE_REKEYED/gi, "Duplikált ForIT termékkód volt; az import egyedi kódot adott neki"],
+    [/DUPLICATE_FORIT_CODE_REKEYED/gi, "Duplikált régi termékkód volt; az import egyedi kódot adott neki"],
     [/MISSING_CATEGORY/gi, "Hiányzik a kategória"],
     [/MISSING_GENDER/gi, "Hiányzik a nem"],
     [/UNKNOWN_BRAND/gi, "A márka nem azonosítható biztosan"],
@@ -327,6 +329,27 @@ function humanizeLegacyMessage(value: unknown) {
   return out.replace(/;+/g, " • ").replace(/\s*•\s*•+/g, " • ").trim();
 }
 
+type LegacyHistoryItem = {
+  id: string;
+  status: string;
+  sourceFileName?: string | null;
+  sourceDate?: string | null;
+  locationName?: string | null;
+  rowCount: number;
+  processedRows: number;
+  totalQty: number;
+  createdAt?: string | null;
+};
+
+function legacyHistoryStatusLabel(status: string) {
+  if (status === "prepared") return "Előkészítve";
+  if (status === "committing") return "Folyamatban";
+  if (status === "committed") return "Befejezve";
+  if (status === "failed") return "Hibás / megszakadt";
+  if (status === "cancelled") return "Törölve";
+  return status || "-";
+}
+
 export default function AllInLegacyImport() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [locations, setLocations] = useState<AifLocation[]>([]);
@@ -334,7 +357,9 @@ export default function AllInLegacyImport() {
   const [fileName, setFileName] = useState("");
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
   const [migration, setMigration] = useState<AifLegacyImportDetailResponse | null>(null);
-  const [history, setHistory] = useState<Array<{ id: string; status: string; sourceFileName?: string | null; sourceDate?: string | null; locationName?: string | null; rowCount: number; processedRows: number; totalQty: number; createdAt?: string | null }>>([]);
+  const [history, setHistory] = useState<LegacyHistoryItem[]>([]);
+  const [deleteCandidate, setDeleteCandidate] = useState<LegacyHistoryItem | null>(null);
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -356,6 +381,27 @@ export default function AllInLegacyImport() {
       setHistory(response.items || []);
     } catch {
       // A történeti lista nem blokkolja magát a migrációt.
+    }
+  }
+
+  async function deleteHistoryItem(item: LegacyHistoryItem) {
+    if (!item?.id || deletingHistoryId) return;
+    setDeletingHistoryId(item.id);
+    setError("");
+    try {
+      const response = await apiAifDeleteLegacyImport(item.id);
+      if (migration?.item?.id === item.id) {
+        setMigration(null);
+        setConfirmExactStock(false);
+        try { window.sessionStorage.removeItem(LEGACY_ACTIVE_MIGRATION_KEY); } catch {}
+      }
+      setDeleteCandidate(null);
+      setMessage(`${response.deletedRows.toLocaleString("ro-RO")} előkészített sor véglegesen törölve az importnaplóból.`);
+      await loadHistory();
+    } catch (e: any) {
+      setError(e?.message || "Az import előzmény törlése nem sikerült.");
+    } finally {
+      setDeletingHistoryId(null);
     }
   }
 
@@ -442,7 +488,7 @@ export default function AllInLegacyImport() {
     const headers = new Set(Object.keys(parsed[0] || {}));
     const missing = REQUIRED_HEADERS.filter((header) => !headers.has(header));
     if (missing.length) {
-      throw new Error(`Ez nem az előkészített AllIn ForIT migrációs CSV. Hiányzó oszlopok: ${missing.join(", ")}.`);
+      throw new Error(`Ez nem az előkészített AllIn migrációs CSV. Hiányzó oszlopok: ${missing.join(", ")}.`);
     }
     setFileName(file.name);
     setCsvRows(parsed);
@@ -451,11 +497,11 @@ export default function AllInLegacyImport() {
 
   async function startPreview() {
     if (!locationId) {
-      setError("Válaszd ki, melyik AllIn üzlethez tartozik a régi ForIT készlet.");
+      setError("Válaszd ki, melyik AllIn üzlethez tartozik a régi készlet.");
       return;
     }
     if (!csvRows.length) {
-      setError("Előbb töltsd be a teljes ForIT migrációs CSV-t.");
+      setError("Előbb töltsd be a teljes migrációs CSV-t.");
       return;
     }
     setBusy(true);
@@ -497,7 +543,7 @@ export default function AllInLegacyImport() {
       const parts = [
         `${r.resolved} ütközés feloldva`,
         r.matchedExisting ? `${r.matchedExisting} meglévő AllIn variánshoz kötve` : "",
-        r.separatedNew ? `${r.separatedNew} külön ForIT legacy variánsként marad` : "",
+        r.separatedNew ? `${r.separatedNew} külön variánsként marad` : "",
         r.reservedProtected ? `${r.reservedProtected} sornál a meglévő foglalás védve` : "",
         r.duplicateBarcodeCanonicalized ? `${r.duplicateBarcodeCanonicalized} régi AllIn barcode-duplikáció elsődleges rekordhoz kötve` : "",
       ].filter(Boolean);
@@ -606,8 +652,8 @@ export default function AllInLegacyImport() {
               <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#8ce7e2]/45 bg-[#208d8b]/22 text-[#d7fffd]"><Database size={22} /></span>
               <div>
                 <p className="text-[9px] uppercase tracking-[0.18em] text-[#9ee5e2]/68">ALLINFASHION • EGYSZERI ADATMIGRÁCIÓ</p>
-                <h1 className="mt-1 text-2xl text-white">Régi rendszer import • ForIT</h1>
-                <p className="mt-1 text-sm text-white/64">Teljes terméktörzs, vonalkódok, árak és a kiválasztott üzlet pontos nyitókészlete. Beszállítói receptió nélkül.</p>
+                <h1 className="mt-1 text-2xl text-white">Régi rendszer import</h1>
+                <p className="mt-1 text-sm text-white/64">Terméktörzs, vonalkódok, árak és nyitókészlet átvitele receptió nélkül.</p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -625,9 +671,9 @@ export default function AllInLegacyImport() {
             <div>
               <p className="text-[9px] uppercase tracking-[0.14em] text-white/46">1. FORRÁS ÉS CÉLHELY</p>
               <h2 className="mt-1 text-lg text-white">Melyik készletet hozzuk át?</h2>
-              <p className="mt-1 text-sm text-white/58">A ForIT csak egy üzletet kezelt, ezért itt egyszer kell megmondani, melyik AllIn helyhez tartozik.</p>
+              <p className="mt-1 text-sm text-white/58">Válaszd ki, melyik AllIn helyhez tartozik a forráskészlet.</p>
             </div>
-            <span className="inline-flex items-center gap-2 rounded-full border border-amber-200/25 bg-amber-300/8 px-3 py-1 text-[11px] text-amber-50"><ShieldCheck size={13} /> A preview semmit nem ír a készletbe</span>
+            <span className="inline-flex items-center gap-2 rounded-full border border-amber-200/25 bg-amber-300/8 px-3 py-1 text-[11px] text-amber-50"><ShieldCheck size={13} /> Az ellenőrzés nem módosít készletet</span>
           </div>
 
           <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.5fr_auto] lg:items-end">
@@ -649,7 +695,7 @@ export default function AllInLegacyImport() {
               <p className="mb-1 text-[9px] uppercase tracking-[0.1em] text-white/48">Előkészített migrációs CSV</p>
               <button className={`${neutralBtn} h-11 w-full justify-start`} onClick={() => fileInputRef.current?.click()} disabled={busy || committing} type="button">
                 <FileSpreadsheet size={16} />
-                <span className="min-w-0 flex-1 truncate text-left">{fileName || "AllIn_ForIT_LEGACY_IMPORT_FULL_20260819.csv kiválasztása"}</span>
+                <span className="min-w-0 flex-1 truncate text-left">{fileName || "Migrációs CSV kiválasztása"}</span>
               </button>
               <input ref={fileInputRef} className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file).catch((e) => setError(e?.message || "A CSV nem olvasható.")); event.currentTarget.value = ""; }} />
             </div>
@@ -676,8 +722,8 @@ export default function AllInLegacyImport() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/46">2. SZERVERES ELLENŐRZÉS</p>
-                <h2 className="mt-1 text-lg text-white">Mit fog csinálni az AllIn?</h2>
-                <p className="mt-1 text-sm text-white/58">Vonalkód az elsődleges egyezési kulcs. Beszállító nem jön létre; a régi beszállító csak legacy információként marad.</p>
+                <h2 className="mt-1 text-lg text-white">Ellenőrzés eredménye</h2>
+                <p className="mt-1 text-sm text-white/58">Az egyezések, hiányzó adatok és a várható nyitókészlet összesítése.</p>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${summary.canCommit ? "border-emerald-200/30 bg-emerald-400/10 text-emerald-50" : "border-red-200/35 bg-red-500/12 text-red-50"}`}>
@@ -690,7 +736,7 @@ export default function AllInLegacyImport() {
                     type="button"
                     onClick={() => void resolveConflicts()}
                     disabled={busy || committing || resolvingConflicts}
-                    title="A biztos barcode-egyezéseket meglévő termékhez köti; a bizonytalan, de saját barcode-os ForIT sorokat külön legacy variánsként viszi át."
+                    title="A biztos barcode-egyezéseket meglévő termékhez köti; a különálló barcode-os sorokat szükség esetén külön variánsként kezeli."
                   >
                     {resolvingConflicts ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
                     {resolvingConflicts ? "Ütközések rendezése..." : `${summary.conflictRows} ütközés rendezése`}
@@ -714,7 +760,7 @@ export default function AllInLegacyImport() {
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Új variáns</p><p className="mt-1 text-sm text-[#bff8f5]">{integer(summary.newRows)}</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Kihagyva</p><p className="mt-1 text-sm text-white/55">{integer(summary.excludedRows || 0)} sor</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Készlet vételi érték</p><p className="mt-1 text-sm">{money(summary.purchaseValueRon)}</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Negatív ForIT → 0</p><p className="mt-1 text-sm text-amber-100">{integer(summary.normalizedNegativeRows)} sor</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Negatív készlet → 0</p><p className="mt-1 text-sm text-amber-100">{integer(summary.normalizedNegativeRows)} sor</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Barcode nélkül</p><p className="mt-1 text-sm">{integer(summary.missingBarcodeRows)} sor</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Márka nélkül</p><p className="mt-1 text-sm">{integer(summary.missingBrandRows)} sor</p></div>
             </div>
@@ -726,7 +772,7 @@ export default function AllInLegacyImport() {
             ) : null}
 
             <div className="mt-4 rounded-2xl border border-amber-200/28 bg-amber-300/8 p-3 text-sm leading-6 text-amber-50">
-              <strong>Készletlogika:</strong> a kiválasztott célhely készlete <strong>pontosan</strong> a CSV `QTY` értékére áll. Nem hozzáadjuk a ForIT darabot az AllIn jelenlegi darabjához. A régi negatív készletű {summary.normalizedNegativeRows} sor terméke is létrejön, de a nyitókészlete 0 lesz; az eredeti negatív érték az auditban megmarad.
+              <strong>Készletlogika:</strong> a kiválasztott célhely készlete <strong>pontosan</strong> a CSV `QTY` értékére áll, nem hozzáadással. A negatív készletű {summary.normalizedNegativeRows} sor nyitókészlete 0 lesz; az eredeti érték az auditban megmarad.
             </div>
           </section>
         ) : null}
@@ -765,7 +811,7 @@ export default function AllInLegacyImport() {
             <div className="mt-3 overflow-x-auto rounded-2xl border border-white/12">
               <table className="w-full min-w-[1180px] text-xs">
                 <thead className="bg-[#273447] text-[9px] uppercase tracking-[0.08em] text-white/50">
-                  <tr><th className="px-3 py-2 text-left">Sor</th><th className="px-3 py-2 text-left">Állapot</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-left">Márka</th><th className="px-3 py-2 text-left">Kód</th><th className="px-3 py-2 text-left">Barcode</th><th className="px-3 py-2 text-left">Szín / méret</th><th className="px-3 py-2 text-right">ForIT db</th><th className="px-3 py-2 text-right">AllIn → cél</th><th className="px-3 py-2 text-left">Hiányzik / gond</th><th className="px-3 py-2 text-center">Import</th></tr>
+                  <tr><th className="px-3 py-2 text-left">Sor</th><th className="px-3 py-2 text-left">Állapot</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-left">Márka</th><th className="px-3 py-2 text-left">Kód</th><th className="px-3 py-2 text-left">Barcode</th><th className="px-3 py-2 text-left">Szín / méret</th><th className="px-3 py-2 text-right">Forrás db</th><th className="px-3 py-2 text-right">AllIn → cél</th><th className="px-3 py-2 text-left">Hiányzik / gond</th><th className="px-3 py-2 text-center">Import</th></tr>
                 </thead>
                 <tbody>
                   {visibleRows.map((row) => {
@@ -829,7 +875,7 @@ export default function AllInLegacyImport() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/46">4. VÉGLEGESÍTÉS</p>
-                <h2 className="mt-1 text-lg text-white">ForIT → AllIn migráció</h2>
+                <h2 className="mt-1 text-lg text-white">Import véglegesítése</h2>
                 <p className="mt-1 max-w-3xl text-sm leading-6 text-white/60">A 0 készletes termékek is bekerülnek a terméktörzsbe. A <strong>{integer(summary.excludedRows || 0)}</strong> kihagyott sor viszont sem terméket, sem készletet nem hoz létre. Más AllIn üzlet készletéhez nem nyúl.</p>
               </div>
               {status === "committed" ? <span className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200/30 bg-emerald-400/12 px-4 py-3 text-sm text-emerald-50"><PackageCheck size={18} /> Migráció befejezve</span> : null}
@@ -839,7 +885,7 @@ export default function AllInLegacyImport() {
               <div className="mt-4 rounded-2xl border border-white/12 bg-[#2b3749] p-4">
                 <label className="flex cursor-pointer items-start gap-3 text-sm text-white/84">
                   <input className="mt-1 h-4 w-4 accent-[#2a8d8b]" type="checkbox" checked={confirmExactStock} onChange={(event) => setConfirmExactStock(event.target.checked)} disabled={committing || !summary.canCommit} />
-                  <span><strong>Értem és jóváhagyom:</strong> a kiválasztott üzlet készlete a ForIT CSV szerinti nyitó darabszámra áll. Ha egy már meglévő AllIn foglalás ennél nagyobb, a rendszer a foglalt darabszámot védi, és azt nem csökkenti. Ez nyitókészlet-migráció, nem normál bevételezés és nem összeadás.</span>
+                  <span><strong>Értem és jóváhagyom:</strong> a kiválasztott üzlet készlete a CSV szerinti nyitó darabszámra áll. Ha egy már meglévő AllIn foglalás ennél nagyobb, a rendszer a foglalt darabszámot védi, és azt nem csökkenti. Ez nyitókészlet-migráció, nem normál bevételezés és nem összeadás.</span>
                 </label>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-[280px] flex-1">
@@ -849,7 +895,7 @@ export default function AllInLegacyImport() {
                   </div>
                   <button className={summary.canCommit ? primaryBtn : dangerBtn} onClick={commitMigration} disabled={committing || busy || !summary.canCommit || !confirmExactStock} type="button">
                     {committing ? <RefreshCw size={15} className="animate-spin" /> : <Database size={15} />}
-                    {committing ? "Migráció folyamatban..." : processed > 0 ? "Migráció folytatása" : "FORIT MIGRÁCIÓ VÉGLEGESÍTÉSE"}
+                    {committing ? "Migráció folyamatban..." : processed > 0 ? "Migráció folytatása" : "MIGRÁCIÓ VÉGLEGESÍTÉSE"}
                   </button>
                 </div>
               </div>
@@ -861,11 +907,68 @@ export default function AllInLegacyImport() {
 
         {history.length ? (
           <section className={card}>
-            <div className="flex items-center justify-between gap-3"><div><p className="text-[9px] uppercase tracking-[0.14em] text-white/46">MIGRÁCIÓS NAPLÓ</p><h2 className="mt-1 text-lg">Legutóbbi régi rendszer importok</h2></div><button className={neutralBtn} type="button" onClick={() => void loadHistory()}><RefreshCw size={14} /> Frissítés</button></div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[9px] uppercase tracking-[0.14em] text-white/46">MIGRÁCIÓS NAPLÓ</p>
+                <h2 className="mt-1 text-lg">Korábbi importok</h2>
+              </div>
+              <button className={neutralBtn} type="button" onClick={() => void loadHistory()}><RefreshCw size={14} /> Frissítés</button>
+            </div>
             <div className="mt-3 grid gap-2">
-              {history.map((item) => <button key={item.id} className="flex w-full flex-col gap-2 rounded-2xl border border-white/12 bg-[#354153] p-3 text-left transition hover:border-[#7bd7d4]/28 sm:flex-row sm:items-center sm:justify-between" type="button" onClick={() => void loadMigration(item.id)}><div><p className="text-sm text-white">{item.sourceFileName || "ForIT migráció"}</p><p className="mt-1 text-xs text-white/48">{item.locationName || "-"} • {item.sourceDate || "-"} • {item.rowCount.toLocaleString("ro-RO")} sor</p></div><div className="text-right"><p className="text-xs text-white/80">{item.status}</p><p className="mt-1 text-[10px] text-white/42">{item.processedRows.toLocaleString("ro-RO")} / {item.rowCount.toLocaleString("ro-RO")} • {integer(item.totalQty)} db</p></div></button>)}
+              {history.map((item) => {
+                const canDelete = item.status === "prepared";
+                return (
+                  <div key={item.id} className="flex w-full flex-col gap-2 rounded-2xl border border-white/12 bg-[#354153] p-3 transition hover:border-[#7bd7d4]/28 sm:flex-row sm:items-center sm:justify-between">
+                    <button className="min-w-0 flex-1 text-left" type="button" onClick={() => void loadMigration(item.id)}>
+                      <p className="truncate text-sm text-white">{item.sourceFileName || "Régi rendszer import"}</p>
+                      <p className="mt-1 text-xs text-white/48">{item.locationName || "-"} • {item.sourceDate || "-"} • {item.rowCount.toLocaleString("ro-RO")} sor</p>
+                    </button>
+                    <div className="flex shrink-0 items-center justify-end gap-2">
+                      <button className="min-w-[150px] text-right" type="button" onClick={() => void loadMigration(item.id)}>
+                        <p className="text-xs text-white/80">{legacyHistoryStatusLabel(item.status)}</p>
+                        <p className="mt-1 text-[10px] text-white/42">{item.processedRows.toLocaleString("ro-RO")} / {item.rowCount.toLocaleString("ro-RO")} • {integer(item.totalQty)} db</p>
+                      </button>
+                      {canDelete ? (
+                        <button
+                          type="button"
+                          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-300/30 bg-red-500/10 px-3 text-[11px] text-red-50 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+                          disabled={deletingHistoryId !== null}
+                          onClick={() => setDeleteCandidate(item)}
+                          title="Az előkészített import végleges törlése"
+                        >
+                          {deletingHistoryId === item.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                          Törlés
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
+        ) : null}
+
+        {deleteCandidate && typeof document !== "undefined" ? createPortal(
+          <div className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-[520px] rounded-[22px] border border-white/16 bg-[#2d394b] p-5 shadow-[0_30px_90px_rgba(2,6,23,0.72)]">
+              <div className="flex items-start gap-3">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-300/30 bg-red-500/12 text-red-100"><Trash2 size={18} /></span>
+                <div>
+                  <h3 className="text-lg text-white">Import előzmény végleges törlése</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/62">Ez az import még csak előkészített állapotban van, ezért terméket és készletet nem érint. A hozzá tartozó ellenőrzési sorok és az importnapló-bejegyzés végleg törlődik.</p>
+                  <p className="mt-2 break-all text-xs text-white/42">{deleteCandidate.sourceFileName || "Régi rendszer import"}</p>
+                </div>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <button className={neutralBtn} type="button" disabled={deletingHistoryId !== null} onClick={() => setDeleteCandidate(null)}>Mégse</button>
+                <button className={dangerBtn} type="button" disabled={deletingHistoryId !== null} onClick={() => void deleteHistoryItem(deleteCandidate)}>
+                  {deletingHistoryId === deleteCandidate.id ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  {deletingHistoryId === deleteCandidate.id ? "Törlés..." : "Végleges törlés"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
         ) : null}
       </div>
     </main>
