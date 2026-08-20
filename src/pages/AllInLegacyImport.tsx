@@ -22,6 +22,7 @@ import {
   apiAifListLegacyImports,
   apiAifMeta,
   apiAifResolveLegacyImportConflicts,
+  apiAifSetLegacyImportRowsExcluded,
   apiAifStartLegacyImport,
   type AifLegacyImportCompactRow,
   type AifLegacyImportDetailResponse,
@@ -39,7 +40,7 @@ const REQUIRED_HEADERS = [
 ] as const;
 
 type CsvRow = Record<string, string>;
-type StatusFilter = "all" | "new" | "existing" | "review" | "conflict" | "done" | "error";
+type StatusFilter = "all" | "new" | "existing" | "review" | "conflict" | "skipped" | "done" | "error";
 
 const page = "min-h-screen bg-[#4e5969] p-3 text-white font-normal sm:p-4 lg:p-6";
 const wrap = "mx-auto max-w-[1580px] space-y-3.5";
@@ -266,6 +267,7 @@ function parseSemicolonCsv(source: string): CsvRow[] {
 }
 
 function actionLabel(row: AifLegacyImportCompactRow) {
+  if (row.processStatus === "skipped") return "Kihagyva";
   if (row.processStatus === "done") return "Kész";
   if (row.processStatus === "error") return "Hiba";
   if (row.previewAction === "conflict") return "Ütközés";
@@ -274,6 +276,7 @@ function actionLabel(row: AifLegacyImportCompactRow) {
 }
 
 function actionClass(row: AifLegacyImportCompactRow) {
+  if (row.processStatus === "skipped") return "border-white/16 bg-white/[0.05] text-white/45";
   if (row.processStatus === "done") return "border-emerald-200/30 bg-emerald-400/12 text-emerald-50";
   if (row.processStatus === "error" || row.previewAction === "conflict") return "border-red-200/35 bg-red-500/14 text-red-50";
   if (row.previewAction === "existing") return "border-sky-200/28 bg-sky-400/10 text-sky-50";
@@ -281,7 +284,30 @@ function actionClass(row: AifLegacyImportCompactRow) {
 }
 
 function sourceNeedsReview(row: AifLegacyImportCompactRow) {
-  return row.sourceStatus === "REVIEW" || Boolean(row.warningCount) || row.rawQty < 0;
+  if (row.processStatus === "skipped") return false;
+  return legacyIssueBadges(row).length > 0 || row.rawQty < 0;
+}
+
+type LegacyIssueBadge = { key: string; label: string; tone: "warning" | "danger" };
+
+function legacyIssueBadges(row: AifLegacyImportCompactRow): LegacyIssueBadge[] {
+  if (row.processStatus === "skipped") return [];
+  const raw = `${row.issues || ""} ${row.message || ""} ${row.processError || ""}`.toUpperCase();
+  const badges: LegacyIssueBadge[] = [];
+  const add = (key: string, label: string, tone: "warning" | "danger" = "warning") => {
+    if (!badges.some((item) => item.key === key)) badges.push({ key, label, tone });
+  };
+
+  if (!String(row.brandName || "").trim() || raw.includes("UNKNOWN_BRAND")) add("brand", "Márka");
+  if (!String(row.size || "").trim() || String(row.size || "").startsWith("N/A-") || raw.includes("SIZE_NOT_PARSED") || raw.includes("MISSING_SIZE")) add("size", "Méret");
+  if (raw.includes("MISSING_CATEGORY")) add("category", "Kategória");
+  if (raw.includes("MISSING_GENDER")) add("gender", "Nem");
+  if (!String(row.barcode || "").trim() || raw.includes("MISSING_BARCODE")) add("barcode", "Vonalkód");
+  if (!String(row.productCode || "").trim() || raw.includes("MISSING_PRODUCT_CODE")) add("code", "Termékkód");
+  if (row.rawQty < 0 || raw.includes("NEGATIVE_STOCK")) add("negative_stock", `${row.rawQty} db → 0`);
+  if (row.previewAction === "conflict") add("conflict", "Ütközés", "danger");
+  if (row.processStatus === "error") add("error", "Hiba", "danger");
+  return badges;
 }
 
 function humanizeLegacyMessage(value: unknown) {
@@ -314,6 +340,7 @@ export default function AllInLegacyImport() {
   const [busy, setBusy] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [resolvingConflicts, setResolvingConflicts] = useState(false);
+  const [rowActionBusy, setRowActionBusy] = useState<number | null>(null);
   const [confirmExactStock, setConfirmExactStock] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -386,7 +413,8 @@ export default function AllInLegacyImport() {
     return migrationRows.filter((row) => {
       if (statusFilter === "new" && row.previewAction !== "new") return false;
       if (statusFilter === "existing" && row.previewAction !== "existing") return false;
-      if (statusFilter === "conflict" && row.previewAction !== "conflict") return false;
+      if (statusFilter === "conflict" && (row.previewAction !== "conflict" || row.processStatus === "skipped")) return false;
+      if (statusFilter === "skipped" && row.processStatus !== "skipped") return false;
       if (statusFilter === "review" && !sourceNeedsReview(row)) return false;
       if (statusFilter === "done" && row.processStatus !== "done") return false;
       if (statusFilter === "error" && row.processStatus !== "error") return false;
@@ -488,6 +516,26 @@ export default function AllInLegacyImport() {
     }
   }
 
+  async function setRowExcluded(row: AifLegacyImportCompactRow, excluded: boolean) {
+    const id = migration?.item?.id;
+    if (!id || !row.rowNo || rowActionBusy !== null) return;
+    setRowActionBusy(row.rowNo);
+    setError("");
+    try {
+      const response = await apiAifSetLegacyImportRowsExcluded(id, { rowNos: [row.rowNo], excluded });
+      setMigration(response);
+      setConfirmExactStock(false);
+      setMessage(excluded
+        ? `${row.title || `A(z) ${row.sourceRow || row.rowNo}. sor`} kihagyva. Nem kerül át az AllInba és a készlethez sem nyúl.`
+        : `${row.title || `A(z) ${row.sourceRow || row.rowNo}. sor`} visszatéve az importba.`);
+      await loadHistory();
+    } catch (e: any) {
+      setError(e?.message || "A sor importállapotának módosítása nem sikerült.");
+    } finally {
+      setRowActionBusy(null);
+    }
+  }
+
   async function commitMigration() {
     const id = migration?.item?.id;
     if (!id) return;
@@ -527,7 +575,7 @@ export default function AllInLegacyImport() {
       }
       const fresh = await loadMigration(id);
       if (fresh.item.status === "committed") {
-        setMessage(`KÉSZ. ${fresh.summary.rowCount.toLocaleString("ro-RO")} régi ForIT sor feldolgozva, a nyitókészlet beállítva.`);
+        setMessage(`KÉSZ. ${(fresh.summary.importRows ?? fresh.summary.rowCount).toLocaleString("ro-RO")} sor importálva, ${(fresh.summary.excludedRows || 0).toLocaleString("ro-RO")} kihagyva, a nyitókészlet beállítva.`);
         setConfirmExactStock(false);
       }
       await loadHistory();
@@ -652,8 +700,8 @@ export default function AllInLegacyImport() {
             </div>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Összes termék</p><p className="mt-1 text-base">{integer(summary.rowCount)}</p></div>
-              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Új variáns</p><p className="mt-1 text-base text-[#bff8f5]">{integer(summary.newRows)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Összes sor</p><p className="mt-1 text-base">{integer(summary.rowCount)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Importálva lesz</p><p className="mt-1 text-base text-[#bff8f5]">{integer(summary.importRows ?? (summary.rowCount - (summary.excludedRows || 0)))}</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Már létezik</p><p className="mt-1 text-base text-sky-100">{integer(summary.existingRows)}</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Ellenőrzendő</p><p className="mt-1 text-base text-amber-100">{integer(summary.reviewRows)}</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Ütközés</p><p className="mt-1 text-base text-red-100">{integer(summary.conflictRows)}</p></div>
@@ -662,7 +710,9 @@ export default function AllInLegacyImport() {
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Készlet eladási érték</p><p className="mt-1 text-sm">{money(summary.retailValueRon)}</p></div>
             </div>
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Új variáns</p><p className="mt-1 text-sm text-[#bff8f5]">{integer(summary.newRows)}</p></div>
+              <div className={statCard}><p className="text-[9px] uppercase text-white/46">Kihagyva</p><p className="mt-1 text-sm text-white/55">{integer(summary.excludedRows || 0)} sor</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Készlet vételi érték</p><p className="mt-1 text-sm">{money(summary.purchaseValueRon)}</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Negatív ForIT → 0</p><p className="mt-1 text-sm text-amber-100">{integer(summary.normalizedNegativeRows)} sor</p></div>
               <div className={statCard}><p className="text-[9px] uppercase text-white/46">Barcode nélkül</p><p className="mt-1 text-sm">{integer(summary.missingBarcodeRows)} sor</p></div>
@@ -670,8 +720,8 @@ export default function AllInLegacyImport() {
             </div>
 
             {!summary.canCommit && summary.conflictRows > 0 ? (
-              <div className="mt-4 rounded-2xl border border-red-200/28 bg-red-500/10 p-3 text-sm leading-6 text-red-50">
-                <strong>Nem kell 33 sort kézzel végigkattintani.</strong> Az „ütközés rendezése” a valódi barcode-egyezést meglévő AllIn variánshoz köti. Ha csak a modell/szín/méret ütközik, de a ForIT barcode külön és szabad, külön legacy variánst készít, így nem ír rá egy másik termékre. Meglévő foglalást soha nem vág a készlet alá.
+              <div className="mt-4 rounded-2xl border border-red-200/28 bg-red-500/10 p-3 text-sm text-red-50">
+                <strong>{summary.conflictRows} ütköző sor.</strong> Rendezheted automatikusan, vagy a nem kívánt sort a listában kihagyhatod az importból.
               </div>
             ) : null}
 
@@ -703,6 +753,7 @@ export default function AllInLegacyImport() {
                       { value: "existing", label: "Meglévő" },
                       { value: "review", label: "Ellenőrzendő" },
                       { value: "conflict", label: "Ütközés" },
+                      { value: "skipped", label: "Kihagyva" },
                       { value: "done", label: "Kész" },
                       { value: "error", label: "Hibás" },
                     ]}
@@ -714,24 +765,55 @@ export default function AllInLegacyImport() {
             <div className="mt-3 overflow-x-auto rounded-2xl border border-white/12">
               <table className="w-full min-w-[1180px] text-xs">
                 <thead className="bg-[#273447] text-[9px] uppercase tracking-[0.08em] text-white/50">
-                  <tr><th className="px-3 py-2 text-left">Sor</th><th className="px-3 py-2 text-left">Állapot</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-left">Márka</th><th className="px-3 py-2 text-left">Kód</th><th className="px-3 py-2 text-left">Barcode</th><th className="px-3 py-2 text-left">Szín / méret</th><th className="px-3 py-2 text-right">ForIT db</th><th className="px-3 py-2 text-right">AllIn → cél</th><th className="px-3 py-2 text-left">Megjegyzés</th></tr>
+                  <tr><th className="px-3 py-2 text-left">Sor</th><th className="px-3 py-2 text-left">Állapot</th><th className="px-3 py-2 text-left">Termék</th><th className="px-3 py-2 text-left">Márka</th><th className="px-3 py-2 text-left">Kód</th><th className="px-3 py-2 text-left">Barcode</th><th className="px-3 py-2 text-left">Szín / méret</th><th className="px-3 py-2 text-right">ForIT db</th><th className="px-3 py-2 text-right">AllIn → cél</th><th className="px-3 py-2 text-left">Hiányzik / gond</th><th className="px-3 py-2 text-center">Import</th></tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((row) => (
-                    <tr key={row.rowNo} className="border-t border-white/8 bg-[#344154] align-top">
-                      <td className="px-3 py-2.5 text-white/55">{row.sourceRow || row.rowNo}</td>
-                      <td className="px-3 py-2.5"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] ${actionClass(row)}`}>{actionLabel(row)}</span>{sourceNeedsReview(row) ? <span className="ml-1 inline-flex rounded-full border border-amber-200/20 bg-amber-300/8 px-2 py-1 text-[10px] text-amber-50">ellenőrzendő</span> : null}</td>
-                      <td className="px-3 py-2.5 text-white">{row.title || "-"}</td>
-                      <td className="px-3 py-2.5 text-white/72">{row.brandName || "-"}</td>
-                      <td className="px-3 py-2.5 font-mono text-white/76">{row.productCode || "-"}</td>
-                      <td className="px-3 py-2.5 font-mono text-white/76">{row.barcode || "-"}</td>
-                      <td className="px-3 py-2.5 text-white/72">{[row.colorCode || row.colorName, row.size].filter(Boolean).join(" • ") || "-"}</td>
-                      <td className={`px-3 py-2.5 text-right ${row.rawQty < 0 ? "text-amber-100" : "text-white"}`}>{row.rawQty}</td>
-                      <td className="px-3 py-2.5 text-right text-white/80">{row.existingStockQty ?? 0} → {row.targetStockQty}</td>
-                      <td className="max-w-[360px] px-3 py-2.5 text-white/58">{humanizeLegacyMessage(row.processError || row.message)}</td>
-                    </tr>
-                  ))}
-                  {!visibleRows.length ? <tr><td colSpan={10} className="px-4 py-10 text-center text-white/42">Nincs ilyen sor.</td></tr> : null}
+                  {visibleRows.map((row) => {
+                    const issueBadges = legacyIssueBadges(row);
+                    const skipped = row.processStatus === "skipped";
+                    const fullHint = humanizeLegacyMessage(row.processError || row.message || row.issues);
+                    return (
+                      <tr key={row.rowNo} className={`border-t border-white/8 align-top ${skipped ? "bg-[#303846]/65 opacity-60" : "bg-[#344154]"}`}>
+                        <td className="px-3 py-2.5 text-white/55">{row.sourceRow || row.rowNo}</td>
+                        <td className="px-3 py-2.5"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] ${actionClass(row)}`}>{actionLabel(row)}</span></td>
+                        <td className={`px-3 py-2.5 ${skipped ? "text-white/48 line-through" : "text-white"}`}>{row.title || "-"}</td>
+                        <td className="px-3 py-2.5 text-white/72">{row.brandName || "-"}</td>
+                        <td className="px-3 py-2.5 font-mono text-white/76">{row.productCode || "-"}</td>
+                        <td className="px-3 py-2.5 font-mono text-white/76">{row.barcode || "-"}</td>
+                        <td className="px-3 py-2.5 text-white/72">{[row.colorCode || row.colorName, row.size].filter(Boolean).join(" • ") || "-"}</td>
+                        <td className={`px-3 py-2.5 text-right ${row.rawQty < 0 ? "text-amber-100" : "text-white"}`}>{row.rawQty}</td>
+                        <td className="px-3 py-2.5 text-right text-white/80">{row.existingStockQty ?? 0} → {row.targetStockQty}</td>
+                        <td className="max-w-[300px] px-3 py-2.5" title={fullHint !== "-" ? fullHint : undefined}>
+                          {skipped ? (
+                            <span className="text-[10px] text-white/40">Nem lesz importálva</span>
+                          ) : issueBadges.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {issueBadges.map((issue) => (
+                                <span key={issue.key} className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${issue.tone === "danger" ? "border-red-200/35 bg-red-500/12 text-red-50" : "border-orange-200/35 bg-orange-400/10 text-orange-50"}`}>
+                                  <XCircle size={11} /> {issue.label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-100/75"><Check size={11} /> Rendben</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            type="button"
+                            disabled={rowActionBusy !== null || committing || busy || row.processStatus === "done"}
+                            onClick={() => void setRowExcluded(row, !skipped)}
+                            className={`inline-flex h-8 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] transition disabled:cursor-not-allowed disabled:opacity-45 ${skipped ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10 text-[#cffffd] hover:bg-[#2a8d8b]/20" : "border-orange-200/30 bg-orange-400/8 text-orange-50 hover:bg-orange-400/16"}`}
+                            title={skipped ? "Visszateszi ezt a sort az importba" : "Ezt a sort nem importálja az AllInba"}
+                          >
+                            {rowActionBusy === row.rowNo ? <RefreshCw size={12} className="animate-spin" /> : skipped ? <RefreshCw size={12} /> : <XCircle size={12} />}
+                            {skipped ? "Vissza" : "Kihagyás"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!visibleRows.length ? <tr><td colSpan={11} className="px-4 py-10 text-center text-white/42">Nincs ilyen sor.</td></tr> : null}
                 </tbody>
               </table>
             </div>
@@ -748,7 +830,7 @@ export default function AllInLegacyImport() {
               <div>
                 <p className="text-[9px] uppercase tracking-[0.14em] text-white/46">4. VÉGLEGESÍTÉS</p>
                 <h2 className="mt-1 text-lg text-white">ForIT → AllIn migráció</h2>
-                <p className="mt-1 max-w-3xl text-sm leading-6 text-white/60">A 0 készletes termékek is bekerülnek a terméktörzsbe. Csak a pozitív, illetve már meglévő célhelyi készlet eltérése kap készletmozgást. Más AllIn üzlet készletéhez nem nyúl.</p>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-white/60">A 0 készletes termékek is bekerülnek a terméktörzsbe. A <strong>{integer(summary.excludedRows || 0)}</strong> kihagyott sor viszont sem terméket, sem készletet nem hoz létre. Más AllIn üzlet készletéhez nem nyúl.</p>
               </div>
               {status === "committed" ? <span className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200/30 bg-emerald-400/12 px-4 py-3 text-sm text-emerald-50"><PackageCheck size={18} /> Migráció befejezve</span> : null}
             </div>
