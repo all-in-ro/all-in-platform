@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNod
 import {
   Barcode,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Download,
   Filter,
@@ -160,6 +162,12 @@ type PendingScan = {
   code: string;
   qty: number;
   at: number;
+  source: "camera" | "manual";
+};
+
+type CountValueSnapshot = {
+  countedSellValue: number;
+  expectedSellValue: number;
 };
 
 type ConfirmDialog = {
@@ -210,7 +218,7 @@ const headerIconBtn = "inline-flex h-9 w-9 items-center justify-center rounded-x
 const headerIconBtnActive = "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#7bd7d4]/45 bg-[#2a8d8b] text-white shadow-[0_8px_18px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#7bd7d4]/45 bg-[#2a8d8b] px-3 text-xs font-medium text-white shadow-[0_10px_24px_rgba(42,141,139,0.22)] transition hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50";
 const softBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-white/16 bg-white/[0.08] px-3 text-xs font-medium text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
-const dangerBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-rose-300/35 bg-[#d31126] px-3 text-xs font-medium text-white shadow-[0_10px_24px_rgba(211,17,38,0.22)] transition hover:bg-[#b90f21] disabled:cursor-not-allowed disabled:opacity-50";
+const dangerBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#ff6678] bg-[#e3132c] px-3 text-xs font-semibold text-white shadow-[0_10px_24px_rgba(227,19,44,0.30)] transition hover:bg-[#ff1935] disabled:cursor-not-allowed disabled:opacity-50";
 const chipBase = "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-2xl border px-3 text-xs transition-colors";
 const chipActive = `${chipBase} border-[#7bd7d4]/55 bg-[#2a8d8b] text-white shadow-[0_8px_20px_rgba(42,141,139,0.20)]`;
 const chipIdle = `${chipBase} border-white/14 bg-white/[0.06] text-white/72 hover:bg-white/[0.10]`;
@@ -478,6 +486,8 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
   const [lineFilter, setLineFilter] = useState<LineFilter>("all");
   const [stockRows, setStockRows] = useState<AifStockItem[]>([]);
   const [counts, setCounts] = useState<InventoryCountSummary[]>([]);
+  const [countsPage, setCountsPage] = useState(1);
+  const [countValueCache, setCountValueCache] = useState<Record<string, CountValueSnapshot>>({});
   const [active, setActive] = useState<InventoryCountDetail | null>(null);
   const [drafts, setDrafts] = useState<Record<string, DraftLine>>({});
   const [title, setTitle] = useState(todayTitle());
@@ -506,6 +516,8 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
   const draftsRef = useRef<Record<string, DraftLine>>({});
   const pendingScanRef = useRef<PendingScan | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const manualBarcodeInputRef = useRef<HTMLInputElement | null>(null);
+  const countValueLoadingRef = useRef<Set<string>>(new Set());
 
   async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const method = String(init?.method || "GET").toUpperCase();
@@ -539,6 +551,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
     try {
       const detail = await fetchAifJSON<InventoryCountDetail>(`/inventory-counts/${encodeURIComponent(id)}?_=${Date.now()}`);
       setActive(detail);
+      setCountValueCache((prev) => ({ ...prev, [detail.item.id]: valueSnapshotFromLines(detail.lines || []) }));
       const nextDrafts: Record<string, DraftLine> = {};
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
@@ -561,7 +574,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       q.set("_", String(Date.now()));
       const [stock, countList] = await Promise.all([
         fetchAifJSON<{ items: AifStockItem[] }>(`/stock?${q.toString()}`),
-        fetchAifJSON<{ items: InventoryCountSummary[] }>(`/inventory-counts?location=${encodeURIComponent(locationValue)}&limit=30&_=${Date.now()}`),
+        fetchAifJSON<{ items: InventoryCountSummary[] }>(`/inventory-counts?location=${encodeURIComponent(locationValue)}&limit=200&_=${Date.now()}`),
       ]);
       setStockRows(stock.items || []);
       setCounts(countList.items || []);
@@ -661,10 +674,24 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
 
   const visibleLines = useMemo(() => filteredLines.slice(0, visibleCount), [filteredLines, visibleCount]);
 
+  function valueSnapshotFromLines(lines: InventoryCountLine[]): CountValueSnapshot {
+    let countedSellValue = 0;
+    let expectedSellValue = 0;
+    for (const line of lines || []) {
+      const sell = n(line.sell_price);
+      expectedSellValue += n(line.expected_qty) * sell;
+      const countedValue = line.counted_qty === null || line.counted_qty === undefined ? null : n(line.counted_qty);
+      if (countedValue !== null) countedSellValue += countedValue * sell;
+    }
+    return { countedSellValue, expectedSellValue };
+  }
+
   const activeStats = useMemo(() => {
     const lines = active?.lines || [];
     let expected = 0;
     let counted = 0;
+    let expectedSellValue = 0;
+    let countedSellValue = 0;
     let countedLines = 0;
     let missing = 0;
     let extra = 0;
@@ -676,11 +703,13 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       const expectedQty = n(line.expected_qty);
       const countedValue = draftCountedValue(drafts[line.id]);
       expected += expectedQty;
+      const sell = n(line.sell_price);
+      expectedSellValue += expectedQty * sell;
       if (countedValue !== null) {
+        countedSellValue += countedValue * sell;
         countedLines += 1;
         counted += countedValue;
         const diff = countedValue - expectedQty;
-        const sell = n(line.sell_price);
         const buy = n(line.buy_price);
         if (diff < 0) missing += Math.abs(diff);
         if (diff > 0) extra += diff;
@@ -702,10 +731,50 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
       extraSell,
       diffSell,
       diffBuy,
+      expectedSellValue,
+      countedSellValue,
       complete: lines.length > 0 && countedLines === lines.length,
       progress: lines.length ? Math.round((countedLines / lines.length) * 100) : 0,
     };
   }, [active, drafts]);
+
+  const countsPageSize = 10;
+  const countsTotalPages = Math.max(1, Math.ceil(counts.length / countsPageSize));
+  const visibleCounts = useMemo(() => {
+    const start = (countsPage - 1) * countsPageSize;
+    return counts.slice(start, start + countsPageSize);
+  }, [counts, countsPage]);
+
+  useEffect(() => {
+    setCountsPage(1);
+  }, [location]);
+
+  useEffect(() => {
+    if (countsPage > countsTotalPages) setCountsPage(countsTotalPages);
+  }, [countsPage, countsTotalPages]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const targets = Array.from(new Map([...counts.slice(0, 3), ...visibleCounts].map((count) => [count.id, count])).values());
+    const loadValues = async () => {
+      for (const count of targets) {
+        if (cancelled || countValueCache[count.id] || countValueLoadingRef.current.has(count.id)) continue;
+        countValueLoadingRef.current.add(count.id);
+        try {
+          const detail = await fetchAifJSON<InventoryCountDetail>(`/inventory-counts/${encodeURIComponent(count.id)}?_=${Date.now()}`);
+          if (!cancelled) {
+            setCountValueCache((prev) => ({ ...prev, [count.id]: valueSnapshotFromLines(detail.lines || []) }));
+          }
+        } catch {
+          // A lista marad használható akkor is, ha egy régi leltár értékét épp nem sikerül betölteni.
+        } finally {
+          countValueLoadingRef.current.delete(count.id);
+        }
+      }
+    };
+    void loadValues();
+    return () => { cancelled = true; };
+  }, [counts, visibleCounts]);
 
   const stockStats = useMemo(() => {
     return filteredStockRows.reduce((acc, row) => {
@@ -769,6 +838,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
         body: JSON.stringify({ lines }),
       });
       setActive({ item: detail.item, lines: detail.lines });
+      setCountValueCache((prev) => ({ ...prev, [detail.item.id]: valueSnapshotFromLines(detail.lines || []) }));
       const nextDrafts: Record<string, DraftLine> = {};
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
@@ -818,6 +888,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
         body: JSON.stringify({}),
       });
       setActive({ item: detail.item, lines: detail.lines });
+      setCountValueCache((prev) => ({ ...prev, [detail.item.id]: valueSnapshotFromLines(detail.lines || []) }));
       const nextDrafts: Record<string, DraftLine> = {};
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
@@ -944,7 +1015,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
     }
 
     setLineFilter("all");
-    setPendingScan({ lineId: line.id, code, qty: 1, at: now });
+    setPendingScan({ lineId: line.id, code, qty: 1, at: now, source });
     setScannerStatus(`${productTitle(line)} beolvasva. Alapból 1 db, erősítsd meg.`);
     if (source === "manual") setManualBarcode("");
   }
@@ -957,9 +1028,18 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
     setPendingScan((prev) => prev ? { ...prev, qty: Math.max(1, prev.qty + delta) } : prev);
   }
 
+  function focusBarcodeInput() {
+    window.setTimeout(() => {
+      manualBarcodeInputRef.current?.focus();
+      manualBarcodeInputRef.current?.select();
+    }, 0);
+  }
+
   function clearPendingScan() {
+    const shouldRefocus = pendingScan?.source === "manual";
     setPendingScan(null);
     setScannerStatus("Beolvasás elvetve. Jöhet a következő vonalkód.");
+    if (shouldRefocus) focusBarcodeInput();
   }
 
   function applyPendingScan() {
@@ -972,10 +1052,13 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
     }
     const current = draftCountedValue(draftsRef.current[pendingScan.lineId]) ?? 0;
     const next = current + pendingScan.qty;
+    const shouldRefocus = pendingScan.source === "manual";
     updateDraft(pendingScan.lineId, { countedQty: String(next) });
     setPendingScan(null);
+    setManualBarcode("");
     setScannerStatus(`${pendingScan.qty} db hozzáadva: ${productTitle(line)}. Új talált mennyiség: ${next} db.`);
     setMessage({ tone: "success", text: `${pendingScan.qty} db hozzáadva ehhez: ${productTitle(line)}. Talált mennyiség: ${next} db.` });
+    if (shouldRefocus) focusBarcodeInput();
   }
 
   function stopCameraScanner(close = true) {
@@ -1239,8 +1322,11 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 <button className={softBtn} type="button" onClick={() => setCountsOpen(true)}><ClipboardCheck size={15} /> Megnyitás</button>
               </div>
               <div className="mt-3 grid gap-2">
-                {counts.slice(0, 3).map((count) => (
-                  <button key={count.id} type="button" onClick={() => loadCount(count.id)} className="rounded-2xl border border-white/14 bg-white/[0.06] p-3 text-left hover:bg-white/[0.10]">
+                {counts.slice(0, 3).map((count) => {
+                  const selected = active?.item.id === count.id;
+                  const valueSnapshot = selected ? { countedSellValue: activeStats.countedSellValue, expectedSellValue: activeStats.expectedSellValue } : countValueCache[count.id];
+                  return (
+                  <button key={count.id} type="button" onClick={() => loadCount(count.id)} className={`rounded-2xl border p-3 text-left transition ${selected ? "border-[#9ee4e2]/70 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.06] hover:bg-white/[0.10]"}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm text-white">{count.title}</p>
@@ -1251,10 +1337,15 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                     <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px] text-white/64">
                       <span><b className="block text-white">{formatQty(count.line_count)}</b>sor</span>
                       <span><b className="block text-white">{formatQty(count.counted_lines)}</b>számolt</span>
-                      <span><b className={n(count.diff_qty) < 0 ? "block text-red-200" : n(count.diff_qty) > 0 ? "block text-emerald-200" : "block text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
+                      <span><b className={selected ? "block text-white" : n(count.diff_qty) < 0 ? "block text-red-200" : n(count.diff_qty) > 0 ? "block text-emerald-200" : "block text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
+                    </div>
+                    <div className={`mt-2 rounded-xl border px-2.5 py-2 ${selected ? "border-white/25 bg-white/12" : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10"}`}>
+                      <div className="text-[10px] text-white/50">Számolt eladási érték</div>
+                      <div className="mt-0.5 text-sm font-semibold text-white">{valueSnapshot ? `${formatMoney(valueSnapshot.countedSellValue)} RON` : "Betöltés..."}</div>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
                 {!counts.length && <p className="rounded-2xl border border-white/12 bg-white/[0.05] px-3 py-5 text-center text-sm text-white/62">Ehhez a helyszínhez még nincs leltár.</p>}
               </div>
             </section>
@@ -1312,6 +1403,13 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 <div className="rounded-xl bg-white/[0.07] p-2"><div className="text-white/46">Talált</div><div className="font-semibold text-white">{formatQty(activeStats.counted)}</div></div>
                 <div className="rounded-xl bg-red-500/10 p-2"><div className="text-white/46">Hiány</div><div className="font-semibold text-red-100">{formatQty(activeStats.missing)}</div></div>
                 <div className="rounded-xl bg-[#2a8d8b]/14 p-2"><div className="text-white/46">Többlet</div><div className="font-semibold text-emerald-100">{formatQty(activeStats.extra)}</div></div>
+              </div>
+              <div className="mt-2 flex items-center justify-between rounded-2xl border border-[#7bd7d4]/35 bg-[#2a8d8b]/18 px-3 py-2.5">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-white/55">Számolt eladási érték</p>
+                  <p className="mt-0.5 text-xs text-white/46">Rendszerérték: {formatMoney(activeStats.expectedSellValue)} RON</p>
+                </div>
+                <strong className="text-base text-white">{formatMoney(activeStats.countedSellValue)} RON</strong>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button className={primaryBtn} type="button" onClick={startCameraScanner} disabled={!canEditActive}><Barcode size={15} /> Kamera</button>
@@ -1450,19 +1548,41 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
               <button className={iconBtn} type="button" onClick={() => setCountsOpen(false)}><X size={18} /></button>
             </div>
             <div className="grid gap-2">
-              {counts.map((count) => (
-                <button key={count.id} type="button" onClick={() => { setCountsOpen(false); void loadCount(count.id); }} className="rounded-2xl border border-white/14 bg-white/[0.06] p-3 text-left hover:bg-white/[0.10]">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm text-white">{count.title}</p>
-                      <p className="mt-1 text-[11px] text-white/52">{count.code} · {formatDateTime(count.created_at)}</p>
+              {visibleCounts.map((count) => {
+                const selected = active?.item.id === count.id;
+                const valueSnapshot = selected ? { countedSellValue: activeStats.countedSellValue, expectedSellValue: activeStats.expectedSellValue } : countValueCache[count.id];
+                const progress = Math.max(0, Math.min(100, n(count.line_count) ? (n(count.counted_lines) / n(count.line_count)) * 100 : 0));
+                return (
+                  <button key={count.id} type="button" onClick={() => { setCountsOpen(false); void loadCount(count.id); }} className={`rounded-2xl border p-3 text-left transition ${selected ? "border-[#9ee4e2]/70 bg-[#2a8d8b]" : "border-white/14 bg-white/[0.06] hover:border-[#7bd7d4]/30 hover:bg-white/[0.10]"}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">{count.title}</p>
+                        <p className={`mt-1 text-[11px] ${selected ? "text-white/72" : "text-white/52"}`}>{count.code} · {formatDateTime(count.created_at)}</p>
+                      </div>
+                      <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${selected ? "border-white/30 bg-white/14 text-white" : count.status === "committed" ? "border-[#7bd7d4]/30 bg-[#2a8d8b]/28 text-white" : "border-white/10 bg-white/[0.10] text-white/75"}`}>{statusLabel(count.status)}</span>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${count.status === "committed" ? "bg-[#2a8d8b] text-white" : "bg-white/[0.10] text-white/75"}`}>{statusLabel(count.status)}</span>
-                  </div>
-                </button>
-              ))}
+                    <div className={`mt-2 h-1.5 overflow-hidden rounded-full ${selected ? "bg-white/20" : "bg-slate-950/30"}`}><div className={selected ? "h-full rounded-full bg-white" : "h-full rounded-full bg-[#63d8d3]"} style={{ width: `${progress}%` }} /></div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[10px] text-white/60">
+                      <span><b className="block text-sm text-white">{formatQty(count.line_count)}</b>sor</span>
+                      <span><b className="block text-sm text-white">{formatQty(count.counted_lines)}</b>számolt</span>
+                      <span><b className={selected ? "block text-sm text-white" : n(count.diff_qty) < 0 ? "block text-sm text-red-200" : n(count.diff_qty) > 0 ? "block text-sm text-emerald-200" : "block text-sm text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b>eltérés</span>
+                    </div>
+                    <div className={`mt-2 flex items-center justify-between rounded-xl border px-2.5 py-2 ${selected ? "border-white/25 bg-white/12" : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10"}`}>
+                      <span className="text-[10px] text-white/52">Számolt érték</span>
+                      <strong className="text-sm text-white">{valueSnapshot ? `${formatMoney(valueSnapshot.countedSellValue)} RON` : "Betöltés..."}</strong>
+                    </div>
+                  </button>
+                );
+              })}
               {!counts.length && <p className="rounded-2xl border border-white/12 bg-white/[0.05] px-3 py-5 text-center text-sm text-white/62">Nincs mentett leltár ezen a helyen.</p>}
             </div>
+            {counts.length > countsPageSize ? (
+              <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/10 pt-3">
+                <button className={iconBtn} type="button" disabled={countsPage <= 1} onClick={() => setCountsPage((value) => Math.max(1, value - 1))}><ChevronLeft size={18} /></button>
+                <span className="text-xs text-white/58">{countsPage} / {countsTotalPages}. oldal · 10 / oldal</span>
+                <button className={iconBtn} type="button" disabled={countsPage >= countsTotalPages} onClick={() => setCountsPage((value) => Math.min(countsTotalPages, value + 1))}><ChevronRight size={18} /></button>
+              </div>
+            ) : null}
           </div>
         </>
       )}
@@ -1486,7 +1606,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
             </div>
 
             <form className="grid grid-cols-[1fr_auto] gap-2" onSubmit={(event) => { event.preventDefault(); submitManualBarcode(); }}>
-              <input className={`${input} text-base`} value={manualBarcode} onChange={(event) => setManualBarcode(event.target.value)} placeholder="Kézi / bluetooth vonalkód" autoComplete="off" inputMode="numeric" />
+              <input ref={manualBarcodeInputRef} className={`${input} text-base`} value={manualBarcode} onChange={(event) => setManualBarcode(event.target.value)} placeholder="Kézi / bluetooth vonalkód" autoComplete="off" inputMode="numeric" />
               <button className={primaryBtn} type="submit" disabled={!manualBarcode.trim()}><CheckCircle2 size={15} /> OK</button>
             </form>
 
@@ -1515,7 +1635,7 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 </div>
                 <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
                   <button className={primaryBtn} type="button" onClick={applyPendingScan}><CheckCircle2 size={15} /> Hozzáadás</button>
-                  <button className={softBtn} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
+                  <button className={dangerBtn} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
                 </div>
               </div>
             ) : (
@@ -1523,7 +1643,6 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
                 <div>
                   <Barcode className="mx-auto text-white/38" size={42} />
                   <p className="mt-3 text-base text-white">Várja a beolvasást</p>
-                  <p className="mt-1 text-sm leading-6 text-white/60">A talált termék itt jelenik meg képpel és mennyiséggombokkal.</p>
                 </div>
               </div>
             )}
