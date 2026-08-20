@@ -1004,7 +1004,8 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
 
     const now = Date.now();
     const key = barcodeKey(code);
-    if (lastScanRef.current.code === key && now - lastScanRef.current.at < 950) return;
+    const duplicateWindowMs = source === "manual" ? 250 : 950;
+    if (lastScanRef.current.code === key && now - lastScanRef.current.at < duplicateWindowMs) return;
     lastScanRef.current = { code: key, at: now };
 
     if (!activeRef.current) {
@@ -1041,6 +1042,15 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
 
   function submitManualBarcode() {
     handleBarcodeCandidate(manualBarcode, "manual");
+  }
+
+  function handleManualBarcodeInput(value: string) {
+    setManualBarcode(value);
+    if (pendingScanRef.current) return;
+    const code = cleanScannedBarcode(value);
+    if (!code || !activeRef.current || !canEditActive) return;
+    if (!findLineByBarcode(code)) return;
+    handleBarcodeCandidate(code, "manual");
   }
 
   function changePendingQty(delta: number) {
@@ -1640,9 +1650,8 @@ export default function AllInInventoryMobile({ apiBase = "/api" }: Props) {
               <div className="border-t border-white/10 px-3 py-2 text-xs text-white/62">Tartsd stabilan a kamerát, és igazítsd a vonalkódot középre.</div>
             </div>
 
-            <form className="grid grid-cols-[1fr_auto] gap-2" onSubmit={(event) => { event.preventDefault(); submitManualBarcode(); }}>
-              <input ref={manualBarcodeInputRef} className={`${input} text-base`} value={manualBarcode} onChange={(event) => setManualBarcode(event.target.value)} placeholder="Kézi / bluetooth vonalkód" autoComplete="off" inputMode="numeric" />
-              <button className={primaryBtn} type="submit" disabled={!manualBarcode.trim()}><CheckCircle2 size={15} /> OK</button>
+            <form onSubmit={(event) => { event.preventDefault(); submitManualBarcode(); }}>
+              <input ref={manualBarcodeInputRef} className={`${input} text-base`} value={manualBarcode} onChange={(event) => handleManualBarcodeInput(event.target.value)} placeholder="Olvasd be a bárkódot…" autoComplete="off" inputMode="numeric" />
             </form>
 
             {pendingLine && pendingScan ? (
