@@ -52,7 +52,7 @@ const input = "h-11 w-full rounded-[13px] border border-white/18 bg-gradient-to-
 const btnBase = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
 const primaryBtn = `${btnBase} border-[#9be9e5]/48 bg-gradient-to-r from-[#238985] to-[#2a9a96] shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:brightness-110`;
 const neutralBtn = `${btnBase} border-white/18 bg-[#3a475a]/90 hover:border-[#8ce7e2]/28 hover:bg-[#445369]`;
-const dangerBtn = `${btnBase} border-red-300/30 bg-[#b71528] hover:bg-[#ca1830]`;
+const dangerBtn = `${btnBase} border-[#ff6b6b] bg-[#e00000] font-semibold text-white shadow-[0_8px_20px_rgba(224,0,0,0.34)] hover:bg-[#ff0000] hover:border-white/45`;
 const statCard = "rounded-2xl border border-white/10 bg-[#2b3749] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]";
 
 
@@ -921,17 +921,17 @@ export default function AllInLegacyImport() {
                   <div key={item.id} className="flex w-full flex-col gap-2 rounded-2xl border border-white/12 bg-[#354153] p-3 transition hover:border-[#7bd7d4]/28 sm:flex-row sm:items-center sm:justify-between">
                     <button className="min-w-0 flex-1 text-left" type="button" onClick={() => void loadMigration(item.id)}>
                       <p className="truncate text-sm text-white">{item.sourceFileName || "Régi rendszer import"}</p>
-                      <p className="mt-1 text-xs text-white/48">{item.locationName || "-"} • {item.sourceDate || "-"} • {item.rowCount.toLocaleString("ro-RO")} sor</p>
+                      <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.72)" }}>{item.locationName || "-"} • {item.sourceDate || "-"} • {item.rowCount.toLocaleString("ro-RO")} sor</p>
                     </button>
                     <div className="flex shrink-0 items-center justify-end gap-2">
                       <button className="min-w-[150px] text-right" type="button" onClick={() => void loadMigration(item.id)}>
-                        <p className="text-xs text-white/80">{legacyHistoryStatusLabel(item.status)}</p>
-                        <p className="mt-1 text-[10px] text-white/42">{item.processedRows.toLocaleString("ro-RO")} / {item.rowCount.toLocaleString("ro-RO")} • {integer(item.totalQty)} db</p>
+                        <p className="text-xs font-medium text-white">{legacyHistoryStatusLabel(item.status)}</p>
+                        <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.68)" }}>{item.processedRows.toLocaleString("ro-RO")} / {item.rowCount.toLocaleString("ro-RO")} • {integer(item.totalQty)} db</p>
                       </button>
                       {canDelete ? (
                         <button
                           type="button"
-                          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-300/30 bg-red-500/10 px-3 text-[11px] text-red-50 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+                          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-[#ff6b6b] bg-[#e00000] px-3 text-[11px] font-semibold text-white shadow-[0_6px_16px_rgba(224,0,0,0.30)] transition hover:border-white/45 hover:bg-[#ff0000] disabled:cursor-not-allowed disabled:opacity-45"
                           disabled={deletingHistoryId !== null}
                           onClick={() => setDeleteCandidate(item)}
                           title="Az előkészített import végleges törlése"
@@ -950,13 +950,13 @@ export default function AllInLegacyImport() {
 
         {deleteCandidate && typeof document !== "undefined" ? createPortal(
           <div className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-[520px] rounded-[22px] border border-white/16 bg-[#2d394b] p-5 shadow-[0_30px_90px_rgba(2,6,23,0.72)]">
+            <div className="w-full max-w-[520px] rounded-[22px] border border-white/30 bg-[#263246] p-5 text-white shadow-[0_30px_90px_rgba(2,6,23,0.82)]">
               <div className="flex items-start gap-3">
-                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-300/30 bg-red-500/12 text-red-100"><Trash2 size={18} /></span>
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#ff6b6b] bg-[#5c1118] text-white"><Trash2 size={18} /></span>
                 <div>
-                  <h3 className="text-lg text-white">Import előzmény végleges törlése</h3>
-                  <p className="mt-2 text-sm leading-6 text-white/62">Ez az import még csak előkészített állapotban van, ezért terméket és készletet nem érint. A hozzá tartozó ellenőrzési sorok és az importnapló-bejegyzés végleg törlődik.</p>
-                  <p className="mt-2 break-all text-xs text-white/42">{deleteCandidate.sourceFileName || "Régi rendszer import"}</p>
+                  <h3 className="text-lg font-semibold text-white">Import előzmény végleges törlése</h3>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "rgba(255,255,255,0.88)" }}>Ez az import még csak előkészített állapotban van, ezért terméket és készletet nem érint. A hozzá tartozó ellenőrzési sorok és az importnapló-bejegyzés végleg törlődik.</p>
+                  <p className="mt-2 break-all text-xs" style={{ color: "rgba(255,255,255,0.64)" }}>{deleteCandidate.sourceFileName || "Régi rendszer import"}</p>
                 </div>
               </div>
               <div className="mt-5 flex justify-end gap-2">
