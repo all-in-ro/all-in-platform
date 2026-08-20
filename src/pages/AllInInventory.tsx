@@ -35,7 +35,7 @@ const primaryBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-x
 const headerBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/18 bg-[#354153] px-2.5 text-[11px] text-white hover:bg-[#3e4d63] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerBtnSoft = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.08] px-2.5 text-[11px] text-white hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
 const headerPrimaryBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-[#2a8d8b]/55 bg-[#2a8d8b] px-2.5 text-[11px] text-white hover:bg-[#319c99] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
-const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500 bg-red-600 px-3 text-xs font-semibold text-white shadow-[0_0_0_1px_rgba(220,38,38,0.22)] hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50";
+const redBtn = "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#ff6678] bg-[#e3132c] px-3 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(227,19,44,0.28)] hover:bg-[#ff1935] disabled:cursor-not-allowed disabled:opacity-50";
 const input = "h-10 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/45";
 const label = "grid gap-1.5 text-xs text-white/70";
 const chipBase = "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs transition-colors";
@@ -349,6 +349,12 @@ type PendingScan = {
   code: string;
   qty: number;
   at: number;
+  source: "camera" | "manual";
+};
+
+type CountValueSnapshot = {
+  countedSellValue: number;
+  expectedSellValue: number;
 };
 
 type ConfirmDialog = {
@@ -549,6 +555,9 @@ export default function AllInInventory() {
   const [lineFilter, setLineFilter] = useState<LineFilter>("all");
   const [stockRows, setStockRows] = useState<AifStockItem[]>([]);
   const [counts, setCounts] = useState<InventoryCountSummary[]>([]);
+  const [countsExpanded, setCountsExpanded] = useState(true);
+  const [countsPage, setCountsPage] = useState(1);
+  const [countValueCache, setCountValueCache] = useState<Record<string, CountValueSnapshot>>({});
   const [active, setActive] = useState<InventoryCountDetail | null>(null);
   const [drafts, setDrafts] = useState<Record<string, DraftLine>>({});
   const [title, setTitle] = useState(todayTitle());
@@ -571,6 +580,8 @@ export default function AllInInventory() {
   const activeRef = useRef<InventoryCountDetail | null>(null);
   const draftsRef = useRef<Record<string, DraftLine>>({});
   const pendingScanRef = useRef<PendingScan | null>(null);
+  const manualBarcodeInputRef = useRef<HTMLInputElement | null>(null);
+  const countValueLoadingRef = useRef<Set<string>>(new Set());
 
   const currentLocation = useMemo(() => locations.find((x) => x.id === location || x.code === location) || null, [locations, location]);
 
@@ -590,7 +601,7 @@ export default function AllInInventory() {
       if (searchValue.trim()) q.set("search", searchValue.trim());
       const [stock, countList] = await Promise.all([
         fetchAifJSON<{ items: AifStockItem[] }>(`/stock?${q.toString()}`),
-        fetchAifJSON<{ items: InventoryCountSummary[] }>(`/inventory-counts?location=${encodeURIComponent(locationValue)}&limit=30`),
+        fetchAifJSON<{ items: InventoryCountSummary[] }>(`/inventory-counts?location=${encodeURIComponent(locationValue)}&limit=200`),
       ]);
       setStockRows(stock.items || []);
       setCounts(countList.items || []);
@@ -616,6 +627,7 @@ export default function AllInInventory() {
     try {
       const detail = await fetchAifJSON<InventoryCountDetail>(`/inventory-counts/${encodeURIComponent(id)}`);
       setActive(detail);
+      setCountValueCache((prev) => ({ ...prev, [detail.item.id]: valueSnapshotFromLines(detail.lines || []) }));
       const nextDrafts: Record<string, DraftLine> = {};
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
@@ -718,10 +730,24 @@ export default function AllInInventory() {
     });
   }, [active, categoryFilter, lineFilter, drafts, search]);
 
+  function valueSnapshotFromLines(lines: InventoryCountLine[]): CountValueSnapshot {
+    let countedSellValue = 0;
+    let expectedSellValue = 0;
+    for (const line of lines || []) {
+      const sell = n(line.sell_price);
+      expectedSellValue += n(line.expected_qty) * sell;
+      const countedValue = line.counted_qty === null || line.counted_qty === undefined ? null : n(line.counted_qty);
+      if (countedValue !== null) countedSellValue += countedValue * sell;
+    }
+    return { countedSellValue, expectedSellValue };
+  }
+
   const activeStats = useMemo(() => {
     const lines = active?.lines || [];
     let expected = 0;
     let counted = 0;
+    let expectedSellValue = 0;
+    let countedSellValue = 0;
     let countedLines = 0;
     let missing = 0;
     let extra = 0;
@@ -733,11 +759,13 @@ export default function AllInInventory() {
       const expectedQty = n(line.expected_qty);
       const countedValue = draftCountedValue(drafts[line.id]);
       expected += expectedQty;
+      const sell = n(line.sell_price);
+      expectedSellValue += expectedQty * sell;
       if (countedValue !== null) {
+        countedSellValue += countedValue * sell;
         countedLines++;
         counted += countedValue;
         const diff = countedValue - expectedQty;
-        const sell = n(line.sell_price);
         const buy = n(line.buy_price);
         if (diff < 0) missing += Math.abs(diff);
         if (diff > 0) extra += diff;
@@ -759,9 +787,49 @@ export default function AllInInventory() {
       extraSell,
       diffSell,
       diffBuy,
+      expectedSellValue,
+      countedSellValue,
       complete: lines.length > 0 && countedLines === lines.length,
     };
   }, [active, drafts]);
+
+  const countsPageSize = 10;
+  const countsTotalPages = Math.max(1, Math.ceil(counts.length / countsPageSize));
+  const visibleCounts = useMemo(() => {
+    const start = (countsPage - 1) * countsPageSize;
+    return counts.slice(start, start + countsPageSize);
+  }, [counts, countsPage]);
+
+  useEffect(() => {
+    setCountsPage(1);
+  }, [location]);
+
+  useEffect(() => {
+    if (countsPage > countsTotalPages) setCountsPage(countsTotalPages);
+  }, [countsPage, countsTotalPages]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadValues = async () => {
+      for (const count of visibleCounts) {
+        if (cancelled || countValueCache[count.id] || countValueLoadingRef.current.has(count.id)) continue;
+        countValueLoadingRef.current.add(count.id);
+        try {
+          const detail = await fetchAifJSON<InventoryCountDetail>(`/inventory-counts/${encodeURIComponent(count.id)}`);
+          if (!cancelled) {
+            const snapshot = valueSnapshotFromLines(detail.lines || []);
+            setCountValueCache((prev) => ({ ...prev, [count.id]: snapshot }));
+          }
+        } catch {
+          // A kártya ettől még használható, csak az érték marad átmenetileg ismeretlen.
+        } finally {
+          countValueLoadingRef.current.delete(count.id);
+        }
+      }
+    };
+    void loadValues();
+    return () => { cancelled = true; };
+  }, [visibleCounts]);
 
   const pendingLine = useMemo(() => {
     if (!pendingScan || !active) return null;
@@ -814,6 +882,7 @@ export default function AllInInventory() {
         body: JSON.stringify({ lines }),
       });
       setActive({ item: detail.item, lines: detail.lines });
+      setCountValueCache((prev) => ({ ...prev, [detail.item.id]: valueSnapshotFromLines(detail.lines || []) }));
       const nextDrafts: Record<string, DraftLine> = {};
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
@@ -863,6 +932,7 @@ export default function AllInInventory() {
         body: JSON.stringify({}),
       });
       setActive({ item: detail.item, lines: detail.lines });
+      setCountValueCache((prev) => ({ ...prev, [detail.item.id]: valueSnapshotFromLines(detail.lines || []) }));
       const nextDrafts: Record<string, DraftLine> = {};
       for (const line of detail.lines || []) nextDrafts[line.id] = lineDraftFrom(line);
       setDrafts(nextDrafts);
@@ -958,7 +1028,7 @@ export default function AllInInventory() {
     }
 
     setLineFilter("all");
-    setPendingScan({ lineId: line.id, code, qty: 1, at: now });
+    setPendingScan({ lineId: line.id, code, qty: 1, at: now, source });
     setScannerStatus(`${productTitle(line)} beolvasva. Alapból 1 db, erősítsd meg vagy állítsd + / - gombbal.`);
     if (source === "manual") setManualBarcode("");
   }
@@ -974,9 +1044,18 @@ export default function AllInInventory() {
     });
   }
 
+  function focusBarcodeInput() {
+    window.setTimeout(() => {
+      manualBarcodeInputRef.current?.focus();
+      manualBarcodeInputRef.current?.select();
+    }, 0);
+  }
+
   function clearPendingScan() {
+    const shouldRefocus = pendingScan?.source === "manual";
     setPendingScan(null);
     setScannerStatus("Beolvasás elvetve.");
+    if (shouldRefocus) focusBarcodeInput();
   }
 
   function applyPendingScan() {
@@ -989,10 +1068,13 @@ export default function AllInInventory() {
     }
     const current = draftCountedValue(draftsRef.current[pendingScan.lineId]) ?? 0;
     const next = current + pendingScan.qty;
+    const shouldRefocus = pendingScan.source === "manual";
     updateDraft(pendingScan.lineId, { countedQty: String(next) });
     setPendingScan(null);
+    setManualBarcode("");
     setScannerStatus(`${pendingScan.qty} db hozzáadva: ${productTitle(line)}. Új számolt mennyiség: ${next} db.`);
     setMessage({ tone: "success", text: `${pendingScan.qty} db hozzáadva ehhez: ${productTitle(line)}. Talált mennyiség: ${next} db.` });
+    if (shouldRefocus) focusBarcodeInput();
   }
 
   function stopCameraScanner() {
@@ -1093,11 +1175,9 @@ export default function AllInInventory() {
       <div className="border-t border-white/10 bg-[#404a5b]/35 p-4">
         <div className="grid gap-3 xl:grid-cols-[1.05fr_1.35fr]">
           <div className="rounded-3xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/12 p-3 shadow-sm shadow-[#2a8d8b]/10">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#9ee4e2]/35 bg-[#2a8d8b]/28 px-3 py-1 text-xs text-[#d7fffe]"><Barcode size={14} /> Bárkódos számolás</div>
-                <h3 className="mt-2 text-xl font-semibold text-white">Beolvasás, termékkép, mennyiség</h3>
-                <p className="mt-1 text-sm leading-6 text-white/72">Kamera, bluetooth olvasó vagy kézi beírás. Beolvasás után 1 db kerül előkészítésre, a mennyiség + / - gombbal állítható.</p>
+                <h3 className="text-xl font-semibold text-white">Beolvasás</h3>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2">
                 {scannerOpen ? (
@@ -1110,6 +1190,7 @@ export default function AllInInventory() {
 
             <form className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
               <input
+                ref={manualBarcodeInputRef}
                 className={`${input} h-12 w-full text-base`}
                 value={manualBarcode}
                 onChange={(e) => setManualBarcode(e.target.value)}
@@ -1154,7 +1235,6 @@ export default function AllInInventory() {
                   <div className="mt-3 grid grid-cols-[52px_1fr_52px] gap-2">
                     <button className={btnSoft} type="button" onClick={() => changePendingQty(-1)} disabled={pendingScan.qty <= 1}>−</button>
                     <div className="grid place-items-center rounded-2xl border border-white/14 bg-[#303a4c] text-center">
-                      <div className="text-xs text-white/50">Hozzáadandó</div>
                       <div className="text-3xl font-semibold leading-none text-white">{pendingScan.qty}</div>
                     </div>
                     <button className={btnSoft} type="button" onClick={() => changePendingQty(1)}>+</button>
@@ -1162,7 +1242,7 @@ export default function AllInInventory() {
 
                   <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
                     <button className={primaryBtn} type="button" onClick={applyPendingScan}><CheckCircle2 size={15} /> Hozzáadás a leltárhoz</button>
-                    <button className={btnSoft} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
+                    <button className={redBtn} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
                   </div>
                 </div>
               </div>
@@ -1171,7 +1251,6 @@ export default function AllInInventory() {
                 <div>
                   <Barcode className="mx-auto text-white/38" size={38} />
                   <div className="mt-3 text-base font-semibold text-white">Várja a beolvasást</div>
-                  <p className="mt-1 max-w-md text-sm leading-6 text-white/60">Amint a kamera vagy olvasó talál egy bárkódot, itt megjelenik a termék képpel, mérettel, színnel és a + / - mennyiségállítóval.</p>
                 </div>
               </div>
             )}
@@ -1208,9 +1287,14 @@ export default function AllInInventory() {
             <div className="rounded-xl bg-red-500/10 p-2"><div className="text-white/46">Hiány</div><div className="font-semibold text-red-100">{formatQty(activeStats.missing)}</div></div>
             <div className="rounded-xl bg-[#2a8d8b]/14 p-2"><div className="text-white/46">Többlet</div><div className="font-semibold text-emerald-100">{formatQty(activeStats.extra)}</div></div>
           </div>
+          <div className="mt-2 flex items-center justify-between rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/14 px-3 py-2">
+            <span className="text-[11px] text-white/60">Számolt eladási érték</span>
+            <strong className="text-sm text-white">{formatMoney(activeStats.countedSellValue)} RON</strong>
+          </div>
 
           <form className="mt-3 grid grid-cols-[1fr_auto] gap-2" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
             <input
+              ref={manualBarcodeInputRef}
               className="h-11 min-w-0 rounded-xl border border-white/18 bg-[#202a3a] px-3 text-base text-white outline-none placeholder:text-white/42 focus:border-[#2a8d8b]/75"
               value={manualBarcode}
               onChange={(e) => setManualBarcode(e.target.value)}
@@ -1264,7 +1348,7 @@ export default function AllInInventory() {
               </div>
               <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
                 <button className={primaryBtn} type="button" onClick={applyPendingScan}><CheckCircle2 size={15} /> Hozzáadás</button>
-                <button className={btnSoft} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
+                <button className={redBtn} type="button" onClick={clearPendingScan}><X size={15} /> Mégse</button>
               </div>
             </div>
           ) : null}
@@ -1527,31 +1611,77 @@ export default function AllInInventory() {
 
         {(!active || !isMobileLayout) ? (
         <section className={panel}>
-          <div className={panelHead}>
+          <button
+            type="button"
+            className={`${panelHead} w-full text-left`}
+            onClick={() => setCountsExpanded((value) => !value)}
+            aria-expanded={countsExpanded}
+          >
             <div>
               <div className="flex items-center gap-2 text-sm font-semibold"><ClipboardCheck size={16} /> Folyamatban lévő / korábbi leltárak</div>
-              <div className="mt-1 text-xs text-white/58">Az üzlethez tartozó leltárak. A nyitott leltár folytatható, a bevezetett ellenőrizhető.</div>
+              <div className="mt-1 text-xs text-white/58">10 leltár oldalanként. A kiválasztott sor zölddel kiemelve.</div>
             </div>
-            <div className="text-xs text-white/60">{counts.length} leltár</div>
-          </div>
-          <div className="grid gap-2 p-4 md:grid-cols-2 xl:grid-cols-3">
-            {counts.length ? counts.map((count) => (
-              <button key={count.id} type="button" onClick={() => loadCount(count.id)} className={`rounded-2xl border p-3 text-left transition ${active?.item.id === count.id ? "border-[#2a8d8b]/70 bg-[#2a8d8b]/14" : "border-white/14 bg-white/[0.06] hover:bg-white/[0.09]"}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-white">{count.title}</div>
-                    <div className="mt-1 text-xs text-white/55">{count.code} · {formatDateTime(count.created_at)}</div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-white/60">{counts.length} leltár</span>
+              <ChevronDown size={18} className={`text-white/70 transition ${countsExpanded ? "rotate-180" : ""}`} />
+            </div>
+          </button>
+
+          {countsExpanded ? (
+            <div className="p-3">
+              <div className="grid gap-2">
+                {visibleCounts.length ? visibleCounts.map((count) => {
+                  const selected = active?.item.id === count.id;
+                  const cached = selected
+                    ? { countedSellValue: activeStats.countedSellValue, expectedSellValue: activeStats.expectedSellValue }
+                    : countValueCache[count.id];
+                  const progress = Math.max(0, Math.min(100, n(count.line_count) ? (n(count.counted_lines) / n(count.line_count)) * 100 : 0));
+                  return (
+                    <button
+                      key={count.id}
+                      type="button"
+                      onClick={() => loadCount(count.id)}
+                      className={`w-full overflow-hidden rounded-2xl border text-left transition ${selected
+                        ? "border-[#9ee4e2]/75 bg-[#2a8d8b] shadow-[0_12px_28px_rgba(42,141,139,0.24)]"
+                        : "border-white/14 bg-white/[0.055] hover:border-[#7bd7d4]/35 hover:bg-white/[0.09]"}`}
+                    >
+                      <div className="grid gap-3 px-3 py-3 lg:grid-cols-[minmax(260px,1.5fr)_110px_110px_110px_minmax(180px,1fr)_auto] lg:items-center">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-white">{count.title}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] ${selected ? "border-white/35 bg-white/16 text-white" : count.status === "committed" ? "border-[#7bd7d4]/30 bg-[#2a8d8b]/28 text-[#d7fffe]" : "border-white/12 bg-white/[0.08] text-white/72"}`}>{statusLabel(count.status)}</span>
+                          </div>
+                          <div className={`mt-1 text-[11px] ${selected ? "text-white/78" : "text-white/50"}`}>{count.code} · {formatDateTime(count.created_at)}</div>
+                          <div className={`mt-2 h-1.5 overflow-hidden rounded-full ${selected ? "bg-white/20" : "bg-slate-950/28"}`}>
+                            <div className={`h-full rounded-full ${selected ? "bg-white" : "bg-[#63d8d3]"}`} style={{ width: `${progress}%` }} />
+                          </div>
+                        </div>
+                        <div className="text-xs"><span className={selected ? "text-white/68" : "text-white/46"}>Sor</span><div className="mt-1 text-base font-semibold text-white">{formatQty(count.line_count)}</div></div>
+                        <div className="text-xs"><span className={selected ? "text-white/68" : "text-white/46"}>Számolt</span><div className="mt-1 text-base font-semibold text-white">{formatQty(count.counted_lines)}</div></div>
+                        <div className="text-xs"><span className={selected ? "text-white/68" : "text-white/46"}>Eltérés</span><div className={`mt-1 text-base font-semibold ${selected ? "text-white" : n(count.diff_qty) < 0 ? "text-red-200" : n(count.diff_qty) > 0 ? "text-emerald-200" : "text-white"}`}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</div></div>
+                        <div className={`rounded-xl border px-3 py-2 ${selected ? "border-white/25 bg-white/12" : "border-[#7bd7d4]/20 bg-[#2a8d8b]/10"}`}>
+                          <div className={selected ? "text-[10px] uppercase tracking-wide text-white/68" : "text-[10px] uppercase tracking-wide text-[#9ee4e2]/75"}>Számolt eladási érték</div>
+                          <div className="mt-1 text-base font-semibold text-white">{cached ? `${formatMoney(cached.countedSellValue)} RON` : "Betöltés..."}</div>
+                          <div className={selected ? "mt-0.5 text-[10px] text-white/62" : "mt-0.5 text-[10px] text-white/42"}>{cached ? `Rendszerérték: ${formatMoney(cached.expectedSellValue)} RON` : ""}</div>
+                        </div>
+                        <ChevronDown size={17} className={`hidden -rotate-90 lg:block ${selected ? "text-white" : "text-white/35"}`} />
+                      </div>
+                    </button>
+                  );
+                }) : <div className="rounded-2xl border border-white/14 bg-white/[0.04] p-4 text-sm text-white/62">Ehhez a helyszínhez még nincs leltár.</div>}
+              </div>
+
+              {counts.length > countsPageSize ? (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+                  <span className="text-xs text-white/52">{countsPage} / {countsTotalPages}. oldal · oldalanként 10</span>
+                  <div className="flex gap-2">
+                    <button className={btnSoft} type="button" disabled={countsPage <= 1} onClick={(event) => { event.stopPropagation(); setCountsPage((value) => Math.max(1, value - 1)); }}>Előző</button>
+                    <button className={btnSoft} type="button" disabled={countsPage >= countsTotalPages} onClick={(event) => { event.stopPropagation(); setCountsPage((value) => Math.min(countsTotalPages, value + 1)); }}>Következő</button>
                   </div>
-                  <span className={`rounded-full px-2.5 py-1 text-[11px] ${count.status === "committed" ? "bg-[#2a8d8b] text-white" : "bg-white/[0.10] text-white/75"}`}>{statusLabel(count.status)}</span>
                 </div>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-white/72">
-                  <div><b className="text-white">{formatQty(count.line_count)}</b><br />sor</div>
-                  <div><b className="text-white">{formatQty(count.counted_lines)}</b><br />számolt</div>
-                  <div><b className={n(count.diff_qty) < 0 ? "text-red-200" : n(count.diff_qty) > 0 ? "text-emerald-200" : "text-white"}>{n(count.diff_qty) > 0 ? "+" : ""}{formatQty(count.diff_qty)}</b><br />eltérés</div>
-                </div>
-              </button>
-            )) : <div className="rounded-2xl border border-white/14 bg-white/[0.04] p-4 text-sm text-white/62 md:col-span-2 xl:col-span-3">Ehhez a helyszínhez még nincs leltár.</div>}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
         </section>
         ) : null}
 
@@ -1576,12 +1706,13 @@ export default function AllInInventory() {
               </div>
             </div>
 
-            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-6">
               <StatCard label="Rendszer szerint" value={formatQty(activeStats.expected)} hint={`${formatQty(activeStats.lines)} sor`} icon={<ClipboardList size={18} />} />
               <StatCard label="Megszámolva" value={formatQty(activeStats.counted)} hint={`${formatQty(activeStats.countedLines)} / ${formatQty(activeStats.lines)} sor`} icon={<CheckCircle2 size={18} />} tone="green" />
               <StatCard label="Hiány" value={formatQty(activeStats.missing)} hint={`${formatMoney(activeStats.missingSell)} RON eladási értéken`} icon={<AlertTriangle size={18} />} tone="red" />
               <StatCard label="Többlet" value={formatQty(activeStats.extra)} hint={`${formatMoney(activeStats.extraSell)} RON eladási értéken`} icon={<PackageCheck size={18} />} tone="green" />
               <StatCard label="Nettó eltérés" value={`${activeStats.net > 0 ? "+" : ""}${formatQty(activeStats.net)}`} hint={`${formatMoney(activeStats.diffSell)} RON eladási értéken`} icon={<SlidersHorizontal size={18} />} tone={activeStats.net < 0 ? "red" : activeStats.net > 0 ? "green" : "neutral"} />
+              <StatCard label="Számolt érték" value={`${formatMoney(activeStats.countedSellValue)} RON`} hint={`Rendszerérték: ${formatMoney(activeStats.expectedSellValue)} RON`} icon={<FileText size={18} />} tone="blue" />
             </div>
 
             {renderScannerPanel()}
