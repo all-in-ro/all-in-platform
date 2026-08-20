@@ -1089,7 +1089,8 @@ export default function AllInInventory() {
 
     const now = Date.now();
     const key = barcodeKey(code);
-    if (lastScanRef.current.code === key && now - lastScanRef.current.at < 1100) return;
+    const duplicateWindowMs = source === "manual" ? 250 : 1100;
+    if (lastScanRef.current.code === key && now - lastScanRef.current.at < duplicateWindowMs) return;
     lastScanRef.current = { code: key, at: now };
 
     const line = findLineByBarcode(code);
@@ -1107,6 +1108,15 @@ export default function AllInInventory() {
 
   function submitManualBarcode() {
     handleBarcodeCandidate(manualBarcode, "manual");
+  }
+
+  function handleManualBarcodeInput(value: string) {
+    setManualBarcode(value);
+    if (pendingScanRef.current) return;
+    const code = String(value || "").trim();
+    if (!code || !activeRef.current || !canEditActive) return;
+    if (!findLineByBarcode(code)) return;
+    handleBarcodeCandidate(code, "manual");
   }
 
   function changePendingQty(delta: number) {
@@ -1260,18 +1270,17 @@ export default function AllInInventory() {
               </div>
             </div>
 
-            <form className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
+            <form className="mt-3" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
               <input
                 ref={manualBarcodeInputRef}
                 className={`${input} h-12 w-full text-base`}
                 value={manualBarcode}
-                onChange={(e) => setManualBarcode(e.target.value)}
-                placeholder="Bárkód kézzel / bluetooth olvasóval"
+                onChange={(e) => handleManualBarcodeInput(e.target.value)}
+                placeholder="Olvasd be a bárkódot…"
                 autoComplete="off"
                 inputMode="numeric"
                 disabled={!canScan}
               />
-              <button className={primaryBtn} type="submit" disabled={!canScan || !manualBarcode.trim()}><CheckCircle2 size={15} /> Beolvasás</button>
             </form>
 
             {scannerOpen ? (
@@ -1364,18 +1373,17 @@ export default function AllInInventory() {
             <strong className="text-sm text-white">{formatMoney(activeStats.countedSellValue)} RON</strong>
           </div>
 
-          <form className="mt-3 grid grid-cols-[1fr_auto] gap-2" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
+          <form className="mt-3" onSubmit={(e) => { e.preventDefault(); submitManualBarcode(); }}>
             <input
               ref={manualBarcodeInputRef}
               className="h-11 min-w-0 rounded-xl border border-white/18 bg-[#202a3a] px-3 text-base text-white outline-none placeholder:text-white/42 focus:border-[#2a8d8b]/75"
               value={manualBarcode}
-              onChange={(e) => setManualBarcode(e.target.value)}
-              placeholder="Bárkód"
+              onChange={(e) => handleManualBarcodeInput(e.target.value)}
+              placeholder="Olvasd be a bárkódot…"
               autoComplete="off"
               inputMode="numeric"
               disabled={!canScan}
             />
-            <button className={primaryBtn} type="submit" disabled={!canScan || !manualBarcode.trim()}><CheckCircle2 size={15} /> OK</button>
           </form>
 
           <div className="mt-2 grid grid-cols-2 gap-2">
