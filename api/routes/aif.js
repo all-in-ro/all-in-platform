@@ -18063,6 +18063,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
   }
 
+  function aifRoundMoneyUp(value) {
+    const amount = Number(value || 0);
+    if (!Number.isFinite(amount)) return 0;
+    return Math.ceil(amount * 100 - 1e-9) / 100;
+  }
+
+  function aifDiscountedUnitPrice(listPrice, discountPercent) {
+    const price = Number(listPrice || 0);
+    const discount = Math.max(0, Math.min(100, Number(discountPercent || 0)));
+    if (discount <= 0) return aifRoundMoney(price);
+    return aifRoundMoneyUp(price * (1 - discount / 100));
+  }
+
   function aifEmployeeKey(value) {
     return text(value).replace(/\s+/g, " ").trim().toLowerCase();
   }
@@ -18988,7 +19001,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const address = emptyToNull(body.address || body.addressLine || body.address_line);
       const notes = emptyToNull(body.note || body.notes);
       if (!fullName) return res.status(400).json({ error: "A kliens neve kötelező." });
-      if (!phone) return res.status(400).json({ error: "A kliens telefonszáma kötelező." });
 
       const client = await pool.connect();
       try {
@@ -18998,7 +19010,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         const existing = await client.query(
           `SELECT id
            FROM aif_shop_customers c
-           WHERE lower(regexp_replace(COALESCE(c.phone,''),'[^0-9+]','','g')) =
+           WHERE NULLIF(btrim($1),'') IS NOT NULL
+             AND lower(regexp_replace(COALESCE(c.phone,''),'[^0-9+]','','g')) =
                  lower(regexp_replace($1,'[^0-9+]','','g'))
              AND (
                c.location_id=$2
@@ -19085,7 +19098,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
              RETURNING *`,
             [
-              fullName, phone, email, address, geo.localityName,
+              fullName, phone || null, email, address, geo.localityName,
               geo.countryCode, geo.countyCode, geo.countyName, geo.localityCode, geo.localityName,
               geo.postalCode, notes, location.id, actorFrom(req),
             ]
@@ -19146,12 +19159,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         error.statusCode = 400;
         throw error;
       }
-      if (!phone) {
-        const error = new Error("A kliens telefonszáma kötelező.");
-        error.statusCode = 400;
-        throw error;
-      }
-
       const geo = await aifResolveRomaniaCustomerGeo(client, body, { required: true });
       const phoneConflict = await client.query(
         `SELECT id, full_name
@@ -19159,6 +19166,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE id<>$1
            AND location_id=$2
            AND is_active=true
+           AND NULLIF(btrim($3),'') IS NOT NULL
            AND lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) =
                lower(regexp_replace($3,'[^0-9+]','','g'))
          LIMIT 1`,
@@ -19194,7 +19202,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         [
           current.rows[0].id,
           fullName,
-          phone,
+          phone || null,
           email,
           address,
           geo.localityName,
@@ -21740,7 +21748,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           error.code = "missing_sell_price";
           throw error;
         }
-        const unitPrice = aifRoundMoney(listPrice * (1 - input.discountPercent / 100));
+        const unitPrice = aifDiscountedUnitPrice(listPrice, input.discountPercent);
         const lineSubtotal = aifRoundMoney(listPrice * input.quantity);
         const lineTotal = aifRoundMoney(unitPrice * input.quantity);
         const lineDiscount = aifRoundMoney(lineSubtotal - lineTotal);
@@ -21772,8 +21780,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           ? await aifResolveRomaniaCustomerGeo(client, customerInput, { required: true })
           : null;
 
-      if (paymentMethod === "credit" && (!customerName || !customerPhone)) {
-        const error = new Error("Utólagos fizetésnél a kliens neve és telefonszáma kötelező.");
+      if (paymentMethod === "credit" && !requestedCustomerId && !customerName) {
+        const error = new Error("Utólagos fizetésnél kliens kiválasztása kötelező.");
         error.statusCode = 400;
         throw error;
       }
