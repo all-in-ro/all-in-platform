@@ -114,6 +114,23 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function roundMoney(value: number) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function roundMoneyUp(value: number) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.ceil(amount * 100 - 1e-9) / 100;
+}
+
+function discountedUnitPrice(listPrice: number, discountPercent: number) {
+  const price = numberValue(listPrice);
+  const discount = Math.max(0, Math.min(100, numberValue(discountPercent)));
+  if (discount <= 0) return roundMoney(price);
+  return roundMoneyUp(price * (1 - discount / 100));
+}
+
 function createRequestKey() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -310,18 +327,17 @@ export default function AllInMagazinSale({
   }, [administrationAccessOpen, administrationBusy, administrationCode]);
 
   const subtotal = useMemo(
-    () => cart.reduce((sum, line) => sum + numberValue(line.sellPrice) * line.quantity, 0),
+    () => roundMoney(cart.reduce((sum, line) => sum + roundMoney(numberValue(line.sellPrice)) * line.quantity, 0)),
     [cart],
   );
   const total = useMemo(
-    () => cart.reduce((sum, line) => {
-      const listPrice = numberValue(line.sellPrice);
-      const unitPrice = listPrice * (1 - line.discountPercent / 100);
+    () => roundMoney(cart.reduce((sum, line) => {
+      const unitPrice = discountedUnitPrice(numberValue(line.sellPrice), line.discountPercent);
       return sum + unitPrice * line.quantity;
-    }, 0),
+    }, 0)),
     [cart],
   );
-  const discountTotal = Math.max(0, subtotal - total);
+  const discountTotal = Math.max(0, roundMoney(subtotal - total));
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const selectedQuickDiscount = useMemo(() => {
     if (!cart.length) return null;
@@ -335,9 +351,11 @@ export default function AllInMagazinSale({
   );
   const editingDiscountValue = Math.max(0, Math.min(100, numberValue(discountEditor?.value)));
   const editingDiscountOriginal = editingDiscountLine
-    ? numberValue(editingDiscountLine.sellPrice) * editingDiscountLine.quantity
+    ? roundMoney(numberValue(editingDiscountLine.sellPrice) * editingDiscountLine.quantity)
     : 0;
-  const editingDiscountFinal = editingDiscountOriginal * (1 - editingDiscountValue / 100);
+  const editingDiscountFinal = editingDiscountLine
+    ? roundMoney(discountedUnitPrice(numberValue(editingDiscountLine.sellPrice), editingDiscountValue) * editingDiscountLine.quantity)
+    : 0;
 
   function cancelAutomaticLookup() {
     if (automaticLookupTimerRef.current !== null) {
@@ -615,8 +633,8 @@ export default function AllInMagazinSale({
   async function saveNewCustomer() {
     const fullName = customerDraft.fullName.trim();
     const phone = customerDraft.phone.trim();
-    if (!fullName || !phone) {
-      setError("Új kliensnél a név és a telefonszám kötelező.");
+    if (!fullName) {
+      setError("Új kliensnél a név kötelező.");
       return;
     }
     if (!customerDraft.countyCode || !customerDraft.localityCode) {
@@ -942,8 +960,8 @@ export default function AllInMagazinSale({
             <div className="mt-3 max-h-[43vh] space-y-2 overflow-y-auto pr-1">
               {cart.length ? cart.map((line) => {
                 const listPrice = numberValue(line.sellPrice);
-                const discountedUnit = listPrice * (1 - line.discountPercent / 100);
-                const lineTotal = discountedUnit * line.quantity;
+                const discountedUnit = discountedUnitPrice(listPrice, line.discountPercent);
+                const lineTotal = roundMoney(discountedUnit * line.quantity);
                 return (
                   <div key={line.variantId} className="rounded-[18px] border border-white/13 bg-[#3b475a] p-3">
                     <div className="grid grid-cols-[52px_1fr_auto] gap-2">
@@ -1274,7 +1292,7 @@ export default function AllInMagazinSale({
                     </div>
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Név *<input autoFocus value={customerDraft.fullName} onChange={(event) => setCustomerDraft((current) => ({ ...current, fullName: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
-                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Telefonszám *<input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
+                      <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Telefonszám <span className="normal-case tracking-normal text-white/35">(opcionális)</span><input value={customerDraft.phone} onChange={(event) => setCustomerDraft((current) => ({ ...current, phone: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">E-mail<input type="email" value={customerDraft.email} onChange={(event) => setCustomerDraft((current) => ({ ...current, email: event.target.value }))} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none placeholder:text-white/42 focus:border-[#72d8d4]" /></label>
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Megye *<select value={customerDraft.countyCode} onChange={(event) => changeCustomerCounty(event.target.value)} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4]"><option value="">Válassz megyét</option>{counties.map((county) => <option key={county.code} value={county.code}>{county.name}</option>)}</select></label>
                       <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">Helység *<select value={customerDraft.localityCode} onChange={(event) => changeCustomerLocality(event.target.value)} disabled={!customerDraft.countyCode || geoLoading} className="h-12 rounded-xl border border-white/16 bg-[#273243] px-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#72d8d4] disabled:cursor-not-allowed disabled:opacity-50"><option value="">{geoLoading ? "Helységek betöltése…" : "Válassz helységet"}</option>{localities.map((locality) => <option key={locality.code} value={locality.code}>{locality.name}</option>)}</select></label>
