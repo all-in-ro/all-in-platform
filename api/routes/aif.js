@@ -6874,7 +6874,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               br.code AS brand_code, br.name AS brand_name,
               COALESCE(st.total_qty,0)::int AS total_qty
        FROM aif_product_variants v
-       ${finalFastJoin}
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands br ON br.id=m.brand_id
        LEFT JOIN LATERAL (
