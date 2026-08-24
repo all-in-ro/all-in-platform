@@ -3990,6 +3990,7 @@ export function apiAifAdminShopOverview(options: {
   saleType?: string;
   brand?: string;
   category?: string;
+  snCod?: string;
   search?: string;
 }) {
   const q = new URLSearchParams();
@@ -4001,6 +4002,7 @@ export function apiAifAdminShopOverview(options: {
   if (options.saleType) q.set("saleType", options.saleType);
   if (options.brand) q.set("brand", options.brand);
   if (options.category) q.set("category", options.category);
+  if (options.snCod?.trim()) q.set("snCod", options.snCod.trim());
   if (options.search?.trim()) q.set("search", options.search.trim());
   return fetchAifJSON<AifAdminShopOverviewResponse>(`/admin-shops/overview?${q.toString()}`);
 }
@@ -4156,6 +4158,7 @@ export type AifSalesCommandOverviewResponse = {
     color?: string | null;
     payment?: string | null;
     product?: string | null;
+    snCod?: string | null;
     search?: string | null;
     source: "all" | "live" | "history";
   };
@@ -4273,6 +4276,7 @@ export function apiAifSalesCommandCenterOverview(options?: {
   color?: string;
   payment?: string;
   product?: string;
+  snCod?: string;
   search?: string;
   source?: "all" | "live" | "history";
   bucket?: "auto" | "day" | "week" | "month";
@@ -4291,6 +4295,7 @@ export function apiAifSalesCommandCenterOverview(options?: {
   if (options?.color?.trim()) q.set("color", options.color.trim());
   if (options?.payment?.trim()) q.set("payment", options.payment.trim());
   if (options?.product?.trim()) q.set("product", options.product.trim());
+  if (options?.snCod?.trim()) q.set("snCod", options.snCod.trim());
   if (options?.search?.trim()) q.set("search", options.search.trim());
   q.set("source", options?.source || "all");
   q.set("bucket", options?.bucket || "auto");
