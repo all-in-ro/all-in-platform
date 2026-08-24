@@ -1289,6 +1289,7 @@ export default function AllInReceptions(_props: Props) {
   const [rowColorResolution, setRowColorResolution] = useState<any | null>(null);
   const [rowColorResolutionLoading, setRowColorResolutionLoading] = useState(false);
   const [rowColorResolutionBusy, setRowColorResolutionBusy] = useState(false);
+  const [rowColorResolutionActionError, setRowColorResolutionActionError] = useState("");
   const [rowColorChoice, setRowColorChoice] = useState<'keep_existing' | 'use_incoming' | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -1787,12 +1788,14 @@ export default function AllInReceptions(_props: Props) {
     if (!rowId) {
       setRowColorResolution(null);
       setRowColorChoice(null);
+      setRowColorResolutionActionError("");
       setRowColorResolutionLoading(false);
       return;
     }
     let cancelled = false;
     setRowColorResolution(null);
     setRowColorChoice(null);
+    setRowColorResolutionActionError("");
     setRowColorResolutionLoading(true);
     void fetchAifJsonLocal<any>(`/import-rows/${encodeURIComponent(rowId)}/barcode-color-resolution`)
       .then((data) => {
@@ -1811,6 +1814,7 @@ export default function AllInReceptions(_props: Props) {
     if (!detail || !rowErrorTarget?.id || rowColorResolutionBusy) return;
     const rowId = String(rowErrorTarget.id);
     setRowColorResolutionBusy(true);
+    setRowColorResolutionActionError("");
     setMessage('');
     try {
       await fetchAifJsonLocal(`/import-rows/${encodeURIComponent(rowId)}/barcode-color-resolution`, {
@@ -1822,6 +1826,7 @@ export default function AllInReceptions(_props: Props) {
       await load();
       const freshRow = (next?.rows || []).find((row: any) => String(row.id) === rowId);
       if (freshRow?.status === 'committed') {
+        setRowColorResolutionActionError("");
         setRowErrorTarget(null);
         setRowColorResolution(null);
         setRowColorChoice(null);
@@ -1840,7 +1845,9 @@ export default function AllInReceptions(_props: Props) {
         const freshRow = (next?.rows || []).find((row: any) => String(row.id) === rowId);
         if (freshRow) setRowErrorTarget(freshRow);
       } catch {}
-      setMessage(e?.message || 'A színválasztás és készletre vétel nem sikerült.');
+      const actionError = e?.message || 'A színválasztás és készletre vétel nem sikerült.';
+      setRowColorResolutionActionError(actionError);
+      setMessage(actionError);
     } finally {
       setRowColorResolutionBusy(false);
     }
@@ -2596,6 +2603,18 @@ export default function AllInReceptions(_props: Props) {
                   </details>
                 ) : null}
 
+                {rowColorResolutionActionError ? (
+                  <div className="rounded-2xl border border-red-300/45 bg-red-500/14 px-3 py-3 text-sm leading-5 text-red-50 shadow-[0_0_18px_rgba(239,68,68,0.16)]">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-200" />
+                      <div>
+                        <p className="font-medium text-white">A művelet nem sikerült</p>
+                        <p className="mt-1 text-red-50/86">{rowColorResolutionActionError}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-3 flex flex-wrap justify-end gap-2 border-t border-white/10 bg-[#303a4c]/98 px-4 py-3 shadow-[0_-12px_28px_rgba(15,23,42,0.28)] backdrop-blur">
                   {rowColorResolution?.canResolve ? (
                     <>
@@ -2607,6 +2626,7 @@ export default function AllInReceptions(_props: Props) {
                           setRowErrorTarget(null);
                           setRowColorResolution(null);
                           setRowColorChoice(null);
+                          setRowColorResolutionActionError("");
                         }}
                       >
                         <X size={15} /> Mégse
