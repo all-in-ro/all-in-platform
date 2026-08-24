@@ -1,0 +1,590 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  BarChart3,
+  CalendarDays,
+  Boxes,
+  Clock3,
+  LogOut,
+  PackageSearch,
+  Receipt,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  ShoppingCart,
+  Store,
+  Truck,
+  UserPlus,
+  UserRound,
+  Users,
+} from "lucide-react";
+import AllInMagazinClients from "./AllInMagazinClients";
+import AllInShopVacations from "./AllInShopVacations";
+import AllInShopOperations, { type AllInShopOperationMode } from "./AllInShopOperations";
+import AllInShiftHandoverInbox from "./AllInShiftHandoverInbox";
+import AllInShopReturns from "./AllInShopReturns";
+import AllInReturnAuthorizationInbox from "./AllInReturnAuthorizationInbox";
+import AllInShopReservations from "./AllInShopReservations";
+import AllInShopIncoming from "./AllInShopIncoming";
+import AllInShopDocuments from "./AllInShopDocuments";
+import {
+  apiAifShopReservations,
+  type AifShopReservation,
+} from "../lib/aif/api";
+
+type Props = {
+  apiBase?: string;
+  actor?: string;
+  role?: "admin" | "shop";
+  shopId: string;
+  locationCode: string;
+  locationName: string;
+  cityName: string;
+  saleHash?: string;
+  onLogout?: () => void | Promise<void>;
+};
+
+type ActionCard = {
+  key: string;
+  title: string;
+  description: string;
+  icon: typeof ShoppingCart;
+  primary?: boolean;
+};
+
+type ReservationDeadlineAlert = {
+  count: number;
+  date: string | null;
+  label: "LEJÁRT" | "MA LEJÁR" | null;
+};
+
+const EMPTY_RESERVATION_DEADLINE_ALERT: ReservationDeadlineAlert = {
+  count: 0,
+  date: null,
+  label: null,
+};
+
+function formatDateTime(value: Date) {
+  return value.toLocaleString("hu-HU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function localIsoDate(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function normalizeDateOnly(value?: string | null) {
+  const iso = String(value || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+}
+
+function formatIsoDate(value?: string | null) {
+  const iso = normalizeDateOnly(value);
+  if (!iso) return "";
+  return new Intl.DateTimeFormat("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(`${iso}T12:00:00Z`));
+}
+
+function summarizeReservationDeadlines(items: AifShopReservation[]): ReservationDeadlineAlert {
+  const today = localIsoDate();
+  const urgentDates = (items || [])
+    .map((item) => normalizeDateOnly(item.expiresOn))
+    .filter((date): date is string => Boolean(date && date <= today))
+    .sort();
+
+  if (!urgentDates.length) return EMPTY_RESERVATION_DEADLINE_ALERT;
+
+  return {
+    count: urgentDates.length,
+    date: urgentDates[0],
+    label: urgentDates.some((date) => date < today) ? "LEJÁRT" : "MA LEJÁR",
+  };
+}
+
+function shopAdministrationUnlockKey(shopId: string) {
+  return `allin:shop-administration-unlock:${shopId}`;
+}
+
+function shopAdministrationUnlockExpiresAt(shopId: string) {
+  if (typeof window === "undefined") return 0;
+  const key = shopAdministrationUnlockKey(shopId);
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const expiresAt = Number(parsed?.expiresAt || 0);
+    const storedShopId = String(parsed?.shopId || "");
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || (storedShopId && storedShopId !== shopId)) {
+      window.sessionStorage.removeItem(key);
+      return 0;
+    }
+    return expiresAt;
+  } catch {
+    return 0;
+  }
+}
+
+function clearShopAdministrationUnlock(shopId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(shopAdministrationUnlockKey(shopId));
+  } catch {
+    // A navigáció ettől még működjön.
+  }
+}
+
+export default function AllInMagazinDynamic({
+  apiBase = "/api",
+  actor = "Üzleti felhasználó",
+  role = "shop",
+  shopId,
+  locationCode,
+  locationName,
+  cityName,
+  saleHash = "shopsale",
+  onLogout,
+}: Props) {
+  const actions = useMemo<ActionCard[]>(() => [
+    {
+      key: "search",
+      title: "Termék keresése",
+      description: "Vonalkód, név, méret vagy termékkód alapján.",
+      icon: Search,
+      primary: true,
+    },
+    {
+      key: "stock",
+      title: "Üzleti készlet",
+      description: `${locationName} elérhető készlete.`,
+      icon: Boxes,
+      primary: true,
+    },
+    {
+      key: "reserved",
+      title: "Félretett termékek",
+      description: "Klienshez kötött foglalások, lejáratok és átvételek.",
+      icon: PackageSearch,
+      primary: true,
+    },
+    {
+      key: "transfers",
+      title: "Beérkező áru",
+      description: "Lezárt Avizok tételes átvétele és havi beérkezési előzmény.",
+      icon: Truck,
+      primary: true,
+    },
+    {
+      key: "returns",
+      title: "Visszáru",
+      description: "Vevői visszáru, üzletközi árfeloldás és cserefolyamat.",
+      icon: RotateCcw,
+      primary: true,
+    },
+    {
+      key: "receipts",
+      title: "Bizonylatok",
+      description: "Saját eladások, pénzátadások, műszakok, áruátvételek és kérelmek.",
+      icon: Receipt,
+      primary: true,
+    },
+    {
+      key: "summary",
+      title: "Napi összesítés",
+      description: "Forgalom, darabszám és műszakzárás.",
+      icon: BarChart3,
+      primary: true,
+    },
+    {
+      key: "vacations",
+      title: "Szabadságok",
+      description: "Saját kérelmek, döntések és elfogadott távollétek.",
+      icon: CalendarDays,
+      primary: true,
+    },
+  ], [locationName]);
+
+  const [now, setNow] = useState(() => new Date());
+  const [notice, setNotice] = useState("");
+  const [clientsOpen, setClientsOpen] = useState(false);
+  const [clientsInitialMode, setClientsInitialMode] = useState<"search" | "new">("search");
+  const [vacationsOpen, setVacationsOpen] = useState(false);
+  const [returnsOpen, setReturnsOpen] = useState(false);
+  const [reservationsOpen, setReservationsOpen] = useState(false);
+  const [reservationDeadlineAlert, setReservationDeadlineAlert] = useState<ReservationDeadlineAlert>(
+    EMPTY_RESERVATION_DEADLINE_ALERT,
+  );
+  const [incomingOpen, setIncomingOpen] = useState(false);
+  const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [shopOperationMode, setShopOperationMode] = useState<AllInShopOperationMode | null>(null);
+  const [administrationExpiresAt] = useState(() =>
+    role === "admin" ? Number.POSITIVE_INFINITY : shopAdministrationUnlockExpiresAt(shopId),
+  );
+  const administrationUnlocked = role === "admin" || administrationExpiresAt > Date.now();
+
+  const refreshReservationDeadlineAlert = useCallback(async () => {
+    try {
+      const response = await apiAifShopReservations({
+        location: locationCode,
+        mode: "active",
+      });
+      setReservationDeadlineAlert(summarizeReservationDeadlines(response.items || []));
+    } catch {
+      // Átmeneti hiba miatt ne tüntessünk el valódi figyelmeztetést.
+    }
+  }, [locationCode]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!administrationUnlocked) return;
+
+    void refreshReservationDeadlineAlert();
+    const timer = window.setInterval(() => void refreshReservationDeadlineAlert(), 30000);
+    const refreshOnFocus = () => void refreshReservationDeadlineAlert();
+    window.addEventListener("focus", refreshOnFocus);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
+  }, [administrationUnlocked, refreshReservationDeadlineAlert]);
+
+  useEffect(() => {
+    if (role !== "shop") return;
+    if (!administrationUnlocked) {
+      window.location.hash = saleHash;
+      return;
+    }
+
+    const remaining = Math.max(0, administrationExpiresAt - Date.now());
+    const timer = window.setTimeout(() => {
+      clearShopAdministrationUnlock(shopId);
+      window.location.hash = saleHash;
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [administrationExpiresAt, administrationUnlocked, role, saleHash, shopId]);
+
+  const sessionLabel = useMemo(
+    () => role === "admin" ? "Admin előnézet" : "Védett adminisztráció",
+    [role],
+  );
+
+  function openClients(mode: "search" | "new") {
+    setClientsInitialMode(mode);
+    setClientsOpen(true);
+    setNotice("");
+  }
+
+  function returnToSale() {
+    clearShopAdministrationUnlock(shopId);
+    window.location.hash = saleHash;
+  }
+
+  function closeReservations() {
+    setReservationsOpen(false);
+    void refreshReservationDeadlineAlert();
+  }
+
+  function openModule(action: ActionCard) {
+    if (action.key === "vacations") {
+      setNotice("");
+      setVacationsOpen(true);
+      return;
+    }
+    if (action.key === "returns") {
+      setNotice("");
+      setReturnsOpen(true);
+      return;
+    }
+    if (action.key === "reserved") {
+      setNotice("");
+      void refreshReservationDeadlineAlert();
+      setReservationsOpen(true);
+      return;
+    }
+    if (action.key === "transfers") {
+      setNotice("");
+      setIncomingOpen(true);
+      return;
+    }
+    if (action.key === "receipts") {
+      setNotice("");
+      setDocumentsOpen(true);
+      return;
+    }
+    if (action.key === "search" || action.key === "stock" || action.key === "summary") {
+      setNotice("");
+      setShopOperationMode(action.key);
+      return;
+    }
+    setNotice(`${action.title}: a modul jelenleg nem nyitható meg.`);
+  }
+
+  if (role === "shop" && !administrationUnlocked) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-gradient-to-br from-[#626d7d] via-[#596373] to-[#505a69] px-4 text-white">
+        <div className="rounded-2xl border border-white/16 bg-[#303a4c] px-5 py-4 text-sm text-white/72 shadow-2xl">
+          Értékesítési felület megnyitása…
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-gradient-to-br from-[#626d7d] via-[#596373] to-[#505a69] p-3 text-white sm:p-4 lg:p-6">
+      <div className="mx-auto max-w-[1480px] space-y-4">
+        <header className="rounded-[24px] border border-white/18 bg-[#303a4c] px-4 py-4 shadow-[0_18px_48px_rgba(15,23,42,0.28)] sm:px-5">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/22 text-[#cffffd]">
+              <Store size={28} strokeWidth={1.8} />
+            </span>
+            <div className="min-w-[240px] border-l-4 border-[#2a8d8b] pl-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[#cffffd]/65">AllInFashion • értékesítés</p>
+              <h1 className="mt-1 text-2xl tracking-tight sm:text-3xl">ÜZLET – {cityName}</h1>
+              <p className="mt-1 text-sm text-white/55">{locationName}</p>
+            </div>
+
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <div className="hidden min-w-[210px] rounded-2xl border border-white/12 bg-white/[0.06] px-3 py-2 sm:block">
+                <div className="flex items-center gap-2 text-xs text-white/55">
+                  <Clock3 size={14} />
+                  <span>{formatDateTime(now)}</span>
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-sm text-white">
+                  <UserRound size={14} className="text-[#8ee6e2]" />
+                  <span className="truncate">{actor}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={returnToSale}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm font-normal text-white transition hover:bg-[#3e4d63] active:scale-[0.98]"
+              >
+                <ShoppingCart size={18} />
+                Eladáshoz
+              </button>
+              <button
+                type="button"
+                onClick={() => void onLogout?.()}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-[#9be9e5]/48 bg-[#2a8d8b] px-4 text-sm font-normal text-white shadow-[0_10px_22px_rgba(42,141,139,0.20)] transition hover:bg-[#319c99] active:scale-[0.98]"
+              >
+                <LogOut size={18} />
+                Kilépés
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <section className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <div className="rounded-2xl border border-[#7bd7d4]/28 bg-[#244750] px-4 py-3">
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-0.5 shrink-0 text-[#9ff3ef]" size={20} />
+              <div>
+                <p className="text-sm text-white">{cityName} értékesítési felület</p>
+                <p className="mt-1 text-xs leading-relaxed text-white/58">
+                  Ez a védett kezelőfelület csak ismételt kódellenőrzés után nyílik meg. Az eladó alapból közvetlenül az Új eladás oldalon dolgozik.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex min-w-[210px] items-center justify-between gap-3 rounded-2xl border border-white/14 bg-[#354153] px-4 py-3">
+            <div>
+              <p className="text-[9px] uppercase tracking-[0.14em] text-white/42">Munkamenet</p>
+              <p className="mt-1 text-sm text-white">{sessionLabel}</p>
+            </div>
+            <span className="h-3 w-3 rounded-full bg-[#37c7c2] shadow-[0_0_14px_rgba(55,199,194,0.85)]" />
+          </div>
+        </section>
+
+        {notice ? (
+          <div className="rounded-2xl border border-amber-200/28 bg-amber-500/12 px-4 py-3 text-sm text-amber-50">
+            {notice}
+          </div>
+        ) : null}
+
+        <section>
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.16em] text-white/45">Gyors műveletek</p>
+              <h2 className="mt-1 text-xl">Értékesítési központ</h2>
+            </div>
+            <span className="rounded-full border border-white/14 bg-white/[0.06] px-3 py-1 text-[11px] text-white/55">Érintőképernyőre optimalizált</span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {actions.map((action) => {
+              const Icon = action.icon;
+              const reservationIsDanger =
+                action.key === "reserved" && reservationDeadlineAlert.count > 0;
+              const alertBadgeText = reservationIsDanger
+                ? reservationDeadlineAlert.count > 1
+                  ? `${reservationDeadlineAlert.count} SÜRGŐS`
+                  : reservationDeadlineAlert.label
+                : "Aktív modul";
+
+              return (
+                <button
+                  key={action.key}
+                  type="button"
+                  onClick={() => openModule(action)}
+                  className={`group min-h-[154px] touch-manipulation rounded-[22px] border p-4 text-left shadow-[0_12px_28px_rgba(15,23,42,0.16)] transition active:scale-[0.985] ${
+                    reservationIsDanger
+                      ? "border-[#ffbac2]/85 bg-gradient-to-br from-[#e0182f] via-[#c30d1c] to-[#8f0714] shadow-[0_18px_38px_rgba(134,7,20,0.42)] ring-2 ring-[#ffccd2]/28 hover:brightness-110"
+                      : "border-[#9be9e5]/45 bg-gradient-to-br from-[#2a8d8b] to-[#207572] hover:brightness-110"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl border ${
+                      reservationIsDanger
+                        ? "border-white/38 bg-black/15 text-white shadow-[0_8px_20px_rgba(82,0,12,0.30)]"
+                        : "border-white/25 bg-white/14 text-white"
+                    }`}>
+                      <Icon size={24} strokeWidth={reservationIsDanger ? 2.2 : 1.8} />
+                    </span>
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] ${
+                      reservationIsDanger
+                        ? "border-white/48 bg-white/18 font-semibold text-white shadow-[0_6px_16px_rgba(80,0,12,0.25)]"
+                        : "border-white/14 bg-black/10 text-white/55"
+                    }`}>
+                      {reservationIsDanger ? <AlertTriangle size={12} strokeWidth={2.4} /> : null}
+                      {alertBadgeText}
+                    </span>
+                  </div>
+                  <h3 className={`mt-4 text-lg text-white ${reservationIsDanger ? "font-semibold" : ""}`}>
+                    {action.title}
+                  </h3>
+                  <p className={`mt-1.5 text-sm leading-snug ${reservationIsDanger ? "text-white/84" : "text-white/58"}`}>
+                    {action.description}
+                  </p>
+                  {reservationIsDanger && reservationDeadlineAlert.date ? (
+                    <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/40 bg-black/20 px-3 py-2 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(74,0,10,0.24)]">
+                      <Clock3 size={17} strokeWidth={2.3} />
+                      <span>{reservationDeadlineAlert.label}</span>
+                      <span className="text-white/65">•</span>
+                      <span>{formatIsoDate(reservationDeadlineAlert.date)}</span>
+                    </div>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="rounded-[22px] border border-white/18 bg-[#3b4759] p-3 shadow-[0_12px_28px_rgba(15,23,42,0.14)]">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => openClients("search")}
+              className="flex min-h-14 min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-2xl px-2 text-left text-white transition hover:bg-white/[0.05] active:scale-[0.995]"
+            >
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/30 bg-[#2a8d8b]/18 text-[#d7fffd]">
+                <Users size={21} />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[10px] uppercase tracking-[0.14em] text-white/42">Vevői nyilvántartás</span>
+                <span className="mt-1 block text-lg text-white">Kliensek</span>
+              </span>
+            </button>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => openClients("search")}
+                className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-white/18 bg-[#354153] px-4 text-sm text-white transition hover:bg-[#465366] active:scale-[0.98]"
+              >
+                <Search size={17} /> Lista
+              </button>
+              <button
+                type="button"
+                onClick={() => openClients("new")}
+                className="inline-flex min-h-11 touch-manipulation items-center gap-2 rounded-xl border border-[#9be9e5]/45 bg-[#2a8d8b] px-4 text-sm text-white transition hover:bg-[#319c99] active:scale-[0.98]"
+              >
+                <UserPlus size={17} /> Új kliens
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <AllInMagazinClients
+        open={clientsOpen}
+        initialMode={clientsInitialMode}
+        role={role}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={() => setClientsOpen(false)}
+      />
+      <AllInShopVacations
+        open={vacationsOpen}
+        actor={actor}
+        locationName={locationName}
+        apiBase={apiBase}
+        onClose={() => setVacationsOpen(false)}
+      />
+      <AllInShopOperations
+        open={shopOperationMode !== null}
+        mode={shopOperationMode || "search"}
+        actor={actor}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={() => setShopOperationMode(null)}
+      />
+      <AllInShopReservations
+        open={reservationsOpen}
+        actor={actor}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={closeReservations}
+      />
+      <AllInShopIncoming
+        open={incomingOpen}
+        actor={actor}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={() => setIncomingOpen(false)}
+      />
+      <AllInShopDocuments
+        open={documentsOpen}
+        actor={actor}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={() => setDocumentsOpen(false)}
+      />
+      <AllInShopReturns
+        open={returnsOpen}
+        actor={actor}
+        locationCode={locationCode}
+        locationName={locationName}
+        onClose={() => setReturnsOpen(false)}
+      />
+      <AllInReturnAuthorizationInbox
+        locationCode={locationCode}
+        locationName={locationName}
+      />
+      <AllInShiftHandoverInbox
+        actor={actor}
+        locationCode={locationCode}
+        locationName={locationName}
+      />
+    </main>
+  );
+}
