@@ -1136,7 +1136,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.use(express.json({
     limit: AIF_JSON_BODY_LIMIT,
     verify: (req, _res, buffer) => {
-      req.rawBody = Buffer.from(buffer);
+      const url = String(req.originalUrl || req.url || "");
+      if (url.includes("/shopify/webhooks/")) {
+        req.rawBody = Buffer.from(buffer);
+      }
     },
   }));
   router.use(express.urlencoded({ extended: true, limit: AIF_JSON_BODY_LIMIT }));
@@ -2121,16 +2124,52 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const barcodeOwnerMatchesIncomingVariant = (owner) => {
       if (!owner) return false;
-
-      // A valódi vonalkód az elsődleges fizikai azonosító. Ha ugyanahhoz a modellhez
-      // ÉS ugyanahhoz a mérethez tartozik, ugyanazt a variánst használjuk akkor is,
-      // ha egy régi importban a szín neve/kódja pontatlan vagy hiányos volt.
-      // Tipikus migrációs eset: régi ForIT = "albastru", új számla = "DENIM / 32S".
-      // Ilyenkor nem gyártunk új variánst és nem állítjuk meg a receptiót: a friss
-      // receptió színadatai felülírják a régi variáns színadatait.
       if (String(owner.model_id) !== String(modelId)) return false;
       if (normCode(owner.size || "") !== normCode(size)) return false;
       return true;
+    };
+
+    const barcodeOwnerColorDiffers = (owner) => {
+      if (!owner) return false;
+      const ownerCode = normCode(owner.color_code || "");
+      const ownerName = normCode(owner.color_name || "");
+      const incomingCode = normCode(colorCode || "");
+      const incomingName = normCode(colorName || "");
+      if (ownerCode && incomingCode && ownerCode !== incomingCode) return true;
+      if (ownerName && incomingName && ownerName !== incomingName) return true;
+      return false;
+    };
+
+    const barcodeColorResolution = normCode(
+      normalized.barcodeColorResolution || normalized.barcode_color_resolution || ""
+    );
+    const barcodeColorResolutionVariantId = text(
+      normalized.barcodeColorResolutionVariantId || normalized.barcode_color_resolution_variant_id || ""
+    );
+    const barcodeColorResolutionBarcode = text(
+      normalized.barcodeColorResolutionBarcode || normalized.barcode_color_resolution_barcode || ""
+    );
+
+    const throwBarcodeColorChoiceRequired = (owner) => {
+      const existingColorCode = text(owner?.color_code || "");
+      const existingColorName = text(owner?.color_name || "");
+      const incomingColorCode = text(colorCode || "");
+      const incomingColorName = text(colorName || "");
+      const existingLabel = [existingColorName, existingColorCode].filter(Boolean).join(" / ") || "nincs megadva";
+      const incomingLabel = [incomingColorName, incomingColorCode].filter(Boolean).join(" / ") || "nincs megadva";
+      const error = new Error(
+        `A(z) ${barcode} vonalkód ugyanahhoz a modellhez és mérethez tartozik, de a szín eltér. Meglévő: ${existingLabel}; érkező: ${incomingLabel}. Válaszd ki, hogy a régi szín maradjon, vagy nevezze át az új színre.`
+      );
+      error.statusCode = 409;
+      error.code = "barcode_color_choice_required";
+      error.barcode = barcode;
+      error.conflictVariantId = owner?.id ? String(owner.id) : null;
+      error.existingColorCode = existingColorCode || null;
+      error.existingColorName = existingColorName || null;
+      error.incomingColorCode = incomingColorCode || null;
+      error.incomingColorName = incomingColorName || null;
+      error.size = size || null;
+      throw error;
     };
 
     const throwBarcodeConflict = (owner) => {
@@ -2146,7 +2185,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       throw error;
     };
 
-    const updateVariantById = async (id) => {
+    const updateVariantById = async (id, { preserveExistingColor = false } = {}) => {
       const barcodeConflict = barcode ? await findBarcodeOwner(barcode, id) : null;
       if (barcodeConflict) throwBarcodeConflict(barcodeConflict);
 
@@ -2154,9 +2193,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_product_variants SET
            barcode = COALESCE($2, barcode),
            sn_cod = COALESCE($11, sn_cod),
-           color_code = COALESCE(NULLIF($3, ''), color_code),
-           color_name = COALESCE(NULLIF($4, ''), color_name),
-           color_hex = COALESCE($5, color_hex),
+           color_code = CASE WHEN $14::boolean THEN color_code ELSE COALESCE(NULLIF($3, ''), color_code) END,
+           color_name = CASE WHEN $14::boolean THEN color_name ELSE COALESCE(NULLIF($4, ''), color_name) END,
+           color_hex = CASE WHEN $14::boolean THEN color_hex ELSE COALESCE($5, color_hex) END,
            buy_price = COALESCE($6, buy_price),
            sell_price = COALESCE($7, sell_price),
            compare_at_price = COALESCE($8, compare_at_price),
@@ -2184,6 +2223,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           snCod,
           variantAttributesJson,
           variantUpdateStatus,
+          Boolean(preserveExistingColor),
         ]
       );
       return id;
@@ -2252,14 +2292,43 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       return result.rows[0] || null;
     };
 
-    // A valódi, egyedi vonalkód a legerősebb variánsazonosító. Ha ugyanahhoz a
-    // modellhez és mérethez tartozik, ugyanazt a sort frissítjük; ellentmondásnál hibázunk.
+    const resolveMatchingBarcodeOwner = async (barcodeOwner) => {
+      if (!barcodeOwnerMatchesIncomingVariant(barcodeOwner)) throwBarcodeConflict(barcodeOwner);
+      if (!barcodeOwnerColorDiffers(barcodeOwner)) return updateVariantById(barcodeOwner.id);
+
+      const resolutionMatchesOwner =
+        barcodeColorResolutionVariantId &&
+        barcodeColorResolutionVariantId === String(barcodeOwner.id) &&
+        (!barcodeColorResolutionBarcode || barcodeColorResolutionBarcode.toLowerCase() === String(barcode || '').toLowerCase());
+
+      if (!resolutionMatchesOwner || !["keep_existing", "use_incoming"].includes(barcodeColorResolution)) {
+        throwBarcodeColorChoiceRequired(barcodeOwner);
+      }
+
+      if (barcodeColorResolution === "keep_existing") {
+        return updateVariantById(barcodeOwner.id, { preserveExistingColor: true });
+      }
+
+      // Átnevezés előtt megnézzük, hogy az új szín + méret alatt nincs-e már másik
+      // variáns. Ha van, nem olvasztunk össze két terméket csak azért, mert valaki kattintott egyet.
+      const incomingIdentity = await findIdentityCandidate();
+      if (incomingIdentity && String(incomingIdentity.id) !== String(barcodeOwner.id)) {
+        const error = new Error(
+          `Az érkező ${colorName || colorCode || "szín"} / ${size} variáns már külön is létezik. A régi vonalkódos variáns nem nevezhető át erre automatikusan.`
+        );
+        error.statusCode = 409;
+        error.code = "barcode_color_target_conflict";
+        error.conflictVariantId = String(incomingIdentity.id);
+        throw error;
+      }
+      return updateVariantById(barcodeOwner.id, { preserveExistingColor: false });
+    };
+
+    // A valódi, egyedi vonalkód a legerősebb variánsazonosító. Azonos modell + méret
+    // esetén ugyanazt a fizikai variánst használjuk, de eltérő színnél a felhasználó dönt.
     if (barcode) {
       const barcodeOwner = await findBarcodeOwner(barcode, null);
-      if (barcodeOwner) {
-        if (!barcodeOwnerMatchesIncomingVariant(barcodeOwner)) throwBarcodeConflict(barcodeOwner);
-        return updateVariantById(barcodeOwner.id);
-      }
+      if (barcodeOwner) return resolveMatchingBarcodeOwner(barcodeOwner);
     }
 
     const existing = await findIdentityCandidate();
@@ -2301,10 +2370,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       if (barcode) {
         const barcodeOwner = await findBarcodeOwner(barcode, null);
-        if (barcodeOwner && barcodeOwnerMatchesIncomingVariant(barcodeOwner)) {
-          return updateVariantById(barcodeOwner.id);
-        }
-        if (barcodeOwner) throwBarcodeConflict(barcodeOwner);
+        if (barcodeOwner) return resolveMatchingBarcodeOwner(barcodeOwner);
       }
       throw error;
     }
@@ -6594,6 +6660,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           code: rowError?.code || null,
           detail: rowError?.detail || null,
           constraint: rowError?.constraint || null,
+          barcode: rowError?.barcode || row?.normalized?.barcode || null,
+          conflictVariantId: rowError?.conflictVariantId || null,
+          existingColorCode: rowError?.existingColorCode || null,
+          existingColorName: rowError?.existingColorName || null,
+          incomingColorCode: rowError?.incomingColorCode || null,
+          incomingColorName: rowError?.incomingColorName || null,
+          size: rowError?.size || row?.normalized?.size || row?.supplier_size || null,
         };
         failedRows.push(rowFailure);
         console.error("AIF commit import row failed", rowFailure);
@@ -6774,6 +6847,146 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       console.error("AIF reception selected commit failed", e);
       const status = Number(e?.statusCode || 500);
       res.status(status >= 400 && status < 600 ? status : 500).json({ error: e?.message || "A kijelölt sorok készletre vétele nem sikerült." });
+    } finally {
+      client.release();
+    }
+  });
+
+  async function loadImportRowBarcodeColorContext(client, rowId) {
+    const rowResult = await client.query(
+      `SELECT rw.id, rw.row_no, rw.status, rw.error_messages, rw.normalized,
+              rw.supplier_product_code, rw.supplier_color_code, rw.supplier_size,
+              b.supplier_id, b.reception_id, b.id AS batch_id
+       FROM aif_import_rows rw
+       JOIN aif_import_batches b ON b.id=rw.batch_id
+       WHERE rw.id::text=$1
+       LIMIT 1`,
+      [rowId]
+    );
+    if (!rowResult.rowCount) return null;
+    const row = rowResult.rows[0];
+    const normalized = row.normalized && typeof row.normalized === 'object' ? row.normalized : {};
+    const barcode = importBarcodeValue(normalized, row);
+    if (!barcode) return { row, barcode: null, owner: null, canResolve: false };
+    const ownerResult = await client.query(
+      `SELECT v.id, v.model_id, v.barcode, v.color_code, v.color_name, v.color_hex, v.size, v.status,
+              m.model_code, m.title_ro, m.status AS model_status,
+              br.code AS brand_code, br.name AS brand_name,
+              COALESCE(st.total_qty,0)::int AS total_qty
+       FROM aif_product_variants v
+       JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands br ON br.id=m.brand_id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sum(s.qty),0)::int AS total_qty
+         FROM aif_stock s WHERE s.variant_id=v.id
+       ) st ON true
+       WHERE lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+       ORDER BY CASE WHEN COALESCE(v.status,'active')='archived' THEN 1 ELSE 0 END,
+                v.created_at ASC, v.id ASC
+       LIMIT 1`,
+      [barcode]
+    );
+    const owner = ownerResult.rows[0] || null;
+    const incomingSize = text(normalized.size || row.supplier_size || '');
+    const incomingModel = normCode(normalized.modelCode || normalized.model_code || normalized.supplierProductCode || row.supplier_product_code || '');
+    const ownerModelRaw = text(owner?.model_code || '');
+    const ownerModel = normCode(ownerModelRaw.includes(':') ? ownerModelRaw.split(':').slice(1).join(':') : ownerModelRaw);
+    const sameSize = owner && normCode(owner.size || '') === normCode(incomingSize);
+    const sameModel = owner && (!incomingModel || !ownerModel || incomingModel === ownerModel);
+    const existingColorCode = text(owner?.color_code || '');
+    const existingColorName = text(owner?.color_name || '');
+    const incomingColorCode = text(normalized.colorCode || normalized.supplierColorCode || row.supplier_color_code || '');
+    const incomingColorName = text(normalized.colorName || '');
+    const colorDiffers = Boolean(owner && (
+      (existingColorCode && incomingColorCode && normCode(existingColorCode) !== normCode(incomingColorCode)) ||
+      (existingColorName && incomingColorName && normCode(existingColorName) !== normCode(incomingColorName))
+    ));
+    return {
+      row,
+      barcode,
+      owner,
+      canResolve: Boolean(owner && sameSize && sameModel && colorDiffers),
+      sameSize,
+      sameModel,
+      colorDiffers,
+      incoming: {
+        colorCode: incomingColorCode || null,
+        colorName: incomingColorName || null,
+        size: incomingSize || null,
+        title: text(normalized.titleRo || normalized.productName || row.supplier_product_code || '') || null,
+      },
+      existing: owner ? {
+        variantId: String(owner.id),
+        colorCode: existingColorCode || null,
+        colorName: existingColorName || null,
+        size: owner.size || null,
+        title: owner.title_ro || null,
+        brand: owner.brand_name || owner.brand_code || null,
+        totalQty: Number(owner.total_qty || 0),
+        status: owner.status || null,
+      } : null,
+    };
+  }
+
+  router.get('/import-rows/:id/barcode-color-resolution', requireAuthed, async (req, res) => {
+    try {
+      const context = await loadImportRowBarcodeColorContext(pool, text(req.params.id));
+      if (!context) return res.status(404).json({ error: 'Terméksor nem található.' });
+      return res.json({ ok: true, ...context });
+    } catch (error) {
+      console.error('AIF barcode color resolution context failed', error);
+      return res.status(500).json({ error: error?.message || 'A színütközés adatai nem tölthetők be.' });
+    }
+  });
+
+  router.post('/import-rows/:id/barcode-color-resolution', requireAuthed, async (req, res) => {
+    const rowId = text(req.params.id);
+    const resolution = normCode(req.body?.resolution || req.body?.choice || '');
+    if (!['keep_existing','use_incoming'].includes(resolution)) {
+      return res.status(400).json({ error: 'Érvénytelen színfeloldási választás.' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const context = await loadImportRowBarcodeColorContext(client, rowId);
+      if (!context) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Terméksor nem található.' });
+      }
+      if (!context.canResolve || !context.owner || !context.barcode) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Ez a sor jelenleg nem oldható fel egyszerű színválasztással.' });
+      }
+      await client.query(
+        `UPDATE aif_import_rows
+         SET normalized=COALESCE(normalized,'{}'::jsonb) || jsonb_build_object(
+               'barcodeColorResolution',$2,
+               'barcode_color_resolution',$2,
+               'barcodeColorResolutionVariantId',$3,
+               'barcode_color_resolution_variant_id',$3,
+               'barcodeColorResolutionBarcode',$4,
+               'barcode_color_resolution_barcode',$4,
+               'barcodeColorResolutionAt',now()::text
+             ),
+             status=CASE WHEN status='committed' THEN status ELSE 'parsed' END,
+             error_messages=CASE WHEN status='committed' THEN error_messages ELSE '{}'::text[] END,
+             updated_at=now()
+         WHERE id::text=$1`,
+        [rowId, resolution, String(context.owner.id), context.barcode]
+      );
+      await client.query('COMMIT');
+      return res.json({
+        ok: true,
+        resolution,
+        rowId,
+        barcode: context.barcode,
+        existing: context.existing,
+        incoming: context.incoming,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('AIF barcode color resolution save failed', error);
+      return res.status(500).json({ error: error?.message || 'A színválasztás mentése nem sikerült.' });
     } finally {
       client.release();
     }
@@ -11358,6 +11571,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const includeZero = ["1", "true", "yes"].includes(text(req.query.includeZero || req.query.include_zero).toLowerCase());
     const limit = Math.min(25000, Math.max(1, Number(req.query.limit || 200)));
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0);
     const args = [];
     const where = [
       `COALESCE(v.status,'active') <> 'archived'`,
@@ -11410,6 +11624,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     args.push(limit);
     const limitParam = `$${args.length}`;
+    args.push(offset);
+    const offsetParam = `$${args.length}`;
 
     const r = await pool.query(
       `WITH stock_totals AS (
@@ -11640,12 +11856,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
        LEFT JOIN aif_shopify_variant_map svm ON svm.variant_id=v.id
        LEFT JOIN aif_shopify_sync_outbox sso ON sso.variant_id=v.id
        WHERE ${where.join(" AND ")}
-       ORDER BY COALESCE(b.name,'') ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC
-       LIMIT ${limitParam}`,
+       ORDER BY COALESCE(b.name,'') ASC NULLS LAST,
+                m.title_ro ASC,
+                v.color_name ASC NULLS LAST,
+                v.size ASC,
+                v.id ASC
+       LIMIT ${limitParam}
+       OFFSET ${offsetParam}`,
       args
     );
 
-    res.json({ items: r.rows });
+    res.json({
+      items: r.rows,
+      limit,
+      offset,
+      returned: r.rows.length,
+      hasMore: r.rows.length === limit,
+    });
   });
 
   function aifStockProductJoinSql(baseAlias = "sm") {
