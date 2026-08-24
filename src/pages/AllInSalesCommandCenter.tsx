@@ -81,6 +81,7 @@ type FiltersState = {
   color: string;
   payment: string;
   product: string;
+  snCod: string;
   search: string;
   source: SourceFilter;
   bucket: BucketFilter;
@@ -2053,6 +2054,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     color: "",
     payment: "",
     product: "",
+    snCod: "",
     search: "",
     source: "all",
     bucket: "auto",
@@ -2090,7 +2092,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   // A szűrők azonnal élnek. Szöveges keresésnél csak egy rövid debounce van,
   // hogy gépelés közben ne lőjünk ki minden billentyűre külön lekérdezést.
   useEffect(() => {
-    const delay = draft.search || draft.product ? 220 : 40;
+    const delay = draft.search || draft.product || draft.snCod ? 220 : 40;
     const timer = window.setTimeout(() => setApplied(draft), delay);
     return () => window.clearTimeout(timer);
   }, [draft]);
@@ -2141,7 +2143,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
   }
 
   function clearDrillFilters() {
-    applyPatch({ employee: "", brand: "", category: "", subcategory: "", size: "", color: "", payment: "", product: "", location: "all", search: "", source: "all" });
+    applyPatch({ employee: "", brand: "", category: "", subcategory: "", size: "", color: "", payment: "", product: "", snCod: "", location: "all", search: "", source: "all" });
   }
 
   function drillDimension(active: AifSalesCommandDimensionKey, item: AifSalesCommandDimensionItem) {
@@ -2166,6 +2168,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
     if (applied.color) values.push({ key: "color", label: applied.color });
     if (applied.payment) values.push({ key: "payment", label: paymentLabel(applied.payment) });
     if (applied.product) values.push({ key: "product", label: applied.product });
+    if (applied.snCod) values.push({ key: "snCod", label: `S/N/COD: ${applied.snCod}` });
     if (applied.search) values.push({ key: "search", label: `Keresés: ${applied.search}` });
     if (applied.source !== "all") values.push({ key: "source", label: applied.source === "live" ? "Csak élő" : "Csak történeti" });
     return values;
@@ -2321,6 +2324,7 @@ export default function AllInSalesCommandCenter({ actor = "ADMIN" }: { actor?: s
                 <FieldLabel label="Adatforrás"><SelectControl value={draft.source} onChange={(value) => setDraft({ ...draft, source: value as SourceFilter })} options={[{ value: "all", label: "Élő + történeti" }, { value: "live", label: "Csak élő eladások" }, { value: "history", label: "Csak történeti adatok" }]} placeholder="Minden" /></FieldLabel>
                 <FieldLabel label="Grafikon bontása"><SelectControl value={draft.bucket} onChange={(value) => setDraft({ ...draft, bucket: value as BucketFilter })} options={[{ value: "auto", label: "Automatikus" }, { value: "day", label: "Nap" }, { value: "week", label: "Hét" }, { value: "month", label: "Hónap" }]} placeholder="Automatikus" /></FieldLabel>
                 <FieldLabel label="Termék"><input className={control} value={draft.product} onChange={(event) => setDraft({ ...draft, product: event.target.value })} placeholder="Név vagy kód" /></FieldLabel>
+                <FieldLabel label="S/N/COD"><input className={control} value={draft.snCod} onChange={(event) => setDraft({ ...draft, snCod: event.target.value })} placeholder="Pl. CAM007" autoComplete="off" /></FieldLabel>
                 <FieldLabel label="Szabad keresés"><div className="relative"><Search size={14} className="pointer-events-none absolute left-3 top-3.5 text-white/32" /><input className={`${control} pl-9`} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} placeholder="Bizonylat, márka, termék..." /></div></FieldLabel>
               </div>
             </div>
