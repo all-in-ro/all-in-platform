@@ -11869,6 +11869,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          si.supplier_variant_code AS supplier_variant_code,
          si.supplier_variant_code AS "supplierVariantCode"
        FROM aif_product_variants v
+       ${finalFastJoin}
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands b ON b.id=m.brand_id
        LEFT JOIN aif_categories c ON c.id=m.category_id
