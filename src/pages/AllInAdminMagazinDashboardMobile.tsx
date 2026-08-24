@@ -68,6 +68,7 @@ type FilterState = {
   saleType: string;
   brand: string;
   category: string;
+  snCod: string;
   search: string;
 };
 
@@ -592,6 +593,7 @@ export default function AllInAdminMagazinDashboardMobile({
     saleType: "",
     brand: "",
     category: "",
+    snCod: "",
     search: "",
   }), [initialDates.from, initialDates.to]);
 
@@ -737,6 +739,7 @@ export default function AllInAdminMagazinDashboardMobile({
     applied.saleType,
     applied.brand,
     applied.category,
+    applied.snCod,
     applied.search,
   ].filter(Boolean).length + (preset === "custom" ? 1 : 0);
 
@@ -825,6 +828,7 @@ export default function AllInAdminMagazinDashboardMobile({
       saleType: "",
       brand: "",
       category: "",
+      snCod: "",
       search: "",
     };
     setPreset("today");
@@ -1373,6 +1377,23 @@ export default function AllInAdminMagazinDashboardMobile({
                   onChange={(value) => setDraft({ ...draft, category: value })}
                   options={[{ value: "", label: "Minden alkategória" }, ...filterOptions.categories.map((value) => ({ value, label: value }))]}
                 />
+              </label>
+
+              <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
+                S/N/COD
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3.5 top-4 text-white/36" size={17} />
+                  <input
+                    className={`${inputClass} pl-10`}
+                    value={draft.snCod}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, snCod: event.target.value })}
+                    onKeyDown={(event: ReactKeyboardEvent<HTMLInputElement>) => {
+                      if (event.key === "Enter") applyFilters();
+                    }}
+                    placeholder="Pl. CAM007"
+                    autoComplete="off"
+                  />
+                </div>
               </label>
 
               <label className="grid gap-1.5 text-[10px] uppercase tracking-[0.1em] text-white/48">
