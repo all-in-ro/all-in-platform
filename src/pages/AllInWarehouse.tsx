@@ -14977,7 +14977,7 @@ export default function AllInWarehouse() {
 
               <div className="flex flex-wrap justify-end gap-2 border-t border-white/12 pt-4">
                 <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Mégse</button>
-                <button className={detailSaveButtonClass} onClick={() => void saveDetail()} disabled={saving || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : !detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése"}><Save size={16} /> Mentés</button>
+                <button className={detailSaveButtonClass} onClick={() => void saveDetailAndClose()} disabled={saving || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : !detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése és adatlap bezárása"}><Save size={16} /> Mentés</button>
               </div>
             </div>
           </div>
