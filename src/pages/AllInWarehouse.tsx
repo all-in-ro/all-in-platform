@@ -2272,7 +2272,7 @@ function WarehouseInvoicePicker({
                 </button>
               );
             })}
-            {!options.length ? <div className="px-4 py-5 text-center text-xs text-white/45">Ehhez a beszállítóhoz nincs számlaadat.</div> : null}
+            {!options.length ? <div className="px-4 py-5 text-center text-xs text-white/45">Nincs számlaadat az aktuális szűréshez.</div> : null}
           </div>
           <div className="border-t border-white/10 px-3 py-2 text-[10px] text-white/38">Rámutatás: dátumok • Kattintás: szűrés és számlarészletek</div>
         </div>
