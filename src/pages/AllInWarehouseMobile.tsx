@@ -990,7 +990,39 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }
 
   async function apiInventory() {
-    return fetchAifJSON<{ items: InventoryItem[] }>(`/inventory?limit=25000&includeZero=1&_=${Date.now()}`);
+    // Mobilon is a teljes terméktörzs kell, csak kisebb válaszcsomagokban.
+    // Így nem kérünk egyetlen 25 000 soros JSON-t a Node szervertől.
+    const pageSize = 1000;
+    const maxRows = 30000;
+    const items: InventoryItem[] = [];
+    const seenVariantIds = new Set<string>();
+
+    for (let offset = 0; offset < maxRows; offset += pageSize) {
+      const page = await fetchAifJSON<{
+        items: InventoryItem[];
+        hasMore?: boolean;
+        returned?: number;
+      }>(`/inventory?limit=${pageSize}&offset=${offset}&includeZero=1&_=${Date.now()}`);
+
+      const rows = Array.isArray(page.items) ? page.items : [];
+      let added = 0;
+
+      for (const item of rows) {
+        const id = selectedVariantIdFromItem(item as any) || String(item.variant_id || "").trim();
+        if (!id || seenVariantIds.has(id)) continue;
+        seenVariantIds.add(id);
+        items.push(item);
+        added += 1;
+      }
+
+      if (rows.length < pageSize || page.hasMore === false) break;
+
+      if (offset > 0 && added === 0) {
+        throw new Error("A szerver még nem támogatja a lapozott raktárbetöltést. Az aktuális aif.js backend frissítése szükséges.");
+      }
+    }
+
+    return { items };
   }
 
   async function apiMeta() {
