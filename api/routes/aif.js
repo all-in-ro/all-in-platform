@@ -6960,12 +6960,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query(
         `UPDATE aif_import_rows
          SET normalized=COALESCE(normalized,'{}'::jsonb) || jsonb_build_object(
-               'barcodeColorResolution',$2,
-               'barcode_color_resolution',$2,
-               'barcodeColorResolutionVariantId',$3,
-               'barcode_color_resolution_variant_id',$3,
-               'barcodeColorResolutionBarcode',$4,
-               'barcode_color_resolution_barcode',$4,
+               'barcodeColorResolution',$2::text,
+               'barcode_color_resolution',$2::text,
+               'barcodeColorResolutionVariantId',$3::text,
+               'barcode_color_resolution_variant_id',$3::text,
+               'barcodeColorResolutionBarcode',$4::text,
+               'barcode_color_resolution_barcode',$4::text,
                'barcodeColorResolutionAt',now()::text
              ),
              status=CASE WHEN status='committed' THEN status ELSE 'parsed' END,
