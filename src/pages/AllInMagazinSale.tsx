@@ -46,10 +46,13 @@ import {
 } from "../lib/aif/api";
 
 type Props = {
-  locationCode: "main_warehouse" | "magazin_targu_secuiesc";
+  locationCode: string;
   locationName: string;
   cityName: string;
   homeHash: string;
+  shopId?: string;
+  defaultCountyCode?: string;
+  administrationEnabled?: boolean;
   actor?: string;
   role?: "admin" | "shop";
   onLogout?: () => void | Promise<void>;
@@ -147,7 +150,9 @@ function productCode(item: AifShopSaleCatalogItem) {
 }
 
 function preferredCountyCode(locationCode: Props["locationCode"]) {
-  return locationCode === "magazin_targu_secuiesc" ? "CV" : "HR";
+  if (locationCode === "magazin_targu_secuiesc") return "CV";
+  if (locationCode === "main_warehouse") return "HR";
+  return "";
 }
 
 function customerAddressLabel(customer: AifShopCustomer) {
@@ -168,7 +173,7 @@ function exactCatalogMatch(item: AifShopSaleCatalogItem, query: string) {
 
 const SHOP_ADMIN_UNLOCK_TTL_MS = 10 * 60 * 1000;
 
-function shopAdministrationUnlockKey(shopId: "csikszereda" | "kezdivasarhely") {
+function shopAdministrationUnlockKey(shopId: string) {
   return `allin:shop-administration-unlock:${shopId}`;
 }
 
@@ -186,13 +191,22 @@ export default function AllInMagazinSale({
   locationName,
   cityName,
   homeHash,
+  shopId: shopIdProp,
+  defaultCountyCode: defaultCountyCodeProp,
+  administrationEnabled = true,
   actor = "Üzleti felhasználó",
   role = "shop",
   onLogout,
 }: Props) {
   const storageKey = `allin:shop-sale-cart:${locationCode}`;
-  const shopId = locationCode === "main_warehouse" ? "csikszereda" : "kezdivasarhely";
-  const defaultCountyCode = preferredCountyCode(locationCode);
+  const shopId = shopIdProp || (
+    locationCode === "main_warehouse"
+      ? "csikszereda"
+      : locationCode === "magazin_targu_secuiesc"
+        ? "kezdivasarhely"
+        : locationCode
+  );
+  const defaultCountyCode = defaultCountyCodeProp ?? preferredCountyCode(locationCode);
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<AifShopSaleCatalogItem[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -380,6 +394,7 @@ export default function AllInMagazinSale({
   }
 
   function openAdministrationAccess() {
+    if (!administrationEnabled) return;
     if (role === "admin") {
       window.location.hash = homeHash;
       return;
@@ -750,13 +765,15 @@ export default function AllInMagazinSale({
                   {role === "admin" ? <span className="text-white/45">• admin előnézet</span> : null}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={openAdministrationAccess}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm transition hover:border-[#7bd7d4]/45 hover:bg-[#3e4d63] active:scale-[0.98]"
-              >
-                <ShieldCheck size={18} /> Adminisztráció
-              </button>
+              {administrationEnabled ? (
+                <button
+                  type="button"
+                  onClick={openAdministrationAccess}
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/18 bg-[#354153] px-4 text-sm transition hover:border-[#7bd7d4]/45 hover:bg-[#3e4d63] active:scale-[0.98]"
+                >
+                  <ShieldCheck size={18} /> Adminisztráció
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void onLogout?.()}
