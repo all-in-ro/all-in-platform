@@ -2398,7 +2398,7 @@ export default function AllInReceptions(_props: Props) {
         const isBarcodeConflict = /vonalk[oó]d|barcode/i.test(errors.join(" "));
         return (
           <div
-            className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-[4px]"
+            className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-slate-950/72 p-3 backdrop-blur-[4px]"
             role="dialog"
             aria-modal="true"
             aria-labelledby="reception-row-error-title"
@@ -2406,7 +2406,7 @@ export default function AllInReceptions(_props: Props) {
               if (event.currentTarget === event.target) setRowErrorTarget(null);
             }}
           >
-            <div className="w-full max-w-2xl overflow-hidden rounded-[22px] border border-rose-200/28 bg-[#303a4c] text-white shadow-[0_28px_90px_rgba(0,0,0,0.62)] ring-1 ring-rose-400/10">
+            <div className="flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] border border-rose-200/28 bg-[#303a4c] text-white shadow-[0_28px_90px_rgba(0,0,0,0.62)] ring-1 ring-rose-400/10" onMouseDown={(event) => event.stopPropagation()}>
               <div className="flex items-start gap-3 border-b border-rose-200/16 bg-gradient-to-r from-[#3b2633] via-[#3a3040] to-[#303a4c] px-4 py-4">
                 <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/28 bg-rose-500/16 text-rose-100 shadow-[0_0_24px_rgba(244,63,94,0.14)]">
                   <AlertTriangle size={21} />
@@ -2423,7 +2423,7 @@ export default function AllInReceptions(_props: Props) {
                 </button>
               </div>
 
-              <div className="space-y-3 p-4">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-xl border border-white/12 bg-[#263246] px-3 py-2">
                     <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Termékkód</p>
@@ -2596,7 +2596,7 @@ export default function AllInReceptions(_props: Props) {
                   </details>
                 ) : null}
 
-                <div className="flex flex-wrap justify-end gap-2">
+                <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-3 flex flex-wrap justify-end gap-2 border-t border-white/10 bg-[#303a4c]/98 px-4 py-3 shadow-[0_-12px_28px_rgba(15,23,42,0.28)] backdrop-blur">
                   {rowColorResolution?.canResolve ? (
                     <>
                       <button
