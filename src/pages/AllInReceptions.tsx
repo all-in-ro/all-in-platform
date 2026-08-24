@@ -601,6 +601,9 @@ function humanReceptionRowError(message: unknown, row?: any) {
   const clean = stripReceptionRowErrorPrefix(message);
   const barcode = receptionRowBarcode(row);
 
+  if (/ugyanahhoz a modellhez és mérethez tartozik, de a szín eltér/i.test(clean)) {
+    return clean;
+  }
   if (/vonalk[oó]d.*m[aá]r egy m[aá]sik vari[aá]nshoz tartozik/i.test(clean) || /barcode[_\s-]*conflict/i.test(clean)) {
     return barcode
       ? `A ${barcode} vonalkód már egy másik termékvariánshoz tartozik. Ennél a sornál ezért nem engedhető a készletre vétel.`
@@ -629,6 +632,7 @@ function humanReceptionRowError(message: unknown, row?: any) {
 
 function receptionRowErrorTitle(row: any) {
   const joined = receptionRowErrorMessages(row).join(" ");
+  if (/szín eltér|szin elter|régi szín maradjon|regi szin maradjon/i.test(joined)) return "Szín egyeztetés szükséges";
   if (/vonalk[oó]d|barcode/i.test(joined)) return "Vonalkód ütközés";
   if (/m[eé]ret|size/i.test(joined)) return "Méret probléma";
   if (/duplicate|unique|23505/i.test(joined)) return "Duplikált azonosító";
@@ -1282,6 +1286,9 @@ export default function AllInReceptions(_props: Props) {
   const [committingRows, setCommittingRows] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AifReceptionSummary | null>(null);
   const [rowErrorTarget, setRowErrorTarget] = useState<any | null>(null);
+  const [rowColorResolution, setRowColorResolution] = useState<any | null>(null);
+  const [rowColorResolutionLoading, setRowColorResolutionLoading] = useState(false);
+  const [rowColorResolutionBusy, setRowColorResolutionBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -1771,6 +1778,67 @@ export default function AllInReceptions(_props: Props) {
       setMessage(e?.message || "A terméksor mentése nem sikerült.");
     } finally {
       setSavingRowId(null);
+    }
+  }
+
+  useEffect(() => {
+    const rowId = String(rowErrorTarget?.id || '').trim();
+    if (!rowId) {
+      setRowColorResolution(null);
+      setRowColorResolutionLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRowColorResolution(null);
+    setRowColorResolutionLoading(true);
+    void fetchAifJsonLocal<any>(`/import-rows/${encodeURIComponent(rowId)}/barcode-color-resolution`)
+      .then((data) => {
+        if (!cancelled && data?.canResolve) setRowColorResolution(data);
+      })
+      .catch(() => {
+        // Nem minden hiba színütközés, ettől a normál hibamodal még működik.
+      })
+      .finally(() => {
+        if (!cancelled) setRowColorResolutionLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [rowErrorTarget?.id]);
+
+  async function resolveBarcodeColorAndCommit(resolution: 'keep_existing' | 'use_incoming') {
+    if (!detail || !rowErrorTarget?.id || rowColorResolutionBusy) return;
+    const rowId = String(rowErrorTarget.id);
+    setRowColorResolutionBusy(true);
+    setMessage('');
+    try {
+      await fetchAifJsonLocal(`/import-rows/${encodeURIComponent(rowId)}/barcode-color-resolution`, {
+        method: 'POST',
+        body: JSON.stringify({ resolution }),
+      });
+      await apiAifCommitReceptionRows(detail.item.id, [rowId]);
+      const next = await reloadDetail(detail.item.id);
+      await load();
+      const freshRow = (next?.rows || []).find((row: any) => String(row.id) === rowId);
+      if (freshRow?.status === 'committed') {
+        setRowErrorTarget(null);
+        setRowColorResolution(null);
+        setMessage(
+          resolution === 'keep_existing'
+            ? 'Készletre véve. A meglévő színnév maradt, az új darabok ehhez a variánshoz kerültek.'
+            : 'Készletre véve. A meglévő variáns színe az új receptió szerinti színre lett átnevezve.'
+        );
+      } else if (freshRow) {
+        setRowErrorTarget(freshRow);
+        setMessage('A színválasztást elmentettem, de a sornál maradt másik ellenőrizendő hiba.');
+      }
+    } catch (e: any) {
+      try {
+        const next = await reloadDetail(detail.item.id);
+        const freshRow = (next?.rows || []).find((row: any) => String(row.id) === rowId);
+        if (freshRow) setRowErrorTarget(freshRow);
+      } catch {}
+      setMessage(e?.message || 'A színválasztás és készletre vétel nem sikerült.');
+    } finally {
+      setRowColorResolutionBusy(false);
     }
   }
 
@@ -2381,12 +2449,63 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                 </div>
 
+                {rowColorResolutionLoading ? (
+                  <div className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white/55">
+                    <RefreshCw size={15} className="animate-spin text-[#8ee6e2]" /> Egyező régi termék ellenőrzése…
+                  </div>
+                ) : rowColorResolution?.canResolve ? (
+                  <div className="rounded-2xl border border-[#7bd7d4]/30 bg-[#233f49] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Te döntöd el, melyik szín maradjon</p>
+                        <p className="mt-1 text-sm text-white/72">A vonalkód és a méret egyezik. Ez ugyanaz a fizikai variáns, csak a régi és az új színmegnevezés különbözik.</p>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-white/14 bg-white/[0.06] px-2 py-1 text-[10px] text-white/58">
+                        jelenlegi készlet: {Number(rowColorResolution.existing?.totalQty || 0)} db
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        disabled={rowColorResolutionBusy}
+                        onClick={() => void resolveBarcodeColorAndCommit('keep_existing')}
+                        className="rounded-2xl border border-sky-200/28 bg-sky-500/[0.10] p-3 text-left transition hover:bg-sky-500/[0.16] disabled:opacity-50"
+                      >
+                        <p className="text-[10px] uppercase tracking-[0.12em] text-sky-100/58">Régi szín megtartása</p>
+                        <p className="mt-1 text-lg text-white">
+                          {rowColorResolution.existing?.colorName || 'Nincs színnév'}
+                          {rowColorResolution.existing?.colorCode ? <span className="ml-2 text-sm text-white/48">/ {rowColorResolution.existing.colorCode}</span> : null}
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-white/58">A beérkező darabokat ehhez a meglévő színhez teszi. A régi terméknév/szín nem változik.</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={rowColorResolutionBusy}
+                        onClick={() => void resolveBarcodeColorAndCommit('use_incoming')}
+                        className="rounded-2xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/18 p-3 text-left transition hover:bg-[#2a8d8b]/26 disabled:opacity-50"
+                      >
+                        <p className="text-[10px] uppercase tracking-[0.12em] text-[#cffffd]/62">Átnevezés az új színre</p>
+                        <p className="mt-1 text-lg text-white">
+                          {rowColorResolution.incoming?.colorName || 'Nincs színnév'}
+                          {rowColorResolution.incoming?.colorCode ? <span className="ml-2 text-sm text-white/48">/ {rowColorResolution.incoming.colorCode}</span> : null}
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-white/58">A meglévő variáns színét átírja az új receptió szerinti értékre, majd erre veszi készletre a darabokat.</p>
+                      </button>
+                    </div>
+                    {rowColorResolutionBusy ? <p className="mt-2 text-center text-xs text-[#cffffd]/65">Mentés és készletre vétel…</p> : null}
+                  </div>
+                ) : null}
+
                 <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 px-3 py-3">
                   <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Mit kell tenni?</p>
                   <p className="mt-1.5 text-sm leading-5 text-white/76">
-                    {isBarcodeConflict
-                      ? <>Ellenőrizd a <strong className="text-white">{barcode || "megadott"}</strong> vonalkódot a Raktárban. Ha már egy másik mérethez vagy variánshoz tartozik, előbb azt a kapcsolatot kell tisztázni. A rendszer szándékosan nem készít néma duplikált terméket.</>
-                      : <>Javítsd a piros sor adatait, mentsd el a sort, majd indítsd újra a készletre vételt. Ennél a sornál addig nem történik készletmozgás.</>}
+                    {rowColorResolution?.canResolve
+                      ? <>Válassz a két lehetőség közül fent. A rendszer csak ezután módosít készletet vagy színnevet, tehát semmit nem dönt el helyetted.</>
+                      : isBarcodeConflict
+                        ? <>Ellenőrizd a <strong className="text-white">{barcode || "megadott"}</strong> vonalkódot a Raktárban. Ha már egy másik mérethez vagy variánshoz tartozik, előbb azt a kapcsolatot kell tisztázni. A rendszer szándékosan nem készít néma duplikált terméket.</>
+                        : <>Javítsd a piros sor adatait, mentsd el a sort, majd indítsd újra a készletre vételt. Ennél a sornál addig nem történik készletmozgás.</>}
                   </p>
                 </div>
 
