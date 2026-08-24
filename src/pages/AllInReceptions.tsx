@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   Home,
   CalendarDays,
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -560,6 +561,79 @@ function statusText(s?: string | null) {
   if (v === "ignored") return "Kihagyva";
   if (v === "cancelled") return "Törölve";
   return s || "-";
+}
+
+function receptionRowErrorMessages(row: any) {
+  const source = Array.isArray(row?.error_messages)
+    ? row.error_messages
+    : row?.error_messages
+      ? [row.error_messages]
+      : [];
+  return source.map((value: unknown) => String(value || "").trim()).filter(Boolean);
+}
+
+function stripReceptionRowErrorPrefix(message: unknown) {
+  return String(message || "")
+    .replace(/^A\(z\)\s+\d+\.\s+terméksor készletre vétele nem sikerült:\s*/i, "")
+    .replace(/^A\s+\d+\.\s+terméksor készletre vétele nem sikerült:\s*/i, "")
+    .trim();
+}
+
+function receptionRowBarcode(row: any) {
+  const normalized = row?.normalized || {};
+  const raw = row?.raw || {};
+  return String(
+    normalized.barcode ||
+    normalized.ean ||
+    normalized.ean13 ||
+    normalized.supplierBarcode ||
+    normalized.supplier_barcode ||
+    raw.BARCODE ||
+    raw.Barcode ||
+    raw.barcode ||
+    raw.EAN ||
+    raw.EAN13 ||
+    ""
+  ).trim();
+}
+
+function humanReceptionRowError(message: unknown, row?: any) {
+  const clean = stripReceptionRowErrorPrefix(message);
+  const barcode = receptionRowBarcode(row);
+
+  if (/vonalk[oó]d.*m[aá]r egy m[aá]sik vari[aá]nshoz tartozik/i.test(clean) || /barcode[_\s-]*conflict/i.test(clean)) {
+    return barcode
+      ? `A ${barcode} vonalkód már egy másik termékvariánshoz tartozik. Ennél a sornál ezért nem engedhető a készletre vétel.`
+      : "A vonalkód már egy másik termékvariánshoz tartozik. Ennél a sornál ezért nem engedhető a készletre vétel.";
+  }
+  if (/m[eé]ret.*hi[aá]nyzik|variant_size_required|size.*required/i.test(clean)) {
+    return "A termék mérete hiányzik, ezért a rendszer nem tudja biztonságosan azonosítani a variánst.";
+  }
+  if (/qty must be > 0/i.test(clean)) {
+    return "A darabszám hibás. A készletre vételhez legalább 1 db szükséges.";
+  }
+  if (/duplicate key|unique constraint|23505/i.test(clean)) {
+    return "Egy egyedi azonosító már használatban van egy másik terméknél. Ellenőrizd a vonalkódot, termékkódot és a méretet.";
+  }
+  if (/stock cannot go negative|k[eé]szlet.*negat/i.test(clean)) {
+    return "A művelet negatív készletet eredményezne, ezért a rendszer leállította a sort.";
+  }
+  if (/model\/product code missing|product.*code.*missing/i.test(clean)) {
+    return "Hiányzik a termék- vagy modellkód, ezért a sor nem azonosítható.";
+  }
+  if (/product name\/title missing|title.*missing/i.test(clean)) {
+    return "Hiányzik a terméknév.";
+  }
+  return clean || "A terméksort a rendszer nem tudta készletre venni.";
+}
+
+function receptionRowErrorTitle(row: any) {
+  const joined = receptionRowErrorMessages(row).join(" ");
+  if (/vonalk[oó]d|barcode/i.test(joined)) return "Vonalkód ütközés";
+  if (/m[eé]ret|size/i.test(joined)) return "Méret probléma";
+  if (/duplicate|unique|23505/i.test(joined)) return "Duplikált azonosító";
+  if (/k[eé]szlet|stock/i.test(joined)) return "Készlet probléma";
+  return "A sor nem vehető készletre";
 }
 
 function tvaModeText(s?: string | null) {
@@ -1207,6 +1281,7 @@ export default function AllInReceptions(_props: Props) {
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
   const [committingRows, setCommittingRows] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AifReceptionSummary | null>(null);
+  const [rowErrorTarget, setRowErrorTarget] = useState<any | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -1654,12 +1729,13 @@ export default function AllInReceptions(_props: Props) {
 
   async function reloadDetail(id?: string) {
     const detailId = id || detail?.item?.id;
-    if (!detailId) return;
+    if (!detailId) return null;
     const next = await apiAifGetReception(detailId);
     setDetail(next);
     setReceptionDraft(buildReceptionDraft(next.item));
     setRowDrafts(buildDrafts(next.rows || []));
     setSelectedRows(new Set((next.rows || []).filter(rowCanWork).map((row: any) => row.id)));
+    return next;
   }
 
   async function saveRowEdits() {
@@ -1709,12 +1785,45 @@ export default function AllInReceptions(_props: Props) {
     setMessage("");
     try {
       await saveRowEdits();
-      await apiAifCommitReceptionRows(detail.item.id, ids);
-      await reloadDetail(detail.item.id);
+      const result: any = await apiAifCommitReceptionRows(detail.item.id, ids);
+      const next = await reloadDetail(detail.item.id);
       await load();
-      setMessage("A kijelölt terméksorok készletre véve.");
+
+      const failedRows = Array.isArray(result?.failedRows) ? result.failedRows : [];
+      const failedIds = new Set(failedRows.map((row: any) => String(row?.id || "")).filter(Boolean));
+      const firstError = (next?.rows || []).find((row: any) =>
+        (failedIds.size ? failedIds.has(String(row.id)) : ids.includes(String(row.id))) &&
+        (row.status === "error" || receptionRowErrorMessages(row).length)
+      );
+
+      if (firstError) setRowErrorTarget(firstError);
+
+      if (failedRows.length || firstError) {
+        const committed = Number(result?.committed || 0);
+        const failedCount = Number(result?.failedCount || failedRows.length || 1);
+        setMessage(`${committed} sor készletre véve, ${failedCount} sor hibás. A hiba részlete megnyílt.`);
+      } else {
+        setMessage("A kijelölt terméksorok készletre véve.");
+      }
     } catch (e: any) {
-      setMessage(e?.message || "A kijelölt terméksorok készletre vétele nem sikerült.");
+      let firstError: any = null;
+      try {
+        const next = await reloadDetail(detail.item.id);
+        await load();
+        firstError = (next?.rows || []).find((row: any) =>
+          ids.includes(String(row.id)) &&
+          (row.status === "error" || receptionRowErrorMessages(row).length)
+        );
+      } catch {
+        // Az eredeti készletre vételi hibát mutatjuk tovább.
+      }
+
+      if (firstError) {
+        setRowErrorTarget(firstError);
+        setMessage("A készletre vétel megállt egy hibás sornál. A részletes magyarázat megnyílt.");
+      } else {
+        setMessage(e?.message || "A kijelölt terméksorok készletre vétele nem sikerült.");
+      }
     } finally {
       setCommittingRows(false);
     }
@@ -2111,7 +2220,19 @@ export default function AllInReceptions(_props: Props) {
                               <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
                               <span className="truncate text-[11px] tabular-nums text-white/82">Nr. {r.row_no}</span>
                             </div>
-                            <span className="mt-0.5 block truncate text-[9px] text-white/40">{statusText(r.status)}</span>
+                            {hasRowError ? (
+                              <button
+                                type="button"
+                                onClick={() => setRowErrorTarget(r)}
+                                className="mt-0.5 inline-flex max-w-full items-center gap-1 rounded-full border border-rose-300/28 bg-rose-500/14 px-1.5 py-0.5 text-[9px] text-rose-50 hover:bg-rose-500/22"
+                                title="Hiba részletei"
+                              >
+                                <AlertTriangle size={9} className="shrink-0" />
+                                <span className="truncate">Hiba • részletek</span>
+                              </button>
+                            ) : (
+                              <span className="mt-0.5 block truncate text-[9px] text-white/40">{statusText(r.status)}</span>
+                            )}
                           </div>
                           <input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} title={String(draft.supplierProductCode ?? "")} />
                           <input className={rowInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} title={String(draft.snCod ?? draft.sn_cod ?? "")} />
@@ -2150,7 +2271,18 @@ export default function AllInReceptions(_props: Props) {
                       <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm ${checked ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/12" : hasRowError ? "border-rose-300/30 bg-rose-500/[0.08]" : "border-white/12 bg-white/[0.04]"}`}>
                         <div className="flex items-center justify-between gap-2 border-b border-white/12 pb-2">
                           <label className="inline-flex items-center gap-2 text-[11px] text-white/82"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} />Nr. {r.row_no}</label>
-                          <span className={rowStatusPill}>{statusText(r.status)}</span>
+                          {hasRowError ? (
+                            <button
+                              type="button"
+                              onClick={() => setRowErrorTarget(r)}
+                              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-rose-300/30 bg-rose-500/14 px-2 text-[10px] text-rose-50"
+                            >
+                              <AlertTriangle size={11} />
+                              Hiba részletei
+                            </button>
+                          ) : (
+                            <span className={rowStatusPill}>{statusText(r.status)}</span>
+                          )}
                           <div className="ml-auto flex gap-1">
                             <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
                             <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
@@ -2181,6 +2313,102 @@ export default function AllInReceptions(_props: Props) {
           </div>
         </div>
       )}
+
+      {rowErrorTarget && (() => {
+        const draft: any = rowDrafts[rowErrorTarget.id] || rowErrorTarget.normalized || {};
+        const errors = receptionRowErrorMessages(rowErrorTarget);
+        const barcode = receptionRowBarcode(rowErrorTarget);
+        const title = String(draft.titleRo || draft.productName || rowErrorTarget.normalized?.titleRo || rowErrorTarget.supplier_product_code || "Ismeretlen termék");
+        const productCode = String(rowErrorTarget.supplier_product_code || draft.supplierProductCode || draft.modelCode || "-");
+        const snCod = String(rowErrorTarget.sn_cod || draft.snCod || draft.sn_cod || "-");
+        const size = String(rowErrorTarget.supplier_size || draft.size || "-");
+        const color = String(draft.colorName || rowErrorTarget.supplier_color_code || "-");
+        const isBarcodeConflict = /vonalk[oó]d|barcode/i.test(errors.join(" "));
+        return (
+          <div
+            className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/72 p-3 backdrop-blur-[4px]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reception-row-error-title"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target) setRowErrorTarget(null);
+            }}
+          >
+            <div className="w-full max-w-2xl overflow-hidden rounded-[22px] border border-rose-200/28 bg-[#303a4c] text-white shadow-[0_28px_90px_rgba(0,0,0,0.62)] ring-1 ring-rose-400/10">
+              <div className="flex items-start gap-3 border-b border-rose-200/16 bg-gradient-to-r from-[#3b2633] via-[#3a3040] to-[#303a4c] px-4 py-4">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/28 bg-rose-500/16 text-rose-100 shadow-[0_0_24px_rgba(244,63,94,0.14)]">
+                  <AlertTriangle size={21} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/58">Készletre vétel megállt</p>
+                  <h2 id="reception-row-error-title" className="mt-1 text-xl text-white">{receptionRowErrorTitle(rowErrorTarget)}</h2>
+                  <p className="mt-1 text-sm text-white/58">Nr. {rowErrorTarget.row_no || "?"} • {title}</p>
+                </div>
+                <button className={neutralBtn} type="button" onClick={() => setRowErrorTarget(null)} aria-label="Bezárás">
+                  <X size={15} /> Bezárás
+                </button>
+              </div>
+
+              <div className="space-y-3 p-4">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-xl border border-white/12 bg-[#263246] px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Termékkód</p>
+                    <p className="mt-1 truncate text-xs text-white" title={productCode}>{productCode}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/12 bg-[#263246] px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Vonalkód</p>
+                    <p className="mt-1 truncate font-mono text-xs text-[#cffffd]" title={barcode || "-"}>{barcode || "-"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/12 bg-[#263246] px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Méret / szín</p>
+                    <p className="mt-1 truncate text-xs text-white">{size} • {color}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/12 bg-[#263246] px-3 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">S/N/COD</p>
+                    <p className="mt-1 truncate text-xs text-white" title={snCod}>{snCod}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-rose-200/24 bg-rose-500/[0.09] p-3">
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-rose-100/64">Mi a hiba?</p>
+                  <div className="mt-2 space-y-2">
+                    {(errors.length ? errors : ["A terméksort a rendszer nem tudta készletre venni."]).map((error: string, index: number) => (
+                      <div key={`${index}-${error}`} className="flex items-start gap-2 text-sm leading-5 text-rose-50">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-rose-300" />
+                        <span>{humanReceptionRowError(error, rowErrorTarget)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/10 px-3 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Mit kell tenni?</p>
+                  <p className="mt-1.5 text-sm leading-5 text-white/76">
+                    {isBarcodeConflict
+                      ? <>Ellenőrizd a <strong className="text-white">{barcode || "megadott"}</strong> vonalkódot a Raktárban. Ha már egy másik mérethez vagy variánshoz tartozik, előbb azt a kapcsolatot kell tisztázni. A rendszer szándékosan nem készít néma duplikált terméket.</>
+                      : <>Javítsd a piros sor adatait, mentsd el a sort, majd indítsd újra a készletre vételt. Ennél a sornál addig nem történik készletmozgás.</>}
+                  </p>
+                </div>
+
+                {errors.length ? (
+                  <details className="rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-[11px] text-white/48">
+                    <summary className="cursor-pointer select-none text-white/58">Technikai részlet</summary>
+                    <div className="mt-2 space-y-1 font-mono leading-5">
+                      {errors.map((error: string, index: number) => <p key={`${index}-technical`}>{stripReceptionRowErrorPrefix(error)}</p>)}
+                    </div>
+                  </details>
+                ) : null}
+
+                <div className="flex justify-end">
+                  <button className={primaryBtn} type="button" onClick={() => setRowErrorTarget(null)}>
+                    <Check size={15} /> Értem, javítom
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {salesTvaModalOpen && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/62 p-3 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="sales-tva-title">
