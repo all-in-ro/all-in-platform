@@ -217,13 +217,34 @@ async function ensureShops() {
      ON CONFLICT (id) DO UPDATE SET
        name=EXCLUDED.name, login_enabled=true, aif_location_code='magazin_targu_secuiesc'`
   );
-  // A Raktár technikai helység marad, nem jelenik meg üzleti belépésként.
+  // A Raktár is teljes értékű beléphető helység és készlethely.
+  // Nem kezeljük többé technikai kivételként, mert attól restart után eltűnt a Loginból
+  // és a készlethely-listákból.
   await pool.query(
     `INSERT INTO shops (id, name, login_enabled, aif_location_code)
-     VALUES ('raktar','Raktár',false,NULL)
-     ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, login_enabled=false`
+     VALUES ('raktar','Raktár',true,'raktar')
+     ON CONFLICT (id) DO UPDATE SET
+       name=EXCLUDED.name, login_enabled=true, aif_location_code='raktar'`
   );
-  await pool.query(`UPDATE shops SET aif_location_code=id WHERE aif_location_code IS NULL AND id <> 'raktar'`);
+  await pool.query(`UPDATE shops SET aif_location_code=id WHERE NULLIF(btrim(COALESCE(aif_location_code,'')),'') IS NULL`);
+
+  // Ön-helyreállító szinkron: minden shops rekordhoz legyen aktív AIF készlethely.
+  // Így egy új helység létrehozása után nem kell külön SQL, és egy későbbi restart
+  // sem tudja szétválasztani a belépési helységet a készlethelytől.
+  const shopRows = await pool.query(
+    `SELECT id, name, COALESCE(NULLIF(aif_location_code,''), id) AS aif_location_code
+     FROM shops
+     ORDER BY created_at ASC, id ASC`
+  );
+  for (const row of shopRows.rows) {
+    await ensureAifLocationForShop(pool, {
+      shopId: row.id,
+      name: row.name,
+      locationCode: row.aif_location_code || row.id,
+      locationTypeOverride: row.id === 'raktar' ? 'warehouse' : null,
+    });
+  }
+
   shopsReady = true;
 }
 
@@ -284,17 +305,20 @@ async function preferredShopLocationType(client) {
   return 'warehouse';
 }
 
-async function ensureAifLocationForShop(client, { shopId, name, locationCode }) {
+async function ensureAifLocationForShop(client, { shopId, name, locationCode, locationTypeOverride = null }) {
   const code = String(locationCode || shopId || '').trim();
   if (!code) throw new Error('A helységhez nem állapítható meg AllIn készlethely-kód.');
-  const locationType = await preferredShopLocationType(client);
+  const locationType = String(locationTypeOverride || '').trim() || await preferredShopLocationType(client);
   const existing = await client.query(`SELECT id FROM aif_locations WHERE code=$1 LIMIT 1`, [code]);
   if (existing.rowCount) {
     await client.query(
       `UPDATE aif_locations
-       SET name=$2, is_active=true, updated_at=now()
+       SET name=$2,
+           location_type=CASE WHEN $3::text IS NULL OR btrim($3::text)='' THEN location_type ELSE $3::text END,
+           is_active=true,
+           updated_at=now()
        WHERE code=$1`,
-      [code, name]
+      [code, name, locationTypeOverride]
     );
     return code;
   }
@@ -473,14 +497,16 @@ app.post("/api/admin/shops", requireAdmin, async (req, res) => {
     : id === 'kezdivasarhely'
       ? 'magazin_targu_secuiesc'
       : id;
-  const loginEnabled = id !== 'raktar';
+  const loginEnabled = true;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    let locationCode = defaultLocationCode;
-    if (loginEnabled) {
-      locationCode = await ensureAifLocationForShop(client, { shopId: id, name, locationCode: defaultLocationCode });
-    }
+    const locationCode = await ensureAifLocationForShop(client, {
+      shopId: id,
+      name,
+      locationCode: defaultLocationCode,
+      locationTypeOverride: id === 'raktar' ? 'warehouse' : null,
+    });
     await client.query(
       `INSERT INTO shops (id, name, login_enabled, aif_location_code)
        VALUES ($1,$2,$3,$4)
@@ -488,10 +514,10 @@ app.post("/api/admin/shops", requireAdmin, async (req, res) => {
          name=EXCLUDED.name,
          login_enabled=EXCLUDED.login_enabled,
          aif_location_code=EXCLUDED.aif_location_code`,
-      [id, name, loginEnabled, loginEnabled ? locationCode : null]
+      [id, name, loginEnabled, locationCode]
     );
     await client.query('COMMIT');
-    return res.json({ ok: true, item: { id, name, loginEnabled, locationCode: loginEnabled ? locationCode : null } });
+    return res.json({ ok: true, item: { id, name, loginEnabled, locationCode } });
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch {}
     console.error('Create shop failed', error);
@@ -542,7 +568,7 @@ app.post("/api/admin/codes", requireAdmin, async (req, res) => {
   if (!shopId) return res.status(400).send("shopId required");
   const codeShop = await shopRow(String(shopId));
   if (!codeShop) return res.status(400).send("Ismeretlen helység");
-  if (codeShop.login_enabled === false) return res.status(400).send("Ehhez a technikai helységhez nem készíthető üzleti belépőkód");
+  if (codeShop.login_enabled === false) return res.status(400).send("Ehhez a helységhez jelenleg nem készíthető belépőkód");
 
   const rawCode = crypto.randomBytes(4).toString("hex").toUpperCase();
   const hint = rawCode.slice(-4);
