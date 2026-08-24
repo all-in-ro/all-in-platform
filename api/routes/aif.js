@@ -18025,10 +18025,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   async function aifResolveShopLocation(req, client = pool, requestedLocation = null) {
     const sessionRole = normCode(req.session?.role);
     const sessionShop = text(req.session?.shopId || req.session?.shop_id);
+    const sessionLocation = text(req.session?.locationCode || req.session?.location_code || sessionShop);
     let locationCode = aifShopLocationCode(requestedLocation || req.query?.location || req.body?.location);
 
     if (sessionRole === "shop") {
-      const sessionLocationCode = aifShopLocationCode(sessionShop);
+      const sessionLocationCode = aifShopLocationCode(sessionLocation);
       if (!sessionLocationCode) {
         const error = new Error("Az üzleti munkamenethez nincs érvényes üzlet rendelve.");
         error.statusCode = 403;
@@ -18084,7 +18085,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const code = aifShopLocationCode(locationCode);
     if (code === "main_warehouse") return "csikszereda";
     if (code === "magazin_targu_secuiesc") return "kezdivasarhely";
-    return "";
+    // Az új, dinamikusan létrehozott üzleteknél a shop ID és az AIF location code azonos.
+    return text(code);
   }
 
   async function aifListActiveShopEmployees(client, locationCode) {
