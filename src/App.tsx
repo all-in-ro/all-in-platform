@@ -13,6 +13,7 @@ import AllInMagazinCiuc from "./pages/AllInMagazinCiuc";
 import AllInMagazinTargu from "./pages/AllInMagazinTargu";
 import AllInMagazinCiucSale from "./pages/AllInMagazinCiucSale";
 import AllInMagazinTarguSale from "./pages/AllInMagazinTarguSale";
+import AllInMagazinSale from "./pages/AllInMagazinSale";
 import AllInAdminMagazinCiuc from "./pages/AllInAdminMagazinCiuc";
 import AllInAdminMagazinTargu from "./pages/AllInAdminMagazinTargu";
 import AllInAdminMagazinDashboardMobile from "./pages/AllInAdminMagazinDashboardMobile";
@@ -34,7 +35,7 @@ import AllInUsers from "./pages/AllInUsers";
 import AllInCars from "./pages/AllInCars";
 import AllInCarExpenses from "./pages/AllInCarExpenses";
 
-type ShopId = "csikszereda" | "kezdivasarhely";
+type ShopId = string;
 type ScreenName =
   | "login"
   | "home"
@@ -42,6 +43,7 @@ type ScreenName =
   | "magazintargu"
   | "magazinciucsale"
   | "magazintargusale"
+  | "shopsale"
   | "adminmagazinciuc"
   | "adminmagazintargu"
   | "salescenter"
@@ -66,7 +68,14 @@ type Screen = { name: ScreenName };
 
 type Session =
   | { role: "admin"; actor: string }
-  | { role: "shop"; shopId: ShopId; actor: string };
+  | {
+      role: "shop";
+      shopId: ShopId;
+      shopName?: string;
+      locationCode?: string;
+      locationName?: string;
+      actor: string;
+    };
 
 const INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
 const INACTIVITY_CHECK_MS = 15 * 1000;
@@ -77,9 +86,7 @@ function rememberLoginMode(session: Session | null) {
   try {
     const mode = session.role === "admin"
       ? "admin"
-      : session.shopId === "csikszereda"
-        ? "csik"
-        : "kezdi";
+      : `shop:${session.shopId}`;
     window.localStorage.setItem(LAST_LOGIN_MODE_KEY, mode);
   } catch {
     // A belépés ettől még működjön, ha a böngésző tiltja a localStorage-ot.
@@ -124,6 +131,12 @@ function hashToScreen(rawHash: string): Screen {
     key === "allin-magazin-targu-sale" ||
     key === "shop-targu-sale"
   ) return { name: "magazintargusale" };
+  if (
+    key === "shopsale" ||
+    key === "allinshopsale" ||
+    key === "allin-shop-sale" ||
+    key === "dynamic-shop-sale"
+  ) return { name: "shopsale" };
   if (
     key === "adminmagazinciuc" ||
     key === "allinadminmagazinciuc" ||
@@ -195,14 +208,19 @@ function hashToScreen(rawHash: string): Screen {
 }
 
 function shopHomeScreen(shopId: ShopId): ScreenName {
-  return shopId === "csikszereda" ? "magazinciucsale" : "magazintargusale";
+  if (shopId === "csikszereda") return "magazinciucsale";
+  if (shopId === "kezdivasarhely") return "magazintargusale";
+  return "shopsale";
 }
 
 function isShopScreenAllowed(shopId: ShopId, screenName: ScreenName) {
   if (shopId === "csikszereda") {
     return screenName === "magazinciuc" || screenName === "magazinciucsale";
   }
-  return screenName === "magazintargu" || screenName === "magazintargusale";
+  if (shopId === "kezdivasarhely") {
+    return screenName === "magazintargu" || screenName === "magazintargusale";
+  }
+  return screenName === "shopsale";
 }
 
 function isShopFacingScreen(screenName: ScreenName) {
@@ -210,7 +228,8 @@ function isShopFacingScreen(screenName: ScreenName) {
     screenName === "magazinciuc" ||
     screenName === "magazintargu" ||
     screenName === "magazinciucsale" ||
-    screenName === "magazintargusale"
+    screenName === "magazintargusale" ||
+    screenName === "shopsale"
   );
 }
 
@@ -473,6 +492,19 @@ export default function App() {
       {screen.name === "magazintargu" && <AllInMagazinTargu {...(commonProps as any)} />}
       {screen.name === "magazinciucsale" && <AllInMagazinCiucSale {...(commonProps as any)} />}
       {screen.name === "magazintargusale" && <AllInMagazinTarguSale {...(commonProps as any)} />}
+      {screen.name === "shopsale" && session.role === "shop" && (
+        <AllInMagazinSale
+          actor={session.actor}
+          role="shop"
+          shopId={session.shopId}
+          locationCode={session.locationCode || session.shopId}
+          locationName={session.locationName || session.shopName || session.shopId}
+          cityName={session.shopName || session.locationName || session.shopId}
+          homeHash="shopsale"
+          administrationEnabled={false}
+          onLogout={requestLogout}
+        />
+      )}
       {screen.name === "adminmagazinciuc" && (adminShopMobile ? (
         <AllInAdminMagazinDashboardMobile
           actor={session.actor}
