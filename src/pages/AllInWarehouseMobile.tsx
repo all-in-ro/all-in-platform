@@ -298,7 +298,7 @@ type EditForm = {
 
 
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "incoming_desc" | "missing";
-type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
+type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "inactive" | "watch";
 type ImageFilter = "all" | "with" | "missing";
 type ShopifyFilter = "all" | "mapped" | "exported" | "unmapped" | "error";
 
@@ -936,6 +936,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [visibleCount, setVisibleCount] = useState(40);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [duplicateSkuOpen, setDuplicateSkuOpen] = useState(false);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
   const [editBarcodeConflict, setEditBarcodeConflict] = useState<MobileBarcodeConflictInfo | null>(null);
@@ -989,7 +990,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }
 
   async function apiInventory() {
-    return fetchAifJSON<{ items: InventoryItem[] }>(`/inventory?limit=5000&_=${Date.now()}`);
+    return fetchAifJSON<{ items: InventoryItem[] }>(`/inventory?limit=25000&includeZero=1&_=${Date.now()}`);
   }
 
   async function apiMeta() {
@@ -1151,6 +1152,33 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       .sort((a, b) => String(a.name || a.code || "").localeCompare(String(b.name || b.code || ""), "hu", { sensitivity: "base" }));
   }, [locations]);
 
+  const duplicateSkuGroups = useMemo(() => {
+    const groups = new Map<string, { sku: string; items: InventoryItem[] }>();
+    for (const item of items) {
+      const sku = cleanScannedBarcode(firstText(item.barcode, item.display_barcode));
+      if (!sku || /^AIF[-_]/i.test(sku)) continue;
+      const key = sku.toLowerCase();
+      const current = groups.get(key) || { sku, items: [] };
+      if (!current.items.some((row) => selectedVariantIdFromItem(row as any) === selectedVariantIdFromItem(item as any))) {
+        current.items.push(item);
+      }
+      groups.set(key, current);
+    }
+    return Array.from(groups.values())
+      .filter((group) => group.items.length > 1)
+      .sort((a, b) => b.items.length - a.items.length || a.sku.localeCompare(b.sku, "hu", { numeric: true, sensitivity: "base" }));
+  }, [items]);
+
+  const duplicateSkuVariantCount = useMemo(
+    () => duplicateSkuGroups.reduce((sum, group) => sum + group.items.length, 0),
+    [duplicateSkuGroups],
+  );
+
+  const activationTodoItems = useMemo(
+    () => items.filter((item) => n(item.total_qty) > 0 && (itemStatus(item) !== "active" || modelStatus(item) !== "active")),
+    [items],
+  );
+
   function stockBackedInventoryItems(inventoryItems: InventoryItem[], stockItems: StockItem[]) {
     const aggregate = new Map<string, { total: number; reserved: number; available: number; updatedAt: string }>();
     for (const row of stockItems || []) {
@@ -1195,6 +1223,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!duplicateSkuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setDuplicateSkuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [duplicateSkuOpen]);
 
   useEffect(() => {
     saveSelectedVariants(selectedVariants);
@@ -1300,7 +1339,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         if (stockFilter === "out" && n(item.total_qty) > 0) return false;
         if (stockFilter === "reserved" && n(item.total_reserved_qty) <= 0) return false;
         if (stockFilter === "missing" && !needsAttention(item)) return false;
-        if (stockFilter === "watch" && itemStatus(item) === "active" && modelStatus(item) === "active" && !needsAttention(item)) return false;
+        if (stockFilter === "inactive" && itemStatus(item) === "active" && modelStatus(item) === "active") return false;
+        if (stockFilter === "watch" && !(n(item.total_qty) > 0 && (itemStatus(item) !== "active" || modelStatus(item) !== "active"))) return false;
         return true;
       })
       .sort((a, b) => {
@@ -1986,6 +2026,33 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       <div className="space-y-3 px-3 pt-3">
         {message ? <div className="rounded-2xl border border-[#7bd7d4]/30 bg-[#203f49] px-3 py-2 text-sm text-[#d7fffd]">{message}</div> : null}
 
+        {duplicateSkuGroups.length > 0 ? (
+          <button
+            type="button"
+            className="w-full rounded-2xl border border-rose-300/35 bg-[#d31126] px-3 py-2.5 text-left text-sm text-white shadow-[0_10px_24px_rgba(120,8,24,.28)]"
+            onClick={() => setDuplicateSkuOpen(true)}
+          >
+            <AlertTriangle className="mr-2 inline" size={15} /> {duplicateSkuGroups.length} dupla SKU • {duplicateSkuVariantCount} érintett termék
+          </button>
+        ) : null}
+
+        {activationTodoItems.length > 0 ? (
+          <button
+            type="button"
+            className="w-full rounded-2xl border border-amber-200/30 bg-amber-400/12 px-3 py-2.5 text-left text-sm text-amber-50"
+            onClick={() => {
+              setStockFilter("watch");
+              setFiltersOpen(false);
+              setVisibleCount(40);
+              setFocusVariantIds([]);
+              setFocusLabel("");
+              setMessage(`${activationTodoItems.length} aktiválandó készletes variánst mutatok.`);
+            }}
+          >
+            <AlertTriangle className="mr-2 inline" size={15} /> {activationTodoItems.length} aktiválandó készleten lévő variáns
+          </button>
+        ) : null}
+
         {(hasActiveFilters || focusLabel) && (
           <div className="rounded-2xl border border-[#7bd7d4]/25 bg-[#203f49]/75 px-3 py-2 text-xs text-[#d7fffd]">
             <div className="flex items-start justify-between gap-2">
@@ -2110,7 +2177,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <label className={label}>Alkategória<select className={select} value={subCategory} onChange={(e) => { setSubCategory(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{subCategoryOptions.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label>
               <label className={label}>Nem<select className={select} value={gender} onChange={(e) => { setGender(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{genderTypes.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
               <label className={label}>Szín<select className={select} value={color} onChange={(e) => { setColor(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{colorTypes.map((row) => <option key={row.id} value={row.code || row.name_ro}>{row.name_ro}</option>)}</select></label>
-              <label className={label}>Készlet<select className={select} value={stockFilter} onChange={(e) => { setStockFilter(e.target.value as StockFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="available">Van elérhető</option><option value="out">Nulla készlet</option><option value="reserved">Van foglalás</option><option value="missing">Hiányzó adat</option><option value="watch">Aktiválandó / figyelendő</option></select></label>
+              <label className={label}>Készlet<select className={select} value={stockFilter} onChange={(e) => { setStockFilter(e.target.value as StockFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="available">Van elérhető</option><option value="out">Nulla készlet</option><option value="reserved">Van foglalás</option><option value="missing">Hiányzó adat</option><option value="inactive">Inaktív termékek</option><option value="watch">Aktiválandó készlet</option></select></label>
               <label className={label}>Kép<select className={select} value={imageFilter} onChange={(e) => { setImageFilter(e.target.value as ImageFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="with">Van kép</option><option value="missing">Nincs kép</option></select></label>
               <label className={label}>Shopify<select className={select} value={shopifyFilter} onChange={(e) => { setShopifyFilter(e.target.value as ShopifyFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="mapped">Összekötve</option><option value="exported">Exportálva, párosításra vár</option><option value="unmapped">Nincs Shopifyon</option><option value="error">Szinkronhiba</option></select></label>
               <label className={label}>Sorrend<select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}><option value="name">Terméknév</option><option value="brand">Márka</option><option value="stock_desc">Készlet csökkenő</option><option value="stock_asc">Készlet növekvő</option><option value="value_desc">Érték</option><option value="incoming_desc">Utolsó bevételezés</option><option value="missing">Javítandók előre</option></select></label>
@@ -2120,6 +2187,55 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <button className={primaryBtn} onClick={() => setFiltersOpen(false)} type="button">Alkalmaz</button>
             </div>
           </div>
+        </>
+      )}
+
+      {duplicateSkuOpen && (
+        <>
+          <MobileBackdrop onClose={() => setDuplicateSkuOpen(false)} />
+          <section className={`${sheetPanel} z-[82]`}>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/70">Adatellenőrzés</p>
+                <h2 className="mt-1 text-lg text-white">Dupla Vonalkód / Shopify SKU</h2>
+                <p className="mt-1 text-xs text-white/58">{duplicateSkuGroups.length} ütköző kód • {duplicateSkuVariantCount} konkrét termék</p>
+              </div>
+              <button className={iconBtn} onClick={() => setDuplicateSkuOpen(false)} type="button"><X size={18} /></button>
+            </div>
+            <div className="space-y-3">
+              {duplicateSkuGroups.map((group) => (
+                <div key={group.sku} className="overflow-hidden rounded-2xl border border-rose-200/22 bg-white/[0.05]">
+                  <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-rose-950/20 px-3 py-2">
+                    <span className="font-mono text-sm text-white">{group.sku}</span>
+                    <span className="rounded-full bg-[#d31126] px-2 py-1 text-[10px] text-white">{group.items.length} termék</span>
+                  </div>
+                  <div className="divide-y divide-white/10">
+                    {group.items.map((item) => (
+                      <button
+                        key={item.variant_id}
+                        type="button"
+                        className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-white/[0.05]"
+                        onClick={() => {
+                          setDuplicateSkuOpen(false);
+                          void openDetail(item);
+                        }}
+                      >
+                        <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/14 bg-white text-slate-400">
+                          {item.image_url ? <img src={item.image_url} alt="" className="h-full w-full object-contain p-0.5" /> : <ImagePlus size={17} />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-white">{itemTitle(item)}</span>
+                          <span className="mt-0.5 block truncate text-xs text-white/55">{item.brand_name || "-"} • {officialColorRo(firstText(item.color_name, item.color_code)) || "-"} • {item.size || "-"}</span>
+                          <span className="mt-0.5 block truncate text-[10px] text-[#cffffd]/68">Termékkód: {itemProductCode(item) || "-"} • {qty(item.total_qty)} db</span>
+                        </span>
+                        <Eye size={16} className="shrink-0 text-white/70" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
         </>
       )}
 
