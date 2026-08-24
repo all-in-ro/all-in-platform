@@ -1160,6 +1160,7 @@ export default function AllInAdminMagazinDashboard({
     saleType: "",
     brand: "",
     category: "",
+    snCod: "",
     search: "",
   });
   const [applied, setApplied] = useState(draft);
@@ -1453,7 +1454,7 @@ export default function AllInAdminMagazinDashboard({
               </label>
             </div>
 
-            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[minmax(210px,0.8fr)_minmax(210px,0.8fr)_minmax(340px,2fr)_auto]">
+            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-[minmax(190px,0.75fr)_minmax(190px,0.75fr)_minmax(190px,0.75fr)_minmax(300px,1.65fr)_auto]">
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Márka
                 <SmartSelect
@@ -1472,6 +1473,23 @@ export default function AllInAdminMagazinDashboard({
                   options={[{ value: "", label: "Minden alkategória" }, ...(data?.filterOptions.categories || []).map((value) => ({ value, label: value }))]}
                 />
               </label>
+              <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
+                S/N/COD
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-3 text-white/38" size={15} />
+                  <input
+                    className={`${inputClass} pl-9`}
+                    value={draft.snCod}
+                    onChange={(event) => setDraft({ ...draft, snCod: event.target.value })}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") applyFilters();
+                    }}
+                    placeholder="Pl. CAM007"
+                    autoComplete="off"
+                  />
+                </div>
+              </label>
+
               <label className="grid min-w-0 gap-1 text-[9px] uppercase tracking-[0.1em] text-white/48">
                 Keresés
                 <div className="relative">
