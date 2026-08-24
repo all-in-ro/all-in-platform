@@ -1289,6 +1289,7 @@ export default function AllInReceptions(_props: Props) {
   const [rowColorResolution, setRowColorResolution] = useState<any | null>(null);
   const [rowColorResolutionLoading, setRowColorResolutionLoading] = useState(false);
   const [rowColorResolutionBusy, setRowColorResolutionBusy] = useState(false);
+  const [rowColorChoice, setRowColorChoice] = useState<'keep_existing' | 'use_incoming' | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -1785,11 +1786,13 @@ export default function AllInReceptions(_props: Props) {
     const rowId = String(rowErrorTarget?.id || '').trim();
     if (!rowId) {
       setRowColorResolution(null);
+      setRowColorChoice(null);
       setRowColorResolutionLoading(false);
       return;
     }
     let cancelled = false;
     setRowColorResolution(null);
+    setRowColorChoice(null);
     setRowColorResolutionLoading(true);
     void fetchAifJsonLocal<any>(`/import-rows/${encodeURIComponent(rowId)}/barcode-color-resolution`)
       .then((data) => {
@@ -1821,6 +1824,7 @@ export default function AllInReceptions(_props: Props) {
       if (freshRow?.status === 'committed') {
         setRowErrorTarget(null);
         setRowColorResolution(null);
+        setRowColorChoice(null);
         setMessage(
           resolution === 'keep_existing'
             ? 'Készletre véve. A meglévő színnév maradt, az új darabok ehhez a variánshoz kerültek.'
@@ -2409,7 +2413,9 @@ export default function AllInReceptions(_props: Props) {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/58">Készletre vétel megállt</p>
-                  <h2 id="reception-row-error-title" className="mt-1 text-xl text-white">{receptionRowErrorTitle(rowErrorTarget)}</h2>
+                  <h2 id="reception-row-error-title" className="mt-1 text-xl text-white">
+                    {rowColorResolution?.canResolve ? "Szín egyeztetés szükséges" : receptionRowErrorTitle(rowErrorTarget)}
+                  </h2>
                   <p className="mt-1 text-sm text-white/58">Nr. {rowErrorTarget.row_no || "?"} • {title}</p>
                 </div>
                 <button className={neutralBtn} type="button" onClick={() => setRowErrorTarget(null)} aria-label="Bezárás">
@@ -2451,50 +2457,122 @@ export default function AllInReceptions(_props: Props) {
 
                 {rowColorResolutionLoading ? (
                   <div className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white/55">
-                    <RefreshCw size={15} className="animate-spin text-[#8ee6e2]" /> Egyező régi termék ellenőrzése…
+                    <RefreshCw size={15} className="animate-spin text-[#8ee6e2]" /> Régi termék és színadat ellenőrzése…
                   </div>
                 ) : rowColorResolution?.canResolve ? (
                   <div className="rounded-2xl border border-[#7bd7d4]/30 bg-[#233f49] p-3">
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
-                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Te döntöd el, melyik szín maradjon</p>
-                        <p className="mt-1 text-sm text-white/72">A vonalkód és a méret egyezik. Ez ugyanaz a fizikai variáns, csak a régi és az új színmegnevezés különbözik.</p>
+                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Szín egyeztetés</p>
+                        <p className="mt-1 text-base text-white">Mit szeretnél megtartani ennél a terméknél?</p>
+                        <p className="mt-1 text-sm leading-5 text-white/65">
+                          A vonalkód és a méret egyezik, tehát ugyanarról a fizikai variánsról van szó.
+                          Csak a régi és az új színmegnevezés tér el.
+                        </p>
                       </div>
-                      <span className="shrink-0 rounded-full border border-white/14 bg-white/[0.06] px-2 py-1 text-[10px] text-white/58">
-                        jelenlegi készlet: {Number(rowColorResolution.existing?.totalQty || 0)} db
+                      <span className="shrink-0 rounded-full border border-white/14 bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/58">
+                        Jelenlegi készlet: {Number(rowColorResolution.existing?.totalQty || 0)} db
                       </span>
                     </div>
 
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
                       <button
                         type="button"
                         disabled={rowColorResolutionBusy}
-                        onClick={() => void resolveBarcodeColorAndCommit('keep_existing')}
-                        className="rounded-2xl border border-sky-200/28 bg-sky-500/[0.10] p-3 text-left transition hover:bg-sky-500/[0.16] disabled:opacity-50"
+                        onClick={() => setRowColorChoice('keep_existing')}
+                        aria-pressed={rowColorChoice === 'keep_existing'}
+                        className={`relative rounded-2xl border p-4 text-left disabled:opacity-50 ${
+                          rowColorChoice === 'keep_existing'
+                            ? 'border-[#8fe7e3] bg-[#2a8d8b] text-white shadow-[0_10px_26px_rgba(42,141,139,0.28)]'
+                            : 'border-white/16 bg-[#354153] text-white hover:border-white/30 hover:bg-[#3d4a5e]'
+                        }`}
                       >
-                        <p className="text-[10px] uppercase tracking-[0.12em] text-sky-100/58">Régi szín megtartása</p>
-                        <p className="mt-1 text-lg text-white">
-                          {rowColorResolution.existing?.colorName || 'Nincs színnév'}
-                          {rowColorResolution.existing?.colorCode ? <span className="ml-2 text-sm text-white/48">/ {rowColorResolution.existing.colorCode}</span> : null}
+                        <span className={`absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full border ${
+                          rowColorChoice === 'keep_existing'
+                            ? 'border-white/70 bg-white text-[#176b69]'
+                            : 'border-white/20 bg-white/[0.05] text-transparent'
+                        }`}>
+                          <Check size={16} strokeWidth={3} />
+                        </span>
+                        <p className={`pr-10 text-[10px] uppercase tracking-[0.12em] ${
+                          rowColorChoice === 'keep_existing' ? 'text-white/80' : 'text-white/48'
+                        }`}>
+                          Régi szín marad
                         </p>
-                        <p className="mt-2 text-xs leading-5 text-white/58">A beérkező darabokat ehhez a meglévő színhez teszi. A régi terméknév/szín nem változik.</p>
+                        <p className="mt-2 pr-10 text-xl font-medium text-white">
+                          {rowColorResolution.existing?.colorName || 'Nincs színnév'}
+                          {rowColorResolution.existing?.colorCode ? (
+                            <span className={`ml-2 text-sm ${rowColorChoice === 'keep_existing' ? 'text-white/80' : 'text-white/48'}`}>
+                              / {rowColorResolution.existing.colorCode}
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className={`mt-3 text-xs leading-5 ${
+                          rowColorChoice === 'keep_existing' ? 'text-white/82' : 'text-white/58'
+                        }`}>
+                          A most érkező darabok a meglévő színű variánshoz kerülnek.
+                          A régi szín neve és kódja nem változik.
+                        </p>
                       </button>
 
                       <button
                         type="button"
                         disabled={rowColorResolutionBusy}
-                        onClick={() => void resolveBarcodeColorAndCommit('use_incoming')}
-                        className="rounded-2xl border border-[#7bd7d4]/40 bg-[#2a8d8b]/18 p-3 text-left transition hover:bg-[#2a8d8b]/26 disabled:opacity-50"
+                        onClick={() => setRowColorChoice('use_incoming')}
+                        aria-pressed={rowColorChoice === 'use_incoming'}
+                        className={`relative rounded-2xl border p-4 text-left disabled:opacity-50 ${
+                          rowColorChoice === 'use_incoming'
+                            ? 'border-[#8fe7e3] bg-[#2a8d8b] text-white shadow-[0_10px_26px_rgba(42,141,139,0.28)]'
+                            : 'border-white/16 bg-[#354153] text-white hover:border-white/30 hover:bg-[#3d4a5e]'
+                        }`}
                       >
-                        <p className="text-[10px] uppercase tracking-[0.12em] text-[#cffffd]/62">Átnevezés az új színre</p>
-                        <p className="mt-1 text-lg text-white">
-                          {rowColorResolution.incoming?.colorName || 'Nincs színnév'}
-                          {rowColorResolution.incoming?.colorCode ? <span className="ml-2 text-sm text-white/48">/ {rowColorResolution.incoming.colorCode}</span> : null}
+                        <span className={`absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full border ${
+                          rowColorChoice === 'use_incoming'
+                            ? 'border-white/70 bg-white text-[#176b69]'
+                            : 'border-white/20 bg-white/[0.05] text-transparent'
+                        }`}>
+                          <Check size={16} strokeWidth={3} />
+                        </span>
+                        <p className={`pr-10 text-[10px] uppercase tracking-[0.12em] ${
+                          rowColorChoice === 'use_incoming' ? 'text-white/80' : 'text-white/48'
+                        }`}>
+                          Új szín legyen
                         </p>
-                        <p className="mt-2 text-xs leading-5 text-white/58">A meglévő variáns színét átírja az új receptió szerinti értékre, majd erre veszi készletre a darabokat.</p>
+                        <p className="mt-2 pr-10 text-xl font-medium text-white">
+                          {rowColorResolution.incoming?.colorName || 'Nincs színnév'}
+                          {rowColorResolution.incoming?.colorCode ? (
+                            <span className={`ml-2 text-sm ${rowColorChoice === 'use_incoming' ? 'text-white/80' : 'text-white/48'}`}>
+                              / {rowColorResolution.incoming.colorCode}
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className={`mt-3 text-xs leading-5 ${
+                          rowColorChoice === 'use_incoming' ? 'text-white/82' : 'text-white/58'
+                        }`}>
+                          A meglévő variáns színét átnevezi az új receptió szerinti értékre,
+                          majd az érkező darabokat erre veszi készletre.
+                        </p>
                       </button>
                     </div>
-                    {rowColorResolutionBusy ? <p className="mt-2 text-center text-xs text-[#cffffd]/65">Mentés és készletre vétel…</p> : null}
+
+                    <div className="mt-3 rounded-xl border border-white/12 bg-[#263246] px-3 py-2">
+                      {rowColorChoice ? (
+                        <div className="flex items-center gap-2 text-sm text-white">
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#2a8d8b] text-white">
+                            <Check size={14} strokeWidth={3} />
+                          </span>
+                          <span>
+                            Kiválasztva: <strong>
+                              {rowColorChoice === 'keep_existing'
+                                ? `régi szín marad – ${rowColorResolution.existing?.colorName || 'nincs színnév'}${rowColorResolution.existing?.colorCode ? ` / ${rowColorResolution.existing.colorCode}` : ''}`
+                                : `új szín lesz – ${rowColorResolution.incoming?.colorName || 'nincs színnév'}${rowColorResolution.incoming?.colorCode ? ` / ${rowColorResolution.incoming.colorCode}` : ''}`}
+                            </strong>
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-white/55">Válaszd ki a két lehetőség egyikét. Addig semmi nem változik.</p>
+                      )}
+                    </div>
                   </div>
                 ) : null}
 
@@ -2502,7 +2580,7 @@ export default function AllInReceptions(_props: Props) {
                   <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/62">Mit kell tenni?</p>
                   <p className="mt-1.5 text-sm leading-5 text-white/76">
                     {rowColorResolution?.canResolve
-                      ? <>Válassz a két lehetőség közül fent. A rendszer csak ezután módosít készletet vagy színnevet, tehát semmit nem dönt el helyetted.</>
+                      ? <>Válaszd ki fent, hogy a régi szín maradjon-e, vagy az új szín legyen a terméken. Ezután az alsó zöld gombbal külön jóváhagyod a műveletet.</>
                       : isBarcodeConflict
                         ? <>Ellenőrizd a <strong className="text-white">{barcode || "megadott"}</strong> vonalkódot a Raktárban. Ha már egy másik mérethez vagy variánshoz tartozik, előbb azt a kapcsolatot kell tisztázni. A rendszer szándékosan nem készít néma duplikált terméket.</>
                         : <>Javítsd a piros sor adatait, mentsd el a sort, majd indítsd újra a készletre vételt. Ennél a sornál addig nem történik készletmozgás.</>}
@@ -2518,10 +2596,43 @@ export default function AllInReceptions(_props: Props) {
                   </details>
                 ) : null}
 
-                <div className="flex justify-end">
-                  <button className={primaryBtn} type="button" onClick={() => setRowErrorTarget(null)}>
-                    <Check size={15} /> Értem, javítom
-                  </button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {rowColorResolution?.canResolve ? (
+                    <>
+                      <button
+                        className={neutralBtn}
+                        type="button"
+                        disabled={rowColorResolutionBusy}
+                        onClick={() => {
+                          setRowErrorTarget(null);
+                          setRowColorResolution(null);
+                          setRowColorChoice(null);
+                        }}
+                      >
+                        <X size={15} /> Mégse
+                      </button>
+                      <button
+                        className={primaryBtn}
+                        type="button"
+                        disabled={!rowColorChoice || rowColorResolutionBusy}
+                        onClick={() => {
+                          if (!rowColorChoice) return;
+                          void resolveBarcodeColorAndCommit(rowColorChoice);
+                        }}
+                      >
+                        {rowColorResolutionBusy ? (
+                          <RefreshCw size={15} className="animate-spin" />
+                        ) : (
+                          <Check size={15} />
+                        )}
+                        {rowColorResolutionBusy ? "Mentés és készletre vétel…" : "Kiválasztás alkalmazása és készletre vétel"}
+                      </button>
+                    </>
+                  ) : (
+                    <button className={primaryBtn} type="button" onClick={() => setRowErrorTarget(null)}>
+                      <Check size={15} /> Értem, javítom
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
