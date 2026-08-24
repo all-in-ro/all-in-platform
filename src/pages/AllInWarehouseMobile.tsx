@@ -989,10 +989,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return data as T;
   }
 
-  async function apiInventory() {
-    // Mobilon is a teljes terméktörzs kell, csak kisebb válaszcsomagokban.
-    // Így nem kérünk egyetlen 25 000 soros JSON-t a Node szervertől.
-    const pageSize = 1000;
+  async function apiInventory(onProgress?: (items: InventoryItem[], done: boolean) => void) {
+    const pageSize = 2500;
     const maxRows = 30000;
     const items: InventoryItem[] = [];
     const seenVariantIds = new Set<string>();
@@ -1002,11 +1000,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         items: InventoryItem[];
         hasMore?: boolean;
         returned?: number;
-      }>(`/inventory?limit=${pageSize}&offset=${offset}&includeZero=1&_=${Date.now()}`);
+        fastPage?: boolean;
+      }>(`/inventory?limit=${pageSize}&offset=${offset}&includeZero=1&fastPage=1&_=${Date.now()}`);
 
       const rows = Array.isArray(page.items) ? page.items : [];
       let added = 0;
-
       for (const item of rows) {
         const id = selectedVariantIdFromItem(item as any) || String(item.variant_id || "").trim();
         if (!id || seenVariantIds.has(id)) continue;
@@ -1015,10 +1013,12 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         added += 1;
       }
 
-      if (rows.length < pageSize || page.hasMore === false) break;
+      const done = rows.length < pageSize || page.hasMore === false;
+      onProgress?.(items.slice(), done);
+      if (done) break;
 
       if (offset > 0 && added === 0) {
-        throw new Error("A szerver még nem támogatja a lapozott raktárbetöltést. Az aktuális aif.js backend frissítése szükséges.");
+        throw new Error("A szerveren még nem a gyorsított inventory API fut. Cseréld az aif.js fájlt is a mostani csomagból.");
       }
     }
 
@@ -1234,7 +1234,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     setBusy(true);
     setMessage("");
     try {
-      const [meta, inventory, stock] = await Promise.all([apiMeta(), apiInventory(), apiStock()]);
+      const [meta, stock] = await Promise.all([apiMeta(), apiStock()]);
       setBrands((meta.brands || []).filter((x) => x.is_active !== false));
       setCategories((meta.categories || []).filter((x) => x.is_active !== false));
       setGenderTypes((meta.genderTypes || []).filter((x) => x.is_active !== false));
@@ -1242,8 +1242,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       setSizeTypes((meta.sizeTypes || []).filter((x) => x.is_active !== false));
       setLocations((meta.locations || []).filter((x) => x.is_active !== false));
       setStockRows(stock.items || []);
-      setItems(stockBackedInventoryItems(inventory.items || [], stock.items || []).filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived"));
+
+      await apiInventory((partialItems, done) => {
+        setItems(
+          stockBackedInventoryItems(partialItems, stock.items || [])
+            .filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived")
+        );
+        if (!done) setMessage(`Raktár betöltése: ${partialItems.length.toLocaleString("hu-HU")} variáns már használható…`);
+      });
+
       if (showSuccess) setMessage("Raktár frissítve.");
+      else setMessage("");
     } catch (error: any) {
       setMessage(error?.message || "A raktár betöltése nem sikerült.");
     } finally {
