@@ -5104,10 +5104,11 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-async function apiInventory() {
-  // A teljes terméktörzs kell a raktári szűrőkhöz, de nem egyetlen 25 000 soros
-  // JSON válaszban. A kis Render példány ezen tudott kifutni a Node heapből.
-  const pageSize = 1000;
+async function apiInventory(onProgress?: (items: InventoryItem[], done: boolean) => void) {
+  // Nem egy 25 000 soros szörnyválasz, és nem is 15 nehéz teljes-adatbázis lekérdezés.
+  // A backend fastPage módban csak az adott lap variánsaihoz számolja ki a drágább
+  // számla/import/Shopify adatokat.
+  const pageSize = 2500;
   const maxRows = 30000;
   const items: InventoryItem[] = [];
   const seenVariantIds = new Set<string>();
@@ -5117,17 +5118,18 @@ async function apiInventory() {
     qs.set("limit", String(pageSize));
     qs.set("offset", String(offset));
     qs.set("includeZero", "1");
+    qs.set("fastPage", "1");
     qs.set("_", String(Date.now()));
 
     const page = await fetchJSON<{
       items: InventoryItem[];
       hasMore?: boolean;
       returned?: number;
+      fastPage?: boolean;
     }>(`/api/aif/inventory?${qs.toString()}`);
 
     const rows = Array.isArray(page.items) ? page.items : [];
     let added = 0;
-
     for (const item of rows) {
       const id = selectedVariantIdFromItem(item);
       if (!id || seenVariantIds.has(id)) continue;
@@ -5136,12 +5138,12 @@ async function apiInventory() {
       added += 1;
     }
 
-    if (rows.length < pageSize || page.hasMore === false) break;
+    const done = rows.length < pageSize || page.hasMore === false;
+    onProgress?.(items.slice(), done);
+    if (done) break;
 
-    // Ha egy régi backend még nem ismerné az offsetet, ugyanazt az első oldalt
-    // adná vissza újra. Ne pörgessünk ilyenkor 30 fölösleges kérést.
     if (offset > 0 && added === 0) {
-      throw new Error("A szerver még nem támogatja a lapozott raktárbetöltést. Az aktuális aif.js backend frissítése szükséges.");
+      throw new Error("A szerveren még nem a gyorsított inventory API fut. Cseréld az aif.js fájlt is a mostani csomagból.");
     }
   }
 
@@ -10645,7 +10647,10 @@ export default function AllInWarehouse() {
     setBusy(true);
     setMessage("");
     try {
-      const [inv, meta, stock] = await Promise.all([apiInventory(), apiMeta(), apiStock()]);
+      // A törzsadat és a készlet azonnal betöltődik. A terméklista utána,
+      // lapokban épül fel, ezért nem marad 0 minden csak azért, mert egy inventory lap lassú.
+      const [meta, stock] = await Promise.all([apiMeta(), apiStock()]);
+
       let brandColorRows = meta.brandColorCodes || [];
       if (!brandColorRows.length) {
         try {
@@ -10664,8 +10669,7 @@ export default function AllInWarehouse() {
           brandSizeRows = [];
         }
       }
-      const stockBackedItems = stockBackedInventoryItems(inv.items || [], stock.items || []);
-      setItems(stockBackedItems.filter((x) => !isArchivedInventoryItem(x)));
+
       setSuppliers(meta.suppliers || []);
       setBrands(meta.brands || []);
       setSupplierBrands(meta.supplierBrands || []);
@@ -10678,6 +10682,14 @@ export default function AllInWarehouse() {
       setBrandSizeCodes(brandSizeRows);
       setLocations(meta.locations || []);
       setStockRows(stock.items || []);
+
+      await apiInventory((partialItems, done) => {
+        const stockBackedItems = stockBackedInventoryItems(partialItems, stock.items || []);
+        setItems(stockBackedItems.filter((x) => !isArchivedInventoryItem(x)));
+        if (!done) setMessage(`Raktár betöltése: ${partialItems.length.toLocaleString("hu-HU")} variáns már használható…`);
+      });
+
+      setMessage("");
 
       try {
         const savedSelection = await apiSelectedVariantSelection();
