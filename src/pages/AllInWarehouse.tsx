@@ -3880,6 +3880,34 @@ function warehouseVariantSizeSortRank(value: unknown) {
   return index >= 0 ? index : 1000;
 }
 
+function warehouseSameColorSizeSibling(a: Partial<InventoryItem> | Record<string, any>, b: Partial<InventoryItem> | Record<string, any>) {
+  const aId = selectedVariantIdFromItem(a as any);
+  const bId = selectedVariantIdFromItem(b as any);
+  if (!aId || !bId || aId === bId) return false;
+
+  const aModelId = firstWarehouseText((a as any).model_id, (a as any).modelId);
+  const bModelId = firstWarehouseText((b as any).model_id, (b as any).modelId);
+  const sameModel = aModelId && bModelId
+    ? aModelId === bModelId
+    : normalizeSearch(warehouseProductFamilyCode(a)) === normalizeSearch(warehouseProductFamilyCode(b)) &&
+      normalizeSearch(firstWarehouseText((a as any).brand_code, (a as any).brand_name)) === normalizeSearch(firstWarehouseText((b as any).brand_code, (b as any).brand_name));
+  if (!sameModel) return false;
+
+  const aColorCode = firstWarehouseText((a as any).color_code, (a as any).colorCode, (a as any).supplier_color_code, (a as any).supplierColorCode);
+  const bColorCode = firstWarehouseText((b as any).color_code, (b as any).colorCode, (b as any).supplier_color_code, (b as any).supplierColorCode);
+  if (aColorCode && bColorCode && normalizeSearch(aColorCode) !== normalizeSearch(bColorCode)) return false;
+
+  const aColorName = firstWarehouseText((a as any).color_name, (a as any).colorName);
+  const bColorName = firstWarehouseText((b as any).color_name, (b as any).colorName);
+  if ((!aColorCode || !bColorCode) && aColorName && bColorName && colorKey(aColorName) !== colorKey(bColorName)) return false;
+
+  // Ha az egyik oldalon sincs színadat, ugyanazon modellen belül ezt is egy színnek tekintjük.
+  // Ha van használható színadat, annak már fent egyeznie kellett.
+  const aSize = normalizeSearch((a as any).size);
+  const bSize = normalizeSearch((b as any).size);
+  return Boolean(aSize && bSize && aSize !== bSize);
+}
+
 function compareWarehouseVariantPresentation(a: InventoryItem, b: InventoryItem) {
   const compareText = (left: unknown, right: unknown) => String(left || "").localeCompare(String(right || ""), "hu", {
     numeric: true,
@@ -11267,6 +11295,45 @@ export default function AllInWarehouse() {
         status: edit.variantStatus,
       };
       await apiVariantUpdate(detail.item.id, variantUpdatePayload);
+
+      // Azonos termék + azonos szín + más méret esetén a kép és a leírás közös.
+      // Más színhez NEM nyúlunk. Így pl. S/M/L ugyanazt a DENIM fotót/leírást kapja,
+      // de egy BLACK vagy WHITE variáns megtartja a saját képét.
+      const siblingSource: InventoryItem = {
+        ...(detail.item as InventoryItem),
+        variant_id: detailId,
+        model_id: firstWarehouseText(detail.item.model_id, detail.item.modelId) || null,
+        brand_code: edit.brandCode || detail.item.brand_code || null,
+        brand_name: detail.item.brand_name || null,
+        color_code: edit.colorCode || detail.item.color_code || null,
+        color_name: normalizedEditColor || detail.item.color_name || null,
+        size: normalizedEditSize || detail.item.size || null,
+        supplier_product_code: edit.supplierProductCode || detail.item.supplier_product_code || null,
+        model_code: detail.item.model_code || null,
+      };
+      const sameColorSizeSiblings = inventoryDisplayItems.filter((item) => warehouseSameColorSizeSibling(siblingSource, item));
+      const siblingPatch: Record<string, unknown> = {};
+      if (String(edit.imageUrl || '').trim()) siblingPatch.imageUrl = edit.imageUrl;
+      if (String(edit.descriptionRo || '').trim()) siblingPatch.descriptionRo = edit.descriptionRo;
+
+      let inheritedSiblingCount = 0;
+      let inheritedSiblingFailed = 0;
+      const inheritedSiblingIds: string[] = [];
+      if (Object.keys(siblingPatch).length && sameColorSizeSiblings.length) {
+        const results = await Promise.allSettled(
+          sameColorSizeSiblings.map((item) => apiVariantUpdate(String(item.variant_id), siblingPatch))
+        );
+        results.forEach((result, index) => {
+          const siblingId = String(sameColorSizeSiblings[index]?.variant_id || '').trim();
+          if (result.status === 'fulfilled') {
+            inheritedSiblingCount += 1;
+            if (siblingId) inheritedSiblingIds.push(siblingId);
+          } else {
+            inheritedSiblingFailed += 1;
+          }
+        });
+      }
+
       const d = await apiVariantDetail(detail.item.id);
 
       // Egy termékadat módosítása miatt nem kérjük le újra a teljes raktárt.
@@ -11289,6 +11356,13 @@ export default function AllInWarehouse() {
       const updateSavedRows = (current: InventoryItem[]) => current.map((item) => {
         const itemId = String(item.variant_id || "").trim();
         if (itemId === detailId) return freshItem(item);
+        if (inheritedSiblingIds.includes(itemId)) {
+          return {
+            ...item,
+            ...(String(edit.imageUrl || '').trim() ? { image_url: edit.imageUrl } : {}),
+            ...(String(edit.descriptionRo || '').trim() ? { description_ro: edit.descriptionRo } : {}),
+          };
+        }
         if (activatingSharedModel && deactivatedSiblingIds.includes(itemId)) {
           return { ...item, model_status: nextModelStatus, variant_status: "inactive" };
         }
@@ -11353,9 +11427,14 @@ export default function AllInWarehouse() {
           ? `A közös modell aktív, de ez a variáns továbbra is Inaktív. A további ${deactivatedSiblingIds.length} variáns szintén az aktiválandó listán maradt.`
           : "A modell aktív, de ez a konkrét variáns még Inaktív, ezért az aktiválandó listán maradt.");
       } else {
-        setMessage(priceHistoryEntry
+        const siblingMessage = inheritedSiblingCount
+          ? ` Azonos színű további ${inheritedSiblingCount} méretváltozat átvette a képet/leírást.${inheritedSiblingFailed ? ` ${inheritedSiblingFailed} méret frissítése nem sikerült.` : ''}`
+          : inheritedSiblingFailed
+            ? ` ${inheritedSiblingFailed} azonos színű méret frissítése nem sikerült.`
+            : '';
+        setMessage((priceHistoryEntry
           ? (shouldCloseAfter ? "A változtatások mentve, az árváltozás bekerült a Termék History-ba." : "A termékadatok mentve, az árváltozás bekerült a Termék History-ba.")
-          : (shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.")
+          : (shouldCloseAfter ? "A változtatások mentve." : "A termékadatok mentése megtörtént.")) + siblingMessage
         );
       }
       return true;
