@@ -1401,6 +1401,8 @@ export default function AllInProductMoves() {
   const [scanBusy, setScanBusy] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [productSearch, setProductSearch] = useState("");
+  const [productSearchBusy, setProductSearchBusy] = useState(false);
+  const [productSearchError, setProductSearchError] = useState("");
   const [draftLines, setDraftLines] = useState<Record<string, DraftLine>>({});
   const [editingDraftId, setEditingDraftId] = useState("");
   const [editingDraftNumber, setEditingDraftNumber] = useState("");
@@ -1419,6 +1421,7 @@ export default function AllInProductMoves() {
   const scanAutoTimerRef = useRef<number | null>(null);
   const scanQueueRef = useRef<string[]>([]);
   const scanQueueRunningRef = useRef(false);
+  const productSearchRequestIdRef = useRef(0);
 
   const loadSettings = useCallback(async () => {
     const result = await fetchJson<{ settings?: Record<DocumentType, StockDocumentSettings>; items?: StockDocumentSettings[] }>("/stock-documents/settings");
@@ -1561,9 +1564,25 @@ export default function AllInProductMoves() {
 
   const productSearchResults = useMemo(() => {
     const query = normalize(productSearch);
-    if (!query) return [] as InventoryItem[];
+    const looseQuery = scanLooseKey(productSearch);
+    if (!query && !looseQuery) return [] as InventoryItem[];
+
     return inventory
-      .filter((item) => productSearchValues(item).some((value) => value.includes(query)))
+      .filter((item) => {
+        if (query && productSearchValues(item).some((value) => value.includes(query))) return true;
+        if (!looseQuery) return false;
+        return [
+          ...productIdentifierValues(item),
+          item.title_ro,
+          item.shopify_title,
+          item.brand_name,
+          item.color_name,
+          item.color_code,
+          item.size,
+        ]
+          .filter((value) => String(value ?? "").trim())
+          .some((value) => scanLooseKey(value).includes(looseQuery));
+      })
       .sort((a, b) => {
         const exactA = exactProductMatch(a, productSearch) ? 0 : 1;
         const exactB = exactProductMatch(b, productSearch) ? 0 : 1;
@@ -1571,6 +1590,49 @@ export default function AllInProductMoves() {
       })
       .slice(0, 10);
   }, [inventory, productSearch]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    const query = productSearch.trim();
+    const requestId = ++productSearchRequestIdRef.current;
+
+    if (!query) {
+      setProductSearchBusy(false);
+      setProductSearchError("");
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setProductSearchBusy(true);
+      setProductSearchError("");
+      try {
+        const params = new URLSearchParams();
+        params.set("search", query);
+        params.set("limit", "100");
+        params.set("includeZero", "1");
+        params.set("_", String(Date.now()));
+
+        const remote = await fetchJson<{ items?: InventoryItem[] }>(`/inventory?${params.toString()}`);
+        if (requestId !== productSearchRequestIdRef.current) return;
+
+        const remoteItems = (remote.items || []).filter((item) =>
+          String(item.variant_status || "active") !== "archived" &&
+          String(item.model_status || "active") !== "archived"
+        );
+
+        if (remoteItems.length) {
+          setInventory((current) => uniqueInventoryItems([...current, ...remoteItems]));
+        }
+      } catch (searchError: any) {
+        if (requestId !== productSearchRequestIdRef.current) return;
+        setProductSearchError(searchError?.message || "A teljes terméktörzs keresése nem sikerült.");
+      } finally {
+        if (requestId === productSearchRequestIdRef.current) setProductSearchBusy(false);
+      }
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [createOpen, productSearch]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -1601,6 +1663,9 @@ export default function AllInProductMoves() {
       scanAutoTimerRef.current = null;
     }
     setProductSearch("");
+    setProductSearchBusy(false);
+    setProductSearchError("");
+    productSearchRequestIdRef.current += 1;
     setDraftLines({});
     setEditingDraftId("");
     setEditingDraftNumber("");
@@ -2823,8 +2888,63 @@ export default function AllInProductMoves() {
                       {scanFeedback.text}
                     </div>
                   ) : null}
-                  <label className="mt-3 grid gap-1.5 text-xs text-white/62">Név / termékkód / méret<div className="relative"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" /><input className={`${input} pl-9`} value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Kezdj el gépelni..." /></div></label>
-                  {productSearch ? <div className="mt-2 max-h-[330px] space-y-1.5 overflow-auto rounded-xl border border-white/10 bg-[#303a4c] p-1.5">{productSearchResults.map((item) => <button key={item.variant_id} type="button" onClick={() => { addDraftItem(item); focusScanInput(); }} className="flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-2 text-left transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/12"><ProductThumb item={item} className="h-11 w-11" /><span className="min-w-0 flex-1"><span className="block truncate text-xs text-white">{productTitle(item)}</span><span className="mt-0.5 block truncate text-[10px] text-white/45">{item.brand_name || "-"} • {item.color_name || item.color_code || "-"} • {item.size || "-"}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-[#cffffd]/65">{visibleBarcode(item) || productCode(item) || "Azonosító nélkül"}</span></span><span className="shrink-0 rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px] text-white/62">{sourceLocationId ? `${availableAt(item.variant_id, sourceLocationId)} db` : "-"}</span></button>)}{!productSearchResults.length ? <div className="px-3 py-5 text-center text-xs text-white/42">Nincs találat.</div> : null}</div> : null}
+                  <label className="mt-3 grid gap-1.5 text-xs text-white/62">
+                    Név / termékkód / méret / vonalkód
+                    <div className="relative">
+                      <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" />
+                      <input
+                        className={`${input} pl-9 pr-10`}
+                        value={productSearch}
+                        onChange={(event) => {
+                          setProductSearchError("");
+                          setProductSearch(event.target.value);
+                        }}
+                        placeholder="Vonalkódot is beírhatsz…"
+                        autoComplete="off"
+                      />
+                      {productSearchBusy ? (
+                        <RefreshCw size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-[#8ee6e2]" />
+                      ) : null}
+                    </div>
+                  </label>
+                  {productSearch ? (
+                    <div className="mt-2 max-h-[330px] space-y-1.5 overflow-auto rounded-xl border border-white/10 bg-[#303a4c] p-1.5">
+                      {productSearchResults.map((item) => (
+                        <button
+                          key={item.variant_id}
+                          type="button"
+                          onClick={() => { addDraftItem(item); focusScanInput(); }}
+                          className="flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-2 text-left transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/12"
+                        >
+                          <ProductThumb item={item} className="h-11 w-11" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs text-white">{productTitle(item)}</span>
+                            <span className="mt-0.5 block truncate text-[10px] text-white/45">
+                              {item.brand_name || "-"} • {item.color_name || item.color_code || "-"} • {item.size || "-"}
+                            </span>
+                            <span className="mt-0.5 block truncate font-mono text-[9px] text-[#cffffd]/65">
+                              {visibleBarcode(item) || productCode(item) || "Azonosító nélkül"}
+                            </span>
+                          </span>
+                          <span className="shrink-0 rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px] text-white/62">
+                            {sourceLocationId ? `${availableAt(item.variant_id, sourceLocationId)} db` : "-"}
+                          </span>
+                        </button>
+                      ))}
+                      {!productSearchResults.length && productSearchBusy ? (
+                        <div className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-white/52">
+                          <RefreshCw size={14} className="animate-spin text-[#8ee6e2]" />
+                          Keresés a teljes terméktörzsben…
+                        </div>
+                      ) : null}
+                      {!productSearchResults.length && !productSearchBusy && productSearchError ? (
+                        <div className="px-3 py-4 text-center text-xs text-rose-100">{productSearchError}</div>
+                      ) : null}
+                      {!productSearchResults.length && !productSearchBusy && !productSearchError ? (
+                        <div className="px-3 py-5 text-center text-xs text-white/42">Nincs találat.</div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="mt-3 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/82">Forrás és cél kiválasztása után csak csipogtasd a termékeket. A találat automatikusan bekerül a listába, a mező pedig rögtön várja a következőt. Ugyanazt újra beolvasva a darabszám +1.</div>
                 </div>
 
