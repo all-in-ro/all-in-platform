@@ -1649,6 +1649,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       setEdit(formFromItem(data.item || {}));
       setEditBarcodeConflict(null);
       await load(false);
+
+      // Sikeres mentés után nincs még egy külön bezárási kör.
+      // Hiba vagy SKU-ütközés esetén viszont maradjon nyitva, hogy rögtön javítható legyen.
+      setDetailOpen(false);
+      setDetail(null);
       setMessage("Termékadatok mentve.");
     } catch (error: any) {
       const conflictInfo = barcodeConflictInfoFromApi(error);
