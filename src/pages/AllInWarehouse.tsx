@@ -8261,9 +8261,8 @@ export default function AllInWarehouse() {
       pendingProductJumpFallbackRef.current = null;
       pendingProductJumpViewportTopRef.current = null;
       setPendingProductJumpId("");
-      window.setTimeout(() => {
-        setHighlightProductId((current) => current === targetId ? "" : current);
-      }, 9000);
+      // Szándékosan nem töröljük időzítővel a kiemelést. A "Folytatás innen"
+      // munkajelzés addig marad, amíg a felhasználó meg nem nyit egy terméket.
     }, 80);
 
     return () => window.clearTimeout(timer);
@@ -10723,6 +10722,9 @@ export default function AllInWarehouse() {
 
   async function openDetail(id: string) {
     rememberDetailReturnAnchor(id);
+    // A korábbi "Folytatás innen" jelzés addig maradjon látható, amíg ténylegesen
+    // el nem kezdjük a következő terméket. Nem időzítő dönti el helyettünk.
+    setHighlightProductId("");
     setDetailCloseConfirmOpen(false);
     setEditBarcodeConflict(null);
     setDetailBusy(true);
@@ -11187,7 +11189,7 @@ export default function AllInWarehouse() {
 
     setSaving(true);
     setMessage("");
-    let deactivatedSiblingCount = 0;
+    let deactivatedSiblingIds: string[] = [];
     try {
       const requestedBarcode = cleanScannedBarcode(edit.barcode);
       if (requestedBarcode) {
@@ -11227,7 +11229,7 @@ export default function AllInWarehouse() {
           for (const siblingId of siblingIds) {
             await apiVariantUpdate(siblingId, { status: "inactive" });
           }
-          deactivatedSiblingCount = siblingIds.length;
+          deactivatedSiblingIds = siblingIds;
         }
       }
 
@@ -11266,6 +11268,35 @@ export default function AllInWarehouse() {
       };
       await apiVariantUpdate(detail.item.id, variantUpdatePayload);
       const d = await apiVariantDetail(detail.item.id);
+
+      // Egy termékadat módosítása miatt nem kérjük le újra a teljes raktárt.
+      // A PATCH után a friss variánst visszaolvassuk és helyben cseréljük ki.
+      // Ez teszi az egyszerű mezőmódosítást (pl. Anyag) azonnal használhatóvá.
+      const freshItem = (current: InventoryItem): InventoryItem => {
+        const serverItem = (d.item || {}) as Record<string, any>;
+        return {
+          ...current,
+          ...serverItem,
+          variant_id: detailId,
+          supplier_product_code: supplierProductCodeFromDetail(d) || current.supplier_product_code || null,
+          supplierProductCode: supplierProductCodeFromDetail(d) || current.supplierProductCode || current.supplier_product_code || null,
+          total_qty: serverItem.total_qty ?? current.total_qty,
+          total_reserved_qty: serverItem.total_reserved_qty ?? current.total_reserved_qty,
+          available_qty: serverItem.available_qty ?? current.available_qty,
+          last_stock_movement_at: serverItem.last_stock_movement_at ?? current.last_stock_movement_at,
+        };
+      };
+      const updateSavedRows = (current: InventoryItem[]) => current.map((item) => {
+        const itemId = String(item.variant_id || "").trim();
+        if (itemId === detailId) return freshItem(item);
+        if (activatingSharedModel && deactivatedSiblingIds.includes(itemId)) {
+          return { ...item, model_status: nextModelStatus, variant_status: "inactive" };
+        }
+        return item;
+      });
+      setItems(updateSavedRows);
+      setIncomingFocusItems(updateSavedRows);
+
       if (priceHistoryEntry && historyTarget && String(historyTarget.variant_id || (historyTarget as any).id || "") === detailId) {
         try {
           const refreshedHistory = await apiVariantHistory(detailId);
@@ -11307,22 +11338,19 @@ export default function AllInWarehouse() {
         setEdit(savedForm);
         setEditBaseline({ ...savedForm });
       }
-      await load();
-      if (incomingFocus?.batchId && !resolvedActivation && isUuidLike(incomingFocus.batchId)) {
-        await loadIncomingFocusBatch(incomingFocus.batchId, false, incomingFocus.mode || "import");
-      }
       if (detailClosedDuringSave) {
+        // A visszatérési pontot AZONNAL mutatjuk, nem egy teljes raktár-újratöltés után.
         window.requestAnimationFrame(() => restoreDetailReturnPosition({ preferNext: preferNextAfterClose }));
       }
       if (wasActivationWorkView && resolvedActivation) {
-        setMessage(deactivatedSiblingCount
-          ? `Ez a konkrét variáns aktív lett. A modell további ${deactivatedSiblingCount} méret-/színvariánsa az aktiválandó listán maradt, amíg azokat külön Aktívra nem teszed.`
+        setMessage(deactivatedSiblingIds.length
+          ? `Ez a konkrét variáns aktív lett. A modell további ${deactivatedSiblingIds.length} méret-/színvariánsa az aktiválandó listán maradt, amíg azokat külön Aktívra nem teszed.`
           : "Ez a konkrét variáns aktív lett, ezért levettem az aktiválandó listáról. A többi méret és szín állapota nem változott.");
         setHighlightProductId((current) => current === detailId ? "" : current);
         setPendingProductJumpId((current) => current === detailId ? "" : current);
       } else if (wasActivationWorkView && nextModelStatus === "active" && nextVariantStatus !== "active") {
-        setMessage(deactivatedSiblingCount
-          ? `A közös modell aktív, de ez a variáns továbbra is Inaktív. A további ${deactivatedSiblingCount} variáns szintén az aktiválandó listán maradt.`
+        setMessage(deactivatedSiblingIds.length
+          ? `A közös modell aktív, de ez a variáns továbbra is Inaktív. A további ${deactivatedSiblingIds.length} variáns szintén az aktiválandó listán maradt.`
           : "A modell aktív, de ez a konkrét variáns még Inaktív, ezért az aktiválandó listán maradt.");
       } else {
         setMessage(priceHistoryEntry
@@ -14975,9 +15003,21 @@ export default function AllInWarehouse() {
                 </section>
               </div>
 
-              <div className="flex flex-wrap justify-end gap-2 border-t border-white/12 pt-4">
+              <div className="sticky bottom-0 z-20 -mx-5 -mb-5 flex flex-wrap justify-end gap-2 border-t border-white/16 bg-[#404a5b] px-5 py-3 shadow-[0_-14px_28px_rgba(15,23,42,0.26)]">
                 <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Mégse</button>
-                <button className={detailSaveButtonClass} onClick={() => void saveDetailAndClose()} disabled={saving || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : !detailHasChanges ? "Nincs módosítás, amit menteni kellene." : "Módosítások mentése és adatlap bezárása"}><Save size={16} /> Mentés</button>
+                <button
+                  className={detailHasChanges ? primaryBtn : btnSoft}
+                  onClick={() => void saveDetailAndClose()}
+                  disabled={saving || detailBusy || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)}
+                  title={effectiveEditBarcodeConflict
+                    ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t."
+                    : !detailHasChanges
+                      ? "Nincs módosítás, amit menteni kellene."
+                      : "Módosítások mentése és adatlap bezárása"}
+                  type="button"
+                >
+                  <Save size={16} /> {saving ? "Mentés..." : "Mentés"}
+                </button>
               </div>
             </div>
           </div>
