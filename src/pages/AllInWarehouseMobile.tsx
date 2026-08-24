@@ -1573,6 +1573,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
     setSaving(true);
     setMessage("");
+    let deactivatedSiblingIds: string[] = [];
     try {
       const requestedBarcode = cleanScannedBarcode(edit.barcode);
       if (requestedBarcode) {
@@ -1604,6 +1605,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
           for (const siblingId of siblingIds) {
             await apiVariantUpdate(siblingId, { status: "inactive" });
           }
+          deactivatedSiblingIds = siblingIds;
         }
       }
 
@@ -1645,13 +1647,29 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         status: edit.variantStatus || "active",
       });
       const data = await apiVariantDetail(id);
-      setDetail(data);
-      setEdit(formFromItem(data.item || {}));
+      const serverItem = (data.item || {}) as Record<string, any>;
+      setItems((current) => current.map((item) => {
+        const itemId = selectedVariantIdFromItem(item as any);
+        if (itemId === id) {
+          return {
+            ...item,
+            ...serverItem,
+            variant_id: id,
+            total_qty: serverItem.total_qty ?? item.total_qty,
+            total_reserved_qty: serverItem.total_reserved_qty ?? item.total_reserved_qty,
+            available_qty: serverItem.available_qty ?? item.available_qty,
+            last_stock_movement_at: serverItem.last_stock_movement_at ?? item.last_stock_movement_at,
+          } as InventoryItem;
+        }
+        if (deactivatedSiblingIds.includes(itemId)) {
+          return { ...item, model_status: nextModelStatus, variant_status: "inactive" } as InventoryItem;
+        }
+        return item;
+      }));
       setEditBarcodeConflict(null);
-      await load(false);
 
-      // Sikeres mentés után nincs még egy külön bezárási kör.
-      // Hiba vagy SKU-ütközés esetén viszont maradjon nyitva, hogy rögtön javítható legyen.
+      // Mentés kész: a lap azonnal záródik. Nem tartjuk nyitva addig, amíg
+      // a teljes raktár újra letöltődik.
       setDetailOpen(false);
       setDetail(null);
       setMessage("Termékadatok mentve.");
