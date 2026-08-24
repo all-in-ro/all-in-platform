@@ -61,7 +61,7 @@ type Props = {
   open: boolean;
   mode: AllInShopOperationMode;
   actor: string;
-  locationCode: "main_warehouse" | "magazin_targu_secuiesc";
+  locationCode: string;
   locationName: string;
   onClose: () => void;
 };
@@ -1395,7 +1395,42 @@ export default function AllInShopOperations({
                   <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Mit adtam el?</p><h3 className="mt-1 text-lg">Eladott termékek</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.products.length || 0} termék</span></div>
                   <div className="mt-3 max-h-[520px] space-y-2 overflow-y-auto pr-1">
                     {(summaryData?.products || []).map((item) => (
-                      <div key={item.key} className="grid grid-cols-[68px_1fr_auto] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3"><ProductImage src={item.imageUrl} title={item.title} /><div className="min-w-0"><p className="truncate text-sm">{item.title}</p><p className="mt-1 truncate text-[11px] text-white/48">{[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}</p><p className="mt-1 text-[10px] text-white/38">{item.productCode || "–"}</p></div><div className="text-right"><p className="text-xl text-[#d7fffd]">{item.qty} db</p><p className="mt-1 text-sm">{formatMoney(item.revenue)}</p>{item.discountTotal > 0 ? <p className="mt-1 text-[10px] text-amber-100">Kedv.: {formatMoney(item.discountTotal)}</p> : null}</div></div>
+                      <div
+                        key={item.key}
+                        className="grid grid-cols-[80px_minmax(0,1fr)_96px] items-center gap-3 rounded-2xl border border-white/10 bg-[#293548] p-3 transition hover:border-[#7bd7d4]/24 hover:bg-[#2d3a4d]"
+                      >
+                        <ProductImage src={item.imageUrl} title={item.title} />
+                        <div className="min-w-0 self-stretch py-0.5">
+                          <p className="line-clamp-2 min-h-[36px] text-sm leading-[18px] text-white" title={item.title}>
+                            {item.title}
+                          </p>
+                          <p
+                            className="mt-1.5 line-clamp-1 text-[11px] text-white/52"
+                            title={[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ")}
+                          >
+                            {[item.brandName, item.subcategoryName, item.colorName, item.size].filter(Boolean).join(" • ") || "Nincs további termékadat"}
+                          </p>
+                          <div className="mt-2 flex min-w-0">
+                            <span
+                              className="max-w-full truncate rounded-lg border border-[#7bd7d4]/18 bg-[#2a8d8b]/10 px-2 py-1 font-mono text-[9px] text-[#cffffd]/68"
+                              title={item.productCode || "–"}
+                            >
+                              {item.productCode || "–"}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex h-full min-w-0 flex-col items-end justify-center border-l border-white/8 pl-3 text-right">
+                          <span className="inline-flex min-w-[68px] justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 px-2.5 py-1.5 text-base text-[#d7fffd]">
+                            {item.qty} db
+                          </span>
+                          <p className="mt-2 whitespace-nowrap text-sm text-white">{formatMoney(item.revenue)}</p>
+                          {item.discountTotal > 0 ? (
+                            <p className="mt-1 whitespace-nowrap text-[10px] text-amber-100">
+                              Kedv.: {formatMoney(item.discountTotal)}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
                     ))}
                     {!summaryLoading && !(summaryData?.products || []).length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><ShoppingBag size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladott termék.</p></div> : null}
                   </div>
