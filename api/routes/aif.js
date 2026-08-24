@@ -11201,6 +11201,154 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   router.delete("/selection", requireAuthed, clearSelectedVariants);
   router.delete("/selected-variants", requireAuthed, clearSelectedVariants);
 
+  router.get("/inventory/lookup", requireAuthed, async (req, res) => {
+    const code = text(req.query.code || req.query.barcode || req.query.value || req.query.q);
+    if (!code) return res.status(400).json({ error: "Az azonosító kötelező." });
+
+    try {
+      const r = await pool.query(
+        `WITH barcode_candidates AS (
+           SELECT DISTINCT v.id AS variant_id, 0 AS match_rank, 'barcode'::text AS match_type
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_variant_supplier_codes sc
+             ON sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           WHERE COALESCE(v.status,'active') <> 'archived'
+             AND COALESCE(m.status,'active') <> 'archived'
+             AND (
+               lower(btrim(COALESCE(v.barcode,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(sc.supplier_barcode,'')))=lower(btrim($1))
+             )
+         ),
+         identifier_candidates AS (
+           SELECT DISTINCT
+             v.id AS variant_id,
+             CASE
+               WHEN lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1)) THEN 10
+               WHEN lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1)) THEN 11
+               WHEN lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($1)) THEN 12
+               WHEN lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1)) THEN 13
+               WHEN lower(btrim(COALESCE(sc.supplier_variant_code,'')))=lower(btrim($1)) THEN 14
+               WHEN lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($1)) THEN 15
+               WHEN lower(btrim(COALESCE(v.attributes->>'legacyProductCode','')))=lower(btrim($1)) THEN 16
+               WHEN lower(btrim(COALESCE(v.attributes->>'legacyOriginalProductCode','')))=lower(btrim($1)) THEN 17
+               ELSE 99
+             END AS match_rank,
+             CASE
+               WHEN lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1)) THEN 'internal_sku'
+               WHEN lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1)) THEN 'supplier_sku'
+               WHEN lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($1)) THEN 'sn_cod'
+               WHEN lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1)) THEN 'supplier_product_code'
+               WHEN lower(btrim(COALESCE(sc.supplier_variant_code,'')))=lower(btrim($1)) THEN 'supplier_variant_code'
+               WHEN lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($1)) THEN 'model_code'
+               WHEN lower(btrim(COALESCE(v.attributes->>'legacyProductCode','')))=lower(btrim($1)) THEN 'legacy_product_code'
+               WHEN lower(btrim(COALESCE(v.attributes->>'legacyOriginalProductCode','')))=lower(btrim($1)) THEN 'legacy_original_product_code'
+               ELSE 'identifier'
+             END AS match_type
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           LEFT JOIN aif_variant_supplier_codes sc
+             ON sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+           WHERE COALESCE(v.status,'active') <> 'archived'
+             AND COALESCE(m.status,'active') <> 'archived'
+             AND (
+               lower(btrim(COALESCE(v.internal_sku,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(sc.supplier_sku,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(v.sn_cod,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(sc.supplier_product_code,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(sc.supplier_variant_code,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(m.model_code,'')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(v.attributes->>'legacyProductCode','')))=lower(btrim($1))
+               OR lower(btrim(COALESCE(v.attributes->>'legacyOriginalProductCode','')))=lower(btrim($1))
+             )
+         ),
+         candidates AS (
+           SELECT * FROM barcode_candidates
+           UNION ALL
+           SELECT * FROM identifier_candidates
+           WHERE NOT EXISTS (SELECT 1 FROM barcode_candidates)
+         ),
+         picked AS (
+           SELECT DISTINCT ON (variant_id) variant_id, match_rank, match_type
+           FROM candidates
+           ORDER BY variant_id, match_rank ASC
+         )
+         SELECT
+           v.id AS variant_id,
+           v.internal_sku,
+           COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,'')) AS barcode,
+           COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,'')) AS display_barcode,
+           v.sn_cod,
+           v.sn_cod AS "snCod",
+           m.model_code,
+           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS supplier_product_code,
+           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS "supplierProductCode",
+           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS product_code,
+           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode',''), NULLIF(v.internal_sku,'')) AS "productCode",
+           si.supplier_variant_code,
+           si.supplier_codes,
+           m.title_ro,
+           m.shopify_title,
+           b.name AS brand_name,
+           c.name_ro AS category_name_ro,
+           subc.name_ro AS subcategory_name_ro,
+           subc.name_hu AS subcategory_name_hu,
+           subc.code AS subcategory_code,
+           m.product_type,
+           v.color_name,
+           v.color_code,
+           v.size,
+           v.image_url,
+           v.buy_price,
+           v.sell_price,
+           COALESCE(st.total_qty,0) AS total_qty,
+           COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
+           COALESCE(st.available_qty,0) AS available_qty,
+           v.status AS variant_status,
+           m.status AS model_status,
+           p.match_type,
+           p.match_rank
+         FROM picked p
+         JOIN aif_product_variants v ON v.id=p.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+         LEFT JOIN LATERAL (
+           SELECT
+             string_agg(DISTINCT NULLIF(concat_ws(' / ', sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_size), ''), ', ') AS supplier_codes,
+             (array_agg(sc.supplier_product_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE NULLIF(sc.supplier_product_code,'') IS NOT NULL))[1] AS supplier_product_code,
+             (array_agg(sc.supplier_variant_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE NULLIF(sc.supplier_variant_code,'') IS NOT NULL))[1] AS supplier_variant_code,
+             (array_agg(sc.supplier_barcode ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST) FILTER (WHERE NULLIF(sc.supplier_barcode,'') IS NOT NULL))[1] AS supplier_barcode
+           FROM aif_variant_supplier_codes sc
+           WHERE sc.variant_id=v.id AND COALESCE(sc.is_active,true)=true
+         ) si ON true
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(sum(COALESCE(s.qty,0)),0)::numeric AS total_qty,
+             COALESCE(sum(COALESCE(s.reserved_qty,0)),0)::numeric AS total_reserved_qty,
+             COALESCE(sum(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0)),0)::numeric AS available_qty
+           FROM aif_stock s
+           WHERE s.variant_id=v.id
+         ) st ON true
+         ORDER BY p.match_rank ASC, b.name ASC NULLS LAST, m.title_ro ASC, v.color_name ASC NULLS LAST, v.size ASC
+         LIMIT 20`,
+        [code]
+      );
+
+      return res.json({
+        ok: true,
+        code,
+        exact: true,
+        matchType: r.rows[0]?.match_type || null,
+        items: r.rows,
+      });
+    } catch (e) {
+      console.error("AIF exact inventory lookup failed", e);
+      return res.status(500).json({ error: "A termék pontos azonosítása nem sikerült.", code: e?.code || null });
+    }
+  });
+
   router.get("/inventory", requireAuthed, async (req, res) => {
     await ensureAifShopifyInventorySchema();
     const search = text(req.query.search || req.query.q);
