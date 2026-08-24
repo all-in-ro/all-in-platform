@@ -553,6 +553,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(sl.product_title,''),NULLIF(m.title_ro,''),NULLIF(sl.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(sl.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
         COALESCE(NULLIF(sl.image_url,''),NULLIF(v.image_url,''),NULLIF(sl.raw->>'imageUrl',''),NULLIF(sl.raw->>'image_url','')) AS image_url,
+        NULLIF(v.sn_cod,'') AS sn_cod,
         COALESCE(NULLIF(sl.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(sl.size,''),NULLIF(v.size,'')) AS size,
         sl.quantity::numeric AS quantity,
@@ -605,6 +606,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(el.product_title,''),NULLIF(m.title_ro,''),NULLIF(el.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(el.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
         COALESCE(NULLIF(el.image_url,''),NULLIF(v.image_url,'')) AS image_url,
+        NULLIF(v.sn_cod,'') AS sn_cod,
         COALESCE(NULLIF(el.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(el.size,''),NULLIF(v.size,'')) AS size,
         el.quantity::numeric AS quantity,
@@ -652,6 +654,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(src.product_title,''),NULLIF(m.title_ro,''),NULLIF(src.product_code,''),'Ismeretlen termék') AS product_title,
         COALESCE(NULLIF(src.product_code,''),NULLIF(v.internal_sku,''),NULLIF(m.model_code,'')) AS product_code,
         COALESCE(NULLIF(src.image_url,''),NULLIF(v.image_url,''),NULLIF(src.raw->>'imageUrl',''),NULLIF(src.raw->>'image_url','')) AS image_url,
+        NULLIF(v.sn_cod,'') AS sn_cod,
         COALESCE(NULLIF(src.color_name,''),NULLIF(v.color_name,''),NULLIF(v.color_code,'')) AS color_name,
         COALESCE(NULLIF(src.size,''),NULLIF(v.size,'')) AS size,
         (-e.returned_qty)::numeric AS quantity,
@@ -702,6 +705,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         COALESCE(NULLIF(h.product_title,''),NULLIF(h.product_code,'')) AS product_title,
         h.product_code,
         NULL::text AS image_url,
+        NULL::text AS sn_cod,
         h.color_name,
         h.size,
         COALESCE(h.quantity,0)::numeric AS quantity,
@@ -770,6 +774,10 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
     if (text(filters.product)) {
       const p = push(`%${text(filters.product)}%`);
       where.push(`(COALESCE(f.product_title,'') ILIKE ${p} OR COALESCE(f.product_code,'') ILIKE ${p})`);
+    }
+    if (text(filters.snCod)) {
+      const p = push(`%${text(filters.snCod)}%`);
+      where.push(`COALESCE(f.sn_cod,'') ILIKE ${p}`);
     }
     if (text(filters.search)) {
       const p = push(`%${text(filters.search)}%`);
@@ -1266,6 +1274,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
         color: text(req.query.color),
         payment: text(req.query.payment || req.query.paymentMethod || req.query.payment_method),
         product: text(req.query.product),
+        snCod: text(req.query.snCod || req.query.sn_cod),
         search: text(req.query.search || req.query.q),
         source: cleanSource(req.query.source),
       };
@@ -1274,7 +1283,7 @@ export default function createAifAdminSalesCommandCenterRouter(deps) {
       const requestedBucket = normCode(req.query.bucket || "auto") || "auto";
       const hasDimensionDrill = Boolean(
         filters.brand || filters.category || filters.subcategory || filters.size ||
-        filters.color || filters.payment || filters.product || filters.search
+        filters.color || filters.payment || filters.product || filters.snCod || filters.search
       );
       if (requestedBucket === "auto" && filters.source !== "live" && !hasDimensionDrill) {
         const monthlyArgs = [from, to, compareFrom, compareTo];
