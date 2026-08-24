@@ -4033,9 +4033,9 @@ function AllInIncomingReception(_props: Props) {
       const failedCount = Number((result as any).failedCount || (result as any).failedRows?.length || 0);
       if (failedCount > 0) {
         const firstError = (result as any).failedRows?.[0]?.error || (result as any).warning || "Néhány sor nem került készletre.";
-        setMessage(`Készletre vétel részben kész. Sikeres: ${result.committed ?? 0}, hibás: ${failedCount}. ${firstError}`);
+        setMessage(`Készletre vétel részben kész. Sikeres: ${result.committed ?? 0}, hibás: ${failedCount}. A sikeres sorok termékei automatikusan aktívak. ${firstError}`);
       } else {
-        setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}.`);
+        setMessage(`Készletre vétel kész. Létrehozott vagy frissített variánsok: ${result.committed ?? 0}. A sikeresen készletre vett termékek automatikusan aktívak.`);
       }
     } catch (e: any) {
       await Promise.all([loadBatches(), loadReceptions()]).catch(() => undefined);
