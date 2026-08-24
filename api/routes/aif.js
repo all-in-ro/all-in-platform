@@ -18568,7 +18568,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
 
   function aifSaleLocationTag(locationCode) {
-    return locationCode === "main_warehouse" ? "CIUC" : "KEZDI";
+    const code = aifShopLocationCode(locationCode);
+    if (code === "main_warehouse") return "CIUC";
+    if (code === "magazin_targu_secuiesc") return "KEZDI";
+    const dynamicTag = normCode(code).toUpperCase().replace(/[^A-Z0-9]+/g, "").slice(0, 12);
+    return dynamicTag || "SHOP";
   }
 
   async function aifAllocateShopSaleNumber(client, location) {
