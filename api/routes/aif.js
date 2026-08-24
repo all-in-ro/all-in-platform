@@ -6579,11 +6579,28 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
           normalized.remaining_qty = Number(matchedPurchaseOrderLine.qty_remaining || 0);
         }
 
-        const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized, createStatus: "draft", updateStatus: null });
-        // Valódi bevételezésnél a készletre kerülő variáns aktív. Ez különösen fontos
-        // a 0 készletes, inaktív régi/ForIT variánsok újraérkezésekor: ne maradjanak
-        // "aktiválandó készlet" állapotban egy sikeres receptió után.
-        const variantId = await upsertVariant(client, { modelId, normalized, createStatus: "active", updateStatus: "active" });
+        // Normál receptió készletre vétele üzleti értelemben aktiválás is:
+        // ami fizikailag beérkezett és sikeresen készletre került, annak a modellje
+        // és variánsa is azonnal aktív. Nem örökítünk át draft/inactive státuszt
+        // az import normalizált adataiból, mert abból több száz kézi aktiválás lenne.
+        delete normalized.modelStatus;
+        delete normalized.model_status;
+        delete normalized.variantStatus;
+        delete normalized.variant_status;
+        delete normalized.status;
+
+        const modelId = await upsertModel(client, {
+          supplierCode: batch.supplier_code,
+          normalized,
+          createStatus: "active",
+          updateStatus: "active",
+        });
+        const variantId = await upsertVariant(client, {
+          modelId,
+          normalized,
+          createStatus: "active",
+          updateStatus: "active",
+        });
         await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         await addStock(client, {
           locationId: batch.target_location_id,
