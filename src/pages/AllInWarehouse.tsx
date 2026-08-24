@@ -975,7 +975,7 @@ type StockTransferPrintLine = {
   unitPrice: number;
   lineTotal: number;
 };
-type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "watch";
+type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "inactive" | "watch";
 type ImageFilter = "all" | "with" | "missing";
 type ShopifyFilter = "all" | "mapped" | "recent_mapped" | "exported" | "unmapped" | "error";
 type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "missing" | "incoming_desc" | "incoming_asc" | "shopify_connected_desc";
@@ -5106,7 +5106,8 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 
 async function apiInventory() {
   const qs = new URLSearchParams();
-  qs.set("limit", "5000");
+  qs.set("limit", "25000");
+  qs.set("includeZero", "1");
   qs.set("_", String(Date.now()));
   return fetchJSON<{ items: InventoryItem[] }>(`/api/aif/inventory?${qs.toString()}`);
 }
@@ -5789,6 +5790,7 @@ export default function AllInWarehouse() {
   const [busy, setBusy] = useState(false);
   const [recentImportFocusBusy, setRecentImportFocusBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [duplicateSkuOpen, setDuplicateSkuOpen] = useState(false);
   const [barcodeReturnNotice, setBarcodeReturnNotice] = useState<WarehouseBarcodeReturnTarget | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
@@ -5997,6 +5999,39 @@ export default function AllInWarehouse() {
     const focusedItems = incomingFocusItems.filter((item) => !isArchivedInventoryItem(item));
     return focusedItems.length ? mergeInventoryItems(baseItems, focusedItems).filter((item) => !isArchivedInventoryItem(item)) : baseItems;
   }, [items, incomingFocusItems]);
+
+  const duplicateSkuGroups = useMemo(() => {
+    const groups = new Map<string, { sku: string; items: InventoryItem[] }>();
+    for (const item of inventoryDisplayItems) {
+      const sku = cleanScannedBarcode(firstWarehouseText(item.barcode, (item as any).display_barcode));
+      if (!sku || /^AIF[-_]/i.test(sku)) continue;
+      const key = sku.toLowerCase();
+      const current = groups.get(key) || { sku, items: [] };
+      if (!current.items.some((row) => selectedVariantIdFromItem(row) === selectedVariantIdFromItem(item))) {
+        current.items.push(item);
+      }
+      groups.set(key, current);
+    }
+    return Array.from(groups.values())
+      .filter((group) => group.items.length > 1)
+      .sort((a, b) => b.items.length - a.items.length || a.sku.localeCompare(b.sku, "hu", { numeric: true, sensitivity: "base" }));
+  }, [inventoryDisplayItems]);
+
+  const duplicateSkuVariantCount = useMemo(
+    () => duplicateSkuGroups.reduce((sum, group) => sum + group.items.length, 0),
+    [duplicateSkuGroups],
+  );
+
+  useEffect(() => {
+    if (!duplicateSkuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setDuplicateSkuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [duplicateSkuOpen]);
 
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem[]>();
@@ -7543,6 +7578,8 @@ export default function AllInWarehouse() {
   const filtered = useMemo(() => {
     let out = [...inventoryDisplayItems];
     const reviewMode = stockFilter === "watch";
+    const inactiveMode = stockFilter === "inactive";
+    const explicitSearchMode = Boolean(search.trim());
     if (incomingFocus?.batchId) {
       // A szűrőből megnyitott „Legutóbb bevételezett” nézet történeti lista:
       // minden, az adott bevételezéshez tartozó variáns látható marad, az aktív is.
@@ -7551,8 +7588,10 @@ export default function AllInWarehouse() {
       if (incomingFocus.mode === "activation") {
         out = out.filter(needsWarehouseActivation);
       }
-    } else if (!reviewMode && stockFilter !== "missing") {
-      // A fő raktárlista csak az aktív termékeket mutassa. A draft/inaktív importok az aktiválandó listában élnek, nem a kész raktárban.
+    } else if (!reviewMode && !inactiveMode && stockFilter !== "missing" && !explicitSearchMode) {
+      // Alaphelyzetben a kész raktárlista aktív termékeket mutat.
+      // Kereséskor viszont a teljes terméktörzsben keresünk, különben egy 0 készletes
+      // inaktív vonalkód úgy eltűnne, mintha nem is létezne.
       out = out.filter(isWarehouseVisibleInMainList);
     }
     if (search.trim()) {
@@ -7588,6 +7627,7 @@ export default function AllInWarehouse() {
     if (stockFilter === "out") out = out.filter((x) => n(x.total_qty) <= 0);
     if (stockFilter === "reserved") out = out.filter((x) => n(x.total_reserved_qty) > 0);
     if (stockFilter === "missing") out = out.filter(hasMissingData);
+    if (stockFilter === "inactive") out = out.filter(needsWarehouseActivation);
     if (stockFilter === "watch") out = out.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x));
     out.sort((a, b) => {
       const effectiveSortMode = shopifyFilter === "recent_mapped" ? "shopify_connected_desc" : sortMode;
@@ -7694,6 +7734,7 @@ export default function AllInWarehouse() {
         out: "Nincs készleten",
         reserved: "Van foglalás",
         missing: "Hiányzó adat",
+        inactive: "Inaktív termékek",
         watch: "Aktiválandó készlet",
       };
       labels.push(`Készlet: ${stockLabels[stockFilter] || stockFilter}`);
@@ -10111,10 +10152,11 @@ export default function AllInWarehouse() {
     if (selectedWorkPanel && selectedWorkCounts[selectedWorkPanel] <= 0) setSelectedWorkPanel(null);
   }, [selectedPanelOpen, selectedCount, selectedWorkPanel, selectedWorkCounts.label, selectedWorkCounts.order, selectedWorkCounts.move, selectedWorkCounts.shopify]);
 
-  const activationTodoCount = useMemo(
-    () => inventoryDisplayItems.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x)).length,
-    [inventoryDisplayItems]
+  const activationTodoItems = useMemo(
+    () => inventoryDisplayItems.filter((x) => n(x.total_qty) > 0 && needsWarehouseActivation(x)),
+    [inventoryDisplayItems],
   );
+  const activationTodoCount = activationTodoItems.length;
 
   function showActivationTodoList() {
     setIncomingFocus(null);
@@ -10125,7 +10167,16 @@ export default function AllInWarehouse() {
     setSummaryOpen(false);
     setListOpen(true);
     setProductPage(1);
-    setMessage("Az aktiválandó készletes variánsokat mutatom. Minden méretet és színt külön kell Aktívra tenni; egy variáns aktiválása nem aktiválja a testvéreit.");
+    setMessage(
+      activationTodoItems.length === 1
+        ? `Ezt az 1 aktiválandó készletes variánst mutatom: ${firstWarehouseText(activationTodoItems[0].title_ro, activationTodoItems[0].shopify_title, activationTodoItems[0].model_code, activationTodoItems[0].variant_id)}.`
+        : `Az aktiválandó készletes variánsokat mutatom (${activationTodoItems.length}). Minden méretet és színt külön kell Aktívra tenni.`,
+    );
+    if (activationTodoItems.length === 1) {
+      window.setTimeout(() => queueProductRowJump(activationTodoItems[0].variant_id), 0);
+    } else {
+      window.setTimeout(() => productListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    }
   }
 
   const totals = useMemo(() => {
@@ -11768,6 +11819,7 @@ export default function AllInWarehouse() {
                   <option value="out">Nincs készleten</option>
                   <option value="reserved">Van foglalás</option>
                   <option value="missing">Hiányzó adat</option>
+                  <option value="inactive">Inaktív termékek</option>
                   <option value="watch">Aktiválandó készlet</option>
                 </select>
               </label>
@@ -14894,6 +14946,80 @@ export default function AllInWarehouse() {
         onReload={() => void reloadInvoiceDetail()}
       />
 
+      {duplicateSkuOpen && (
+        <div
+          className="fixed inset-0 z-[115] flex items-center justify-center bg-slate-950/78 p-3 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setDuplicateSkuOpen(false);
+          }}
+        >
+          <div className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[24px] border border-rose-200/30 bg-[#414b5b] shadow-[0_30px_90px_rgba(2,6,23,.58)]">
+            <div className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#4c1d28] via-[#3d2b38] to-[#344154] px-4 py-3.5">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/35 bg-[#d31126] text-white">
+                  <AlertTriangle size={20} />
+                </span>
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/65">Adatellenőrzés</p>
+                  <h3 className="mt-1 text-lg text-white">Dupla Vonalkód / Shopify SKU</h3>
+                  <p className="mt-1 text-xs text-white/62">
+                    {duplicateSkuGroups.length} ütköző kód • {duplicateSkuVariantCount} konkrét termék. Nem kell találgatni, itt vannak név szerint.
+                  </p>
+                </div>
+              </div>
+              <button className={iconBtn} type="button" onClick={() => setDuplicateSkuOpen(false)} aria-label="Bezárás"><X size={16} /></button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3.5">
+              {duplicateSkuGroups.map((group) => (
+                <section key={group.sku} className="overflow-hidden rounded-2xl border border-rose-200/22 bg-[#354052]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#3a3140] px-3 py-2.5">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-[0.12em] text-rose-100/55">Ütköző SKU</p>
+                      <p className="mt-0.5 font-mono text-sm text-white">{group.sku}</p>
+                    </div>
+                    <span className="rounded-full border border-rose-200/28 bg-[#d31126] px-2.5 py-1 text-[10px] text-white">{group.items.length} termék</span>
+                  </div>
+                  <div className="divide-y divide-white/[0.08]">
+                    {group.items.map((item) => (
+                      <div key={item.variant_id} className="grid gap-3 px-3 py-2.5 sm:grid-cols-[56px_minmax(0,1fr)_auto] sm:items-center">
+                        <WarehouseProductImage src={item.image_url} alt={item.title_ro || ""} thumbClassName="h-14 w-14 rounded-xl" iconSize={18} />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-white" title={firstWarehouseText(item.title_ro, item.shopify_title, item.model_code)}>
+                            {firstWarehouseText(item.title_ro, item.shopify_title, item.model_code, "Névtelen termék")}
+                          </p>
+                          <p className="mt-1 text-xs text-white/58">
+                            {firstWarehouseText(item.brand_name, item.brand_code, "Márka nélkül")} • {displayColorName(item.color_name, item.color_code)} • {item.size || "-"}
+                          </p>
+                          <p className="mt-1 truncate font-mono text-[10px] text-[#cffffd]/70">
+                            Termékkód: {itemProductCode(item) || "-"} • készlet: {formatQty(item.total_qty)} db • variáns: {statusHu(itemVariantStatus(item))}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className={btnSoft}
+                          onClick={() => {
+                            setDuplicateSkuOpen(false);
+                            void openDetail(item.variant_id);
+                          }}
+                        >
+                          <Eye size={14} /> Termék megnyitása
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#303a4c] px-4 py-3 text-[11px] text-white/48">
+              <span>ESC vagy Bezárás • minden ütköző SKU külön csoportban</span>
+              <button className={btnSoft} type="button" onClick={() => setDuplicateSkuOpen(false)}><X size={14} /> Bezárás</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {barcodeScanner && (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/65 px-3 py-4 backdrop-blur-sm sm:items-center">
           <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/18 bg-[#4b5362] shadow-2xl">
@@ -14943,15 +15069,30 @@ export default function AllInWarehouse() {
       )}
 
       {busy && <div className="fixed bottom-4 right-4 rounded-xl border border-white/15 bg-[#404a5b] px-4 py-3 text-sm text-white/80 shadow-xl"><RefreshCw className="mr-2 inline" size={15} /> Betöltés...</div>}
-      {activationTodoCount > 0 && (
-        <button
-          className="fixed bottom-4 left-4 hidden rounded-xl border border-amber-200/20 bg-amber-500/10 px-4 py-3 text-left text-sm text-amber-50 shadow-xl transition hover:bg-amber-500/16 lg:block"
-          type="button"
-          onClick={showActivationTodoList}
-          title="Aktiválandó készletes variánsok megnyitása"
-        >
-          <AlertTriangle className="mr-2 inline" size={15} /> {activationTodoCount} aktiválandó készleten lévő variáns
-        </button>
+      {(duplicateSkuGroups.length > 0 || activationTodoCount > 0) && (
+        <div className="fixed bottom-4 left-4 z-[45] hidden max-w-[360px] flex-col gap-2 lg:flex">
+          {duplicateSkuGroups.length > 0 ? (
+            <button
+              className="rounded-xl border border-rose-300/45 bg-[#d31126] px-4 py-3 text-left text-sm text-white shadow-[0_14px_32px_rgba(120,8,24,.34)] transition hover:bg-[#b90f21]"
+              type="button"
+              onClick={() => setDuplicateSkuOpen(true)}
+              title="Dupla Vonalkód / Shopify SKU-k megnyitása"
+            >
+              <AlertTriangle className="mr-2 inline" size={15} />
+              {duplicateSkuGroups.length} dupla SKU • {duplicateSkuVariantCount} érintett termék
+            </button>
+          ) : null}
+          {activationTodoCount > 0 ? (
+            <button
+              className="rounded-xl border border-amber-200/28 bg-amber-500/14 px-4 py-3 text-left text-sm text-amber-50 shadow-xl transition hover:bg-amber-500/20"
+              type="button"
+              onClick={showActivationTodoList}
+              title="Aktiválandó készletes variánsok megnyitása"
+            >
+              <AlertTriangle className="mr-2 inline" size={15} /> {activationTodoCount} aktiválandó készleten lévő variáns
+            </button>
+          ) : null}
+        </div>
       )}
 
       <div className="aifWarehouseLabelPrintRoot" style={labelPrintStyle}>
