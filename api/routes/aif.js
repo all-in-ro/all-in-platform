@@ -2121,23 +2121,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const barcodeOwnerMatchesIncomingVariant = (owner) => {
       if (!owner) return false;
+
+      // A valódi vonalkód az elsődleges fizikai azonosító. Ha ugyanahhoz a modellhez
+      // ÉS ugyanahhoz a mérethez tartozik, ugyanazt a variánst használjuk akkor is,
+      // ha egy régi importban a szín neve/kódja pontatlan vagy hiányos volt.
+      // Tipikus migrációs eset: régi ForIT = "albastru", új számla = "DENIM / 32S".
+      // Ilyenkor nem gyártunk új variánst és nem állítjuk meg a receptiót: a friss
+      // receptió színadatai felülírják a régi variáns színadatait.
       if (String(owner.model_id) !== String(modelId)) return false;
       if (normCode(owner.size || "") !== normCode(size)) return false;
-
-      const ownerColorCode = normCode(owner.color_code || "");
-      const ownerColorName = normCode(owner.color_name || "");
-      const incomingColorCode = normCode(colorCode);
-      const incomingColorName = normCode(colorName);
-
-      if (incomingColorCode && ownerColorCode && incomingColorCode !== ownerColorCode) return false;
-      if (!incomingColorCode && incomingColorName && ownerColorName && incomingColorName !== ownerColorName) return false;
-      if (incomingColorCode && !ownerColorCode && incomingColorName && ownerColorName && incomingColorName !== ownerColorName) return false;
       return true;
     };
 
     const throwBarcodeConflict = (owner) => {
+      const ownerSize = text(owner?.size || "-");
+      const ownerColor = text(owner?.color_code || owner?.color_name || "-");
       const error = new Error(
-        `A(z) ${barcode} vonalkód már egy másik variánshoz tartozik. Nem hozok létre belőle néma, vonalkód nélküli duplikációt.`
+        `A(z) ${barcode} vonalkód valóban másik variánshoz tartozik: más modell vagy más méret. Meglévő: méret ${ownerSize}, szín ${ownerColor}; érkező: méret ${size || "-"}, szín ${colorCode || colorName || "-"}.`
       );
       error.statusCode = 409;
       error.code = "barcode_conflict";
@@ -6514,7 +6514,10 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         }
 
         const modelId = await upsertModel(client, { supplierCode: batch.supplier_code, normalized, createStatus: "draft", updateStatus: null });
-        const variantId = await upsertVariant(client, { modelId, normalized, createStatus: "active", updateStatus: null });
+        // Valódi bevételezésnél a készletre kerülő variáns aktív. Ez különösen fontos
+        // a 0 készletes, inaktív régi/ForIT variánsok újraérkezésekor: ne maradjanak
+        // "aktiválandó készlet" állapotban egy sikeres receptió után.
+        const variantId = await upsertVariant(client, { modelId, normalized, createStatus: "active", updateStatus: "active" });
         await upsertSupplierCode(client, { variantId, supplierId: batch.supplier_id, normalized });
         await addStock(client, {
           locationId: batch.target_location_id,
