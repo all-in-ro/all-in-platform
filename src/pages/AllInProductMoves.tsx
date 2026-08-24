@@ -1403,6 +1403,7 @@ export default function AllInProductMoves() {
   const [productSearch, setProductSearch] = useState("");
   const [productSearchBusy, setProductSearchBusy] = useState(false);
   const [productSearchError, setProductSearchError] = useState("");
+  const [productSearchRemoteItems, setProductSearchRemoteItems] = useState<InventoryItem[] | null>(null);
   const [draftLines, setDraftLines] = useState<Record<string, DraftLine>>({});
   const [editingDraftId, setEditingDraftId] = useState("");
   const [editingDraftNumber, setEditingDraftNumber] = useState("");
@@ -1567,6 +1568,24 @@ export default function AllInProductMoves() {
     const looseQuery = scanLooseKey(productSearch);
     if (!query && !looseQuery) return [] as InventoryItem[];
 
+    const compact = cleanScanCode(productSearch);
+    const codeLike = compact.length >= 6 && !/\s/.test(productSearch);
+    const localExact = codeLike
+      ? uniqueInventoryItems(inventory.filter((item) => exactProductMatch(item, productSearch)))
+      : [];
+
+    if (productSearchRemoteItems !== null) {
+      return uniqueInventoryItems(productSearchRemoteItems)
+        .sort((a, b) => {
+          const exactA = exactProductMatch(a, productSearch) ? 0 : 1;
+          const exactB = exactProductMatch(b, productSearch) ? 0 : 1;
+          return exactA - exactB || productTitle(a).localeCompare(productTitle(b), "hu", { numeric: true, sensitivity: "base" });
+        })
+        .slice(0, 10);
+    }
+
+    if (localExact.length) return localExact.slice(0, 10);
+
     return inventory
       .filter((item) => {
         if (query && productSearchValues(item).some((value) => value.includes(query))) return true;
@@ -1589,7 +1608,7 @@ export default function AllInProductMoves() {
         return exactA - exactB || productTitle(a).localeCompare(productTitle(b), "hu", { numeric: true, sensitivity: "base" });
       })
       .slice(0, 10);
-  }, [inventory, productSearch]);
+  }, [inventory, productSearch, productSearchRemoteItems]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -1599,16 +1618,53 @@ export default function AllInProductMoves() {
     if (!query) {
       setProductSearchBusy(false);
       setProductSearchError("");
+      setProductSearchRemoteItems(null);
       return;
     }
+
+    const compact = cleanScanCode(query);
+    const codeLike = compact.length >= 6 && !/\s/.test(query);
+    const barcodeLike = /^\d{8,18}$/.test(compact);
+    const localExact = codeLike
+      ? uniqueInventoryItems(inventory.filter((item) => exactProductMatch(item, query)))
+      : [];
+
+    // Ha a pontos kód már a memóriában van, azonnal csak azt mutatjuk.
+    // A szerver ettől még röviden visszaellenőrzi, hogy ne legyen rejtett duplikáció.
+    if (localExact.length) setProductSearchRemoteItems(localExact);
+    else setProductSearchRemoteItems(null);
 
     const timer = window.setTimeout(async () => {
       setProductSearchBusy(true);
       setProductSearchError("");
       try {
+        if (codeLike) {
+          const exact = await fetchJson<{ items?: InventoryItem[]; matchType?: string | null }>(
+            `/inventory/lookup?code=${encodeURIComponent(compact)}&_=${Date.now()}`,
+          );
+          if (requestId !== productSearchRequestIdRef.current) return;
+
+          const exactItems = (exact.items || []).filter((item) =>
+            String(item.variant_status || "active") !== "archived" &&
+            String(item.model_status || "active") !== "archived"
+          );
+          if (exactItems.length) {
+            setInventory((current) => uniqueInventoryItems([...current, ...exactItems]));
+            setProductSearchRemoteItems(exactItems);
+            return;
+          }
+
+          // Egy 8-18 számjegyes kódot vonalkódnak tekintünk. Ha nincs pontos
+          // egyezés, nem dobálunk fel hasonló 1977774021116-féle találatokat.
+          if (barcodeLike) {
+            setProductSearchRemoteItems([]);
+            return;
+          }
+        }
+
         const params = new URLSearchParams();
         params.set("search", query);
-        params.set("limit", "100");
+        params.set("limit", "40");
         params.set("includeZero", "1");
         params.set("_", String(Date.now()));
 
@@ -1620,16 +1676,18 @@ export default function AllInProductMoves() {
           String(item.model_status || "active") !== "archived"
         );
 
+        setProductSearchRemoteItems(remoteItems);
         if (remoteItems.length) {
           setInventory((current) => uniqueInventoryItems([...current, ...remoteItems]));
         }
       } catch (searchError: any) {
         if (requestId !== productSearchRequestIdRef.current) return;
-        setProductSearchError(searchError?.message || "A teljes terméktörzs keresése nem sikerült.");
+        setProductSearchRemoteItems([]);
+        setProductSearchError(searchError?.message || "A termékkeresés nem sikerült.");
       } finally {
         if (requestId === productSearchRequestIdRef.current) setProductSearchBusy(false);
       }
-    }, 180);
+    }, codeLike ? 55 : 180);
 
     return () => window.clearTimeout(timer);
   }, [createOpen, productSearch]);
@@ -1665,6 +1723,7 @@ export default function AllInProductMoves() {
     setProductSearch("");
     setProductSearchBusy(false);
     setProductSearchError("");
+    setProductSearchRemoteItems(null);
     productSearchRequestIdRef.current += 1;
     setDraftLines({});
     setEditingDraftId("");
@@ -1888,12 +1947,9 @@ export default function AllInProductMoves() {
     // Ha a beolvasott termék nincs az első helyi csomagban, pontos keresést
     // kérünk a szervertől. Így a régi rendszerből áthozott 14k+ variáns is
     // ugyanúgy felismerhető, mint a raktár oldalon.
-    const query = new URLSearchParams();
-    query.set("search", code);
-    query.set("limit", "100");
-    query.set("includeZero", "1");
-    query.set("_", String(Date.now()));
-    const remote = await fetchJson<{ items?: InventoryItem[] }>(`/inventory?${query.toString()}`);
+    const remote = await fetchJson<{ items?: InventoryItem[] }>(
+      `/inventory/lookup?code=${encodeURIComponent(cleanScanCode(code))}&_=${Date.now()}`,
+    );
     const remoteItems = (remote.items || []).filter((item) =>
       String(item.variant_status || "active") !== "archived" &&
       String(item.model_status || "active") !== "archived"
@@ -2897,6 +2953,7 @@ export default function AllInProductMoves() {
                         value={productSearch}
                         onChange={(event) => {
                           setProductSearchError("");
+                          setProductSearchRemoteItems(null);
                           setProductSearch(event.target.value);
                         }}
                         placeholder="Vonalkódot is beírhatsz…"
@@ -2934,7 +2991,7 @@ export default function AllInProductMoves() {
                       {!productSearchResults.length && productSearchBusy ? (
                         <div className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-white/52">
                           <RefreshCw size={14} className="animate-spin text-[#8ee6e2]" />
-                          Keresés a teljes terméktörzsben…
+                          {/^\d{8,18}$/.test(cleanScanCode(productSearch)) ? "Pontos vonalkód-azonosítás…" : "Keresés a teljes terméktörzsben…"}
                         </div>
                       ) : null}
                       {!productSearchResults.length && !productSearchBusy && productSearchError ? (
