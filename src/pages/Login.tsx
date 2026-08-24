@@ -12,26 +12,54 @@ import {
   Store,
 } from "lucide-react";
 
-type ShopId = "csikszereda" | "kezdivasarhely";
+type ShopId = string;
+type ShopOption = {
+  id: string;
+  name: string;
+  locationCode?: string | null;
+  locationName?: string | null;
+};
+
 type Session =
   | { role: "admin"; actor: string }
-  | { role: "shop"; shopId: ShopId; actor: string };
+  | {
+      role: "shop";
+      shopId: ShopId;
+      shopName?: string;
+      locationCode?: string;
+      locationName?: string;
+      actor: string;
+    };
 
-type Mode = "admin" | "csik" | "kezdi" | null;
+type Mode = "admin" | `shop:${string}` | null;
 type LoginMode = Exclude<Mode, null>;
 
 type ParsedAccessCard = {
-  mode: "csik" | "kezdi";
+  shopIdHint: string | null;
   code: string;
 };
 
 const LAST_LOGIN_MODE_KEY = "allin:last-login-mode";
 
+function shopMode(shopId: string): LoginMode {
+  return `shop:${shopId}`;
+}
+
+function modeShopId(mode: Mode) {
+  if (!mode || mode === "admin" || !mode.startsWith("shop:")) return "";
+  return mode.slice(5);
+}
+
 function rememberedLoginMode(): Mode {
   if (typeof window === "undefined") return null;
   try {
-    const saved = window.localStorage.getItem(LAST_LOGIN_MODE_KEY);
-    return saved === "admin" || saved === "csik" || saved === "kezdi" ? saved : null;
+    const saved = String(window.localStorage.getItem(LAST_LOGIN_MODE_KEY) || "").trim();
+    if (saved === "admin") return "admin";
+    // Régi böngészőállapot kompatibilitás.
+    if (saved === "csik") return shopMode("csikszereda");
+    if (saved === "kezdi") return shopMode("kezdivasarhely");
+    if (saved.startsWith("shop:") && saved.length > 5) return saved as LoginMode;
+    return null;
   } catch {
     return null;
   }
@@ -40,12 +68,10 @@ function rememberedLoginMode(): Mode {
 function rememberLoginMode(session: Session) {
   if (typeof window === "undefined") return;
   try {
-    const nextMode: LoginMode = session.role === "admin"
-      ? "admin"
-      : session.shopId === "csikszereda"
-        ? "csik"
-        : "kezdi";
-    window.localStorage.setItem(LAST_LOGIN_MODE_KEY, nextMode);
+    window.localStorage.setItem(
+      LAST_LOGIN_MODE_KEY,
+      session.role === "admin" ? "admin" : `shop:${session.shopId}`,
+    );
   } catch {
     // A belépés ettől még működjön, ha a böngésző tiltja a localStorage-ot.
   }
@@ -61,10 +87,6 @@ class LoginRequestError extends Error {
     this.status = status;
     this.serverMessage = serverMessage;
   }
-}
-
-function shopModeLabel(mode: "csik" | "kezdi") {
-  return mode === "csik" ? "csíkszeredai" : "kézdivásárhelyi";
 }
 
 function friendlyLoginError(error: unknown, targetMode: LoginMode) {
@@ -90,8 +112,8 @@ function friendlyLoginError(error: unknown, targetMode: LoginMode) {
 function inferInitialModeFromHash(): Mode {
   const h = ((typeof window !== "undefined" ? window.location.hash : "") || "").toLowerCase();
   if (h === "#allinusers" || h === "#admin" || h === "#users") return "admin";
-  if (h.includes("magazinciuc") || h.includes("shop-ciuc") || h === "#csikszereda") return "csik";
-  if (h.includes("magazintargu") || h.includes("shop-targu") || h === "#kezdivasarhely") return "kezdi";
+  if (h.includes("magazinciuc") || h.includes("shop-ciuc") || h === "#csikszereda") return shopMode("csikszereda");
+  if (h.includes("magazintargu") || h.includes("shop-targu") || h === "#kezdivasarhely") return shopMode("kezdivasarhely");
   return rememberedLoginMode();
 }
 
@@ -101,11 +123,12 @@ function parseAccessCard(value: string): ParsedAccessCard | null {
     .toUpperCase()
     .replace(/\s+/g, "");
 
+  // A régi C/K előtagos kártyákat továbbra is elfogadjuk.
   const match = normalized.match(/^AIF-(C|K)-([A-Z0-9]{4,64})$/);
   if (!match) return null;
 
   return {
-    mode: match[1] === "C" ? "csik" : "kezdi",
+    shopIdHint: match[1] === "C" ? "csikszereda" : "kezdivasarhely",
     code: match[2],
   };
 }
@@ -116,37 +139,21 @@ function normalizeShopAccessCode(value: string) {
     .toUpperCase()
     .replace(/\s+/g, "");
   const parsed = parseAccessCard(normalized);
-  if (parsed) return { code: parsed.code, mode: parsed.mode as "csik" | "kezdi" | null };
+  if (parsed) return parsed;
 
   const code = normalized.replace(/[^A-Z0-9]/g, "");
-  return code ? { code, mode: null as "csik" | "kezdi" | null } : null;
+  return code ? { code, shopIdHint: null as string | null } : null;
 }
 
 const LOGO_URL =
   "https://pub-7c1132f9a7f148848302a0e037b8080d.r2.dev/smoke/allin-logo.png";
 
-const modeMeta = {
-  admin: {
-    title: "ADMIN",
-    subtitle: "Rendszerfelügyelet és teljes hozzáférés",
-    inputLabel: "Admin jelszó",
-    placeholder: "Admin jelszó…",
-    icon: Shield,
-  },
-  csik: {
-    title: "ÜZLET – Csíkszereda",
-    subtitle: "Értékesítési munkamenet",
-    inputLabel: "Belépőkód vagy kártya",
-    placeholder: "Belépőkód…",
-    icon: Store,
-  },
-  kezdi: {
-    title: "ÜZLET – Kézdivásárhely",
-    subtitle: "Értékesítési munkamenet",
-    inputLabel: "Belépőkód vagy kártya",
-    placeholder: "Belépőkód…",
-    icon: Store,
-  },
+const adminModeMeta = {
+  title: "ADMIN",
+  subtitle: "Rendszerfelügyelet és teljes hozzáférés",
+  inputLabel: "Admin jelszó",
+  placeholder: "Admin jelszó…",
+  icon: Shield,
 } as const;
 
 export default function Login({
@@ -157,6 +164,9 @@ export default function Login({
   onLoggedIn: (session: Session) => void;
 }) {
   const [mode, setMode] = useState<Mode>(() => inferInitialModeFromHash());
+  const [shops, setShops] = useState<ShopOption[]>([]);
+  const [shopsBusy, setShopsBusy] = useState(true);
+  const [shopsErr, setShopsErr] = useState("");
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -165,6 +175,47 @@ export default function Login({
   const scanTimerRef = useRef<number | null>(null);
   const secretInputRef = useRef<HTMLInputElement | null>(null);
   const lastAutoSubmitRef = useRef("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setShopsBusy(true);
+    setShopsErr("");
+    fetch(`${api}/auth/shops`, { credentials: "include", cache: "no-store" })
+      .then(async (response) => {
+        const raw = await response.text().catch(() => "");
+        let body: any = null;
+        try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
+        if (!response.ok) throw new Error(String(body?.error || body?.message || raw || `HTTP ${response.status}`));
+        return body;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        const items = Array.isArray(body?.items) ? body.items : [];
+        const nextShops: ShopOption[] = items
+          .map((item: any) => ({
+            id: String(item?.id || "").trim(),
+            name: String(item?.name || item?.id || "").trim(),
+            locationCode: item?.locationCode ? String(item.locationCode) : null,
+            locationName: item?.locationName ? String(item.locationName) : null,
+          }))
+          .filter((item: ShopOption) => Boolean(item.id && item.name));
+        setShops(nextShops);
+        const currentShopId = modeShopId(mode);
+        if (currentShopId && !nextShops.some((shop) => shop.id === currentShopId)) {
+          setMode(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setShops([]);
+          setShopsErr(String(error?.message || error || "A belépési helységek nem tölthetők be."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setShopsBusy(false);
+      });
+    return () => { cancelled = true; };
+  }, [api]);
 
   const focusSecretForRetry = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -212,7 +263,22 @@ export default function Login({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancelToChooser, mode]);
 
-  const selectedMeta = useMemo(() => (mode ? modeMeta[mode] : null), [mode]);
+  const selectedShopId = modeShopId(mode);
+  const selectedShop = useMemo(
+    () => shops.find((shop) => shop.id === selectedShopId) || null,
+    [selectedShopId, shops],
+  );
+  const selectedMeta = useMemo(() => {
+    if (mode === "admin") return adminModeMeta;
+    if (!selectedShop) return null;
+    return {
+      title: `ÜZLET – ${selectedShop.name}`,
+      subtitle: selectedShop.locationName || "Értékesítési munkamenet",
+      inputLabel: "Belépőkód vagy kártya",
+      placeholder: "Belépőkód…",
+      icon: Store,
+    };
+  }, [mode, selectedShop]);
   const SelectedIcon = selectedMeta?.icon || Store;
 
   const requestSession = useCallback(async (body: Record<string, unknown>) => {
@@ -258,6 +324,7 @@ export default function Login({
     if (busy) return;
     setErr("");
 
+    const targetShopId = modeShopId(targetMode);
     const normalized = targetMode === "admin" ? null : normalizeShopAccessCode(rawValue);
     const value = targetMode === "admin" ? rawValue.trim() : normalized?.code || "";
 
@@ -266,19 +333,19 @@ export default function Login({
       focusSecretForRetry();
       return;
     }
+    if (targetMode !== "admin" && !targetShopId) {
+      setErr("A kiválasztott helység már nem érhető el. Térj vissza a belépési listához.");
+      return;
+    }
 
-    // Ha a kártya maga tartalmazza az üzletet, egy kiválasztott üzleti
-    // belépésnél nem váltunk át csendben a másik üzletre. Ez korábban azért
-    // volt zavaró, mert egy kézdis kód a csíkszeredai képernyőről is beléptetett.
     if (
       targetMode !== "admin" &&
-      normalized?.mode &&
-      normalized.mode !== targetMode
+      normalized?.shopIdHint &&
+      normalized.shopIdHint !== targetShopId
     ) {
-      setErr(
-        `Ez a belépőkód nem a ${shopModeLabel(targetMode)} üzlethez tartozik. ` +
-        `A kód a ${shopModeLabel(normalized.mode)} üzlethez van kiadva.`
-      );
+      const selectedName = shops.find((shop) => shop.id === targetShopId)?.name || targetShopId;
+      const cardName = shops.find((shop) => shop.id === normalized.shopIdHint)?.name || normalized.shopIdHint;
+      setErr(`Ez a régi típusú kártya a(z) ${cardName} helységhez tartozik, nem a(z) ${selectedName} helységhez.`);
       setScannerActive(false);
       focusSecretForRetry();
       return;
@@ -289,11 +356,7 @@ export default function Login({
       const session = await requestSession(
         targetMode === "admin"
           ? { kind: "admin", password: value }
-          : {
-              kind: "shop",
-              shopId: targetMode === "csik" ? "csikszereda" : "kezdivasarhely",
-              code: value,
-            },
+          : { kind: "shop", shopId: targetShopId, code: value },
       );
       rememberLoginMode(session);
       onLoggedIn(session);
@@ -305,7 +368,7 @@ export default function Login({
       setScannerActive(false);
       scanBufferRef.current = "";
     }
-  }, [busy, focusSecretForRetry, onLoggedIn, requestSession]);
+  }, [busy, focusSecretForRetry, onLoggedIn, requestSession, shops]);
 
   const loginScannedCard = useCallback(async (rawValue: string) => {
     if (busy) return;
@@ -318,33 +381,18 @@ export default function Login({
 
     setBusy(true);
     setErr("");
-    const candidates: Array<"csik" | "kezdi"> = normalized.mode
-      ? [normalized.mode]
-      : ["csik", "kezdi"];
-    let lastError: unknown = null;
-
     try {
-      for (const candidate of candidates) {
-        try {
-          const session = await requestSession({
-            kind: "shop",
-            shopId: candidate === "csik" ? "csikszereda" : "kezdivasarhely",
-            code: normalized.code,
-          });
-          rememberLoginMode(session);
-          onLoggedIn(session);
-          return;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      throw lastError || new Error("A beolvasott kód egyik üzlethez sem érvényes.");
+      // A szerver a kód alapján megkeresi a helységet. Nincs több két üzletre hardkódolt próbálgatás.
+      const session = await requestSession({ kind: "shop", code: normalized.code });
+      rememberLoginMode(session);
+      onLoggedIn(session);
     } catch (error: unknown) {
       const status = error instanceof LoginRequestError ? error.status : 0;
+      const raw = String(error instanceof Error ? error.message : error || "").trim();
       setErr(
         status === 401 || status === 403
           ? "A beolvasott kód hibás, inaktív vagy már nem használható."
-          : "A beolvasott kód egyik üzlethez sem érvényes."
+          : raw || "A beolvasott kódhoz nem található beléphető helység."
       );
     } finally {
       setBusy(false);
@@ -405,7 +453,7 @@ export default function Login({
     const normalized = normalizeShopAccessCode(secret);
     if (!normalized || normalized.code.length < 8) return;
 
-    const submitKey = `${mode}:${normalized.mode || "raw"}:${normalized.code}`;
+    const submitKey = `${mode}:${normalized.shopIdHint || "raw"}:${normalized.code}`;
     // Ugyanazt a hibás kódot egyszer próbáljuk automatikusan. A busy állapot
     // visszaállása többé nem indít végtelen 401-es újrapróbálást.
     if (lastAutoSubmitRef.current === submitKey) return;
@@ -509,27 +557,37 @@ export default function Login({
                   <LogIn size={18} className="text-white/45 transition group-hover:translate-x-0.5 group-hover:text-[#a8f0ec]" />
                 </button>
 
-                <button type="button" className={chooserButton} onClick={() => chooseMode("csik")}>
-                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#8de2de]">
-                    <Store size={20} strokeWidth={1.8} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-normal">ÜZLET – Csíkszereda</span>
-                    <span className="mt-1 block text-xs text-white/50">Magazin - Miercurea Ciuc</span>
-                  </span>
-                  <LogIn size={18} className="text-white/45 transition group-hover:translate-x-0.5 group-hover:text-[#a8f0ec]" />
-                </button>
+                {shops.map((shop) => (
+                  <button
+                    key={shop.id}
+                    type="button"
+                    className={chooserButton}
+                    onClick={() => chooseMode(shopMode(shop.id))}
+                  >
+                    <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#8de2de]">
+                      <Store size={20} strokeWidth={1.8} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-normal">ÜZLET – {shop.name}</span>
+                      <span className="mt-1 block truncate text-xs text-white/50">
+                        {shop.locationName || "Értékesítési munkamenet"}
+                      </span>
+                    </span>
+                    <LogIn size={18} className="text-white/45 transition group-hover:translate-x-0.5 group-hover:text-[#a8f0ec]" />
+                  </button>
+                ))}
 
-                <button type="button" className={chooserButton} onClick={() => chooseMode("kezdi")}>
-                  <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#7bd7d4]/24 bg-[#2a8d8b]/14 text-[#8de2de]">
-                    <Store size={20} strokeWidth={1.8} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-normal">ÜZLET – Kézdivásárhely</span>
-                    <span className="mt-1 block text-xs text-white/50">Magazin - Târgu Secuiesc</span>
-                  </span>
-                  <LogIn size={18} className="text-white/45 transition group-hover:translate-x-0.5 group-hover:text-[#a8f0ec]" />
-                </button>
+                {shopsBusy ? (
+                  <div className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                    <Loader2 size={16} className="animate-spin" /> Helységek betöltése…
+                  </div>
+                ) : null}
+
+                {shopsErr ? (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-normal text-rose-700">
+                    {shopsErr}
+                  </div>
+                ) : null}
 
                 {err ? (
                   <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-normal text-rose-700">
