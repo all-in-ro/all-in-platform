@@ -5105,11 +5105,47 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 async function apiInventory() {
-  const qs = new URLSearchParams();
-  qs.set("limit", "25000");
-  qs.set("includeZero", "1");
-  qs.set("_", String(Date.now()));
-  return fetchJSON<{ items: InventoryItem[] }>(`/api/aif/inventory?${qs.toString()}`);
+  // A teljes terméktörzs kell a raktári szűrőkhöz, de nem egyetlen 25 000 soros
+  // JSON válaszban. A kis Render példány ezen tudott kifutni a Node heapből.
+  const pageSize = 1000;
+  const maxRows = 30000;
+  const items: InventoryItem[] = [];
+  const seenVariantIds = new Set<string>();
+
+  for (let offset = 0; offset < maxRows; offset += pageSize) {
+    const qs = new URLSearchParams();
+    qs.set("limit", String(pageSize));
+    qs.set("offset", String(offset));
+    qs.set("includeZero", "1");
+    qs.set("_", String(Date.now()));
+
+    const page = await fetchJSON<{
+      items: InventoryItem[];
+      hasMore?: boolean;
+      returned?: number;
+    }>(`/api/aif/inventory?${qs.toString()}`);
+
+    const rows = Array.isArray(page.items) ? page.items : [];
+    let added = 0;
+
+    for (const item of rows) {
+      const id = selectedVariantIdFromItem(item);
+      if (!id || seenVariantIds.has(id)) continue;
+      seenVariantIds.add(id);
+      items.push(item);
+      added += 1;
+    }
+
+    if (rows.length < pageSize || page.hasMore === false) break;
+
+    // Ha egy régi backend még nem ismerné az offsetet, ugyanazt az első oldalt
+    // adná vissza újra. Ne pörgessünk ilyenkor 30 fölösleges kérést.
+    if (offset > 0 && added === 0) {
+      throw new Error("A szerver még nem támogatja a lapozott raktárbetöltést. Az aktuális aif.js backend frissítése szükséges.");
+    }
+  }
+
+  return { items };
 }
 
 async function apiMeta() {
