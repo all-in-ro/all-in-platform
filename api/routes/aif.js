@@ -6874,6 +6874,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
               br.code AS brand_code, br.name AS brand_name,
               COALESCE(st.total_qty,0)::int AS total_qty
        FROM aif_product_variants v
+       ${finalFastJoin}
        JOIN aif_product_models m ON m.id=v.model_id
        LEFT JOIN aif_brands br ON br.id=m.brand_id
        LEFT JOIN LATERAL (
@@ -11572,6 +11573,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const includeZero = ["1", "true", "yes"].includes(text(req.query.includeZero || req.query.include_zero).toLowerCase());
     const limit = Math.min(25000, Math.max(1, Number(req.query.limit || 200)));
     const offset = Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0);
+    const fastPageRequested = ["1", "true", "yes", "warehouse"].includes(text(req.query.fastPage || req.query.fast_page).toLowerCase());
+    const fastPage = Boolean(fastPageRequested && includeZero && !search && !snCod);
     const args = [];
     const where = [
       `COALESCE(v.status,'active') <> 'archived'`,
@@ -11627,8 +11630,35 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     args.push(offset);
     const offsetParam = `$${args.length}`;
 
+    const fastPageCte = fastPage ? `
+       page_variants AS (
+         SELECT v0.id
+         FROM aif_product_variants v0
+         JOIN aif_product_models m0 ON m0.id=v0.model_id
+         LEFT JOIN aif_brands b0 ON b0.id=m0.brand_id
+         WHERE COALESCE(v0.status,'active') <> 'archived'
+           AND COALESCE(m0.status,'active') <> 'archived'
+         ORDER BY COALESCE(b0.name,'') ASC NULLS LAST,
+                  m0.title_ro ASC,
+                  v0.color_name ASC NULLS LAST,
+                  v0.size ASC,
+                  v0.id ASC
+         LIMIT ${limitParam}
+         OFFSET ${offsetParam}
+       ),
+    ` : "";
+
+    const stockFastFilter = fastPage ? `WHERE s.variant_id IN (SELECT id FROM page_variants)` : "";
+    const supplierFastFilter = fastPage ? `AND sc.variant_id IN (SELECT id FROM page_variants)` : "";
+    const incomingFastFilter = fastPage ? `AND sm.variant_id IN (SELECT id FROM page_variants)` : "";
+    const committedFastFilter = fastPage ? `AND rw.variant_id IN (SELECT id FROM page_variants)` : "";
+    const latestImportFastFilter = fastPage ? `AND rw.variant_id IN (SELECT id FROM page_variants)` : "";
+    const invoiceFastFilter = fastPage ? `AND rw.variant_id IN (SELECT id FROM page_variants)` : "";
+    const finalFastJoin = fastPage ? `JOIN page_variants pv ON pv.id=v.id` : "";
+    const finalLimitSql = fastPage ? "" : `LIMIT ${limitParam} OFFSET ${offsetParam}`;
+
     const r = await pool.query(
-      `WITH stock_totals AS (
+      `WITH ${fastPageCte}stock_totals AS (
          SELECT
            s.variant_id,
            COALESCE(sum(COALESCE(s.qty,0)),0)::numeric AS total_qty,
@@ -11636,6 +11666,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            COALESCE(sum(COALESCE(s.qty,0) - COALESCE(s.reserved_qty,0)),0)::numeric AS available_qty,
            max(s.updated_at) AS last_stock_movement_at
          FROM aif_stock s
+         ${stockFastFilter}
          GROUP BY s.variant_id
        ),
        supplier_info AS (
@@ -11654,6 +11685,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          FROM aif_variant_supplier_codes sc
          LEFT JOIN aif_suppliers s ON s.id=sc.supplier_id
          WHERE COALESCE(sc.is_active,true)=true
+         ${supplierFastFilter}
          GROUP BY sc.variant_id
        ),
        incoming_info AS (
@@ -11662,7 +11694,8 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            min(sm.created_at) AS first_incoming_at,
            max(sm.created_at) AS last_incoming_at
          FROM aif_stock_movements sm
-         WHERE sm.movement_type='incoming' OR sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit'
+         WHERE (sm.movement_type='incoming' OR sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit')
+         ${incomingFastFilter}
          GROUP BY sm.variant_id
        ),
        committed_import AS (
@@ -11675,6 +11708,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          WHERE rw.status='committed'
            AND rw.variant_id IS NOT NULL
            AND COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) >= now() - interval '30 days'
+           ${committedFastFilter}
          GROUP BY rw.variant_id
        ),
        latest_import_detail AS (
@@ -11703,6 +11737,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_receptions r ON r.id=b.reception_id
          WHERE rw.status='committed'
            AND rw.variant_id IS NOT NULL
+           ${latestImportFastFilter}
          ORDER BY rw.variant_id, COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at) DESC, rw.updated_at DESC NULLS LAST, rw.row_no DESC
        ),
        invoice_info AS (
@@ -11736,6 +11771,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_locations invl ON invl.id=COALESCE(r.target_location_id, b.target_location_id)
          WHERE rw.status='committed'
            AND rw.variant_id IS NOT NULL
+           ${invoiceFastFilter}
          GROUP BY rw.variant_id
        )
        SELECT
@@ -11861,8 +11897,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                 v.color_name ASC NULLS LAST,
                 v.size ASC,
                 v.id ASC
-       LIMIT ${limitParam}
-       OFFSET ${offsetParam}`,
+       ${finalLimitSql}`,
       args
     );
 
@@ -11872,6 +11907,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       offset,
       returned: r.rows.length,
       hasMore: r.rows.length === limit,
+      fastPage,
     });
   });
 
