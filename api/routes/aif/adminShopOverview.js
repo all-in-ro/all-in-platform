@@ -49,6 +49,7 @@ export default function createAifAdminShopOverviewRouter(deps) {
       const saleType = normCode(req.query.saleType || req.query.sale_type);
       const brand = text(req.query.brand);
       const category = text(req.query.category);
+      const snCod = text(req.query.snCod || req.query.sn_cod);
       const search = text(req.query.search || req.query.q);
 
       const salesTvaSettings = typeof readSalesTvaSettings === "function"
@@ -106,6 +107,16 @@ export default function createAifAdminShopOverviewRouter(deps) {
                 NULLIF(subcf.name_ro,''),
                 'Nincs alkategória'
               ))=lower(${p})
+          )`);
+        }
+        if (snCod) {
+          const p = push(`%${snCod}%`);
+          where.push(`EXISTS (
+            SELECT 1
+            FROM aif_shop_sale_lines slf
+            LEFT JOIN aif_product_variants vf ON vf.id=slf.variant_id
+            WHERE slf.sale_id=s.id
+              AND COALESCE(vf.sn_cod,'') ILIKE ${p}
           )`);
         }
         if (search) {
@@ -192,6 +203,25 @@ export default function createAifAdminShopOverviewRouter(deps) {
                   NULLIF(sscf.name_ro,''),
                   'Nincs alkategória'
                 ))=lower(${p})
+            )
+          )`);
+        }
+        if (snCod) {
+          const p = push(`%${snCod}%`);
+          where.push(`(
+            EXISTS (
+              SELECT 1
+              FROM aif_shop_exchange_lines elf
+              LEFT JOIN aif_product_variants evf ON evf.id=elf.variant_id
+              WHERE elf.exchange_id=e.id
+                AND COALESCE(evf.sn_cod,'') ILIKE ${p}
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM aif_shop_sale_lines srcf
+              LEFT JOIN aif_product_variants svf ON svf.id=srcf.variant_id
+              WHERE srcf.id=e.source_sale_line_id
+                AND COALESCE(svf.sn_cod,'') ILIKE ${p}
             )
           )`);
         }
@@ -460,6 +490,10 @@ export default function createAifAdminShopOverviewRouter(deps) {
             NULLIF(subc.name_ro,''),
             'Nincs alkategória'
           ))=lower(${p})`);
+        }
+        if (snCod) {
+          const p = push(`%${snCod}%`);
+          where.push(`COALESCE(v.sn_cod,'') ILIKE ${p}`);
         }
         if (search) {
           const p = push(`%${search}%`);
