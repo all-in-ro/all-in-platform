@@ -89,7 +89,14 @@ type InventoryItem = {
   internal_sku?: string | null;
   barcode?: string | null;
   display_barcode?: string | null;
+  sn_cod?: string | null;
+  snCod?: string | null;
+  model_code?: string | null;
+  product_code?: string | null;
+  productCode?: string | null;
   supplier_product_code?: string | null;
+  supplierProductCode?: string | null;
+  supplier_variant_code?: string | null;
   supplier_codes?: string | null;
   title_ro?: string | null;
   shopify_title?: string | null;
@@ -504,13 +511,46 @@ function productTitle(item: InventoryItem) {
   return firstText(item.title_ro, item.shopify_title, "Névtelen termék");
 }
 
-function productSearchValues(item: InventoryItem) {
+function cleanScanCode(value: unknown) {
+  return String(value ?? "")
+    .replace(/[\r\n\t]+/g, "")
+    .replace(/[\s\u00a0]+/g, "")
+    .trim();
+}
+
+function scanExactKey(value: unknown) {
+  return normalize(cleanScanCode(value));
+}
+
+function scanLooseKey(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function productIdentifierValues(item: InventoryItem) {
   return [
     item.variant_id,
     item.internal_sku,
     item.barcode,
     item.display_barcode,
+    item.sn_cod,
+    item.snCod,
+    item.model_code,
+    item.product_code,
+    item.productCode,
     item.supplier_product_code,
+    item.supplierProductCode,
+    item.supplier_variant_code,
+    ...(String(item.supplier_codes || "").split(/[;,|]+/)),
+  ].filter((value) => String(value ?? "").trim());
+}
+
+function productSearchValues(item: InventoryItem) {
+  return [
+    ...productIdentifierValues(item),
     item.supplier_codes,
     item.title_ro,
     item.shopify_title,
@@ -522,16 +562,22 @@ function productSearchValues(item: InventoryItem) {
 }
 
 function exactProductMatch(item: InventoryItem, query: string) {
-  const key = normalize(query);
-  if (!key) return false;
-  return [
-    item.variant_id,
-    item.internal_sku,
-    item.barcode,
-    item.display_barcode,
-    item.supplier_product_code,
-    ...(String(item.supplier_codes || "").split(",")),
-  ].map((value) => normalize(value)).some((value) => value === key);
+  const exact = scanExactKey(query);
+  const loose = scanLooseKey(query);
+  if (!exact && !loose) return false;
+  const values = productIdentifierValues(item);
+  if (exact && values.some((value) => scanExactKey(value) === exact)) return true;
+  return Boolean(loose && values.some((value) => scanLooseKey(value) === loose));
+}
+
+function uniqueInventoryItems(items: InventoryItem[]) {
+  const map = new Map<string, InventoryItem>();
+  for (const item of items || []) {
+    const id = String(item.variant_id || "").trim();
+    if (!id || map.has(id)) continue;
+    map.set(id, item);
+  }
+  return Array.from(map.values());
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1352,6 +1398,8 @@ export default function AllInProductMoves() {
   const [uitCode, setUitCode] = useState("");
   const [note, setNote] = useState("");
   const [scanValue, setScanValue] = useState("");
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
   const [productSearch, setProductSearch] = useState("");
   const [draftLines, setDraftLines] = useState<Record<string, DraftLine>>({});
   const [editingDraftId, setEditingDraftId] = useState("");
@@ -1367,6 +1415,10 @@ export default function AllInProductMoves() {
   const zxingControlsRef = useRef<{ stop?: () => void } | null>(null);
   const cameraHandlingRef = useRef(false);
   const autoOpenedDocumentRef = useRef("");
+  const scanInputRef = useRef<HTMLInputElement | null>(null);
+  const scanAutoTimerRef = useRef<number | null>(null);
+  const scanQueueRef = useRef<string[]>([]);
+  const scanQueueRunningRef = useRef(false);
 
   const loadSettings = useCallback(async () => {
     const result = await fetchJson<{ settings?: Record<DocumentType, StockDocumentSettings>; items?: StockDocumentSettings[] }>("/stock-documents/settings");
@@ -1520,6 +1572,14 @@ export default function AllInProductMoves() {
       .slice(0, 10);
   }, [inventory, productSearch]);
 
+  useEffect(() => {
+    if (!createOpen) return;
+    const ready = Boolean(sourceLocationId && (draftType !== "internal_transfer" || targetLocationId));
+    if (!ready) return;
+    focusScanInput();
+  }, [createOpen, draftType, sourceLocationId, targetLocationId]);
+
+
   function resetDraft(nextType: DocumentType = "internal_transfer") {
     setDraftType(nextType);
     setSourceLocationId("");
@@ -1533,6 +1593,13 @@ export default function AllInProductMoves() {
     setUitCode("");
     setNote("");
     setScanValue("");
+    setScanBusy(false);
+    setScanFeedback(null);
+    scanQueueRef.current = [];
+    if (scanAutoTimerRef.current !== null) {
+      window.clearTimeout(scanAutoTimerRef.current);
+      scanAutoTimerRef.current = null;
+    }
     setProductSearch("");
     setDraftLines({});
     setEditingDraftId("");
@@ -1731,23 +1798,154 @@ export default function AllInProductMoves() {
     });
   }
 
-  function handleScannedValue(raw: unknown) {
-    const code = String(raw || "").replace(/[\r\n\t]+/g, "").trim();
-    if (!code) return;
-    const exact = inventory.filter((item) => exactProductMatch(item, code));
-    if (exact.length === 1) {
-      addDraftItem(exact[0], 1);
-      setMessage(`Beolvasva: ${productTitle(exact[0])}.`);
-      return;
-    }
-    if (exact.length > 1) {
-      setProductSearch(code);
-      setError("Több termék egyezik ezzel a kóddal. Válaszd ki a megfelelő variánst a találatokból.");
-      return;
-    }
-    setProductSearch(code);
-    setError(`Nincs pontos találat erre a kódra: ${code}. A keresési találatokat megmutatom.`);
+  function focusScanInput(select = false) {
+    window.setTimeout(() => {
+      const node = scanInputRef.current;
+      if (!node || node.disabled) return;
+      node.focus();
+      if (select) node.select();
+    }, 0);
   }
+
+  function scannerReady() {
+    return Boolean(
+      sourceLocationId &&
+      (draftType !== "internal_transfer" || targetLocationId) &&
+      !savingDocument
+    );
+  }
+
+  async function resolveScannedProducts(code: string) {
+    const localMatches = uniqueInventoryItems(inventory.filter((item) => exactProductMatch(item, code)));
+    if (localMatches.length) return localMatches;
+
+    // Az oldal szándékosan nem tölt be tízezres terméktörzset induláskor.
+    // Ha a beolvasott termék nincs az első helyi csomagban, pontos keresést
+    // kérünk a szervertől. Így a régi rendszerből áthozott 14k+ variáns is
+    // ugyanúgy felismerhető, mint a raktár oldalon.
+    const query = new URLSearchParams();
+    query.set("search", code);
+    query.set("limit", "100");
+    query.set("includeZero", "1");
+    query.set("_", String(Date.now()));
+    const remote = await fetchJson<{ items?: InventoryItem[] }>(`/inventory?${query.toString()}`);
+    const remoteItems = (remote.items || []).filter((item) =>
+      String(item.variant_status || "active") !== "archived" &&
+      String(item.model_status || "active") !== "archived"
+    );
+
+    if (remoteItems.length) {
+      setInventory((current) => uniqueInventoryItems([...current, ...remoteItems]));
+    }
+
+    return uniqueInventoryItems(remoteItems.filter((item) => exactProductMatch(item, code)));
+  }
+
+  async function processScannedCode(code: string) {
+    if (!scannerReady()) {
+      setScanFeedback({
+        tone: "error",
+        text: draftType === "internal_transfer"
+          ? "Előbb válaszd ki a forrás- és célhelyet. Utána a scanner automatikusan aktív."
+          : "Előbb válaszd ki az érintett készlethelyet. Utána a scanner automatikusan aktív.",
+      });
+      setError(draftType === "internal_transfer"
+        ? "Előbb válaszd ki a forrás- és célhelyet."
+        : "Előbb válaszd ki a forráshelyet.");
+      return;
+    }
+
+    setScanBusy(true);
+    setScanFeedback({ tone: "info", text: `${code} azonosítása…` });
+    try {
+      const exact = await resolveScannedProducts(code);
+
+      if (exact.length === 1) {
+        const item = exact[0];
+        const available = outgoingDraft ? availableAt(item.variant_id, sourceLocationId) : 999999;
+        if (outgoingDraft && available <= 0) {
+          setProductSearch(code);
+          setError(`${productTitle(item)}: nincs szabad készlet a kiválasztott forráshelyen.`);
+          setScanFeedback({ tone: "error", text: `${productTitle(item)} felismerve, de nincs szabad készlet a forráshelyen.` });
+          return;
+        }
+
+        addDraftItem(item, 1);
+        setScanFeedback({ tone: "success", text: `✓ ${productTitle(item)} • +1 db hozzáadva` });
+        setMessage("");
+        return;
+      }
+
+      if (exact.length > 1) {
+        setProductSearch(code);
+        setError("Több termék egyezik ezzel a kóddal. Válaszd ki a megfelelő variánst a találatokból.");
+        setScanFeedback({ tone: "error", text: `Több pontos egyezés: ${code}.` });
+        return;
+      }
+
+      setProductSearch(code);
+      setError(`Nincs pontos találat erre a kódra: ${code}. A keresési találatokat megmutatom.`);
+      setScanFeedback({ tone: "error", text: `Nem találom ezt a kódot: ${code}.` });
+    } catch (scanError: any) {
+      setError(scanError?.message || "A beolvasott termék azonosítása nem sikerült.");
+      setScanFeedback({ tone: "error", text: scanError?.message || "A termék azonosítása nem sikerült." });
+    } finally {
+      setScanBusy(false);
+    }
+  }
+
+  async function drainScanQueue() {
+    if (scanQueueRunningRef.current) return;
+    scanQueueRunningRef.current = true;
+    try {
+      while (scanQueueRef.current.length) {
+        const next = scanQueueRef.current.shift() || "";
+        if (!next) continue;
+        await processScannedCode(next);
+      }
+    } finally {
+      scanQueueRunningRef.current = false;
+      focusScanInput();
+    }
+  }
+
+  function handleScannedValue(raw: unknown) {
+    const code = cleanScanCode(raw);
+    if (!code) {
+      focusScanInput();
+      return;
+    }
+    setScanValue("");
+    scanQueueRef.current.push(code);
+    void drainScanQueue();
+  }
+
+  function scheduleAutomaticScan(rawValue: string) {
+    setScanValue(rawValue);
+    if (scanAutoTimerRef.current !== null) {
+      window.clearTimeout(scanAutoTimerRef.current);
+      scanAutoTimerRef.current = null;
+    }
+
+    const code = cleanScanCode(rawValue);
+    if (!code || !scannerReady()) return;
+
+    const localExact = uniqueInventoryItems(inventory.filter((item) => exactProductMatch(item, code)));
+    const delay = localExact.length === 1 ? 45 : 170;
+    scanAutoTimerRef.current = window.setTimeout(() => {
+      scanAutoTimerRef.current = null;
+      handleScannedValue(code);
+    }, delay);
+  }
+
+  function submitScannerInput() {
+    if (scanAutoTimerRef.current !== null) {
+      window.clearTimeout(scanAutoTimerRef.current);
+      scanAutoTimerRef.current = null;
+    }
+    handleScannedValue(scanValue);
+  }
+
 
   function stopCamera() {
     if (cameraRafRef.current !== null) {
@@ -1842,6 +2040,16 @@ export default function AllInProductMoves() {
   }, [cameraOpen]);
 
   useEffect(() => () => stopCamera(), []);
+
+  useEffect(() => {
+    return () => {
+      if (scanAutoTimerRef.current !== null) {
+        window.clearTimeout(scanAutoTimerRef.current);
+        scanAutoTimerRef.current = null;
+      }
+      scanQueueRef.current = [];
+    };
+  }, []);
 
   function validateDraft() {
     if (!sourceLocationId && !draftLineArray.every((row) => row.fromLocationId)) return "A forráshely kötelező.";
@@ -2572,10 +2780,52 @@ export default function AllInProductMoves() {
               <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(360px,.85fr)_minmax(0,1.6fr)]">
                 <div className="rounded-2xl border border-white/12 bg-[#404a5b] p-3">
                   <div className="flex items-center justify-between gap-2"><div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Termék hozzáadása</p><h3 className="mt-1 flex items-center gap-2 text-sm"><Barcode size={16} /> Vonalkód vagy keresés</h3></div><button type="button" className={primaryBtn} onClick={() => setCameraOpen(true)}><Camera size={15} /> Kamera</button></div>
-                  <label className="mt-3 grid gap-1.5 text-xs text-white/62">Vonalkód / USB scanner<div className="flex gap-2"><input autoFocus className={input} value={scanValue} onChange={(event) => setScanValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); handleScannedValue(scanValue); } }} placeholder="Csipogtasd be, majd Enter" /><button type="button" className={primaryBtn} onClick={() => handleScannedValue(scanValue)}><Barcode size={15} /></button></div></label>
+                  <label className="mt-3 grid gap-1.5 text-xs text-white/62">Vonalkód / USB scanner
+                    <div className="flex gap-2">
+                      <input
+                        ref={scanInputRef}
+                        autoFocus
+                        className={`${input} flex-1 ${scanFeedback?.tone === "success" ? "border-[#7bd7d4]/70 shadow-[0_0_0_2px_rgba(42,141,139,.12)]" : scanFeedback?.tone === "error" ? "border-rose-300/55" : ""}`}
+                        value={scanValue}
+                        onChange={(event) => scheduleAutomaticScan(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === "Tab") {
+                            if (!scanValue.trim()) return;
+                            event.preventDefault();
+                            submitScannerInput();
+                          }
+                        }}
+                        placeholder={scannerReady() ? "Csipogtasd be • automatikusan hozzáadja" : "Válaszd ki előbb a forrás- és célhelyet"}
+                        autoComplete="off"
+                        inputMode="numeric"
+                        disabled={!scannerReady()}
+                      />
+                      <span className={`inline-flex min-w-[92px] items-center justify-center gap-1.5 rounded-xl border px-2.5 text-[10px] ${
+                        scanBusy
+                          ? "border-sky-200/25 bg-sky-500/10 text-sky-50"
+                          : scannerReady()
+                            ? "border-[#7bd7d4]/35 bg-[#2a8d8b]/18 text-[#d7fffd]"
+                            : "border-white/12 bg-white/[0.05] text-white/42"
+                      }`}>
+                        {scanBusy ? <RefreshCw size={13} className="animate-spin" /> : <Barcode size={13} />}
+                        {scanBusy ? "KERESÉS" : scannerReady() ? "SCANNER AKTÍV" : "VÁRAKOZIK"}
+                      </span>
+                    </div>
+                  </label>
+                  {scanFeedback ? (
+                    <div className={`mt-2 rounded-xl border px-3 py-2 text-[11px] ${
+                      scanFeedback.tone === "success"
+                        ? "border-[#7bd7d4]/32 bg-[#2a8d8b]/14 text-[#d7fffd]"
+                        : scanFeedback.tone === "error"
+                          ? "border-rose-300/30 bg-rose-500/12 text-rose-50"
+                          : "border-sky-200/22 bg-sky-500/10 text-sky-50"
+                    }`}>
+                      {scanFeedback.text}
+                    </div>
+                  ) : null}
                   <label className="mt-3 grid gap-1.5 text-xs text-white/62">Név / termékkód / méret<div className="relative"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/38" /><input className={`${input} pl-9`} value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Kezdj el gépelni..." /></div></label>
-                  {productSearch ? <div className="mt-2 max-h-[330px] space-y-1.5 overflow-auto rounded-xl border border-white/10 bg-[#303a4c] p-1.5">{productSearchResults.map((item) => <button key={item.variant_id} type="button" onClick={() => addDraftItem(item)} className="flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-2 text-left transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/12"><ProductThumb item={item} className="h-11 w-11" /><span className="min-w-0 flex-1"><span className="block truncate text-xs text-white">{productTitle(item)}</span><span className="mt-0.5 block truncate text-[10px] text-white/45">{item.brand_name || "-"} • {item.color_name || item.color_code || "-"} • {item.size || "-"}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-[#cffffd]/65">{visibleBarcode(item) || productCode(item) || "Azonosító nélkül"}</span></span><span className="shrink-0 rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px] text-white/62">{sourceLocationId ? `${availableAt(item.variant_id, sourceLocationId)} db` : "-"}</span></button>)}{!productSearchResults.length ? <div className="px-3 py-5 text-center text-xs text-white/42">Nincs találat.</div> : null}</div> : null}
-                  <div className="mt-3 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/82">Az USB-s olvasó billentyűzetként működik. Telefonon a Kamera gomb nyitja meg a hátsó kamerát. Ugyanazt a terméket újra beolvasva a darabszám nő.</div>
+                  {productSearch ? <div className="mt-2 max-h-[330px] space-y-1.5 overflow-auto rounded-xl border border-white/10 bg-[#303a4c] p-1.5">{productSearchResults.map((item) => <button key={item.variant_id} type="button" onClick={() => { addDraftItem(item); focusScanInput(); }} className="flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-2 text-left transition hover:border-[#7bd7d4]/28 hover:bg-[#2a8d8b]/12"><ProductThumb item={item} className="h-11 w-11" /><span className="min-w-0 flex-1"><span className="block truncate text-xs text-white">{productTitle(item)}</span><span className="mt-0.5 block truncate text-[10px] text-white/45">{item.brand_name || "-"} • {item.color_name || item.color_code || "-"} • {item.size || "-"}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-[#cffffd]/65">{visibleBarcode(item) || productCode(item) || "Azonosító nélkül"}</span></span><span className="shrink-0 rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-[10px] text-white/62">{sourceLocationId ? `${availableAt(item.variant_id, sourceLocationId)} db` : "-"}</span></button>)}{!productSearchResults.length ? <div className="px-3 py-5 text-center text-xs text-white/42">Nincs találat.</div> : null}</div> : null}
+                  <div className="mt-3 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/82">Forrás és cél kiválasztása után csak csipogtasd a termékeket. A találat automatikusan bekerül a listába, a mező pedig rögtön várja a következőt. Ugyanazt újra beolvasva a darabszám +1.</div>
                 </div>
 
                 <div className="overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
