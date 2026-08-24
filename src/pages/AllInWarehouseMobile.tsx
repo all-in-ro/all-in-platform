@@ -520,6 +520,32 @@ function itemProductCode(item: Partial<InventoryItem> | Record<string, any> | nu
   return model.includes(":") ? (model.split(":").pop() || model).trim() : model;
 }
 
+function mobileWarehouseSameColorSizeSibling(a: Partial<InventoryItem> | Record<string, any>, b: Partial<InventoryItem> | Record<string, any>) {
+  const aId = selectedVariantIdFromItem(a as any);
+  const bId = selectedVariantIdFromItem(b as any);
+  if (!aId || !bId || aId === bId) return false;
+
+  const aModelId = firstText((a as any).model_id, (a as any).modelId);
+  const bModelId = firstText((b as any).model_id, (b as any).modelId);
+  const sameModel = aModelId && bModelId
+    ? aModelId === bModelId
+    : normalizeSearch(firstText((a as any).model_code, itemProductCode(a))) === normalizeSearch(firstText((b as any).model_code, itemProductCode(b))) &&
+      normalizeSearch(firstText((a as any).brand_code, (a as any).brand_name)) === normalizeSearch(firstText((b as any).brand_code, (b as any).brand_name));
+  if (!sameModel) return false;
+
+  const aColorCode = firstText((a as any).color_code, (a as any).colorCode);
+  const bColorCode = firstText((b as any).color_code, (b as any).colorCode);
+  if (aColorCode && bColorCode && normalizeSearch(aColorCode) !== normalizeSearch(bColorCode)) return false;
+
+  const aColorName = firstText((a as any).color_name, (a as any).colorName);
+  const bColorName = firstText((b as any).color_name, (b as any).colorName);
+  if ((!aColorCode || !bColorCode) && aColorName && bColorName && colorKey(aColorName) !== colorKey(bColorName)) return false;
+
+  const aSize = normalizeSearch((a as any).size);
+  const bSize = normalizeSearch((b as any).size);
+  return Boolean(aSize && bSize && aSize !== bSize);
+}
+
 function visibleWarehouseBarcode(item: Partial<InventoryItem> | Record<string, any> | null | undefined) {
   const source = (item || {}) as Record<string, any>;
   const raw = firstText(source.barcode, source.display_barcode);
@@ -1646,6 +1672,42 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         imageUrl: edit.imageUrl,
         status: edit.variantStatus || "active",
       });
+
+      const siblingSource: InventoryItem = {
+        ...(detail?.item as InventoryItem),
+        variant_id: id,
+        model_id: firstText(detail?.item?.model_id, detail?.item?.modelId) || null,
+        brand_code: edit.brandCode || detail?.item?.brand_code || null,
+        brand_name: detail?.item?.brand_name || null,
+        model_code: detail?.item?.model_code || null,
+        color_code: edit.colorCode || detail?.item?.color_code || null,
+        color_name: normalizedEditColor || detail?.item?.color_name || null,
+        size: normalizedEditSize || detail?.item?.size || null,
+        supplier_product_code: edit.supplierProductCode || detail?.item?.supplier_product_code || null,
+      };
+      const sameColorSizeSiblings = items.filter((item) => mobileWarehouseSameColorSizeSibling(siblingSource, item));
+      const siblingPatch: Record<string, unknown> = {};
+      if (String(edit.imageUrl || '').trim()) siblingPatch.imageUrl = edit.imageUrl;
+      if (String(edit.descriptionRo || '').trim()) siblingPatch.descriptionRo = edit.descriptionRo;
+
+      let inheritedSiblingCount = 0;
+      let inheritedSiblingFailed = 0;
+      const inheritedSiblingIds: string[] = [];
+      if (Object.keys(siblingPatch).length && sameColorSizeSiblings.length) {
+        const results = await Promise.allSettled(
+          sameColorSizeSiblings.map((item) => apiVariantUpdate(String(item.variant_id), siblingPatch))
+        );
+        results.forEach((result, index) => {
+          const siblingId = String(sameColorSizeSiblings[index]?.variant_id || '').trim();
+          if (result.status === 'fulfilled') {
+            inheritedSiblingCount += 1;
+            if (siblingId) inheritedSiblingIds.push(siblingId);
+          } else {
+            inheritedSiblingFailed += 1;
+          }
+        });
+      }
+
       const data = await apiVariantDetail(id);
       const serverItem = (data.item || {}) as Record<string, any>;
       setItems((current) => current.map((item) => {
@@ -1661,6 +1723,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
             last_stock_movement_at: serverItem.last_stock_movement_at ?? item.last_stock_movement_at,
           } as InventoryItem;
         }
+        if (inheritedSiblingIds.includes(itemId)) {
+          return {
+            ...item,
+            ...(String(edit.imageUrl || '').trim() ? { image_url: edit.imageUrl } : {}),
+            ...(String(edit.descriptionRo || '').trim() ? { description_ro: edit.descriptionRo } : {}),
+          } as InventoryItem;
+        }
         if (deactivatedSiblingIds.includes(itemId)) {
           return { ...item, model_status: nextModelStatus, variant_status: "inactive" } as InventoryItem;
         }
@@ -1672,7 +1741,12 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       // a teljes raktár újra letöltődik.
       setDetailOpen(false);
       setDetail(null);
-      setMessage("Termékadatok mentve.");
+      const siblingMessage = inheritedSiblingCount
+        ? ` Azonos színű további ${inheritedSiblingCount} méretváltozat átvette a képet/leírást.${inheritedSiblingFailed ? ` ${inheritedSiblingFailed} méret frissítése nem sikerült.` : ''}`
+        : inheritedSiblingFailed
+          ? ` ${inheritedSiblingFailed} azonos színű méret frissítése nem sikerült.`
+          : '';
+      setMessage(`Termékadatok mentve.${siblingMessage}`);
     } catch (error: any) {
       const conflictInfo = barcodeConflictInfoFromApi(error);
       if (conflictInfo) {
