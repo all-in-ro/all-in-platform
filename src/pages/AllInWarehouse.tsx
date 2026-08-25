@@ -5966,6 +5966,10 @@ export default function AllInWarehouse() {
   const [incomingFocus, setIncomingFocus] = useState<{ batchId: string; variantIds: string[]; rows: Array<Record<string, any>>; batch?: Record<string, any> | null; totalQty?: number; sourceFileName?: string | null; mode?: "import" | "activation" } | null>(null);
   const [incomingFocusItems, setIncomingFocusItems] = useState<InventoryItem[]>([]);
   const productListRef = useRef<HTMLElement | null>(null);
+  // A termékadatlap első kattintásra a raktárlistában már meglévő adatokból nyílik meg.
+  // A teljes szerveres részlet háttérben érkezik, és rövid ideig cache-eljük is.
+  const detailCacheRef = useRef<Map<string, { data: DetailResponse; loadedAt: number }>>(new Map());
+  const detailLoadSequenceRef = useRef(0);
   const detailReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
   const stockEditorReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
   const selectionReturnAnchorRef = useRef<WarehouseDetailReturnAnchor | null>(null);
@@ -7583,6 +7587,9 @@ export default function AllInWarehouse() {
   const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
 
   function closeDetailImmediately(options: { restoreListPosition?: boolean } = {}) {
+    // Ha a háttérben még érkezik egy korábbi részletkérés, bezárás után már ne
+    // tudja visszanyitni / felülírni az adatlap állapotát.
+    detailLoadSequenceRef.current += 1;
     setDetailCloseConfirmOpen(false);
     setDetail(null);
     setDetailBusy(false);
@@ -10748,31 +10755,99 @@ export default function AllInWarehouse() {
     };
   }
 
+  function buildOptimisticDetail(id: string): DetailResponse {
+    const listItem =
+      inventoryDisplayItems.find((item) => String(item.variant_id || "") === String(id)) ||
+      items.find((item) => String(item.variant_id || "") === String(id)) ||
+      ({ variant_id: id } as InventoryItem);
+
+    return {
+      item: {
+        ...listItem,
+        id,
+        variant_id: id,
+      },
+      // A készlet már a Raktár oldalon memóriában van, ezért ezt sem kell újra
+      // kivárni ahhoz, hogy az adatlap értelmesen megjelenjen.
+      stock: stockRowsForVariant(id),
+      supplierCodes: [],
+      movements: [],
+    };
+  }
+
+  function prepareDetailForm(d: DetailResponse, id: string) {
+    const nextForm = formFromDetail(d);
+    if (!nextForm.brandCode) {
+      const listItem =
+        inventoryDisplayItems.find((it) => String(it.variant_id || "") === String(id)) ||
+        items.find((it) => String(it.variant_id || "") === String(id));
+      nextForm.brandCode = findBrandCodeForName(d.item?.brand_name || listItem?.brand_name || "");
+    }
+    nextForm.colorName = officialColorFromTypes(nextForm.colorName, colorTypes);
+    nextForm.size = officialSizeFromTypes(nextForm.size, sizeTypes);
+    return nextForm;
+  }
+
+  function prefetchVariantDetail(id: string) {
+    const cleanId = String(id || "").trim();
+    if (!cleanId) return;
+    const cached = detailCacheRef.current.get(cleanId);
+    if (cached && Date.now() - cached.loadedAt < 180_000) return;
+
+    void apiVariantDetail(cleanId)
+      .then((data) => {
+        detailCacheRef.current.set(cleanId, { data, loadedAt: Date.now() });
+      })
+      .catch(() => {
+        // Előtöltés kényelmi funkció. A tényleges kattintás újra megpróbálja.
+      });
+  }
+
   async function openDetail(id: string) {
-    rememberDetailReturnAnchor(id);
+    const cleanId = String(id || "").trim();
+    if (!cleanId) return;
+
+    rememberDetailReturnAnchor(cleanId);
     // A korábbi "Folytatás innen" jelzés addig maradjon látható, amíg ténylegesen
     // el nem kezdjük a következő terméket. Nem időzítő dönti el helyettünk.
     setHighlightProductId("");
     setDetailCloseConfirmOpen(false);
     setEditBarcodeConflict(null);
-    setDetailBusy(true);
     setMessage("");
+
+    const requestSequence = ++detailLoadSequenceRef.current;
+    const cached = detailCacheRef.current.get(cleanId);
+    const cacheFresh = Boolean(cached && Date.now() - cached.loadedAt < 180_000);
+    const initialDetail = cacheFresh && cached ? cached.data : buildOptimisticDetail(cleanId);
+    const initialForm = prepareDetailForm(initialDetail, cleanId);
+
+    // EZ a lényeg: a modal most már nem vár a hálózatra.
+    setDetail(initialDetail);
+    setEdit(initialForm);
+    setEditBaseline({ ...initialForm });
+    setDetailBusy(!cacheFresh);
+
     try {
-      const d = await apiVariantDetail(id);
-      setDetail(d);
-      const nextForm = formFromDetail(d);
-      if (!nextForm.brandCode) {
-        const listItem = items.find((it) => String(it.variant_id || "") === String(id));
-        nextForm.brandCode = findBrandCodeForName(d.item?.brand_name || listItem?.brand_name || "");
-      }
-      nextForm.colorName = officialColorFromTypes(nextForm.colorName, colorTypes);
-      nextForm.size = officialSizeFromTypes(nextForm.size, sizeTypes);
-      setEdit(nextForm);
-      setEditBaseline({ ...nextForm });
+      const freshDetail = await apiVariantDetail(cleanId);
+      if (requestSequence !== detailLoadSequenceRef.current) return;
+
+      detailCacheRef.current.set(cleanId, { data: freshDetail, loadedAt: Date.now() });
+      const freshForm = prepareDetailForm(freshDetail, cleanId);
+
+      setDetail(freshDetail);
+      // Ha a felhasználó már elkezdett gépelni, a háttérből megérkező válasz
+      // nem írhatja felül a munkáját. Csak érintetlen űrlapot frissítünk automatikusan.
+      setEdit((current) => editFormsEqual(current, initialForm) ? freshForm : current);
+      setEditBaseline({ ...freshForm });
     } catch (e: any) {
-      setMessage(e.message || "Nem sikerült betölteni a termékadatlapot.");
+      if (requestSequence !== detailLoadSequenceRef.current) return;
+      // Az optimista adatlap ettől még használható. Cache esetén egy átmeneti
+      // hálózati hiba ne csapja arcon a felhasználót minden újranyitásnál.
+      if (!cacheFresh) {
+        setMessage(e.message || "A termék részletes adatai nem töltődtek be. Az alapadatlap ettől még megnyílt.");
+      }
     } finally {
-      setDetailBusy(false);
+      if (requestSequence === detailLoadSequenceRef.current) setDetailBusy(false);
     }
   }
 
@@ -11335,6 +11410,7 @@ export default function AllInWarehouse() {
       }
 
       const d = await apiVariantDetail(detail.item.id);
+      detailCacheRef.current.set(detailId, { data: d, loadedAt: Date.now() });
 
       // Egy termékadat módosítása miatt nem kérjük le újra a teljes raktárt.
       // A PATCH után a friss variánst visszaolvassuk és helyben cseréljük ki.
@@ -12414,7 +12490,7 @@ export default function AllInWarehouse() {
                         <td className="px-2 py-2.5 text-center align-middle">
                           <div className="flex items-center justify-center gap-1.5">
                             <button className={warehouseListIconButton} onClick={() => openProductHistory(it)} title="Termék History" aria-label="Termék History" type="button"><Clock3 size={15} /></button>
-                            <button className={warehouseListIconButton} onClick={() => openDetail(it.variant_id)} title="Részletek" aria-label="Részletek" type="button"><Edit3 size={15} /></button>
+                            <button className={warehouseListIconButton} onMouseEnter={() => prefetchVariantDetail(it.variant_id)} onFocus={() => prefetchVariantDetail(it.variant_id)} onClick={() => openDetail(it.variant_id)} title="Részletek" aria-label="Részletek" type="button"><Edit3 size={15} /></button>
                             <button className={warehouseListDangerButton} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label="Törlés" type="button"><Trash2 size={15} /></button>
                           </div>
                         </td>
@@ -12462,7 +12538,7 @@ export default function AllInWarehouse() {
                       <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-20 w-20 rounded-xl" iconSize={20} />
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
-                          <button className="block min-w-0 flex-1 truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
+                          <button className="block min-w-0 flex-1 truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onMouseEnter={() => prefetchVariantDetail(it.variant_id)} onFocus={() => prefetchVariantDetail(it.variant_id)} onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
                           <WarehouseShopifyStatusIcon item={it} size="sm" />
                         </div>
                         <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
@@ -12492,7 +12568,7 @@ export default function AllInWarehouse() {
                     </div>
                     <div className="mt-3 flex justify-end gap-2">
                       <button className={`${warehouseListIconButton} h-9 w-9`} onClick={() => openProductHistory(it)} title="Termék History" aria-label={`Termék History: ${it.title_ro || "termék"}`} type="button"><Clock3 size={15} /></button>
-                      <button className={`${warehouseListIconButton} h-9 w-9`} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={15} /></button>
+                      <button className={`${warehouseListIconButton} h-9 w-9`} onMouseEnter={() => prefetchVariantDetail(it.variant_id)} onFocus={() => prefetchVariantDetail(it.variant_id)} onClick={() => openDetail(it.variant_id)} title="Részletek / adatlap" aria-label={`Részletek / adatlap: ${it.title_ro || "termék"}`} type="button"><Edit3 size={15} /></button>
                       <button className={`${warehouseListDangerButton} h-9 w-9`} onClick={() => setProductDeleteTarget(it)} title="Törlés" aria-label={`Törlés: ${it.title_ro || "termék"}`} type="button"><Trash2 size={15} /></button>
                     </div>
                   </article>
@@ -14949,7 +15025,12 @@ export default function AllInWarehouse() {
               </div>
             </div>
             <div className="space-y-4 p-4">
-              {detailBusy && <div className="rounded-xl border border-white/12 bg-white/[0.05] p-4 text-sm text-white/65">Betöltés...</div>}
+              {detailBusy && (
+                <div className="flex items-center gap-2 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-xs text-[#d7fffd]/82">
+                  <RefreshCw size={14} className="animate-spin" />
+                  Az adatlap már használható, a részletes készlet- és beszállítói adatok háttérben frissülnek…
+                </div>
+              )}
 
               <div className="grid gap-4 lg:grid-cols-[280px,1fr]">
                 <div className="space-y-3 rounded-xl border border-white/12 bg-white/[0.05] p-3">
