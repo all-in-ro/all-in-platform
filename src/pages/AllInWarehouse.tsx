@@ -7602,14 +7602,14 @@ export default function AllInWarehouse() {
   }
 
   function discardDetailChangesAndClose() {
-    if (saving || detailBusy) return;
+    if (saving) return;
     closeDetailImmediately();
     setMessage("A módosítások mentés nélkül eldobva.");
   }
 
   function requestCloseDetail() {
     if (!detail) return;
-    if (saving || detailBusy) return;
+    if (saving) return;
     if (detailHasChanges) {
       setDetailCloseConfirmOpen(true);
       return;
@@ -7626,7 +7626,7 @@ export default function AllInWarehouse() {
     if (!detail) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (barcodeScanner || saving || detailBusy) return;
+      if (barcodeScanner || saving) return;
       event.preventDefault();
       event.stopPropagation();
       if (detailCloseConfirmOpen) {
@@ -11290,6 +11290,10 @@ export default function AllInWarehouse() {
       return false;
     }
 
+    // Ha az első megnyitás háttér-GET-je még fut, a mentés innentől az igazság.
+    // A későn visszaérkező régi GET nem írhatja felül a frissen mentett mezőket.
+    detailLoadSequenceRef.current += 1;
+    setDetailBusy(false);
     setSaving(true);
     setMessage("");
     let deactivatedSiblingIds: string[] = [];
@@ -15021,14 +15025,14 @@ export default function AllInWarehouse() {
                 >
                   <Barcode size={16} /> Vonalkód / címke
                 </button>
-                <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Bezárás</button>
+                <button className={btnSoft} onClick={requestCloseDetail} type="button" title="Adatlap bezárása"><X size={16} /> Bezárás</button>
               </div>
             </div>
             <div className="space-y-4 p-4">
               {detailBusy && (
                 <div className="flex items-center gap-2 rounded-xl border border-[#7bd7d4]/20 bg-[#2a8d8b]/10 px-3 py-2 text-xs text-[#d7fffd]/82">
                   <RefreshCw size={14} className="animate-spin" />
-                  Az adatlap már használható, a részletes készlet- és beszállítói adatok háttérben frissülnek…
+                  Az adatlap használható. A részletes adatok háttérben frissülnek, közben szerkeszthetsz, menthetsz vagy bezárhatod.
                 </div>
               )}
 
@@ -15164,11 +15168,11 @@ export default function AllInWarehouse() {
               </div>
 
               <div className="sticky bottom-0 z-20 -mx-5 -mb-5 flex flex-wrap justify-end gap-2 border-t border-white/16 bg-[#404a5b] px-5 py-3 shadow-[0_-14px_28px_rgba(15,23,42,0.26)]">
-                <button className={btnSoft} onClick={requestCloseDetail} type="button"><X size={16} /> Mégse</button>
+                <button className={btnSoft} onClick={requestCloseDetail} type="button" title="Bezárás / módosítások kezelése"><X size={16} /> Mégse</button>
                 <button
                   className={detailHasChanges ? primaryBtn : btnSoft}
                   onClick={() => void saveDetailAndClose()}
-                  disabled={saving || detailBusy || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)}
+                  disabled={saving || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)}
                   title={effectiveEditBarcodeConflict
                     ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t."
                     : !detailHasChanges
