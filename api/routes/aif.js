@@ -1314,16 +1314,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return run();
   }
 
+  let aifSubcategorySchemaEnsured = false;
+  let aifSubcategorySchemaPromise = null;
+
   async function ensureAifSubcategorySchema(client = pool) {
-    try {
-      await client.query(`ALTER TABLE IF EXISTS aif_categories ADD COLUMN IF NOT EXISTS parent_id uuid NULL REFERENCES aif_categories(id)`);
-      await client.query(`ALTER TABLE IF EXISTS aif_product_models ADD COLUMN IF NOT EXISTS subcategory_id uuid NULL REFERENCES aif_categories(id)`);
-      await client.query(`CREATE INDEX IF NOT EXISTS aif_categories_parent_idx ON aif_categories (parent_id)`);
-      await client.query(`CREATE INDEX IF NOT EXISTS aif_product_models_subcategory_idx ON aif_product_models (subcategory_id)`);
-    } catch (e) {
-      console.error("AIF subcategory schema ensure warning", e);
-      throw e;
+    if (aifSubcategorySchemaEnsured) return true;
+
+    const run = async () => {
+      try {
+        await client.query(`ALTER TABLE IF EXISTS aif_categories ADD COLUMN IF NOT EXISTS parent_id uuid NULL REFERENCES aif_categories(id)`);
+        await client.query(`ALTER TABLE IF EXISTS aif_product_models ADD COLUMN IF NOT EXISTS subcategory_id uuid NULL REFERENCES aif_categories(id)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS aif_categories_parent_idx ON aif_categories (parent_id)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS aif_product_models_subcategory_idx ON aif_product_models (subcategory_id)`);
+        aifSubcategorySchemaEnsured = true;
+        return true;
+      } catch (e) {
+        console.error("AIF subcategory schema ensure warning", e);
+        throw e;
+      }
+    };
+
+    if (client === pool) {
+      if (!aifSubcategorySchemaPromise) {
+        aifSubcategorySchemaPromise = run().finally(() => { aifSubcategorySchemaPromise = null; });
+      }
+      return aifSubcategorySchemaPromise;
     }
+
+    return run();
   }
 
 
@@ -1333,15 +1351,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   }
   router.use(async (_req, res, next) => {
     try {
+      // Csak a valóban közös, kicsi törzssémákat ellenőrizzük globálisan.
+      // A beszerzési és üzleti eladási sémák saját route-jaikban már külön is
+      // biztosítva vannak. Korábban minden egyes raktárkérés megvárta ezeket a
+      // nagy DDL/backfill csomagokat is, főleg hideg Render-induláskor.
       await ensureSnCodSchema(pool);
       await ensureAifSubcategorySchema(pool);
       await ensureSizeMasterDataSchema(pool);
-      await ensureAifPurchaseOrderSchema(pool);
-      await ensureAifShopSalesSchema();
       next();
     } catch (e) {
-      console.error("AIF AIF schema ensure failed", e);
-      res.status(500).json({ error: "Az AllInFashion adatbázis mezők előkészítése nem sikerült.", code: e?.code || null });
+      console.error("AIF core schema ensure failed", e);
+      res.status(500).json({ error: "Az AllInFashion alap adatbázismezők előkészítése nem sikerült.", code: e?.code || null });
     }
   });
 
@@ -5386,8 +5406,73 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
-  router.get("/meta", requireAuthed, async (_req, res) => {
+  router.get("/meta", requireAuthed, async (req, res) => {
     await ensureAifSizeTables(pool);
+
+    const scope = text(req.query.scope).toLowerCase();
+    if (scope === "warehouse") {
+      // A raktár nem használ pénznem-, importprofil- és egyéb admin-meta adatot.
+      // Ezeket korábban mégis minden megnyitáskor lekértük és JSON-ba csomagoltuk.
+      const [suppliers, brands, categories, genderTypes, locations, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands] = await Promise.all([
+        pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
+        pool.query(`WITH ranked AS (
+                      SELECT id, code, name, is_active,
+                             row_number() OVER (
+                               PARTITION BY lower(regexp_replace(trim(COALESCE(name, code, '')), '\s+', ' ', 'g'))
+                               ORDER BY is_active DESC, name ASC, code ASC, id::text ASC
+                             ) AS rn
+                      FROM aif_brands
+                      WHERE is_active=true
+                    )
+                    SELECT id, code, name, is_active
+                    FROM ranked
+                    WHERE rn=1
+                    ORDER BY name ASC`),
+        pool.query(`SELECT id, code, parent_id, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY parent_id NULLS FIRST, sort_order ASC, name_ro ASC`),
+        pool.query(`SELECT code, name, aliases, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
+        pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
+        pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
+                    FROM aif_color_types
+                    WHERE is_active=true
+                    ORDER BY sort_order ASC, name_ro ASC`),
+        pool.query(`${brandColorCodeSelect()}
+                    WHERE bcc.is_active=true AND b.is_active=true AND c.is_active=true
+                    ORDER BY b.name ASC, bcc.color_code ASC`),
+        pool.query(`SELECT id, code, name, name_hu, aliases, sort_order, is_active
+                    FROM aif_size_types
+                    WHERE is_active=true
+                    ORDER BY sort_order ASC, name ASC, code ASC`),
+        pool.query(`${brandSizeCodeSelect()}
+                    WHERE bsc.is_active=true AND b.is_active=true AND st.is_active=true
+                    ORDER BY b.name ASC, bsc.size_code ASC`),
+        pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, sort_order, is_active
+                    FROM aif_material_types
+                    WHERE is_active=true
+                    ORDER BY sort_order ASC, name_ro ASC`),
+        pool.query(`SELECT sb.id, sb.supplier_id, sb.brand_id, sb.is_preferred, sb.is_active,
+                           s.name AS supplier_name, b.name AS brand_name
+                    FROM aif_supplier_brands sb
+                    JOIN aif_suppliers s ON s.id=sb.supplier_id
+                    JOIN aif_brands b ON b.id=sb.brand_id
+                    WHERE sb.is_active=true AND s.is_active=true AND b.is_active=true
+                    ORDER BY s.name ASC, b.name ASC`),
+      ]);
+
+      return res.json({
+        suppliers: suppliers.rows,
+        brands: brands.rows,
+        categories: categories.rows,
+        genderTypes: genderTypes.rows,
+        locations: locations.rows,
+        colorTypes: colorTypes.rows,
+        brandColorCodes: brandColorCodes.rows,
+        sizeTypes: sizeTypes.rows,
+        brandSizeCodes: brandSizeCodes.rows,
+        materialTypes: materialTypes.rows,
+        supplierBrands: supplierBrands.rows,
+      });
+    }
+
     const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`WITH ranked AS (
@@ -11587,9 +11672,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
     const includeZero = ["1", "true", "yes"].includes(text(req.query.includeZero || req.query.include_zero).toLowerCase());
-    const limit = Math.min(25000, Math.max(1, Number(req.query.limit || 200)));
-    const offset = Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0);
     const fastPageRequested = ["1", "true", "yes", "warehouse"].includes(text(req.query.fastPage || req.query.fast_page).toLowerCase());
+    const requestedLimit = Math.max(1, Number(req.query.limit || 200));
+    // A gyors lapozott módot szándékosan nem engedjük újra több tízezer soros
+    // monolit válasszá nőni. A frontend elsőre 120, háttérben 600 sort kér.
+    const limit = Math.min(fastPageRequested ? 1000 : 25000, requestedLimit);
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0);
     const fastPage = Boolean(fastPageRequested && includeZero && !search && !snCod);
     const args = [];
     const where = [
@@ -11648,7 +11736,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
     const fastPageCte = fastPage ? `
        page_variants AS (
-         SELECT v0.id
+         SELECT v0.id, count(*) OVER()::int AS total_count
          FROM aif_product_variants v0
          JOIN aif_product_models m0 ON m0.id=v0.model_id
          LEFT JOIN aif_brands b0 ON b0.id=m0.brand_id
@@ -11672,6 +11760,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const invoiceFastFilter = fastPage ? `AND rw.variant_id IN (SELECT id FROM page_variants)` : "";
     const finalFastJoin = fastPage ? `JOIN page_variants pv ON pv.id=v.id` : "";
     const finalLimitSql = fastPage ? "" : `LIMIT ${limitParam} OFFSET ${offsetParam}`;
+    const fastTotalSelect = fastPage ? `pv.total_count AS _warehouse_total_count,` : "";
 
     const r = await pool.query(
       `WITH ${fastPageCte}stock_totals AS (
@@ -11791,6 +11880,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          GROUP BY rw.variant_id
        )
        SELECT
+         ${fastTotalSelect}
          v.id AS variant_id,
          v.internal_sku,
          (svm.variant_id IS NOT NULL) AS shopify_mapped,
@@ -11862,7 +11952,6 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          COALESCE(v.sell_price, lid.sell_price_ron, lid.sell_price) AS sell_price,
          v.compare_at_price,
          COALESCE(v.image_url, NULLIF(lid.normalized->>'imageUrl',''), NULLIF(lid.normalized->>'image_url','')) AS image_url,
-         v.images,
          COALESCE(st.total_qty, ci.committed_qty, lid.qty, 0) AS total_qty,
          COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
          COALESCE(st.available_qty, ci.committed_qty, lid.qty, 0) AS available_qty,
@@ -11918,12 +12007,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       args
     );
 
+    const total = fastPage
+      ? Number(r.rows[0]?._warehouse_total_count || 0)
+      : null;
+    const rows = fastPage
+      ? r.rows.map(({ _warehouse_total_count, ...row }) => row)
+      : r.rows;
+
     res.json({
-      items: r.rows,
+      items: rows,
       limit,
       offset,
-      returned: r.rows.length,
-      hasMore: r.rows.length === limit,
+      returned: rows.length,
+      total,
+      hasMore: fastPage ? offset + rows.length < total : rows.length === limit,
       fastPage,
     });
   });
@@ -11968,6 +12065,33 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const variant = text(req.query.variant || req.query.variantId || req.query.variant_id);
     const search = text(req.query.search || req.query.q);
     const snCod = text(req.query.snCod || req.query.sn_cod || req.query.sn || req.query.sncod);
+    const compact = ["1", "true", "yes", "warehouse"].includes(text(req.query.compact).toLowerCase());
+
+    if (compact && !variant && !search && !snCod) {
+      const compactArgs = [];
+      const compactWhere = [
+        `COALESCE(v.status,'active') <> 'archived'`,
+        `COALESCE(m.status,'active') <> 'archived'`,
+      ];
+      if (location) {
+        compactArgs.push(location);
+        compactWhere.push(`(l.code=$${compactArgs.length} OR l.id::text=$${compactArgs.length})`);
+      }
+      const compactResult = await pool.query(
+        `SELECT l.id AS location_id, l.code AS location_code, l.name AS location_name,
+                l.location_type, s.variant_id,
+                s.qty, s.reserved_qty, (s.qty - s.reserved_qty) AS available_qty, s.updated_at
+         FROM aif_stock s
+         JOIN aif_locations l ON l.id=s.location_id
+         JOIN aif_product_variants v ON v.id=s.variant_id
+         JOIN aif_product_models m ON m.id=v.model_id
+         WHERE ${compactWhere.join(" AND ")}
+         ORDER BY l.name ASC, s.variant_id ASC`,
+        compactArgs
+      );
+      return res.json({ items: compactResult.rows, compact: true });
+    }
+
     const args = [];
     const where = [
       `COALESCE(v.status,'active') <> 'archived'`,
@@ -17775,6 +17899,58 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     } catch (error) {
       console.error('AIF purchase orders list failed', error);
       res.status(500).json({ error: error?.message || 'A beszerzési rendelések betöltése nem sikerült.' });
+    }
+  });
+
+  router.get('/purchase-orders/open-variant-map', requireAuthed, async (_req, res) => {
+    try {
+      await ensureAifPurchaseOrderSchema(pool);
+      const rows = await pool.query(
+        `SELECT pol.variant_id::text AS variant_id,
+                po.id::text AS order_id,
+                po.order_number,
+                po.status,
+                po.created_at,
+                s.name AS supplier_name,
+                GREATEST(COALESCE(pol.qty_ordered,0)-COALESCE(pol.qty_received,0),0)::int AS qty
+         FROM aif_purchase_order_lines pol
+         JOIN aif_purchase_orders po ON po.id=pol.order_id
+         JOIN aif_suppliers s ON s.id=po.supplier_id
+         WHERE po.status IN ('draft','ordered','partially_received')
+           AND pol.variant_id IS NOT NULL
+           AND GREATEST(COALESCE(pol.qty_ordered,0)-COALESCE(pol.qty_received,0),0) > 0
+         ORDER BY po.created_at DESC, po.id, pol.line_no ASC`
+      );
+
+      const grouped = new Map();
+      for (const row of rows.rows) {
+        const variantId = text(row.variant_id);
+        const orderId = text(row.order_id);
+        const qty = Math.max(0, Number(row.qty || 0));
+        if (!variantId || !orderId || qty <= 0) continue;
+        const current = grouped.get(variantId) || { variantId, totalQty: 0, orders: new Map() };
+        current.totalQty += qty;
+        const order = current.orders.get(orderId) || {
+          id: orderId,
+          orderNumber: text(row.order_number) || 'Rendelés',
+          supplierName: text(row.supplier_name) || 'Beszállító',
+          status: text(row.status),
+          qty: 0,
+        };
+        order.qty += qty;
+        current.orders.set(orderId, order);
+        grouped.set(variantId, current);
+      }
+
+      const items = Array.from(grouped.values()).map((row) => ({
+        variantId: row.variantId,
+        totalQty: row.totalQty,
+        orders: Array.from(row.orders.values()),
+      }));
+      res.json({ ok: true, items, count: items.length });
+    } catch (error) {
+      console.error('AIF open purchase order variant map failed', error);
+      res.status(500).json({ error: 'A nyitott rendelések termékjelzéseinek betöltése nem sikerült.' });
     }
   });
 
