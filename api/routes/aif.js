@@ -11667,6 +11667,290 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+
+  // ---------------------------------------------------------------------------
+  // RAKTÁR GYORS LISTA
+  // A teljes /inventory route szándékosan sok történeti/import/Shopify adatot
+  // számol, mert más képernyők erre támaszkodnak. A Raktár főlistája viszont
+  // nem várhat 14+ ezer draft/inaktív variáns teljes történetére.
+  // Ez a route csak az aktív raktártermékeket + a készleten lévő aktiválandó
+  // kivételeket adja vissza, és NEM épít számlatörténetet soronként.
+  router.get("/warehouse-products", requireAuthed, async (req, res) => {
+    const requestedLimit = Math.max(1, Number(req.query.limit || 300));
+    const limit = Math.min(3000, requestedLimit);
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset || "0"), 10) || 0);
+    const args = [limit, offset];
+    const tariffExpr = customsTariffSql('v');
+    try {
+      const result = await pool.query(
+        `WITH page_variants AS (
+           SELECT v0.id, count(*) OVER()::int AS total_count
+           FROM aif_product_variants v0
+           JOIN aif_product_models m0 ON m0.id=v0.model_id
+           LEFT JOIN aif_brands b0 ON b0.id=m0.brand_id
+           WHERE COALESCE(v0.status,'active') <> 'archived'
+             AND COALESCE(m0.status,'active') <> 'archived'
+             AND (
+               (COALESCE(v0.status,'active')='active' AND COALESCE(m0.status,'active')='active')
+               OR EXISTS (
+                 SELECT 1
+                 FROM aif_stock sx
+                 WHERE sx.variant_id=v0.id
+                   AND (COALESCE(sx.qty,0) <> 0 OR COALESCE(sx.reserved_qty,0) <> 0)
+               )
+             )
+           ORDER BY COALESCE(b0.name,'') ASC NULLS LAST,
+                    m0.title_ro ASC,
+                    v0.color_name ASC NULLS LAST,
+                    v0.size ASC,
+                    v0.id ASC
+           LIMIT $1 OFFSET $2
+         ),
+         stock_totals AS (
+           SELECT s.variant_id,
+                  COALESCE(sum(COALESCE(s.qty,0)),0)::numeric AS total_qty,
+                  COALESCE(sum(COALESCE(s.reserved_qty,0)),0)::numeric AS total_reserved_qty,
+                  COALESCE(sum(COALESCE(s.qty,0)-COALESCE(s.reserved_qty,0)),0)::numeric AS available_qty,
+                  max(s.updated_at) AS last_stock_movement_at
+           FROM aif_stock s
+           WHERE s.variant_id IN (SELECT id FROM page_variants)
+           GROUP BY s.variant_id
+         ),
+         supplier_info AS (
+           SELECT sc.variant_id,
+                  string_agg(DISTINCT s.id::text, ', ' ORDER BY s.id::text) FILTER (WHERE s.id IS NOT NULL) AS supplier_ids,
+                  string_agg(DISTINCT s.code, ', ' ORDER BY s.code) FILTER (WHERE s.code IS NOT NULL AND s.code <> '') AS supplier_source_codes,
+                  string_agg(DISTINCT s.name, ', ' ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL AND s.name <> '') AS supplier_names,
+                  string_agg(DISTINCT NULLIF(concat_ws(' / ', sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_size), ''), ', ') AS supplier_codes,
+                  (array_agg(sc.supplier_product_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                    FILTER (WHERE sc.supplier_product_code IS NOT NULL AND sc.supplier_product_code <> ''))[1] AS supplier_product_code,
+                  (array_agg(sc.supplier_variant_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                    FILTER (WHERE sc.supplier_variant_code IS NOT NULL AND sc.supplier_variant_code <> ''))[1] AS supplier_variant_code,
+                  (array_agg(sc.supplier_color_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                    FILTER (WHERE sc.supplier_color_code IS NOT NULL AND sc.supplier_color_code <> ''))[1] AS supplier_color_code,
+                  (array_agg(sc.supplier_size ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                    FILTER (WHERE sc.supplier_size IS NOT NULL AND sc.supplier_size <> ''))[1] AS supplier_size,
+                  (array_agg(sc.supplier_barcode ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                    FILTER (WHERE sc.supplier_barcode IS NOT NULL AND sc.supplier_barcode <> ''))[1] AS supplier_barcode
+           FROM aif_variant_supplier_codes sc
+           LEFT JOIN aif_suppliers s ON s.id=sc.supplier_id
+           WHERE COALESCE(sc.is_active,true)=true
+             AND sc.variant_id IN (SELECT id FROM page_variants)
+           GROUP BY sc.variant_id
+         ),
+         incoming_info AS (
+           SELECT sm.variant_id,
+                  min(sm.created_at) AS first_incoming_at,
+                  max(sm.created_at) AS last_incoming_at
+           FROM aif_stock_movements sm
+           WHERE sm.variant_id IN (SELECT id FROM page_variants)
+             AND (sm.movement_type='incoming' OR sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit')
+           GROUP BY sm.variant_id
+         )
+         SELECT
+           pv.total_count AS _warehouse_total_count,
+           v.id AS variant_id,
+           v.internal_sku,
+           COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,'')) AS barcode,
+           COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,'')) AS display_barcode,
+           v.barcode AS variant_barcode,
+           v.sn_cod,
+           v.sn_cod AS "snCod",
+           v.attributes,
+           v.attributes AS variant_attributes,
+           ${tariffExpr} AS customs_tariff_code,
+           ${tariffExpr} AS "customsTariffCode",
+           v.status AS variant_status,
+           v.status AS status,
+           m.id AS model_id,
+           m.model_code,
+           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS supplier_product_code,
+           COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS "supplierProductCode",
+           si.supplier_variant_code,
+           si.supplier_color_code,
+           si.supplier_size,
+           m.title_ro,
+           m.title_hu,
+           m.description_ro,
+           m.shopify_title,
+           m.gender,
+           m.product_type,
+           m.season,
+           m.material,
+           m.status AS model_status,
+           b.name AS brand_name,
+           b.code AS brand_code,
+           c.name_ro AS category_name_ro,
+           c.name_hu AS category_name_hu,
+           c.code AS category_code,
+           subc.id::text AS subcategory_id,
+           subc.name_ro AS subcategory_name_ro,
+           subc.name_hu AS subcategory_name_hu,
+           subc.code AS subcategory_code,
+           v.color_code,
+           v.color_name,
+           v.color_hex,
+           v.size,
+           v.buy_price,
+           v.sell_price,
+           v.compare_at_price,
+           v.image_url,
+           COALESCE(st.total_qty,0) AS total_qty,
+           COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
+           COALESCE(st.available_qty,0) AS available_qty,
+           st.last_stock_movement_at,
+           COALESCE(ii.first_incoming_at, st.last_stock_movement_at) AS first_incoming_at,
+           COALESCE(ii.last_incoming_at, st.last_stock_movement_at) AS last_incoming_at,
+           NULL::text AS last_import_batch_id,
+           NULL::text AS last_reception_id,
+           NULL::text AS last_invoice_number,
+           NULL::date AS last_invoice_date,
+           NULL::date AS last_reception_date,
+           NULL::text AS last_source_file_name,
+           NULL::text[] AS invoice_numbers,
+           '[]'::jsonb AS invoice_history,
+           si.supplier_ids,
+           si.supplier_source_codes,
+           si.supplier_names,
+           si.supplier_codes,
+           (svm.variant_id IS NOT NULL) AS shopify_mapped,
+           svm.sync_status AS shopify_sync_status,
+           sso.status AS shopify_outbox_status,
+           svm.shopify_product_id,
+           svm.shopify_variant_id,
+           svm.shopify_inventory_item_id,
+           svm.shopify_product_title,
+           svm.shopify_variant_title,
+           svm.shopify_product_status,
+           svm.created_at AS shopify_mapped_at,
+           svm.updated_at AS shopify_mapping_updated_at,
+           svm.created_at AS shopify_connected_at,
+           svm.last_synced_at AS shopify_last_synced_at,
+           svm.last_error AS shopify_last_error,
+           sso.last_error AS shopify_outbox_error,
+           sxp.export_id::text AS shopify_export_id,
+           sxp.item_status AS shopify_export_item_status,
+           sxp.export_status AS shopify_export_status,
+           sxp.exported_at AS shopify_exported_at,
+           sxp.reconciled_at AS shopify_export_reconciled_at,
+           sxp.validation_errors AS shopify_export_errors,
+           sxp.validation_warnings AS shopify_export_warnings,
+           (sxp.item_status='exported_pending' AND svm.variant_id IS NULL) AS shopify_export_pending
+         FROM page_variants pv
+         JOIN aif_product_variants v ON v.id=pv.id
+         JOIN aif_product_models m ON m.id=v.model_id
+         LEFT JOIN aif_brands b ON b.id=m.brand_id
+         LEFT JOIN aif_categories c ON c.id=m.category_id
+         LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+         LEFT JOIN stock_totals st ON st.variant_id=v.id
+         LEFT JOIN supplier_info si ON si.variant_id=v.id
+         LEFT JOIN incoming_info ii ON ii.variant_id=v.id
+         LEFT JOIN LATERAL (
+           SELECT svm0.*
+           FROM aif_shopify_variant_map svm0
+           WHERE svm0.variant_id=v.id
+           ORDER BY svm0.updated_at DESC NULLS LAST, svm0.created_at DESC NULLS LAST
+           LIMIT 1
+         ) svm ON true
+         LEFT JOIN LATERAL (
+           SELECT sso0.status, sso0.last_error
+           FROM aif_shopify_sync_outbox sso0
+           WHERE sso0.variant_id=v.id
+           ORDER BY sso0.updated_at DESC NULLS LAST, sso0.created_at DESC NULLS LAST
+           LIMIT 1
+         ) sso ON true
+         LEFT JOIN LATERAL (
+           SELECT ei.export_id, ei.item_status, ei.validation_errors, ei.validation_warnings,
+                  e.status AS export_status, e.created_at AS exported_at, e.reconciled_at
+           FROM aif_shopify_product_export_items ei
+           JOIN aif_shopify_product_exports e ON e.id=ei.export_id
+           WHERE ei.variant_id=v.id
+           ORDER BY e.created_at DESC
+           LIMIT 1
+         ) sxp ON true
+         ORDER BY COALESCE(b.name,'') ASC NULLS LAST,
+                  m.title_ro ASC,
+                  v.color_name ASC NULLS LAST,
+                  v.size ASC,
+                  v.id ASC`,
+        args,
+      );
+      const total = Number(result.rows[0]?._warehouse_total_count || 0);
+      const items = result.rows.map(({ _warehouse_total_count, ...row }) => row);
+      return res.json({
+        ok: true,
+        items,
+        limit,
+        offset,
+        returned: items.length,
+        total,
+        hasMore: offset + items.length < total,
+        warehouseFast: true,
+      });
+    } catch (error) {
+      console.error("AIF warehouse fast products failed", error);
+      return res.status(500).json({ error: "A raktári gyorslista betöltése nem sikerült.", code: error?.code || null });
+    }
+  });
+
+  // A számlaszűrő külön, egyetlen aggregált lekérdezésből épül. Így a terméklista
+  // nem cipeli minden 300/2200-as csomagban újra ugyanazt a számlatörténetet.
+  router.get("/warehouse-invoices", requireAuthed, async (_req, res) => {
+    try {
+      const result = await pool.query(
+        `WITH visible_variants AS (
+           SELECT v.id
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           WHERE COALESCE(v.status,'active') <> 'archived'
+             AND COALESCE(m.status,'active') <> 'archived'
+             AND (
+               (COALESCE(v.status,'active')='active' AND COALESCE(m.status,'active')='active')
+               OR EXISTS (
+                 SELECT 1 FROM aif_stock sx
+                 WHERE sx.variant_id=v.id
+                   AND (COALESCE(sx.qty,0) <> 0 OR COALESCE(sx.reserved_qty,0) <> 0)
+               )
+             )
+         )
+         SELECT
+           COALESCE(r.id::text, 'batch:' || b.id::text) AS key,
+           r.id::text AS reception_id,
+           COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) AS invoice_number,
+           COALESCE(r.supplier_id, b.supplier_id)::text AS supplier_id,
+           s.code AS supplier_code,
+           s.name AS supplier_name,
+           r.invoice_date,
+           r.reception_date,
+           max(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at)) AS imported_at,
+           array_agg(DISTINCT b.id::text) AS batch_ids,
+           array_agg(DISTINCT rw.variant_id::text) AS variant_ids,
+           array_agg(DISTINCT l.name) FILTER (WHERE l.name IS NOT NULL AND l.name <> '') AS location_names,
+           array_agg(DISTINCT COALESCE(r.currency_code, b.currency_code)) FILTER (WHERE COALESCE(r.currency_code, b.currency_code) IS NOT NULL) AS currency_codes,
+           array_agg(DISTINCT b.source_file_name) FILTER (WHERE b.source_file_name IS NOT NULL AND b.source_file_name <> '') AS source_file_names
+         FROM aif_import_rows rw
+         JOIN visible_variants vv ON vv.id=rw.variant_id
+         JOIN aif_import_batches b ON b.id=rw.batch_id
+         LEFT JOIN aif_receptions r ON r.id=b.reception_id
+         LEFT JOIN aif_suppliers s ON s.id=COALESCE(r.supplier_id, b.supplier_id)
+         LEFT JOIN aif_locations l ON l.id=COALESCE(r.target_location_id, b.target_location_id)
+         WHERE rw.status='committed'
+           AND rw.variant_id IS NOT NULL
+           AND COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) IS NOT NULL
+         GROUP BY COALESCE(r.id::text, 'batch:' || b.id::text), r.id,
+                  COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')),
+                  COALESCE(r.supplier_id, b.supplier_id), s.code, s.name,
+                  r.invoice_date, r.reception_date
+         ORDER BY COALESCE(r.reception_date, r.invoice_date, max(COALESCE(b.committed_at, b.updated_at, b.created_at, rw.updated_at))::date) DESC NULLS LAST,
+                  COALESCE(NULLIF(r.invoice_number,''), NULLIF(b.invoice_number,'')) ASC`
+      );
+      return res.json({ ok: true, items: result.rows, count: result.rows.length });
+    } catch (error) {
+      console.error("AIF warehouse invoice index failed", error);
+      return res.status(500).json({ error: "A raktári számlalista betöltése nem sikerült.", code: error?.code || null });
+    }
+  });
+
   router.get("/inventory", requireAuthed, async (req, res) => {
     await ensureAifShopifyInventorySchema();
     const search = text(req.query.search || req.query.q);
