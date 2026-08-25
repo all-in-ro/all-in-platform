@@ -5169,16 +5169,34 @@ type WarehouseInventoryProgress = {
   total: number | null;
 };
 
+type WarehouseInvoiceIndexItem = {
+  key: string;
+  reception_id?: string | null;
+  invoice_number: string;
+  supplier_id?: string | null;
+  supplier_code?: string | null;
+  supplier_name?: string | null;
+  invoice_date?: string | null;
+  reception_date?: string | null;
+  imported_at?: string | null;
+  batch_ids?: string[] | null;
+  variant_ids?: string[] | null;
+  location_names?: string[] | null;
+  currency_codes?: string[] | null;
+  source_file_names?: string[] | null;
+};
+
 type WarehouseBootstrapCache = {
   meta: WarehouseMetaResponse;
   stock: StockItem[];
   items: InventoryItem[];
+  invoices: WarehouseInvoiceIndexItem[];
   loadedAt: number;
 };
 
-const WAREHOUSE_INITIAL_INVENTORY_PAGE_SIZE = 120;
-const WAREHOUSE_BACKGROUND_INVENTORY_PAGE_SIZE = 600;
-const WAREHOUSE_INVENTORY_MAX_ROWS = 30000;
+const WAREHOUSE_INITIAL_INVENTORY_PAGE_SIZE = 300;
+const WAREHOUSE_BACKGROUND_INVENTORY_PAGE_SIZE = 2200;
+const WAREHOUSE_INVENTORY_MAX_ROWS = 10000;
 const WAREHOUSE_BOOTSTRAP_CACHE_TTL_MS = 120_000;
 let warehouseBootstrapCache: WarehouseBootstrapCache | null = null;
 
@@ -5238,16 +5256,14 @@ async function apiInventory({
     const qs = new URLSearchParams();
     qs.set("limit", String(pageSize));
     qs.set("offset", String(offset));
-    qs.set("includeZero", "1");
-    qs.set("fastPage", "1");
 
     const page = await fetchJSON<{
       items: InventoryItem[];
       hasMore?: boolean;
       returned?: number;
       total?: number | null;
-      fastPage?: boolean;
-    }>(`/api/aif/inventory?${qs.toString()}`, { signal });
+      warehouseFast?: boolean;
+    }>(`/api/aif/warehouse-products?${qs.toString()}`, { signal });
 
     const rows = Array.isArray(page.items) ? page.items : [];
     const serverTotal = Number(page.total);
@@ -5284,6 +5300,10 @@ async function apiMeta() {
 
 async function apiStock() {
   return fetchJSON<{ items: StockItem[] }>("/api/aif/stock?compact=1");
+}
+
+async function apiWarehouseInvoices() {
+  return fetchJSON<{ ok?: boolean; items?: WarehouseInvoiceIndexItem[]; count?: number }>("/api/aif/warehouse-invoices");
 }
 
 async function apiIncomingStockMovements(limit = 300) {
@@ -5939,6 +5959,7 @@ export default function AllInWarehouse() {
   const colorFilterRef = useRef<HTMLDivElement | null>(null);
   const [location, setLocation] = useState("all");
   const [invoiceFilter, setInvoiceFilter] = useState("all");
+  const [invoiceIndexRows, setInvoiceIndexRows] = useState<WarehouseInvoiceIndexItem[]>([]);
   const [invoiceDetailTarget, setInvoiceDetailTarget] = useState<WarehouseInvoiceFilterOption | null>(null);
   const [invoiceDetailRows, setInvoiceDetailRows] = useState<WarehouseReceptionDetail[]>([]);
   const [invoiceDetailBusy, setInvoiceDetailBusy] = useState(false);
@@ -7164,6 +7185,58 @@ export default function AllInWarehouse() {
   }, [sizeTypes, inventoryDisplayItems]);
 
   const invoiceFilterOptions = useMemo<WarehouseInvoiceFilterOption[]>(() => {
+    if (invoiceIndexRows.length) {
+      const itemById = new Map(inventoryDisplayItems.map((item) => [String(item.variant_id || ""), item] as const));
+      const selectedSupplierKeys = selectedSupplier
+        ? new Set([selectedSupplier.id, selectedSupplier.code, selectedSupplier.name].map(normalizeSearch).filter(Boolean))
+        : null;
+
+      return invoiceIndexRows
+        .map((row) => {
+          const supplierKeys = [row.supplier_id, row.supplier_code, row.supplier_name].map(normalizeSearch).filter(Boolean);
+          if (selectedSupplierKeys && !supplierKeys.some((key) => selectedSupplierKeys.has(key))) return null;
+
+          let variantIds = Array.from(new Set((row.variant_ids || []).map((value) => String(value || "").trim()).filter(Boolean)));
+          if (brand !== "all") {
+            variantIds = variantIds.filter((id) => {
+              const item = itemById.get(id);
+              return Boolean(item && ((item.brand_code || item.brand_name || "") === brand || item.brand_name === brand));
+            });
+            if (!variantIds.length) return null;
+          }
+
+          const mappedItems = variantIds.map((id) => itemById.get(id)).filter(Boolean) as InventoryItem[];
+          const dateMs = Math.max(dateTimeMs(row.reception_date), dateTimeMs(row.invoice_date), dateTimeMs(row.imported_at));
+          const receptionId = String(row.reception_id || "").trim();
+          const invoiceNumber = String(row.invoice_number || "").trim();
+          const value = receptionId ? `reception:${receptionId}` : String(row.key || `invoice:${normalizeSearch(invoiceNumber)}`);
+          const dateLabel = warehouseDateLabel(row.invoice_date || row.reception_date || row.imported_at);
+          return {
+            value,
+            invoiceNumber,
+            supplierId: String(row.supplier_id || "").trim() || null,
+            supplierCode: String(row.supplier_code || "").trim() || null,
+            supplierName: String(row.supplier_name || "Beszállító nélkül").trim() || "Beszállító nélkül",
+            supplierKeys,
+            invoiceDate: row.invoice_date || null,
+            receptionDate: row.reception_date || null,
+            importedAt: row.imported_at || null,
+            dateMs,
+            count: variantIds.length,
+            variantIds,
+            receptionIds: receptionId ? [receptionId] : [],
+            batchIds: Array.from(new Set((row.batch_ids || []).map(String).filter(Boolean))),
+            locationNames: Array.from(new Set((row.location_names || []).map(String).filter(Boolean))),
+            currencyCodes: Array.from(new Set((row.currency_codes || []).map(String).filter(Boolean))),
+            sourceFileNames: Array.from(new Set((row.source_file_names || []).map(String).filter(Boolean))),
+            items: mappedItems,
+            displayLabel: `${invoiceNumber}${dateLabel ? ` • ${dateLabel}` : ""} • ${variantIds.length} variáns`,
+          } satisfies WarehouseInvoiceFilterOption;
+        })
+        .filter((row): row is WarehouseInvoiceFilterOption => Boolean(row && row.invoiceNumber))
+        .sort((a, b) => b.dateMs - a.dateMs || a.invoiceNumber.localeCompare(b.invoiceNumber, "hu", { numeric: true, sensitivity: "base" }));
+    }
+
     const map = new Map<string, {
       invoiceNumber: string;
       supplierId?: string | null;
@@ -7313,7 +7386,7 @@ export default function AllInWarehouse() {
         } satisfies WarehouseInvoiceFilterOption;
       })
       .sort((a, b) => b.dateMs - a.dateMs || a.invoiceNumber.localeCompare(b.invoiceNumber, "hu", { numeric: true, sensitivity: "base" }));
-  }, [inventoryDisplayItems, supplier, brand, selectedSupplier]);
+  }, [inventoryDisplayItems, invoiceIndexRows, supplier, brand, selectedSupplier]);
 
   const selectedInvoiceFilterOption = useMemo(
     () => invoiceFilter === "all" ? null : invoiceFilterOptions.find((option) => option.value === invoiceFilter) || null,
@@ -7804,7 +7877,10 @@ export default function AllInWarehouse() {
     if (location !== "all") {
       out = out.filter((x) => (stockMap.get(x.variant_id) || []).some((s) => (s.location_code === location || s.location_name === location) && n(s.qty) > 0));
     }
-    if (invoiceFilter !== "all") out = out.filter((x) => itemMatchesInvoiceOption(x, selectedInvoiceFilterOption));
+    if (invoiceFilter !== "all") {
+      const allowedInvoiceVariants = new Set(selectedInvoiceFilterOption?.variantIds || []);
+      out = out.filter((x) => allowedInvoiceVariants.has(String(x.variant_id || "")));
+    }
     if (stockFilter === "available") out = out.filter((x) => n(x.available_qty) > 0);
     if (stockFilter === "out") out = out.filter((x) => n(x.total_qty) <= 0);
     if (stockFilter === "reserved") out = out.filter((x) => n(x.total_reserved_qty) > 0);
@@ -10816,6 +10892,7 @@ export default function AllInWarehouse() {
     const visibleSnapshot = cached?.items || (items.length ? items : null);
     let loadedMeta: WarehouseMetaResponse | null = cached?.meta || null;
     let loadedStock: StockItem[] = cached?.stock || [];
+    let loadedInvoices: WarehouseInvoiceIndexItem[] = cached?.invoices || [];
     let latestInventory: InventoryItem[] = cached?.items || [];
     let inventoryComplete = false;
     let firstInventoryArrived = Boolean(cached);
@@ -10837,6 +10914,7 @@ export default function AllInWarehouse() {
     if (cached) {
       applyWarehouseMeta(cached.meta);
       setStockRows(cached.stock);
+      setInvoiceIndexRows(cached.invoices || []);
       setItems(cached.items.filter((item) => !isArchivedInventoryItem(item)));
       setInventoryLoadedCount(cached.items.length);
       setInventoryTotalCount(cached.items.length);
@@ -10902,6 +10980,20 @@ export default function AllInWarehouse() {
         }
       })();
 
+      const invoiceTask = (async () => {
+        try {
+          const response = await apiWarehouseInvoices();
+          loadedInvoices = response.items || [];
+          if (isCurrent()) setInvoiceIndexRows(loadedInvoices);
+          return loadedInvoices;
+        } catch (error) {
+          // A terméklista ettől még használható. A számlaszűrő visszaeshet a
+          // már betöltött termékek történeti adataira.
+          console.error("AIF warehouse invoice index load skipped", error);
+          return loadedInvoices;
+        }
+      })();
+
       const inventoryTask = apiInventory({
         signal: controller.signal,
         onProgress: (progress) => {
@@ -10955,7 +11047,7 @@ export default function AllInWarehouse() {
           console.error("AIF selected variants load skipped", selectionError);
         });
 
-      await Promise.all([inventoryTask, selectionTask]);
+      await Promise.all([inventoryTask, selectionTask, invoiceTask]);
       if (!isCurrent()) return;
 
       setItems(latestInventory);
@@ -10968,6 +11060,7 @@ export default function AllInWarehouse() {
           meta: loadedMeta,
           stock: loadedStock,
           items: latestInventory,
+          invoices: loadedInvoices,
           loadedAt: Date.now(),
         };
       }
