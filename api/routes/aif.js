@@ -1349,21 +1349,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
   async function ensureSizeMasterDataSchema(client = pool) {
     return ensureAifSizeTables(client);
   }
-  router.use(async (_req, res, next) => {
-    try {
-      // Csak a valóban közös, kicsi törzssémákat ellenőrizzük globálisan.
-      // A beszerzési és üzleti eladási sémák saját route-jaikban már külön is
-      // biztosítva vannak. Korábban minden egyes raktárkérés megvárta ezeket a
-      // nagy DDL/backfill csomagokat is, főleg hideg Render-induláskor.
-      await ensureSnCodSchema(pool);
-      await ensureAifSubcategorySchema(pool);
-      await ensureSizeMasterDataSchema(pool);
-      next();
-    } catch (e) {
-      console.error("AIF core schema ensure failed", e);
-      res.status(500).json({ error: "Az AllInFashion alap adatbázismezők előkészítése nem sikerült.", code: e?.code || null });
-    }
-  });
+  // Nincs globális schema/DDL ellenőrzés a request pathban és induláskor sem.
+  // A szükséges sémát a migrációk, illetve az érintett író route-ok saját
+  // ensure-függvényei kezelik. A raktár olvasási végpontjai így tisztán SELECT-ek.
 
   function splitBrandProductCode(value) {
     const raw = text(value);
@@ -1554,35 +1542,141 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, [ownerKey]);
   }
 
-  async function ensureSelectedVariantsTable(client) {
-    await client.query(`CREATE TABLE IF NOT EXISTS aif_user_selected_variants (
-      owner_key text NOT NULL,
-      variant_id text NOT NULL,
-      action text NULL,
-      sort_order integer NOT NULL DEFAULT 0,
-      raw jsonb NOT NULL DEFAULT '{}'::jsonb,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now(),
-      PRIMARY KEY (owner_key, variant_id),
-      CHECK (action IS NULL OR action IN ('label','order','move','shopify'))
-    )`);
-    await client.query(`CREATE INDEX IF NOT EXISTS aif_user_selected_variants_owner_sort_idx
-      ON aif_user_selected_variants (owner_key, sort_order, updated_at)`);
+  let selectedVariantsSchemaEnsured = false;
+  let selectedVariantsSchemaPromise = null;
+
+  async function ensureSelectedVariantsTable(client = pool) {
+    if (selectedVariantsSchemaEnsured) return true;
+
+    const run = async () => {
+      await client.query(`CREATE TABLE IF NOT EXISTS aif_user_selected_variants (
+        owner_key text NOT NULL,
+        variant_id text NOT NULL,
+        action text NULL,
+        sort_order integer NOT NULL DEFAULT 0,
+        raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (owner_key, variant_id),
+        CHECK (action IS NULL OR action IN ('label','order','move','shopify'))
+      )`);
+      await client.query(`CREATE INDEX IF NOT EXISTS aif_user_selected_variants_owner_sort_idx
+        ON aif_user_selected_variants (owner_key, sort_order, updated_at)`);
+      selectedVariantsSchemaEnsured = true;
+      return true;
+    };
+
+    if (client === pool) {
+      if (!selectedVariantsSchemaPromise) {
+        selectedVariantsSchemaPromise = run().catch((error) => {
+          selectedVariantsSchemaPromise = null;
+          throw error;
+        });
+      }
+      return selectedVariantsSchemaPromise;
+    }
+
+    // Tranzakciós kliensnél a táblának normál esetben már léteznie kell. Ha még
+    // nem, egyszer létrehozzuk, majd a folyamat további kérései már nem DDL-eznek.
+    const result = await run();
+    return result;
   }
 
   async function loadSelectedVariantRows(client, ownerKey) {
+    // A közös munkalista korábban az egész aif_inventory_summary view-t húzta rá
+    // minden pollingra. Ha egy kérés 10+ másodpercig tartott, a 2 másodperces
+    // polling egymásra torlasztotta őket és elfoglalta a teljes DB connection poolt.
+    // Most ELŐSZÖR a néhány kijelölt ID-t vesszük ki, és csak ezekhez joinolunk.
     return client.query(
-      `SELECT i.*, v.sn_cod,
-              s.variant_id AS selected_variant_id,
-              s.action,
-              s.sort_order,
-              s.created_at AS selected_at,
-              s.updated_at AS selected_updated_at
-       FROM aif_user_selected_variants s
-       LEFT JOIN aif_inventory_summary i ON i.variant_id::text=s.variant_id
-       LEFT JOIN aif_product_variants v ON v.id::text=s.variant_id
-       WHERE s.owner_key=$1
-       ORDER BY s.sort_order ASC, s.updated_at ASC`,
+      `WITH selected AS (
+         SELECT variant_id, action, sort_order, raw, created_at, updated_at
+         FROM aif_user_selected_variants
+         WHERE owner_key=$1
+       ),
+       stock_totals AS (
+         SELECT st.variant_id,
+                COALESCE(sum(COALESCE(st.qty,0)),0)::numeric AS total_qty,
+                COALESCE(sum(COALESCE(st.reserved_qty,0)),0)::numeric AS total_reserved_qty,
+                COALESCE(sum(COALESCE(st.qty,0)-COALESCE(st.reserved_qty,0)),0)::numeric AS available_qty,
+                max(st.updated_at) AS last_stock_movement_at
+         FROM aif_stock st
+         JOIN selected sel ON sel.variant_id=st.variant_id::text
+         GROUP BY st.variant_id
+       ),
+       supplier_info AS (
+         SELECT sc.variant_id,
+                string_agg(DISTINCT sup.id::text, ', ' ORDER BY sup.id::text) FILTER (WHERE sup.id IS NOT NULL) AS supplier_ids,
+                string_agg(DISTINCT sup.code, ', ' ORDER BY sup.code) FILTER (WHERE sup.code IS NOT NULL AND sup.code <> '') AS supplier_source_codes,
+                string_agg(DISTINCT sup.name, ', ' ORDER BY sup.name) FILTER (WHERE sup.name IS NOT NULL AND sup.name <> '') AS supplier_names,
+                string_agg(DISTINCT NULLIF(concat_ws(' / ', sc.supplier_product_code, sc.supplier_variant_code, sc.supplier_color_code, sc.supplier_size), ''), ', ') AS supplier_codes,
+                (array_agg(sc.supplier_product_code ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                  FILTER (WHERE sc.supplier_product_code IS NOT NULL AND sc.supplier_product_code <> ''))[1] AS supplier_product_code,
+                (array_agg(sc.supplier_barcode ORDER BY sc.updated_at DESC NULLS LAST, sc.created_at DESC NULLS LAST)
+                  FILTER (WHERE sc.supplier_barcode IS NOT NULL AND sc.supplier_barcode <> ''))[1] AS supplier_barcode
+         FROM aif_variant_supplier_codes sc
+         JOIN selected sel ON sel.variant_id=sc.variant_id::text
+         LEFT JOIN aif_suppliers sup ON sup.id=sc.supplier_id
+         WHERE COALESCE(sc.is_active,true)=true
+         GROUP BY sc.variant_id
+       ),
+       latest_export AS (
+         SELECT DISTINCT ON (ei.variant_id)
+                ei.variant_id, ei.export_id, ei.item_status, ei.validation_errors, ei.validation_warnings,
+                ex.status AS export_status, ex.created_at AS exported_at, ex.reconciled_at
+         FROM aif_shopify_product_export_items ei
+         JOIN aif_shopify_product_exports ex ON ex.id=ei.export_id
+         JOIN selected sel ON sel.variant_id=ei.variant_id::text
+         ORDER BY ei.variant_id, ex.created_at DESC
+       )
+       SELECT
+         v.id AS variant_id,
+         v.internal_sku,
+         COALESCE(NULLIF(v.barcode,''), NULLIF(si.supplier_barcode,'')) AS barcode,
+         v.sn_cod,
+         v.attributes,
+         v.status AS variant_status,
+         m.id AS model_id,
+         m.model_code,
+         COALESCE(NULLIF(si.supplier_product_code,''), NULLIF(v.attributes->>'legacyProductCode','')) AS supplier_product_code,
+         m.title_ro, m.title_hu, m.description_ro, m.shopify_title,
+         m.gender, m.product_type, m.season, m.material, m.status AS model_status,
+         b.name AS brand_name, b.code AS brand_code,
+         c.name_ro AS category_name_ro, c.name_hu AS category_name_hu, c.code AS category_code,
+         subc.id::text AS subcategory_id, subc.name_ro AS subcategory_name_ro, subc.name_hu AS subcategory_name_hu, subc.code AS subcategory_code,
+         v.color_code, v.color_name, v.color_hex, v.size,
+         v.buy_price, v.sell_price, v.compare_at_price, v.image_url,
+         COALESCE(st.total_qty,0) AS total_qty,
+         COALESCE(st.total_reserved_qty,0) AS total_reserved_qty,
+         COALESCE(st.available_qty,0) AS available_qty,
+         st.last_stock_movement_at,
+         si.supplier_ids, si.supplier_source_codes, si.supplier_names, si.supplier_codes,
+         (svm.variant_id IS NOT NULL) AS shopify_mapped,
+         svm.sync_status AS shopify_sync_status,
+         sso.status AS shopify_outbox_status,
+         svm.shopify_product_id, svm.shopify_variant_id, svm.shopify_inventory_item_id,
+         svm.shopify_product_title, svm.shopify_variant_title, svm.shopify_product_status,
+         svm.created_at AS shopify_mapped_at, svm.updated_at AS shopify_mapping_updated_at,
+         svm.created_at AS shopify_connected_at, svm.last_synced_at AS shopify_last_synced_at,
+         svm.last_error AS shopify_last_error, sso.last_error AS shopify_outbox_error,
+         sxp.export_id::text AS shopify_export_id, sxp.item_status AS shopify_export_item_status,
+         sxp.export_status AS shopify_export_status, sxp.exported_at AS shopify_exported_at,
+         sxp.reconciled_at AS shopify_export_reconciled_at,
+         sxp.validation_errors AS shopify_export_errors, sxp.validation_warnings AS shopify_export_warnings,
+         (sxp.item_status='exported_pending' AND svm.variant_id IS NULL) AS shopify_export_pending,
+         sel.variant_id AS selected_variant_id,
+         sel.action, sel.sort_order, sel.created_at AS selected_at, sel.updated_at AS selected_updated_at
+       FROM selected sel
+       LEFT JOIN aif_product_variants v ON v.id::text=sel.variant_id
+       LEFT JOIN aif_product_models m ON m.id=v.model_id
+       LEFT JOIN aif_brands b ON b.id=m.brand_id
+       LEFT JOIN aif_categories c ON c.id=m.category_id
+       LEFT JOIN aif_categories subc ON subc.id=m.subcategory_id
+       LEFT JOIN stock_totals st ON st.variant_id=v.id
+       LEFT JOIN supplier_info si ON si.variant_id=v.id
+       LEFT JOIN aif_shopify_variant_map svm ON svm.variant_id=v.id
+       LEFT JOIN aif_shopify_sync_outbox sso ON sso.variant_id=v.id
+       LEFT JOIN latest_export sxp ON sxp.variant_id=v.id
+       ORDER BY sel.sort_order ASC, sel.updated_at ASC`,
       [ownerKey]
     );
   }
@@ -11746,6 +11840,15 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            WHERE sm.variant_id IN (SELECT id FROM page_variants)
              AND (sm.movement_type='incoming' OR sm.source_type='import_batch' OR sm.raw->>'reason'='import_batch_commit')
            GROUP BY sm.variant_id
+         ),
+         latest_shopify_export AS (
+           SELECT DISTINCT ON (ei.variant_id)
+                  ei.variant_id, ei.export_id, ei.item_status, ei.validation_errors, ei.validation_warnings,
+                  e.status AS export_status, e.created_at AS exported_at, e.reconciled_at
+           FROM aif_shopify_product_export_items ei
+           JOIN aif_shopify_product_exports e ON e.id=ei.export_id
+           WHERE ei.variant_id IN (SELECT id FROM page_variants)
+           ORDER BY ei.variant_id, e.created_at DESC
          )
          SELECT
            pv.total_count AS _warehouse_total_count,
@@ -11845,29 +11948,9 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN stock_totals st ON st.variant_id=v.id
          LEFT JOIN supplier_info si ON si.variant_id=v.id
          LEFT JOIN incoming_info ii ON ii.variant_id=v.id
-         LEFT JOIN LATERAL (
-           SELECT svm0.*
-           FROM aif_shopify_variant_map svm0
-           WHERE svm0.variant_id=v.id
-           ORDER BY svm0.updated_at DESC NULLS LAST, svm0.created_at DESC NULLS LAST
-           LIMIT 1
-         ) svm ON true
-         LEFT JOIN LATERAL (
-           SELECT sso0.status, sso0.last_error
-           FROM aif_shopify_sync_outbox sso0
-           WHERE sso0.variant_id=v.id
-           ORDER BY sso0.updated_at DESC NULLS LAST, sso0.created_at DESC NULLS LAST
-           LIMIT 1
-         ) sso ON true
-         LEFT JOIN LATERAL (
-           SELECT ei.export_id, ei.item_status, ei.validation_errors, ei.validation_warnings,
-                  e.status AS export_status, e.created_at AS exported_at, e.reconciled_at
-           FROM aif_shopify_product_export_items ei
-           JOIN aif_shopify_product_exports e ON e.id=ei.export_id
-           WHERE ei.variant_id=v.id
-           ORDER BY e.created_at DESC
-           LIMIT 1
-         ) sxp ON true
+         LEFT JOIN aif_shopify_variant_map svm ON svm.variant_id=v.id
+         LEFT JOIN aif_shopify_sync_outbox sso ON sso.variant_id=v.id
+         LEFT JOIN latest_shopify_export sxp ON sxp.variant_id=v.id
          ORDER BY COALESCE(b.name,'') ASC NULLS LAST,
                   m.title_ro ASC,
                   v.color_name ASC NULLS LAST,
