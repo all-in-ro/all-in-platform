@@ -6086,6 +6086,7 @@ export default function AllInWarehouse() {
   const selectedMutationCountRef = useRef(0);
   const selectedMutationSequenceRef = useRef(0);
   const selectedFetchSequenceRef = useRef(0);
+  const selectedFetchInFlightRef = useRef<Promise<SelectedVariantSelectionResponse | null> | null>(null);
   const [pendingProductJumpId, setPendingProductJumpId] = useState("");
   const [highlightProductId, setHighlightProductId] = useState("");
   const [incomingFocus, setIncomingFocus] = useState<{ batchId: string; variantIds: string[]; rows: Array<Record<string, any>>; batch?: Record<string, any> | null; totalQty?: number; sourceFileName?: string | null; mode?: "import" | "activation" } | null>(null);
@@ -9550,20 +9551,39 @@ export default function AllInWarehouse() {
   }
 
   async function refreshSelectedVariantSelection(options: { force?: boolean; quiet?: boolean } = {}) {
-    if (!options.force && selectedMutationCountRef.current > 0) return null;
+    if (selectedMutationCountRef.current > 0) return null;
+
+    // Soha ne fusson egynél több közös-munkalista GET egyszerre. A korábbi
+    // 2 másodperces polling alatt a lassú lekérdezések egymásra torlódtak,
+    // és képesek voltak elfoglalni az egész PostgreSQL connection poolt.
+    if (selectedFetchInFlightRef.current) {
+      if (!options.force) return selectedFetchInFlightRef.current;
+      await selectedFetchInFlightRef.current;
+      if (selectedMutationCountRef.current > 0) return null;
+    }
+
     const requestSequence = ++selectedFetchSequenceRef.current;
     const mutationSequenceAtStart = selectedMutationSequenceRef.current;
+    const request = (async (): Promise<SelectedVariantSelectionResponse | null> => {
+      try {
+        const saved = await apiSelectedVariantSelection();
+        if (requestSequence !== selectedFetchSequenceRef.current) return saved;
+        // Ha a GET indítása óta kattintás történt, a válasz már lehet régi.
+        // Ilyenkor nem alkalmazzuk, a művelet végén induló következő GET lesz az igazság.
+        if (mutationSequenceAtStart !== selectedMutationSequenceRef.current || selectedMutationCountRef.current > 0) return saved;
+        applyPersistedSelectedWorklist(saved.items || []);
+        return saved;
+      } catch (error) {
+        if (!options.quiet) console.error("AIF selected variants refresh failed", error);
+        return null;
+      }
+    })();
+
+    selectedFetchInFlightRef.current = request;
     try {
-      const saved = await apiSelectedVariantSelection();
-      if (requestSequence !== selectedFetchSequenceRef.current) return saved;
-      // Ha a GET indítása óta kattintás történt, a válasz már lehet régi.
-      // Ilyenkor nem alkalmazzuk, a művelet végén induló következő GET lesz az igazság.
-      if (mutationSequenceAtStart !== selectedMutationSequenceRef.current || selectedMutationCountRef.current > 0) return saved;
-      applyPersistedSelectedWorklist(saved.items || []);
-      return saved;
-    } catch (error) {
-      if (!options.quiet) console.error("AIF selected variants refresh failed", error);
-      return null;
+      return await request;
+    } finally {
+      if (selectedFetchInFlightRef.current === request) selectedFetchInFlightRef.current = null;
     }
   }
 
@@ -10384,12 +10404,17 @@ export default function AllInWarehouse() {
   }, [selectedVariants]);
 
   useEffect(() => {
+    if (!primaryDataReady) return;
     let disposed = false;
     const refreshSharedSelection = () => {
       if (disposed || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
       void refreshSelectedVariantSelection({ quiet: true });
     };
-    const timer = window.setInterval(refreshSharedSelection, 2000);
+
+    // Több gép közös munkalistáját továbbra is szinkronban tartjuk, de nem
+    // bombázzuk két másodpercenként az adatbázist. Fókusz-visszatéréskor azonnal,
+    // egyébként legfeljebb 30 másodpercenként ellenőrzünk, átfedő kérés nélkül.
+    const timer = window.setInterval(refreshSharedSelection, 30_000);
     const onFocus = () => refreshSharedSelection();
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") refreshSharedSelection();
@@ -10402,7 +10427,7 @@ export default function AllInWarehouse() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [primaryDataReady]);
 
   useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
@@ -11032,7 +11057,10 @@ export default function AllInWarehouse() {
         throw error;
       });
 
-      await Promise.all([metaTask, stockTask, firstInventoryReady]);
+      // Az első 300 termék megérkezése elég ahhoz, hogy a Raktár használható legyen.
+      // A meta, helyenkénti stock, számlák és közös munkalista már nem tarthatják
+      // fogva az első renderelést; ezek folytatódnak a háttérben.
+      await firstInventoryReady;
       if (isCurrent()) {
         setBusy(false);
         setPrimaryDataReady(true);
@@ -11047,7 +11075,7 @@ export default function AllInWarehouse() {
           console.error("AIF selected variants load skipped", selectionError);
         });
 
-      await Promise.all([inventoryTask, selectionTask, invoiceTask]);
+      await Promise.all([inventoryTask, metaTask, stockTask, selectionTask, invoiceTask]);
       if (!isCurrent()) return;
 
       setItems(latestInventory);
