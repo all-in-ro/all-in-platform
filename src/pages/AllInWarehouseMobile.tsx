@@ -340,7 +340,43 @@ const WAREHOUSE_BARCODE_VIDEO_CONSTRAINTS: MediaStreamConstraints = {
   audio: false,
 };
 const WAREHOUSE_ZXING_BROWSER_CDN = "https://unpkg.com/@zxing/browser@0.1.5";
+const MOBILE_WAREHOUSE_INITIAL_PAGE_SIZE = 300;
+const MOBILE_WAREHOUSE_BACKGROUND_PAGE_SIZE = 2200;
+const MOBILE_WAREHOUSE_MAX_ROWS = 10000;
+const MOBILE_WAREHOUSE_CACHE_TTL_MS = 120_000;
+const MOBILE_WAREHOUSE_FOCUS_REFRESH_AFTER_MS = 60_000;
 let warehouseZxingBrowserPromise: Promise<any | null> | null = null;
+
+type MobileWarehouseMetaResponse = {
+  suppliers?: MetaItem[];
+  brands?: MetaItem[];
+  categories?: MetaItem[];
+  genderTypes?: GenderType[];
+  colorTypes?: ColorType[];
+  sizeTypes?: SizeType[];
+  locations?: MetaItem[];
+};
+
+type MobileWarehouseBootstrapCache = {
+  meta: MobileWarehouseMetaResponse;
+  stock: StockItem[];
+  items: InventoryItem[];
+  loadedAt: number;
+};
+
+let mobileWarehouseBootstrapCache: MobileWarehouseBootstrapCache | null = null;
+
+function mobileWarehouseBootstrapCacheFresh() {
+  return Boolean(
+    mobileWarehouseBootstrapCache &&
+    Date.now() - mobileWarehouseBootstrapCache.loadedAt <= MOBILE_WAREHOUSE_CACHE_TTL_MS
+  );
+}
+
+function mobileWarehouseYieldToBrowser() {
+  if (typeof window === "undefined") return Promise.resolve();
+  return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+}
 
 function cleanScannedBarcode(value: unknown) {
   return String(value ?? "").replace(/[\r\n\t]+/g, "").trim();
@@ -994,6 +1030,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const barcodeScanRafRef = useRef<number | null>(null);
   const barcodeScannerHandlingRef = useRef(false);
   const stockEditorSaveLockRef = useRef(false);
+  const loadSequenceRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
+  const loadInFlightRef = useRef(false);
+  const lastSuccessfulLoadAtRef = useRef(0);
 
   async function fetchAifJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const method = String(init?.method || "GET").toUpperCase();
@@ -1015,56 +1055,88 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return data as T;
   }
 
-  async function apiInventory(onProgress?: (items: InventoryItem[], done: boolean) => void) {
-    const pageSize = 2500;
-    const maxRows = 30000;
+  async function apiInventory({
+    signal,
+    onProgress,
+  }: {
+    signal?: AbortSignal;
+    onProgress?: (items: InventoryItem[], done: boolean, total: number | null) => void;
+  } = {}) {
     const items: InventoryItem[] = [];
     const seenVariantIds = new Set<string>();
+    let offset = 0;
+    let requestIndex = 0;
+    let total: number | null = null;
 
-    for (let offset = 0; offset < maxRows; offset += pageSize) {
+    while (offset < MOBILE_WAREHOUSE_MAX_ROWS) {
+      if (signal?.aborted) throw new DOMException("A mobil raktárbetöltés megszakadt.", "AbortError");
+
+      const pageSize = requestIndex === 0
+        ? MOBILE_WAREHOUSE_INITIAL_PAGE_SIZE
+        : MOBILE_WAREHOUSE_BACKGROUND_PAGE_SIZE;
+      const qs = new URLSearchParams();
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(offset));
+
       const page = await fetchAifJSON<{
         items: InventoryItem[];
         hasMore?: boolean;
         returned?: number;
-        fastPage?: boolean;
-      }>(`/inventory?limit=${pageSize}&offset=${offset}&includeZero=1&fastPage=1&_=${Date.now()}`);
+        total?: number | null;
+        warehouseFast?: boolean;
+      }>(`/warehouse-products?${qs.toString()}`, { signal });
 
       const rows = Array.isArray(page.items) ? page.items : [];
+      const serverTotal = Number(page.total);
+      if (Number.isFinite(serverTotal) && serverTotal >= 0) total = serverTotal;
+
       let added = 0;
       for (const item of rows) {
         const id = selectedVariantIdFromItem(item as any) || String(item.variant_id || "").trim();
         if (!id || seenVariantIds.has(id)) continue;
         seenVariantIds.add(id);
-        items.push(item);
+        items.push({ ...item, variant_id: id });
         added += 1;
       }
 
-      const done = rows.length < pageSize || page.hasMore === false;
-      onProgress?.(items.slice(), done);
+      offset += rows.length;
+      const done = page.hasMore === false || rows.length < pageSize || (total !== null && items.length >= total);
+      onProgress?.(items.slice(), done, total);
       if (done) break;
 
-      if (offset > 0 && added === 0) {
-        throw new Error("A szerveren még nem a gyorsított inventory API fut. Cseréld az aif.js fájlt is a mostani csomagból.");
+      if (rows.length === 0 || added === 0) {
+        throw new Error("A gyorsított mobil raktár API nem halad tovább. Ellenőrizd, hogy a FAST V3 aif.js fut-e a szerveren.");
       }
+
+      requestIndex += 1;
+      if (requestIndex === 1) await mobileWarehouseYieldToBrowser();
     }
 
-    return { items };
+    return { items, total };
   }
 
-  async function apiMeta() {
+  async function apiMeta(signal?: AbortSignal) {
+    return fetchAifJSON<MobileWarehouseMetaResponse>(`/meta?scope=warehouse`, { signal });
+  }
+
+  async function apiStock(signal?: AbortSignal) {
+    return fetchAifJSON<{ items: StockItem[] }>(`/stock?compact=1`, { signal });
+  }
+
+  async function apiImportBatches(limit = 60) {
+    return fetchAifJSON<{ items?: Array<Record<string, any>> }>(`/import-batches?limit=${encodeURIComponent(String(limit))}`);
+  }
+
+  async function apiImportBatchInventory(batchId: string) {
     return fetchAifJSON<{
-      suppliers?: MetaItem[];
-      brands?: MetaItem[];
-      categories?: MetaItem[];
-      genderTypes?: GenderType[];
-      colorTypes?: ColorType[];
-      sizeTypes?: SizeType[];
-      locations?: MetaItem[];
-    }>(`/meta?_=${Date.now()}`);
-  }
-
-  async function apiStock() {
-    return fetchAifJSON<{ items: StockItem[] }>(`/stock?_=${Date.now()}`);
+      ok?: boolean;
+      batch?: Record<string, any> | null;
+      items?: InventoryItem[];
+      rows?: Array<Record<string, any>>;
+      variantIds?: string[];
+      rowCount?: number;
+      totalQty?: number;
+    }>(`/import-batches/${encodeURIComponent(batchId)}/inventory`);
   }
 
   async function apiVariantDetail(id: string) {
@@ -1256,38 +1328,171 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     });
   }
 
-  async function load(showSuccess = false) {
-    setBusy(true);
-    setMessage("");
-    try {
-      const [meta, stock] = await Promise.all([apiMeta(), apiStock()]);
-      setBrands((meta.brands || []).filter((x) => x.is_active !== false));
-      setCategories((meta.categories || []).filter((x) => x.is_active !== false));
-      setGenderTypes((meta.genderTypes || []).filter((x) => x.is_active !== false));
-      setColorTypes((meta.colorTypes || []).filter((x) => x.is_active !== false));
-      setSizeTypes((meta.sizeTypes || []).filter((x) => x.is_active !== false));
-      setLocations((meta.locations || []).filter((x) => x.is_active !== false));
-      setStockRows(stock.items || []);
+  function applyMobileWarehouseMeta(meta: MobileWarehouseMetaResponse) {
+    setBrands((meta.brands || []).filter((x) => x.is_active !== false));
+    setCategories((meta.categories || []).filter((x) => x.is_active !== false));
+    setGenderTypes((meta.genderTypes || []).filter((x) => x.is_active !== false));
+    setColorTypes((meta.colorTypes || []).filter((x) => x.is_active !== false));
+    setSizeTypes((meta.sizeTypes || []).filter((x) => x.is_active !== false));
+    setLocations((meta.locations || []).filter((x) => x.is_active !== false));
+  }
 
-      await apiInventory((partialItems, done) => {
-        setItems(
-          stockBackedInventoryItems(partialItems, stock.items || [])
-            .filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived")
-        );
-        if (!done) setMessage(`Raktár betöltése: ${partialItems.length.toLocaleString("hu-HU")} variáns már használható…`);
+  async function load(options: { showSuccess?: boolean; preferCache?: boolean } = {}) {
+    const { showSuccess = false, preferCache = false } = options;
+    const sequence = ++loadSequenceRef.current;
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    loadInFlightRef.current = true;
+    const isCurrent = () => loadSequenceRef.current === sequence && !controller.signal.aborted;
+
+    const cached = preferCache && mobileWarehouseBootstrapCacheFresh()
+      ? mobileWarehouseBootstrapCache
+      : null;
+    const visibleSnapshot = cached?.items || (items.length ? items : null);
+    let loadedMeta: MobileWarehouseMetaResponse | null = cached?.meta || null;
+    let loadedStock: StockItem[] = cached?.stock || [];
+    let latestInventory: InventoryItem[] = cached?.items || [];
+    let firstInventoryArrived = Boolean(cached);
+    let inventoryComplete = false;
+    let firstInventorySettled = false;
+    let resolveFirstInventory!: () => void;
+    let rejectFirstInventory!: (error: unknown) => void;
+    const firstInventoryReady = new Promise<void>((resolve, reject) => {
+      resolveFirstInventory = resolve;
+      rejectFirstInventory = reject;
+    });
+    const settleFirstInventory = (error?: unknown) => {
+      if (firstInventorySettled) return;
+      firstInventorySettled = true;
+      if (error) rejectFirstInventory(error);
+      else resolveFirstInventory();
+    };
+
+    if (cached) {
+      applyMobileWarehouseMeta(cached.meta);
+      setStockRows(cached.stock);
+      setItems(cached.items);
+      lastSuccessfulLoadAtRef.current = cached.loadedAt;
+      setBusy(false);
+      settleFirstInventory();
+    } else {
+      setBusy(true);
+    }
+    setMessage("");
+
+    try {
+      const metaTask = apiMeta(controller.signal)
+        .then((meta) => {
+          loadedMeta = meta;
+          if (isCurrent()) applyMobileWarehouseMeta(meta);
+          return meta;
+        })
+        .catch((error) => {
+          if (loadedMeta) return loadedMeta;
+          throw error;
+        });
+
+      const stockTask = apiStock(controller.signal)
+        .then((stock) => {
+          loadedStock = stock.items || [];
+          if (isCurrent()) {
+            setStockRows(loadedStock);
+            setItems((current) => stockBackedInventoryItems(current, loadedStock));
+          }
+          return loadedStock;
+        })
+        .catch((error) => {
+          if (cached) return loadedStock;
+          throw error;
+        });
+
+      const inventoryTask = apiInventory({
+        signal: controller.signal,
+        onProgress: (partialItems, done, total) => {
+          if (!isCurrent()) return;
+          firstInventoryArrived = true;
+          latestInventory = partialItems
+            .filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived");
+
+          let displayItems = loadedStock.length
+            ? stockBackedInventoryItems(latestInventory, loadedStock)
+            : latestInventory;
+
+          if (visibleSnapshot && !done) {
+            const merged = new Map<string, InventoryItem>();
+            for (const item of visibleSnapshot) {
+              const id = selectedVariantIdFromItem(item as any);
+              if (id) merged.set(id, item);
+            }
+            for (const item of displayItems) {
+              const id = selectedVariantIdFromItem(item as any);
+              if (id) merged.set(id, item);
+            }
+            displayItems = Array.from(merged.values());
+          }
+
+          setItems(displayItems);
+          if (!done) {
+            const totalText = total !== null ? ` / ${total.toLocaleString("hu-HU")}` : "";
+            setMessage(`Raktár háttérbetöltés: ${partialItems.length.toLocaleString("hu-HU")}${totalText} variáns. Az első termékek már használhatók.`);
+          }
+          settleFirstInventory();
+        },
+      }).then((result) => {
+        inventoryComplete = true;
+        latestInventory = (result.items || [])
+          .filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived");
+        return result;
+      }).catch((error) => {
+        settleFirstInventory(error);
+        throw error;
       });
 
+      // A mobil nézetet az első 300 termék után azonnal elengedjük. A meta és a
+      // helyenkénti készlet ezután is érkezhet a háttérben, nem blokkolja a listát.
+      await firstInventoryReady;
+      if (isCurrent()) setBusy(false);
+
+      await Promise.all([inventoryTask, metaTask, stockTask]);
+      if (!isCurrent()) return;
+
+      const finalItems = loadedStock.length
+        ? stockBackedInventoryItems(latestInventory, loadedStock)
+        : latestInventory;
+      setItems(finalItems);
+      lastSuccessfulLoadAtRef.current = Date.now();
       if (showSuccess) setMessage("Raktár frissítve.");
       else setMessage("");
+
+      if (loadedMeta && inventoryComplete) {
+        mobileWarehouseBootstrapCache = {
+          meta: loadedMeta,
+          stock: loadedStock,
+          items: finalItems,
+          loadedAt: Date.now(),
+        };
+      }
     } catch (error: any) {
-      setMessage(error?.message || "A raktár betöltése nem sikerült.");
+      if (controller.signal.aborted || error?.name === "AbortError") return;
+      if (!isCurrent()) return;
+      setMessage(
+        firstInventoryArrived || visibleSnapshot
+          ? `A raktár részben betöltődött, de a háttérfrissítés megszakadt: ${error?.message || "ismeretlen hiba"}`
+          : error?.message || "A raktár betöltése nem sikerült."
+      );
     } finally {
-      setBusy(false);
+      if (isCurrent()) {
+        setBusy(false);
+        loadInFlightRef.current = false;
+      }
+      if (loadAbortRef.current === controller) loadAbortRef.current = null;
     }
   }
 
   useEffect(() => {
-    void load();
+    void load({ preferCache: true });
+    return () => loadAbortRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1307,19 +1512,25 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }, [selectedVariants]);
 
   useEffect(() => {
-    const refresh = () => void load(false);
-    window.addEventListener(stockMovesChangedEventName, refresh as EventListener);
-    window.addEventListener("focus", refresh);
+    const refreshAfterStockChange = () => void load({ preferCache: false });
+    const refreshOnFocusIfStale = () => {
+      if (document.visibilityState !== "visible" || loadInFlightRef.current) return;
+      const lastLoadedAt = lastSuccessfulLoadAtRef.current || mobileWarehouseBootstrapCache?.loadedAt || 0;
+      if (Date.now() - lastLoadedAt < MOBILE_WAREHOUSE_FOCUS_REFRESH_AFTER_MS) return;
+      void load({ preferCache: true });
+    };
+    window.addEventListener(stockMovesChangedEventName, refreshAfterStockChange as EventListener);
+    window.addEventListener("focus", refreshOnFocusIfStale);
     return () => {
-      window.removeEventListener(stockMovesChangedEventName, refresh as EventListener);
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener(stockMovesChangedEventName, refreshAfterStockChange as EventListener);
+      window.removeEventListener("focus", refreshOnFocusIfStale);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const onIncoming = () => {
-      void load(false).then(() => focusLatestIncoming(false));
+      void load({ preferCache: false }).then(() => focusLatestIncoming(false));
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === warehouseShowAllAfterIncomingStorageKey && event.newValue) onIncoming();
@@ -1456,10 +1667,65 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   async function focusLatestIncoming(showMessage = true) {
     setBusy(true);
     try {
+      // Ugyanaz a logika, mint asztali nézetben: a ténylegesen committed importcsomag
+      // az elsődleges forrás. A mozgásnapló csak tartalék, így mobilon sem ugrik
+      // egy régi vagy idegen bejövő mozgásra az „Utolsó” szűrő.
+      const batches = await apiImportBatches(60).catch(() => ({ items: [] as Array<Record<string, any>> }));
+      const committedBatches = (batches.items || [])
+        .filter((batch) => String(batch.status || "").trim().toLowerCase() === "committed")
+        .slice()
+        .sort((a, b) => {
+          const aTime = dateTimeMs(a.committed_at) || dateTimeMs(a.created_at);
+          const bTime = dateTimeMs(b.committed_at) || dateTimeMs(b.created_at);
+          return bTime - aTime;
+        });
+
+      for (const batch of committedBatches) {
+        const batchId = String(batch.id || "").trim();
+        if (!batchId) continue;
+        try {
+          const focused = await apiImportBatchInventory(batchId);
+          const focusedItems = (focused.items || [])
+            .filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived");
+          const ids = Array.from(new Set([
+            ...(focused.variantIds || []),
+            ...focusedItems.map((item) => selectedVariantIdFromItem(item as any)),
+            ...(focused.rows || []).map((row) => String(row.variant_id || row.variantId || "").trim()),
+          ].map((value) => String(value || "").trim()).filter(Boolean)));
+          if (!ids.length) continue;
+
+          if (focusedItems.length) {
+            setItems((current) => {
+              const merged = new Map<string, InventoryItem>();
+              for (const item of current) {
+                const id = selectedVariantIdFromItem(item as any);
+                if (id) merged.set(id, item);
+              }
+              for (const item of focusedItems) {
+                const id = selectedVariantIdFromItem(item as any);
+                if (id) merged.set(id, { ...item, variant_id: id });
+              }
+              return Array.from(merged.values());
+            });
+          }
+
+          setFocusVariantIds(ids);
+          setSortMode("incoming_desc");
+          setVisibleCount(40);
+          const totalQty = Number(focused.totalQty || (focused.rows || []).reduce((sum, row) => sum + Math.abs(n(row.qty || row.import_qty || row.qty_delta)), 0));
+          const batchDate = dateShort(batch.committed_at || batch.created_at);
+          const labelText = `Utolsó import${batchDate && batchDate !== "-" ? ` (${batchDate})` : ""}: ${ids.length} variáns${totalQty ? `, ${Math.trunc(totalQty)} db` : ""}`;
+          setFocusLabel(labelText);
+          if (showMessage) setMessage(labelText);
+          return;
+        } catch {
+          // Ha egy régi committed batch részlete már nem elérhető, próbáljuk a következőt.
+        }
+      }
+
       const qs = new URLSearchParams();
       qs.set("direction", "in");
       qs.set("limit", "400");
-      qs.set("_", String(Date.now()));
       const data = await fetchAifJSON<{ items?: Array<Record<string, any>> }>(`/stock-movements?${qs.toString()}`);
       const rows = (data.items || [])
         .filter((row) => n(row.qty_delta) > 0)
@@ -1469,25 +1735,27 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
           const importBatchId = firstText(
             row.raw?.importBatchId,
             row.raw?.import_batch_id,
-            sourceType.includes("import_batch") ? row.source_id : "",
+            sourceType.includes("import batch") ? row.source_id : "",
           );
           const sourceKey = normalizeSearch(firstText(row.source_id, importBatchId));
-          if (sourceType.includes("stock_table_audit") || sourceKey.startsWith("stock audit") || reason.includes("stock audit")) return false;
-          return sourceType.includes("import_batch") || reason.includes("import_batch") || Boolean(importBatchId);
+          if (sourceType.includes("stock table audit") || sourceKey.startsWith("stock audit") || reason.includes("stock audit")) return false;
+          return sourceType.includes("import batch") || reason.includes("import batch") || Boolean(importBatchId);
         })
         .sort((a, b) => dateTimeMs(b.created_at) - dateTimeMs(a.created_at));
+
       if (!rows.length) {
         setFocusVariantIds([]);
         setFocusLabel("");
-        setMessage("Nem találtam friss bejövő import mozgást.");
+        setMessage("Nem találtam készletre vett importot vagy hozzá tartozó bejövő készletmozgást.");
         return;
       }
+
       const latest = rows[0];
       const latestSourceType = normalizeSearch(latest.source_type || "");
       const sourceId = firstText(
         latest.raw?.importBatchId,
         latest.raw?.import_batch_id,
-        latestSourceType.includes("import_batch") ? latest.source_id : "",
+        latestSourceType.includes("import batch") ? latest.source_id : "",
       );
       const latestMinute = Math.floor(dateTimeMs(latest.created_at) / 60000);
       const group = rows.filter((row) => {
@@ -1495,7 +1763,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         const rowSourceId = firstText(
           row.raw?.importBatchId,
           row.raw?.import_batch_id,
-          rowSourceType.includes("import_batch") ? row.source_id : "",
+          rowSourceType.includes("import batch") ? row.source_id : "",
         );
         if (sourceId && rowSourceId) return rowSourceId === sourceId;
         return Math.floor(dateTimeMs(row.created_at) / 60000) === latestMinute;
@@ -1933,7 +2201,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       setStockEditorReasonCode("");
       setStockEditorReasonText("");
       setStockEditorNote("");
-      await load(false);
+      await load({ preferCache: false });
       setMessage(resultMessage);
     } catch (error: any) {
       setMessage(error?.message || "Nem sikerült menteni a készletet.");
@@ -2137,7 +2405,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <button className={buyPricesVisible ? headerIconBtnActive : headerIconBtn} onClick={() => setBuyPricesVisible((x) => !x)} type="button" aria-label="Vételár mutatása">
                 {buyPricesVisible ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
-              <button className={headerIconBtnActive} onClick={() => load(true)} disabled={busy} type="button" aria-label="Frissítés">
+              <button className={headerIconBtnActive} onClick={() => load({ showSuccess: true, preferCache: false })} disabled={busy} type="button" aria-label="Frissítés">
                 <RefreshCw size={17} className={busy ? "animate-spin" : ""} />
               </button>
               <button className={headerIconBtn} onClick={goHome} type="button" aria-label="Kezdőlap"><Home size={17} /></button>
