@@ -5236,6 +5236,16 @@ function sizeTypeLabel(s?: SizeType | null) {
   return s.name_hu || s.name || s.code || "-";
 }
 
+function compareWarehouseSizeLabels(leftValue: unknown, rightValue: unknown) {
+  const left = String(leftValue ?? "").trim().replace(/,/g, ".");
+  const right = String(rightValue ?? "").trim().replace(/,/g, ".");
+  return left.localeCompare(right, "hu", { numeric: true, sensitivity: "base" });
+}
+
+function compareWarehouseSizeTypes(left: SizeType, right: SizeType) {
+  return compareWarehouseSizeLabels(sizeTypeLabel(left), sizeTypeLabel(right));
+}
+
 function categoryLabel(c: MetaItem) {
   return c.name_hu || c.name_ro || c.name || c.code || "-";
 }
@@ -7478,32 +7488,18 @@ export default function AllInWarehouse() {
   }, [genderTypes]);
 
   const sizeFilterOptions = useMemo<WarehouseMultiSelectOption[]>(() => {
-    const rows = new Map<string, WarehouseMultiSelectOption>();
-    const add = (value: unknown, labelValue?: unknown) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) return;
-      const normalized = officialSizeFromTypes(raw, sizeTypes) || raw.toUpperCase();
-      const key = normalizeSearch(normalized);
-      if (!key || rows.has(key)) return;
-      rows.set(key, {
-        value: normalized,
-        label: String(labelValue || normalized),
-      });
-    };
-
-    // A Méret szűrő felhasználói felület: itt csak az ember számára értelmes
-    // méretnév jelenjen meg. A belső törzsadat-kódok (pl. num_1, eu_38_5)
-    // a háttérben megmaradnak, de a főnöknek nincs velük dolga.
-    sizeTypes
+    // Egyetlen forrás: pontosan ugyanaz az aktív mérettörzs jelenik meg itt,
+    // mint a Törzsadatok / Méretek listában. Nyers termékméret nem kerülhet
+    // külön a szűrőbe, mert attól a két felület megint két külön életet élne.
+    return sizeTypes
       .filter((row) => row.is_active !== false)
-      .forEach((row) => add(row.name || row.code, sizeTypeLabel(row)));
-
-    inventoryDisplayItems.forEach((item) => add(item.size));
-
-    return Array.from(rows.values()).sort((a, b) =>
-      a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" })
-    );
-  }, [sizeTypes, inventoryDisplayItems]);
+      .slice()
+      .sort(compareWarehouseSizeTypes)
+      .map((row) => ({
+        value: String(row.id || row.name || row.code),
+        label: sizeTypeLabel(row),
+      }));
+  }, [sizeTypes]);
 
   const invoiceFilterOptions = useMemo<WarehouseInvoiceFilterOption[]>(() => {
     if (invoiceIndexRows.length) {
@@ -11303,11 +11299,12 @@ export default function AllInWarehouse() {
     setTaxonomyBusy(true);
     try {
       await apiSaveSizeType(sizeForm.id, {
-        code: sizeForm.code,
-        name: sizeForm.name.trim().toUpperCase(),
+        // Új méretnél a backend generál belső kódot. Meglévőnél a háttérben
+        // megtartjuk a jelenlegi kódot, de a felhasználónak nem kell szerkesztenie.
+        ...(sizeForm.id && sizeForm.code ? { code: sizeForm.code } : {}),
+        name: sizeForm.name.trim(),
         nameHu: sizeForm.nameHu,
         aliases: sizeForm.aliases,
-        sortOrder: sizeForm.sortOrder,
       });
       resetSizeForm();
       await load();
@@ -11350,7 +11347,7 @@ export default function AllInWarehouse() {
     setColorTypes(meta.colorTypes || []);
     setBrandColorCodes(meta.brandColorCodes || []);
     setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
-    setSizeTypes((meta.sizeTypes || []).slice().sort((a: SizeType, b: SizeType) => sizeTypeLabel(a).localeCompare(sizeTypeLabel(b), "hu", { sensitivity: "base" })));
+    setSizeTypes((meta.sizeTypes || []).slice().sort(compareWarehouseSizeTypes));
     setBrandSizeCodes(meta.brandSizeCodes || []);
     setLocations(meta.locations || []);
   }
@@ -15644,26 +15641,19 @@ export default function AllInWarehouse() {
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm text-white/88">{sizeForm.id ? "Standard méret módosítása" : "Új standard méret"}</p>
-                        <p className="text-[11px] text-white/50">AllIn méret, amit importnál és kézi termékfelvételnél egységesen használunk.</p>
+                        <p className="text-[11px] text-white/50">Ugyanez a lista jelenik meg a raktári Méret szűrőben is.</p>
                       </div>
                       {sizeForm.id && <button className={taxonomySmallBtn} onClick={resetSizeForm}>Új méret</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={taxonomyField}>Standard méret
-                        <input className={taxonomyInput} value={sizeForm.name} onChange={(e) => setSizeForm((x) => ({ ...x, name: e.target.value.toUpperCase() }))} placeholder="pl. OSFM, EU 42, 36 2/3" />
+                      <label className={taxonomyField}>Méret
+                        <input className={taxonomyInput} value={sizeForm.name} onChange={(e) => setSizeForm((x) => ({ ...x, name: e.target.value }))} placeholder="pl. 42, 42.5, S/40, OSFM" />
                       </label>
                       <label className={taxonomyField}>Magyar megnevezés
-                        <input className={taxonomyInput} value={sizeForm.nameHu} onChange={(e) => setSizeForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. one size, 42-es" />
+                        <input className={taxonomyInput} value={sizeForm.nameHu} onChange={(e) => setSizeForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="csak ha eltér a mérettől" />
                       </label>
-                      <label className={taxonomyField}>Belső kód
-                        <input className={taxonomyInput} value={sizeForm.code} onChange={(e) => setSizeForm((x) => ({ ...x, code: e.target.value }))} placeholder="üresen automatikus" />
-                      </label>
-                      <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek
-                        <textarea className={taxonomyTextarea} value={sizeForm.aliases} onChange={(e) => setSizeForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="ONE SIZE, OS, one-size, 42 EU, EU42" />
-                      </label>
-                      <label className={taxonomyField}>Sorrend
-                        <input className={taxonomyInput} value={sizeForm.sortOrder} onChange={(e) => setSizeForm((x) => ({ ...x, sortOrder: e.target.value }))} />
-                        {!sizeForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextSizeSortOrder}</span>}
+                      <label className={`${taxonomyField} md:col-span-2`}>Importnál elfogadott egyéb megnevezések
+                        <textarea className={taxonomyTextarea} value={sizeForm.aliases} onChange={(e) => setSizeForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="pl. EU42, 42 EU" />
                       </label>
                     </div>
                     <div className="mt-3 flex justify-end">
@@ -15675,7 +15665,7 @@ export default function AllInWarehouse() {
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm text-white/88">Standard méret lista</p>
-                        <p className="text-[11px] text-white/50">OSFM, ruhaméretek és cipőméretek standard oldala.</p>
+                        <p className="text-[11px] text-white/50">Természetes sorrendben jelenik meg. Ami termékhez van társítva, azt a rendszer nem engedi törölni.</p>
                       </div>
                       <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{sizeTypes.length} elem</span>
                     </div>
@@ -15685,11 +15675,8 @@ export default function AllInWarehouse() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm text-white">{sizeTypeLabel(row)}</p>
-                              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/65">{row.code}</span>
-                              <span className="rounded-full border border-[#67d4d1]/25 bg-[#208d8b]/18 px-2 py-0.5 text-[10px] text-white">#{row.sort_order ?? "-"}</span>
                             </div>
-                            {row.name_hu && <p className="mt-0.5 text-[11px] text-white/50">HU: {row.name_hu}</p>}
-                            {!!row.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {row.aliases.join(", ")}</p>}
+                            {!!row.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Importnevek: {row.aliases.join(", ")}</p>}
                           </div>
                           {taxonomyActionMenu({
                             menuId: `size-${row.id}`,
@@ -15845,7 +15832,9 @@ export default function AllInWarehouse() {
               </div>
               <div className="min-w-0">
                 <p className="text-base text-white">Törlés megerősítése</p>
-                <p className="mt-1 text-sm text-white/68">A kiválasztott törzsadat törlésre kerül. Ha már használatban van, a rendszer inaktiválja, hogy a korábbi adatok ne sérüljenek.</p>
+                <p className="mt-1 text-sm text-white/68">{deleteTarget.kind === "size"
+                  ? "A méret csak akkor törölhető véglegesen, ha egyetlen termékhez sincs társítva. Ha használatban van, a rendszer nem engedi törölni."
+                  : "A kiválasztott törzsadat törlésre kerül. Ha már használatban van, a rendszer inaktiválja, hogy a korábbi adatok ne sérüljenek."}</p>
               </div>
             </div>
             <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white">
