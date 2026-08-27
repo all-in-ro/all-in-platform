@@ -620,6 +620,7 @@ export default function AllInInventory() {
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [linePageSize, setLinePageSize] = useState<20 | 50 | 100>(20);
   const [linePage, setLinePage] = useState(1);
+  const [recentScannedLineIds, setRecentScannedLineIds] = useState<string[]>([]);
 
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
@@ -713,6 +714,10 @@ export default function AllInInventory() {
   }, [active]);
 
   useEffect(() => {
+    setRecentScannedLineIds([]);
+  }, [active?.item.id]);
+
+  useEffect(() => {
     draftsRef.current = drafts;
   }, [drafts]);
 
@@ -754,7 +759,7 @@ export default function AllInInventory() {
   const filteredLines = useMemo(() => {
     const lines = active?.lines || [];
     const searchKey = barcodeLooseKey(search);
-    return lines.filter((line) => {
+    const filtered = lines.filter((line) => {
       if (categoryFilter !== "all" && line.category_code !== categoryFilter && line.category_name_ro !== categoryFilter) return false;
       if (searchKey) {
         const haystack = [
@@ -778,7 +783,18 @@ export default function AllInInventory() {
       if (lineFilter === "extra") return diff !== null && diff > 0;
       return true;
     });
-  }, [active, categoryFilter, lineFilter, drafts, search]);
+
+    if (!recentScannedLineIds.length) return filtered;
+    const rank = new Map(recentScannedLineIds.map((id, index) => [id, index]));
+    return filtered.sort((a, b) => {
+      const aRank = rank.get(a.id);
+      const bRank = rank.get(b.id);
+      if (aRank !== undefined && bRank !== undefined) return aRank - bRank;
+      if (aRank !== undefined) return -1;
+      if (bRank !== undefined) return 1;
+      return 0;
+    });
+  }, [active, categoryFilter, lineFilter, drafts, search, recentScannedLineIds]);
 
   const lineTotalPages = Math.max(1, Math.ceil(filteredLines.length / linePageSize));
   const visibleInventoryLines = useMemo(() => {
@@ -1152,6 +1168,8 @@ export default function AllInInventory() {
     const next = current + pendingScan.qty;
     const shouldRefocus = pendingScan.source === "manual";
     updateDraft(pendingScan.lineId, { countedQty: String(next) });
+    setRecentScannedLineIds((currentOrder) => [line.id, ...currentOrder.filter((id) => id !== line.id)]);
+    setLinePage(1);
     setPendingScan(null);
     setManualBarcode("");
     setScannerStatus(`${pendingScan.qty} db hozzáadva: ${productTitle(line)}. Új számolt mennyiség: ${next} db.`);
