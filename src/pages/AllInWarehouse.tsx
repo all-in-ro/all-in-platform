@@ -7479,17 +7479,30 @@ export default function AllInWarehouse() {
 
   const sizeFilterOptions = useMemo<WarehouseMultiSelectOption[]>(() => {
     const rows = new Map<string, WarehouseMultiSelectOption>();
-    const add = (value: unknown, labelValue?: unknown, hint?: string) => {
+    const add = (value: unknown, labelValue?: unknown) => {
       const raw = String(value ?? "").trim();
       if (!raw) return;
       const normalized = officialSizeFromTypes(raw, sizeTypes) || raw.toUpperCase();
       const key = normalizeSearch(normalized);
       if (!key || rows.has(key)) return;
-      rows.set(key, { value: normalized, label: String(labelValue || normalized), hint });
+      rows.set(key, {
+        value: normalized,
+        label: String(labelValue || normalized),
+      });
     };
-    sizeTypes.filter((row) => row.is_active !== false).forEach((row) => add(row.name || row.code, sizeTypeLabel(row), row.code && row.code !== row.name ? row.code : undefined));
+
+    // A Méret szűrő felhasználói felület: itt csak az ember számára értelmes
+    // méretnév jelenjen meg. A belső törzsadat-kódok (pl. num_1, eu_38_5)
+    // a háttérben megmaradnak, de a főnöknek nincs velük dolga.
+    sizeTypes
+      .filter((row) => row.is_active !== false)
+      .forEach((row) => add(row.name || row.code, sizeTypeLabel(row)));
+
     inventoryDisplayItems.forEach((item) => add(item.size));
-    return Array.from(rows.values()).sort((a, b) => a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" }));
+
+    return Array.from(rows.values()).sort((a, b) =>
+      a.label.localeCompare(b.label, "hu", { numeric: true, sensitivity: "base" })
+    );
   }, [sizeTypes, inventoryDisplayItems]);
 
   const invoiceFilterOptions = useMemo<WarehouseInvoiceFilterOption[]>(() => {
