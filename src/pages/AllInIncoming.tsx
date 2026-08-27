@@ -1928,6 +1928,7 @@ function AllInIncomingReception(_props: Props) {
   const [receptionOpen, setReceptionOpen] = useState(true);
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [uitCode, setUitCode] = useState("");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [receptionDate, setReceptionDate] = useState("");
   const [currencyCode, setCurrencyCode] = useState("");
@@ -3183,6 +3184,7 @@ function AllInIncomingReception(_props: Props) {
     setLocationId("");
     setNote("");
     setInvoiceNumber("");
+    setUitCode("");
     setInvoiceDate("");
     setReceptionDate("");
     setCurrencyCode("");
@@ -3216,6 +3218,7 @@ function AllInIncomingReception(_props: Props) {
     setSupplierId(String(item.supplier_id || ""));
     setLocationId(String(item.target_location_id || ""));
     setInvoiceNumber(String(item.invoice_number || ""));
+    setUitCode(String((item as any).uit_code || (item as any).uitCode || ""));
     setInvoiceDate(dateOnly(item.invoice_date));
     setReceptionDate(dateOnly(item.reception_date));
     const nextCurrencyCode = String(item.currency_code || "");
@@ -3860,6 +3863,7 @@ function AllInIncomingReception(_props: Props) {
         note,
         reception: {
           invoiceNumber,
+          uitCode,
           invoiceDate,
           receptionDate,
           currencyCode,
@@ -4356,6 +4360,7 @@ function AllInIncomingReception(_props: Props) {
         body: JSON.stringify({
           reception: {
             invoiceNumber,
+            uitCode,
             invoiceDate,
             receptionDate,
             currencyCode,
@@ -4707,10 +4712,21 @@ function AllInIncomingReception(_props: Props) {
             </label>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-4">
+          <div className="grid gap-3 lg:grid-cols-5">
             <label className={label}>
               Számlaszám
               <input className={requiredInput(requiredMissing.invoiceNumber)} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Számla száma" />
+            </label>
+            <label className={label}>
+              UIT kód • ha van
+              <input
+                className={`${input} w-full border-[#7bd7d4]/38 font-mono tracking-[0.04em]`}
+                value={uitCode}
+                onChange={(e) => setUitCode(e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))}
+                placeholder="UIT kód"
+                maxLength={64}
+                autoComplete="off"
+              />
             </label>
             <label className={label}>
               Számla dátuma
