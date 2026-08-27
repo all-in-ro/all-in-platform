@@ -3795,6 +3795,14 @@ function normalizeSearch(v: unknown) {
     .trim();
 }
 
+function looksLikeWarehouseExactIdentifier(value: unknown) {
+  const clean = cleanScannedBarcode(value);
+  if (clean.length < 6 || clean.length > 80) return false;
+  // Vonalkód, S/N/COD, SKU és hasonló technikai azonosító. Terméknevekre
+  // nem indítunk automatikus szerverkérést minden leütésre.
+  return /^[A-Za-z0-9._:/\-]+$/.test(clean);
+}
+
 function splitCsv(v: unknown) {
   return String(v ?? "")
     .split(",")
@@ -5379,6 +5387,33 @@ async function apiVariantDetail(id: string) {
   return fetchJSON<DetailResponse>(`/api/aif/variants/${encodeURIComponent(id)}`);
 }
 
+function warehouseCatalogItemFromDetail(detail: DetailResponse, fallbackBarcode = ""): InventoryItem | null {
+  const raw = (detail?.item || {}) as Record<string, any>;
+  const variantId = firstWarehouseText(raw.variant_id, raw.id);
+  if (!variantId) return null;
+  const rows = Array.isArray(detail?.stock) ? detail.stock : [];
+  const totalQty = rows.reduce((sum, row) => sum + n(row?.qty), 0);
+  const reservedQty = rows.reduce((sum, row) => sum + n(row?.reserved_qty), 0);
+  const availableQty = rows.reduce((sum, row) => sum + (row?.available_qty !== undefined && row?.available_qty !== null ? n(row.available_qty) : n(row?.qty) - n(row?.reserved_qty)), 0);
+  const productCode = firstWarehouseText(raw.supplier_product_code, raw.supplierProductCode, supplierProductCodeFromDetail(detail));
+  return {
+    ...raw,
+    variant_id: variantId,
+    barcode: firstWarehouseText(raw.barcode, fallbackBarcode) || null,
+    supplier_product_code: productCode || null,
+    supplierProductCode: productCode || null,
+    product_code: firstWarehouseText(raw.product_code, raw.productCode, productCode) || null,
+    productCode: firstWarehouseText(raw.productCode, raw.product_code, productCode) || null,
+    sn_cod: firstWarehouseText(raw.sn_cod, raw.snCod) || null,
+    snCod: firstWarehouseText(raw.snCod, raw.sn_cod) || null,
+    variant_status: firstWarehouseText(raw.variant_status, raw.variantStatus, raw.status, "active") || "active",
+    model_status: firstWarehouseText(raw.model_status, raw.modelStatus, "active") || "active",
+    total_qty: rows.length ? totalQty : (raw.total_qty ?? 0),
+    total_reserved_qty: rows.length ? reservedQty : (raw.total_reserved_qty ?? 0),
+    available_qty: rows.length ? availableQty : (raw.available_qty ?? raw.total_qty ?? 0),
+  } as InventoryItem;
+}
+
 async function apiVariantHistory(id: string) {
   const data = await fetchJSON<VariantHistoryResponse>(`/api/aif/variants/${encodeURIComponent(id)}/history?limit=700`);
   return mergeVariantHistoryPriceEvents(data);
@@ -5392,14 +5427,14 @@ async function apiVariantUpdate(id: string, payload: Record<string, unknown>) {
   });
 }
 
-async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "") {
+async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "", signal?: AbortSignal) {
   const cleanBarcode = cleanScannedBarcode(barcode);
   if (!cleanBarcode) return { ok: true as const, barcode: "", conflict: null as Record<string, any> | null };
   const qs = new URLSearchParams();
   qs.set("barcode", cleanBarcode);
   if (excludeVariantId) qs.set("excludeVariantId", excludeVariantId);
   qs.set("_", String(Date.now()));
-  return fetchJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/api/aif/barcode-conflict?${qs.toString()}`);
+  return fetchJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/api/aif/barcode-conflict?${qs.toString()}`, { signal });
 }
 
 async function apiCreateManualProduct(payload: Record<string, unknown>) {
@@ -7909,6 +7944,25 @@ export default function AllInWarehouse() {
     });
   }
 
+  async function lookupWarehouseBarcodeOwner(code: string, signal?: AbortSignal) {
+    const clean = cleanScannedBarcode(code);
+    if (!looksLikeWarehouseExactIdentifier(clean)) return [] as InventoryItem[];
+    try {
+      // Ugyanazt a barcode-tulajdonos ellenőrzést használjuk, amely a Receptióban
+      // az ütközést jelzi. Így nem fordulhat elő többé, hogy a Receptió látja a
+      // rekordot, a Raktár keresője pedig nem.
+      const owner = await apiBarcodeConflictCheck(clean, "", signal);
+      const variantId = String(owner?.conflict?.variantId || "").trim();
+      if (!variantId) return [] as InventoryItem[];
+      const detail = await fetchJSON<DetailResponse>(`/api/aif/variants/${encodeURIComponent(variantId)}`, { signal });
+      const item = warehouseCatalogItemFromDetail(detail, owner.barcode || clean);
+      return item && !isArchivedInventoryItem(item) ? [item] : [];
+    } catch (error: any) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      return [] as InventoryItem[];
+    }
+  }
+
   async function runWarehouseCatalogSearch() {
     const searchText = String(search || "").trim();
     const snText = String(snCodFilter || "").trim();
@@ -7930,9 +7984,14 @@ export default function AllInWarehouse() {
       let rows: InventoryItem[] = [];
       const exactNeedle = searchText || snText;
 
-      // Az exact lookup olcsó és indexbarát. Ha ez talál, nem indítjuk el a
-      // szélesebb /inventory keresést, így a gyors raktárterhelés megmarad.
-      if (exactNeedle) {
+      // Vonalkódnál először ugyanazt a tulajdonos-ellenőrzést kérdezzük meg,
+      // amely a Receptió ütközését adja. Ez a legbiztosabb és legolcsóbb út.
+      if (searchText && looksLikeWarehouseExactIdentifier(searchText)) {
+        rows = await lookupWarehouseBarcodeOwner(searchText, controller.signal);
+      }
+
+      // Egyéb pontos azonosítókhoz (S/N/COD, termékkód stb.) megmarad az indexelt lookup.
+      if (!rows.length && exactNeedle) {
         const exact = await apiWarehouseExactLookup(exactNeedle, controller.signal);
         rows = Array.isArray(exact.items) ? exact.items : [];
       }
@@ -7969,14 +8028,30 @@ export default function AllInWarehouse() {
     const clean = cleanScannedBarcode(code);
     if (!clean) return [] as InventoryItem[];
     try {
-      const result = await apiWarehouseExactLookup(clean);
-      const rows = (Array.isArray(result.items) ? result.items : []).filter((item) => !isArchivedInventoryItem(item));
+      let rows = await lookupWarehouseBarcodeOwner(clean);
+      if (!rows.length) {
+        const result = await apiWarehouseExactLookup(clean);
+        rows = (Array.isArray(result.items) ? result.items : []).filter((item) => !isArchivedInventoryItem(item));
+      }
       if (rows.length) mergeWarehouseCatalogSearchItems(rows);
       return rows;
     } catch {
       return [] as InventoryItem[];
     }
   }
+
+  useEffect(() => {
+    const clean = String(search || "").trim();
+    if (!looksLikeWarehouseExactIdentifier(clean)) return;
+    // Ha már a gyors listában / korábbi szerveres találatok között ott van,
+    // nincs új kérés. Különben rövid debounce után automatikusan megkeressük.
+    if (inventoryDisplayItems.some((item) => itemMatchesScannedBarcode(item, clean))) return;
+    const timer = window.setTimeout(() => { void runWarehouseCatalogSearch(); }, 280);
+    return () => window.clearTimeout(timer);
+    // A szerveres lookup csak a keresőmező változására indul. A találat beemelése
+    // ne indítson újabb kört saját magára.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const filtered = useMemo(() => {
     let out = [...inventoryDisplayItems];
