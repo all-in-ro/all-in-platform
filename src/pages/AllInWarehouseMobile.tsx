@@ -737,6 +737,20 @@ function selectedVariantIdFromItem(item: Partial<InventoryItem> & Record<string,
   return String(item.variant_id || item.selected_variant_id || item.variantId || item.id || "").trim();
 }
 
+function mergeMobileInventoryItems(baseItems: InventoryItem[], extraItems: InventoryItem[]) {
+  const map = new Map<string, InventoryItem>();
+  for (const item of baseItems || []) {
+    const id = selectedVariantIdFromItem(item as any);
+    if (id) map.set(id, { ...item, variant_id: id });
+  }
+  for (const item of extraItems || []) {
+    const id = selectedVariantIdFromItem(item as any);
+    if (!id) continue;
+    map.set(id, { ...(map.get(id) || {}), ...item, variant_id: id });
+  }
+  return Array.from(map.values());
+}
+
 function readSavedSelectedVariants() {
   if (typeof window === "undefined") return {} as Record<string, boolean>;
   try {
@@ -976,6 +990,8 @@ function MobileHistorySheet({
 export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const aifBase = `${apiBase.replace(/\/$/, "")}/aif`;
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
+  const [catalogSearchBusy, setCatalogSearchBusy] = useState(false);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
   const [brands, setBrands] = useState<MetaItem[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
@@ -1032,6 +1048,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const stockEditorSaveLockRef = useRef(false);
   const loadSequenceRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
+  const catalogSearchSequenceRef = useRef(0);
+  const catalogSearchAbortRef = useRef<AbortController | null>(null);
   const loadInFlightRef = useRef(false);
   const lastSuccessfulLoadAtRef = useRef(0);
 
@@ -1121,6 +1139,27 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
   async function apiStock(signal?: AbortSignal) {
     return fetchAifJSON<{ items: StockItem[] }>(`/stock?compact=1`, { signal });
+  }
+
+  async function apiInventoryLookup(code: string, signal?: AbortSignal) {
+    const clean = cleanScannedBarcode(code);
+    if (!clean) return { items: [] as InventoryItem[] };
+    const qs = new URLSearchParams();
+    qs.set("code", clean);
+    qs.set("_", String(Date.now()));
+    return fetchAifJSON<{ ok?: boolean; code?: string; matchType?: string | null; items?: InventoryItem[] }>(`/inventory/lookup?${qs.toString()}`, { signal });
+  }
+
+  async function apiCatalogSearch(searchText: string, signal?: AbortSignal) {
+    const clean = String(searchText || "").trim();
+    if (!clean) return { items: [] as InventoryItem[] };
+    const qs = new URLSearchParams();
+    qs.set("search", clean);
+    qs.set("includeZero", "1");
+    qs.set("limit", "200");
+    qs.set("offset", "0");
+    qs.set("_", String(Date.now()));
+    return fetchAifJSON<{ ok?: boolean; items?: InventoryItem[]; total?: number | null }>(`/inventory?${qs.toString()}`, { signal });
   }
 
   async function apiImportBatches(limit = 60) {
@@ -1217,11 +1256,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     const barcode = cleanScannedBarcode(edit.barcode);
     if (!currentVariantId || !barcode) return [] as InventoryItem[];
     const key = barcode.toLowerCase();
-    return items
+    return mergeMobileInventoryItems(items, catalogSearchItems)
       .filter((item) => selectedVariantIdFromItem(item as any) !== currentVariantId)
       .filter((item) => cleanScannedBarcode(item.barcode || "").toLowerCase() === key)
       .slice(0, 4);
-  }, [detail?.item?.id, detail?.item?.variant_id, edit.barcode, items]);
+  }, [detail?.item?.id, detail?.item?.variant_id, edit.barcode, items, catalogSearchItems]);
 
   const effectiveEditBarcodeConflict = useMemo(
     () => editBarcodeConflict || (editBarcodeMatches[0] ? mobileBarcodeConflictInfoFromItem(editBarcodeMatches[0], edit.barcode) : null),
@@ -1559,6 +1598,66 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return subCategories.filter((row) => categoryParentId(row) === String(parent.id));
   }, [category, categoryOptions, subCategories]);
 
+  const searchInventoryItems = useMemo(() => {
+    // A normál mobil lista marad a gyors /warehouse-products eredménye. A 0 készletes
+    // inaktív rekordok csak konkrét kereséskor kerülnek mellé, így a gyors indulás
+    // és a mostani DB-terhelés nem romlik el.
+    const includeCatalogRows = Boolean(search.trim() || stockFilter === "inactive" || stockFilter === "out" || stockFilter === "missing");
+    return includeCatalogRows ? mergeMobileInventoryItems(items, catalogSearchItems) : items;
+  }, [items, catalogSearchItems, search, stockFilter]);
+
+  function mergeMobileCatalogSearchItems(rows: InventoryItem[]) {
+    const cleanRows = (rows || [])
+      .map((item) => {
+        const id = selectedVariantIdFromItem(item as any);
+        return id ? { ...item, variant_id: id } : null;
+      })
+      .filter((item): item is InventoryItem => Boolean(item && itemStatus(item) !== "archived" && modelStatus(item) !== "archived"));
+    if (!cleanRows.length) return;
+    setCatalogSearchItems((current) => mergeMobileInventoryItems(current, cleanRows).slice(-600));
+  }
+
+  async function runMobileWarehouseSearch(searchValue = search) {
+    const clean = String(searchValue || "").trim();
+    setVisibleCount(40);
+    setFocusVariantIds([]);
+    setFocusLabel("");
+    if (!clean) {
+      searchInputRef.current?.focus();
+      return;
+    }
+
+    const sequence = ++catalogSearchSequenceRef.current;
+    catalogSearchAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogSearchAbortRef.current = controller;
+    setCatalogSearchBusy(true);
+
+    try {
+      let rows: InventoryItem[] = [];
+      const exact = await apiInventoryLookup(clean, controller.signal);
+      rows = Array.isArray(exact.items) ? exact.items : [];
+      if (!rows.length) {
+        const broad = await apiCatalogSearch(clean, controller.signal);
+        rows = Array.isArray(broad.items) ? broad.items : [];
+      }
+      if (controller.signal.aborted || sequence !== catalogSearchSequenceRef.current) return;
+      if (rows.length) {
+        mergeMobileCatalogSearchItems(rows);
+        setMessage(`Teljes terméktörzs: ${rows.length} találat. A 0 készletes és inaktív variánsok is kereshetők.`);
+      } else {
+        setMessage("A teljes terméktörzsben sincs találat erre a keresésre.");
+      }
+    } catch (error: any) {
+      if (controller.signal.aborted || error?.name === "AbortError") return;
+      if (sequence !== catalogSearchSequenceRef.current) return;
+      setMessage(error?.message || "A teljes terméktörzs keresése nem sikerült.");
+    } finally {
+      if (sequence === catalogSearchSequenceRef.current) setCatalogSearchBusy(false);
+      if (catalogSearchAbortRef.current === controller) catalogSearchAbortRef.current = null;
+    }
+  }
+
   const hasActiveFilters = Boolean(
     search.trim() || brand !== "all" || category !== "all" || subCategory !== "all" || gender !== "all" || color !== "all" || stockFilter !== "all" || imageFilter !== "all" || shopifyFilter !== "all" || focusVariantIds.length
   );
@@ -1591,7 +1690,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const filteredItems = useMemo(() => {
     const q = normalizeSearch(search);
     const focusSet = new Set(focusVariantIds.map(String));
-    return items
+    return searchInventoryItems
       .filter((item) => {
         if (focusSet.size && !focusSet.has(String(item.variant_id))) return false;
         if (q) {
@@ -1630,7 +1729,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         if (sortMode === "brand") return firstText(a.brand_name, a.brand_code).localeCompare(firstText(b.brand_name, b.brand_code), "hu", { sensitivity: "base" }) || itemTitle(a).localeCompare(itemTitle(b), "hu", { sensitivity: "base" });
         return itemTitle(a).localeCompare(itemTitle(b), "hu", { sensitivity: "base" });
       });
-  }, [items, focusVariantIds, search, brand, brands, category, categoryOptions, subCategory, subCategories, gender, color, colorTypes, stockFilter, imageFilter, shopifyFilter, sortMode]);
+  }, [searchInventoryItems, focusVariantIds, search, brand, brands, category, categoryOptions, subCategory, subCategories, gender, color, colorTypes, stockFilter, imageFilter, shopifyFilter, sortMode]);
 
   function itemSupplierText(item: InventoryItem) {
     return firstText((item as any).supplier_names, splitCsv((item as any).supplier_codes).join(" "));
@@ -1649,6 +1748,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const pageItems = filteredItems.slice(0, visibleCount);
 
   function resetFilters(showMsg = true) {
+    catalogSearchAbortRef.current?.abort();
+    setCatalogSearchBusy(false);
     setSearch("");
     setBrand("all");
     setCategory("all");
@@ -2245,22 +2346,32 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     if (clearStatus) setBarcodeScannerStatus("");
   }
 
-  function applyScannedBarcode(rawCode: unknown, _source: "camera" | "manual" = "camera") {
+  async function applyScannedBarcode(rawCode: unknown, _source: "camera" | "manual" = "camera") {
     const code = cleanScannedBarcode(rawCode);
     if (!code) return;
     if (barcodeScannerHandlingRef.current) return;
     barcodeScannerHandlingRef.current = true;
     window.setTimeout(() => { barcodeScannerHandlingRef.current = false; }, 700);
 
-    const exactMatches = items.filter((item) => itemMatchesScannedBarcode(item, code));
+    let exactMatches = searchInventoryItems.filter((item) => itemMatchesScannedBarcode(item, code));
+    if (!exactMatches.length) {
+      try {
+        const exact = await apiInventoryLookup(code);
+        exactMatches = (exact.items || []).filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived");
+        if (exactMatches.length) mergeMobileCatalogSearchItems(exactMatches);
+      } catch {
+        // A kereső ettől még megkapja a kódot; kézi Keresés gombbal újrapróbálható.
+      }
+    }
+
     setSearch(code);
     setVisibleCount(40);
     setFocusVariantIds([]);
     setFocusLabel("");
     setBarcodeScannerManualValue("");
     setMessage(exactMatches.length
-      ? `Vonalkód beolvasva: ${code} • ${exactMatches.length} találat.`
-      : `Vonalkód beolvasva: ${code}. Ha nincs találat, ellenőrizd a kódot vagy a törzsadatot.`
+      ? `Vonalkód beolvasva: ${code} • ${exactMatches.length} találat, a 0 készletes / inaktív törzsadatot is ellenőriztem.`
+      : `Vonalkód beolvasva: ${code}. A teljes terméktörzsben sincs pontos találat.`
     );
     stopBarcodeScanner(false);
     window.setTimeout(() => searchInputRef.current?.focus(), 120);
@@ -2420,6 +2531,8 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 className={`${input} pl-10 pr-9`}
                 value={search}
                 onChange={(event) => { setSearch(event.target.value); setVisibleCount(40); }}
+                onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void runMobileWarehouseSearch(); } }}
+                enterKeyHint="search"
                 placeholder="Név, márka, vonalkód, szín, méret"
               />
               {search && <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-white/45 hover:bg-white/10 hover:text-white" type="button" onClick={() => setSearch("")}><X size={15} /></button>}
@@ -2550,7 +2663,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         <div className="grid grid-cols-3 gap-2">
           <button className={softBtn} onClick={() => setFiltersOpen(true)} type="button"><Filter size={16} /> Szűrő</button>
           <button className={softBtn} onClick={() => focusLatestIncoming(true)} disabled={busy} type="button"><PackageCheck size={16} /> Utolsó</button>
-          <button className={softBtn} onClick={() => { searchInputRef.current?.focus(); }} type="button"><Search size={16} /> Keresés</button>
+          <button className={softBtn} onClick={() => { if (search.trim()) void runMobileWarehouseSearch(); else searchInputRef.current?.focus(); }} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
         </div>
       </nav>
 
