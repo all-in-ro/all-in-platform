@@ -139,6 +139,8 @@ export type AifBrandSizeCode = {
 
 export type AifReceptionInput = {
   invoiceNumber?: string;
+  uitCode?: string | null;
+  uit_code?: string | null;
   invoiceDate?: string;
   receptionDate?: string;
   currencyCode?: string;
@@ -189,6 +191,8 @@ export type AifReceptionSummary = {
   purchase_order_id?: string | null;
   purchase_order_number?: string | null;
   invoice_number?: string | null;
+  uit_code?: string | null;
+  uitCode?: string | null;
   invoice_date?: string | null;
   reception_date?: string | null;
   currency_code: string;
@@ -1772,7 +1776,7 @@ export function apiAifGetReception(id: string) {
 }
 
 export function apiAifUpdateReception(id: string, reception: Partial<AifReceptionInput>) {
-  return fetchAifJSON<{ ok: true }>(`/receptions/${encodeURIComponent(id)}`, {
+  return fetchAifJSON<{ ok: true; item?: AifReceptionSummary | null; warning?: string | null }>(`/receptions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify({ reception }),
   });
