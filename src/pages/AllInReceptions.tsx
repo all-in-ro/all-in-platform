@@ -878,10 +878,11 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
     .title { text-align: right; }
     .title h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: .05em; text-transform: uppercase; }
     .title .nr { font-size: 12px; }
-    .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+    .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
     .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 5px 6px; min-height: 34px; }
     .box .label { color: #6b7280; text-transform: uppercase; font-size: 8px; letter-spacing: .05em; margin-bottom: 2px; }
     .box .value { font-size: 10px; }
+    .box .value.uit { font-weight: 700; letter-spacing: .035em; overflow-wrap: anywhere; }
     .note { border: 1px solid #d1d5db; background: #f9fafb; padding: 6px 8px; margin: 8px 0 10px; line-height: 1.35; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     thead { display: table-header-group; }
@@ -920,7 +921,8 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
 
     <div class="meta">
       <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
-      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}${item.uit_code ? `<br>UIT: ${pdfEscape(item.uit_code)}` : ""}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Cod UIT</div><div class="value uit">${pdfEscape(item.uit_code || item.uitCode || "-")}</div></div>
       <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
       <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
       <div class="box"><div class="label">Deviza factura</div><div class="value">${pdfEscape(currency)}</div></div>
@@ -1131,10 +1133,11 @@ function buildReceptionVerificationHtml(
     .title { text-align: right; }
     .title h1 { margin: 0 0 5px; font-size: 20px; letter-spacing: .05em; text-transform: uppercase; }
     .title .sub { font-size: 10px; border: 1px solid #111827; display: inline-block; padding: 3px 8px; margin-top: 3px; }
-    .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 8px; }
+    .meta { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-bottom: 8px; }
     .box { border: 1px solid #9ca3af; border-radius: 4px; padding: 4px 5px; min-height: 30px; }
     .box .label { color: #6b7280; text-transform: uppercase; font-size: 7px; letter-spacing: .05em; margin-bottom: 2px; }
     .box .value { font-size: 9px; }
+    .box .value.uit { font-weight: 700; letter-spacing: .035em; overflow-wrap: anywhere; }
     .note { border: 1px solid #f59e0b; background: #fffbeb; padding: 5px 7px; margin: 7px 0 8px; line-height: 1.35; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     thead { display: table-header-group; }
@@ -1175,7 +1178,8 @@ function buildReceptionVerificationHtml(
     </div>
     <div class="meta">
       <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
-      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}${item.uit_code ? `<br>UIT: ${pdfEscape(item.uit_code)}` : ""}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Cod UIT</div><div class="value uit">${pdfEscape(item.uit_code || item.uitCode || "-")}</div></div>
       <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
       <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
       <div class="box"><div class="label">Total factura</div><div class="value">${pdfNumber(totalQty, 0)} buc.</div></div>
@@ -2119,6 +2123,11 @@ export default function AllInReceptions(_props: Props) {
               <div>
                 <p className="text-xs uppercase tracking-[0.1em] text-white">Receptió részletei</p>
                 <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
+                {(detail.item as any).uit_code || (detail.item as any).uitCode ? (
+                  <p className="mt-0.5 font-mono text-[11px] tracking-[0.04em] text-[#cffffd]">
+                    UIT: {String((detail.item as any).uit_code || (detail.item as any).uitCode)}
+                  </p>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <button className={neutralBtn} onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button"><CheckCircle size={15} /> Ellenőrző PDF</button>
