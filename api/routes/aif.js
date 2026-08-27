@@ -2947,6 +2947,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const mode = tvaMode(src.tvaMode || src.tva_mode || body.tvaMode || body.tva_mode);
     return {
       invoiceNumber: emptyToNull(src.invoiceNumber || src.invoice_number || body.invoiceNumber || body.invoice_number),
+      uitCode: cleanAifUitCode(src.uitCode ?? src.uit_code ?? body.uitCode ?? body.uit_code),
       invoiceDate: emptyToNull(src.invoiceDate || src.invoice_date || body.invoiceDate || body.invoice_date),
       receptionDate: emptyToNull(src.receptionDate || src.reception_date || body.receptionDate || body.reception_date),
       currencyCode: code || null,
@@ -3522,6 +3523,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const p = addArg(`%${search}%`);
       where.push(`(
         r.invoice_number ILIKE ${p}
+        OR r.uit_code ILIKE ${p}
         OR r.note ILIKE ${p}
         OR s.name ILIKE ${p}
         OR l.name ILIKE ${p}
@@ -3556,7 +3558,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const limitParam = addArg(limit);
     const sql = `
       SELECT
-        r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+        r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
         r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
         r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
         r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
@@ -3613,6 +3615,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const add = (col, value) => { sets.push(`${col}=$${i++}`); args.push(value); };
 
       if (src.invoiceNumber !== undefined || src.invoice_number !== undefined) add("invoice_number", emptyToNull(src.invoiceNumber ?? src.invoice_number));
+      if (src.uitCode !== undefined || src.uit_code !== undefined) add("uit_code", cleanAifUitCode(src.uitCode ?? src.uit_code));
       if (src.invoiceDate !== undefined || src.invoice_date !== undefined) add("invoice_date", emptyToNull(src.invoiceDate ?? src.invoice_date));
       if (src.receptionDate !== undefined || src.reception_date !== undefined) add("reception_date", emptyToNull(src.receptionDate ?? src.reception_date));
       let nextCurrencyCode = rec.rows[0].currency_code;
@@ -3761,7 +3764,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       }
 
       const updated = await pool.query(
-        `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+        `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
                 r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
@@ -3820,6 +3823,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const head = rec.rows[0];
       const lines = [];
       lines.push(csvLine(["Receptio", head.invoice_number || ""]));
+      lines.push(csvLine(["UIT kod", head.uit_code || ""]));
       lines.push(csvLine(["Beszallito", head.supplier_name || ""]));
       lines.push(csvLine(["Cel hely", head.location_name || ""]));
       lines.push(csvLine(["Szamla datum", head.invoice_date ? String(head.invoice_date).slice(0, 10) : ""]));
@@ -3871,7 +3875,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (!id) return res.status(400).json({ error: "reception id required" });
     try {
       const item = await pool.query(
-        `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.invoice_date, r.reception_date,
+        `SELECT r.id, r.created_at, r.updated_at, r.status, r.invoice_number, r.uit_code, r.invoice_date, r.reception_date,
                 r.currency_code, r.exchange_rate_to_ron, r.tva_mode, r.tva_rate, r.goods_value,
                 r.invoice_net, r.invoice_vat, r.invoice_gross, r.shipping_cost, r.total_qty, r.line_count,
                 r.note, r.raw_meta, r.supplier_id, r.target_location_id, r.purchase_order_id,
@@ -5709,17 +5713,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
       const receptionRes = await client.query(
         `INSERT INTO aif_receptions (
-           supplier_id, target_location_id, invoice_number, invoice_date, reception_date,
+           supplier_id, target_location_id, invoice_number, uit_code, invoice_date, reception_date,
            currency_code, exchange_rate_to_ron, tva_mode, tva_rate, shipping_cost,
            goods_value, invoice_net, invoice_vat, invoice_gross, total_qty, line_count,
            status, note, raw_meta, created_by, actor
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft',$17,$18::jsonb,$19,$20)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'draft',$18,$19::jsonb,$20,$21)
          RETURNING id`,
         [
           supplier.id,
           targetLocationId,
           reception.invoiceNumber,
+          reception.uitCode,
           reception.invoiceDate,
           reception.receptionDate,
           reception.currencyCode,
@@ -5885,22 +5890,23 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              supplier_id=$2,
              target_location_id=$3,
              invoice_number=$4,
-             invoice_date=$5,
-             reception_date=$6,
-             currency_code=$7,
-             exchange_rate_to_ron=$8,
-             tva_mode=$9,
-             tva_rate=$10,
-             shipping_cost=$11,
-             goods_value=COALESCE(goods_value,0) + COALESCE($12,0),
-             invoice_net=COALESCE($13, invoice_net),
-             invoice_vat=COALESCE($14, invoice_vat),
-             invoice_gross=$15,
-             total_qty=COALESCE(total_qty,0) + $16,
-             line_count=COALESCE(line_count,0) + $17,
+             uit_code=COALESCE($5, uit_code),
+             invoice_date=$6,
+             reception_date=$7,
+             currency_code=$8,
+             exchange_rate_to_ron=$9,
+             tva_mode=$10,
+             tva_rate=$11,
+             shipping_cost=$12,
+             goods_value=COALESCE(goods_value,0) + COALESCE($13,0),
+             invoice_net=COALESCE($14, invoice_net),
+             invoice_vat=COALESCE($15, invoice_vat),
+             invoice_gross=$16,
+             total_qty=COALESCE(total_qty,0) + $17,
+             line_count=COALESCE(line_count,0) + $18,
              status=CASE WHEN status='cancelled' THEN status ELSE 'draft' END,
-             note=COALESCE($18, note),
-             raw_meta=COALESCE(raw_meta,'{}'::jsonb) || $19::jsonb,
+             note=COALESCE($19, note),
+             raw_meta=COALESCE(raw_meta,'{}'::jsonb) || $20::jsonb,
              updated_at=now()
            WHERE id=$1`,
           [
@@ -5908,6 +5914,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
             supplier.id,
             targetLocationId,
             reception.invoiceNumber,
+            reception.uitCode,
             reception.invoiceDate,
             reception.receptionDate,
             reception.currencyCode,
@@ -5928,17 +5935,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       } else {
         const receptionRes = await client.query(
           `INSERT INTO aif_receptions (
-             supplier_id, target_location_id, invoice_number, invoice_date, reception_date,
+             supplier_id, target_location_id, invoice_number, uit_code, invoice_date, reception_date,
              currency_code, exchange_rate_to_ron, tva_mode, tva_rate, shipping_cost,
              goods_value, invoice_net, invoice_vat, invoice_gross, total_qty, line_count,
              status, note, raw_meta, created_by, actor
            )
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'draft',$17,$18::jsonb,$19,$20)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'draft',$18,$19::jsonb,$20,$21)
            RETURNING id`,
           [
             supplier.id,
             targetLocationId,
             reception.invoiceNumber,
+            reception.uitCode,
             reception.invoiceDate,
             reception.receptionDate,
             reception.currencyCode,
