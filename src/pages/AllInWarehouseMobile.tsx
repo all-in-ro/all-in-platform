@@ -478,6 +478,12 @@ function normalizeSearch(value: unknown) {
     .trim();
 }
 
+function looksLikeMobileWarehouseExactIdentifier(value: unknown) {
+  const clean = cleanScannedBarcode(value);
+  if (clean.length < 6 || clean.length > 80) return false;
+  return /^[A-Za-z0-9._:/\-]+$/.test(clean);
+}
+
 function firstText(...values: unknown[]) {
   for (const value of values) {
     const text = String(value ?? "").trim();
@@ -1182,6 +1188,43 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<DetailResponse>(`/variants/${encodeURIComponent(id)}`);
   }
 
+  function mobileCatalogItemFromDetail(detail: DetailResponse, fallbackBarcode = ""): InventoryItem | null {
+    const raw = (detail?.item || {}) as Record<string, any>;
+    const variantId = firstText(raw.variant_id, raw.id);
+    if (!variantId) return null;
+    const rows = Array.isArray(detail?.stock) ? detail.stock : [];
+    const totalQty = rows.reduce((sum, row) => sum + n(row?.qty), 0);
+    const reservedQty = rows.reduce((sum, row) => sum + n(row?.reserved_qty), 0);
+    const availableQty = rows.reduce((sum, row) => sum + (row?.available_qty !== undefined && row?.available_qty !== null ? n(row.available_qty) : n(row?.qty) - n(row?.reserved_qty)), 0);
+    return {
+      ...raw,
+      variant_id: variantId,
+      barcode: firstText(raw.barcode, fallbackBarcode) || null,
+      display_barcode: firstText(raw.display_barcode, raw.barcode, fallbackBarcode) || null,
+      variant_status: firstText(raw.variant_status, raw.variantStatus, raw.status, "active") || "active",
+      model_status: firstText(raw.model_status, raw.modelStatus, "active") || "active",
+      total_qty: rows.length ? totalQty : (raw.total_qty ?? 0),
+      total_reserved_qty: rows.length ? reservedQty : (raw.total_reserved_qty ?? 0),
+      available_qty: rows.length ? availableQty : (raw.available_qty ?? raw.total_qty ?? 0),
+    } as InventoryItem;
+  }
+
+  async function lookupMobileBarcodeOwner(code: string, signal?: AbortSignal) {
+    const clean = cleanScannedBarcode(code);
+    if (!looksLikeMobileWarehouseExactIdentifier(clean)) return [] as InventoryItem[];
+    try {
+      const owner = await apiBarcodeConflictCheck(clean, "", signal);
+      const variantId = String(owner?.conflict?.variantId || "").trim();
+      if (!variantId) return [] as InventoryItem[];
+      const detail = await fetchAifJSON<DetailResponse>(`/variants/${encodeURIComponent(variantId)}`, { signal });
+      const item = mobileCatalogItemFromDetail(detail, owner.barcode || clean);
+      return item && itemStatus(item) !== "archived" && modelStatus(item) !== "archived" ? [item] : [];
+    } catch (error: any) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      return [] as InventoryItem[];
+    }
+  }
+
   async function apiVariantHistory(id: string) {
     return fetchAifJSON<VariantHistoryResponse>(`/variants/${encodeURIComponent(id)}/history?limit=700`);
   }
@@ -1190,14 +1233,14 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<{ ok: true }>(`/variants/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
-  async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "") {
+  async function apiBarcodeConflictCheck(barcode: string, excludeVariantId = "", signal?: AbortSignal) {
     const cleanBarcode = cleanScannedBarcode(barcode);
     if (!cleanBarcode) return { ok: true as const, barcode: "", conflict: null as Record<string, any> | null };
     const qs = new URLSearchParams();
     qs.set("barcode", cleanBarcode);
     if (excludeVariantId) qs.set("excludeVariantId", excludeVariantId);
     qs.set("_", String(Date.now()));
-    return fetchAifJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/barcode-conflict?${qs.toString()}`);
+    return fetchAifJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/barcode-conflict?${qs.toString()}`, { signal });
   }
 
   async function apiVariantStockUpdate(
@@ -1635,8 +1678,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
     try {
       let rows: InventoryItem[] = [];
-      const exact = await apiInventoryLookup(clean, controller.signal);
-      rows = Array.isArray(exact.items) ? exact.items : [];
+      if (looksLikeMobileWarehouseExactIdentifier(clean)) {
+        rows = await lookupMobileBarcodeOwner(clean, controller.signal);
+      }
+      if (!rows.length) {
+        const exact = await apiInventoryLookup(clean, controller.signal);
+        rows = Array.isArray(exact.items) ? exact.items : [];
+      }
       if (!rows.length) {
         const broad = await apiCatalogSearch(clean, controller.signal);
         rows = Array.isArray(broad.items) ? broad.items : [];
@@ -1657,6 +1705,15 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       if (catalogSearchAbortRef.current === controller) catalogSearchAbortRef.current = null;
     }
   }
+
+  useEffect(() => {
+    const clean = String(search || "").trim();
+    if (!looksLikeMobileWarehouseExactIdentifier(clean)) return;
+    if (searchInventoryItems.some((item) => itemMatchesScannedBarcode(item, clean))) return;
+    const timer = window.setTimeout(() => { void runMobileWarehouseSearch(clean); }, 280);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const hasActiveFilters = Boolean(
     search.trim() || brand !== "all" || category !== "all" || subCategory !== "all" || gender !== "all" || color !== "all" || stockFilter !== "all" || imageFilter !== "all" || shopifyFilter !== "all" || focusVariantIds.length
@@ -2356,8 +2413,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     let exactMatches = searchInventoryItems.filter((item) => itemMatchesScannedBarcode(item, code));
     if (!exactMatches.length) {
       try {
-        const exact = await apiInventoryLookup(code);
-        exactMatches = (exact.items || []).filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived");
+        exactMatches = await lookupMobileBarcodeOwner(code);
+        if (!exactMatches.length) {
+          const exact = await apiInventoryLookup(code);
+          exactMatches = (exact.items || []).filter((item) => itemStatus(item) !== "archived" && modelStatus(item) !== "archived");
+        }
         if (exactMatches.length) mergeMobileCatalogSearchItems(exactMatches);
       } catch {
         // A kereső ettől még megkapja a kódot; kézi Keresés gombbal újrapróbálható.
