@@ -1423,6 +1423,7 @@ export default function AllInProductMoves() {
   const scanQueueRef = useRef<string[]>([]);
   const scanQueueRunningRef = useRef(false);
   const productSearchRequestIdRef = useRef(0);
+  const draftListScrollRef = useRef<HTMLDivElement | null>(null);
 
   const loadSettings = useCallback(async () => {
     const result = await fetchJson<{ settings?: Record<DocumentType, StockDocumentSettings>; items?: StockDocumentSettings[] }>("/stock-documents/settings");
@@ -1550,6 +1551,16 @@ export default function AllInProductMoves() {
   }
 
   const draftLineArray = useMemo(() => Object.values(draftLines), [draftLines]);
+  const newestDraftLineKey = draftLineArray[0]?.key || "";
+
+  useEffect(() => {
+    if (!createOpen || !newestDraftLineKey) return;
+    const handle = window.setTimeout(() => {
+      draftListScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [createOpen, newestDraftLineKey]);
+
   const outgoingDraft = draftType !== "stock_correction" || correctionDirection === "decrease";
   const draftPriceBasis = draftType === "internal_transfer" ? "Eladási ár" : "Beszerzési ár";
   const draftTotalQty = draftLineArray.reduce((sum, line) => sum + line.qty, 0);
@@ -1877,18 +1888,23 @@ export default function AllInProductMoves() {
       }
       const wanted = (previous?.qty || 0) + Math.max(1, amount);
       const qty = outgoingDraft ? Math.min(max, wanted) : wanted;
-      return {
-        ...current,
-        [key]: {
-          key,
-          item,
-          qty,
-          originalQty,
-          fromLocationId: fromId || undefined,
-          toLocationId: toId || undefined,
-          lineId: previous?.lineId || null,
-        },
+      const nextRow: DraftLine = {
+        key,
+        item,
+        qty,
+        originalQty,
+        fromLocationId: fromId || undefined,
+        toLocationId: toId || undefined,
+        lineId: previous?.lineId || null,
       };
+
+      // A legutóbb csipogtatott / hozzáadott termék mindig a lista tetejére kerül.
+      // Ugyanazt újra beolvasva a mennyiség nő, és a sor ismét legfelülre ugrik.
+      const next: Record<string, DraftLine> = { [key]: nextRow };
+      for (const [currentKey, currentRow] of Object.entries(current)) {
+        if (currentKey !== key) next[currentKey] = currentRow;
+      }
+      return next;
     });
     setError("");
     setProductSearch("");
@@ -3007,7 +3023,7 @@ export default function AllInProductMoves() {
 
                 <div className="overflow-hidden rounded-2xl border border-white/12 bg-[#404a5b]">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5"><div><p className="text-[10px] uppercase tracking-[0.14em] text-white/42">Bizonylat tartalma</p><h3 className="mt-1 flex items-center gap-2 text-sm"><Boxes size={16} /> {draftLineArray.length} terméksor • {draftTotalQty} db</h3></div><span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/12 px-2.5 py-1 text-[11px] text-[#d7fffd]">Becsült érték: {moneyRon(draftTotalValue)} • {draftPriceBasis}</span></div>
-                  <div className="max-h-[520px] overflow-auto">
+                  <div ref={draftListScrollRef} className="max-h-[520px] overflow-auto">
                     <table className="min-w-[900px] w-full text-left text-xs">
                       <thead className="sticky top-0 z-10 bg-[#303a4c] text-[9px] uppercase tracking-[0.08em] text-white/48"><tr><th className="px-2 py-2">Kép</th><th className="px-2 py-2">Termék</th><th className="px-2 py-2">Vonalkód</th>{draftType === "internal_transfer" ? <th className="px-2 py-2">Útvonal</th> : null}<th className="px-2 py-2 text-center">Elérhető</th><th className="px-2 py-2 text-center">Db</th><th className="px-2 py-2 text-right">P.U.</th><th className="px-2 py-2 text-right">Érték</th><th className="px-2 py-2 text-right"></th></tr></thead>
                       <tbody>
