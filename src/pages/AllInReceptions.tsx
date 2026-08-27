@@ -920,7 +920,7 @@ function buildOfficialReceptionHtml(detail: AifReceptionDetail, drafts: Record<s
 
     <div class="meta">
       <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
-      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}${item.uit_code ? `<br>UIT: ${pdfEscape(item.uit_code)}` : ""}</div></div>
       <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
       <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
       <div class="box"><div class="label">Deviza factura</div><div class="value">${pdfEscape(currency)}</div></div>
@@ -1175,7 +1175,7 @@ function buildReceptionVerificationHtml(
     </div>
     <div class="meta">
       <div class="box"><div class="label">Furnizor</div><div class="value">${pdfEscape(item.supplier_name || "-")}</div></div>
-      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}</div></div>
+      <div class="box"><div class="label">Factura</div><div class="value">${pdfEscape(item.invoice_number || "-")}${item.uit_code ? `<br>UIT: ${pdfEscape(item.uit_code)}` : ""}</div></div>
       <div class="box"><div class="label">Data factura</div><div class="value">${pdfEscape(pdfDate(item.invoice_date))}</div></div>
       <div class="box"><div class="label">Gestiune</div><div class="value">${pdfEscape(item.location_name || "-")}</div></div>
       <div class="box"><div class="label">Total factura</div><div class="value">${pdfNumber(totalQty, 0)} buc.</div></div>
@@ -1512,6 +1512,7 @@ export default function AllInReceptions(_props: Props) {
   function buildReceptionDraft(item: AifReceptionSummary) {
     return {
       invoiceNumber: String(item.invoice_number || ""),
+      uitCode: String((item as any).uit_code || (item as any).uitCode || ""),
       invoiceDate: dateText(item.invoice_date) === "-" ? "" : dateText(item.invoice_date),
       receptionDate: dateText(item.reception_date) === "-" ? "" : dateText(item.reception_date),
       currencyCode: String(item.currency_code || ""),
@@ -1586,6 +1587,7 @@ export default function AllInReceptions(_props: Props) {
     try {
       const saved = await apiAifUpdateReception(detail.item.id, {
         invoiceNumber: receptionDraft.invoiceNumber,
+        uitCode: receptionDraft.uitCode,
         invoiceDate: receptionDraft.invoiceDate,
         receptionDate: receptionDraft.receptionDate,
         currencyCode: receptionDraft.currencyCode,
@@ -1601,6 +1603,7 @@ export default function AllInReceptions(_props: Props) {
         setReceptionDraft((prev) => ({
           ...prev,
           invoiceNumber: String(saved.item?.invoice_number ?? prev.invoiceNumber ?? ""),
+          uitCode: String(saved.item?.uit_code ?? saved.item?.uitCode ?? prev.uitCode ?? ""),
           invoiceDate: dateOnly(saved.item?.invoice_date) || prev.invoiceDate,
           receptionDate: dateOnly(saved.item?.reception_date) || prev.receptionDate,
           currencyCode: String(saved.item?.currency_code ?? prev.currencyCode ?? ""),
@@ -1953,7 +1956,7 @@ export default function AllInReceptions(_props: Props) {
             <div className="grid gap-3 lg:grid-cols-4">
             <label className={`${label} lg:col-span-2`}>
               Keresés
-              <input className={input} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="számlaszám, beszállító, cél hely" />
+              <input className={input} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="számlaszám, UIT kód, beszállító, cél hely" />
             </label>
             <div className={label}>
               <span>Időszak kezdete</span>
@@ -2034,6 +2037,7 @@ export default function AllInReceptions(_props: Props) {
                 <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.08em] text-white/72 [&_th]:font-normal">
                   <tr>
                     <th className="px-2 py-1.5">Számla</th>
+                    <th className="px-2 py-1.5">UIT kód</th>
                     <th className="px-2 py-1.5">Beszállító</th>
                     <th className="px-2 py-1.5">Beszerzési rendelés</th>
                     <th className="px-2 py-1.5">Cél hely</th>
@@ -2050,6 +2054,7 @@ export default function AllInReceptions(_props: Props) {
                   {items.map((r) => (
                     <tr key={r.id} className="hover:bg-white/[0.04]">
                       <td className="px-3 py-2 text-white">{cell(r.invoice_number)}</td>
+                      <td className="px-2 py-1.5 font-mono text-[11px] text-[#cffffd]">{cell((r as any).uit_code || (r as any).uitCode)}</td>
                       <td className="px-2 py-1.5 text-white/82">{cell(r.supplier_name)}</td>
                       <td className="px-2 py-1.5 text-white/82">{r.purchase_order_id ? <button className="rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(r.purchase_order_id)} type="button">{r.purchase_order_number || "Kapcsolt rendelés"}</button> : <span className="text-white/35">-</span>}</td>
                       <td className="px-2 py-1.5 text-white/82">{cell(r.location_name)}</td>
@@ -2070,7 +2075,7 @@ export default function AllInReceptions(_props: Props) {
                       </td>
                     </tr>
                   ))}
-                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={11}>Nincs receptió a megadott szűrés szerint.</td></tr>}
+                  {!items.length && <tr><td className="px-2 py-6 text-center text-white/62" colSpan={12}>Nincs receptió a megadott szűrés szerint.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -2080,6 +2085,7 @@ export default function AllInReceptions(_props: Props) {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs text-white">{cell(r.invoice_number)}</p>
+                      {(r as any).uit_code || (r as any).uitCode ? <p className="mt-1 font-mono text-[11px] text-[#cffffd]">UIT: {String((r as any).uit_code || (r as any).uitCode)}</p> : null}
                       <p className="mt-1 text-xs text-white/62">{cell(r.supplier_name)} • {cell(r.location_name)}</p>
                       {r.purchase_order_id && <button className="mt-2 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50" onClick={() => openLinkedPurchaseOrder(r.purchase_order_id)} type="button">{r.purchase_order_number || "Kapcsolt rendelés"}</button>}
                     </div>
@@ -2122,7 +2128,8 @@ export default function AllInReceptions(_props: Props) {
               </div>
             </div>
             <div className="space-y-3 px-3 pt-3 pb-6">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
+                <div className={statCard}><p className="text-[11px] uppercase text-white/56">UIT kód</p><p className="mt-0.5 truncate font-mono text-xs text-[#cffffd]" title={String((detail.item as any).uit_code || (detail.item as any).uitCode || "")}>{cell((detail.item as any).uit_code || (detail.item as any).uitCode)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.supplier_name)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszerzési rendelés</p>{detail.item.purchase_order_id ? <button className="mt-1 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(detail.item.purchase_order_id)} type="button">{detail.item.purchase_order_number || "Kapcsolt rendelés"}</button> : <p className="mt-0.5 text-xs text-white/40">-</p>}</div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Cél hely</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.location_name)}</p></div>
@@ -2211,6 +2218,7 @@ export default function AllInReceptions(_props: Props) {
                 </div>
                 <div className="mt-3 grid gap-2 lg:grid-cols-4">
                   <label className={lightLabel}>Számlaszám<input className={lightInput} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
+                  <label className={lightLabel}>UIT kód • ha van<input className={`${lightInput} font-mono tracking-[0.04em]`} maxLength={64} value={receptionDraft.uitCode || ""} onChange={(e) => updateReceptionDraft("uitCode", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))} placeholder="UIT kód" /></label>
                   <label className={lightLabel}>Számla dátuma<input className={lightInput} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
                   <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
                   <label className={lightLabel}>Pénznem<select className={lightSelect} value={receptionDraft.currencyCode || ""} onChange={(e) => updateReceptionDraft("currencyCode", e.target.value)}>{(meta?.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} - {c.name}</option>)}</select></label>
