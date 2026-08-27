@@ -2333,6 +2333,7 @@ function WarehouseInvoicePicker({
 function WarehouseInvoiceDetailModal({
   option,
   details,
+  currentItems,
   loading,
   error,
   buyPricesVisible,
@@ -2341,6 +2342,7 @@ function WarehouseInvoiceDetailModal({
 }: {
   option: WarehouseInvoiceFilterOption | null;
   details: WarehouseReceptionDetail[];
+  currentItems: InventoryItem[];
   loading: boolean;
   error: string;
   buyPricesVisible: boolean;
@@ -2365,40 +2367,117 @@ function WarehouseInvoiceDetailModal({
   }, [option, onClose]);
 
   if (!option) return null;
+
+  // A receptió sora történeti adat, ezért az akkori importban még lehetett üres a kép.
+  // A számlarészletekben viszont mindig a variáns JELENLEGI termékképét mutatjuk,
+  // így a később feltöltött képek a régi számlákhoz visszafelé is megjelennek.
+  // Ehhez nincs új API-kérés: a már betöltött gyors raktárlistából dolgozunk.
+  const currentItemByVariantId = new Map<string, InventoryItem>();
+  for (const item of [...option.items, ...(currentItems || [])]) {
+    const variantId = selectedVariantIdFromItem(item);
+    if (!variantId) continue;
+    const previous = currentItemByVariantId.get(variantId);
+    currentItemByVariantId.set(variantId, {
+      ...(previous || {}),
+      ...item,
+      variant_id: variantId,
+      image_url: firstWarehouseText(item.image_url, previous?.image_url) || null,
+    } as InventoryItem);
+  }
+
+  const currentItemBySignature = new Map<string, InventoryItem>();
+  for (const item of currentItemByVariantId.values()) {
+    const signature = [
+      normalizeSearch(itemProductCode(item)),
+      normalizeSearch(item.size),
+      normalizeSearch(firstWarehouseText(item.color_code, item.color_name)),
+    ].join("|");
+    if (signature !== "||" && !currentItemBySignature.has(signature)) {
+      currentItemBySignature.set(signature, item);
+    }
+  }
+
+  function currentItemForReceptionRow(row: Record<string, any>, normalized: Record<string, any>) {
+    const variantId = firstWarehouseText(
+      row.variant_id,
+      row.variantId,
+      normalized.variant_id,
+      normalized.variantId,
+    );
+    if (variantId && currentItemByVariantId.has(variantId)) {
+      return currentItemByVariantId.get(variantId) || null;
+    }
+
+    // Régebbi importoknál előfordulhat, hogy a receptiósoron nincs variant_id.
+    // Ilyenkor csak biztos termékkód + méret + szín kombinációval esünk vissza.
+    const productCode = firstWarehouseText(
+      row.supplier_product_code,
+      normalized.supplierProductCode,
+      normalized.supplier_product_code,
+      normalized.modelCode,
+      normalized.model_code,
+    );
+    const size = firstWarehouseText(row.supplier_size, normalized.size, normalized.supplierSize);
+    const color = firstWarehouseText(
+      row.supplier_color_code,
+      normalized.colorCode,
+      normalized.color_code,
+      normalized.colorName,
+      normalized.color_name,
+    );
+    const signature = [
+      normalizeSearch(productCode),
+      normalizeSearch(size),
+      normalizeSearch(color),
+    ].join("|");
+    return signature !== "||" ? currentItemBySignature.get(signature) || null : null;
+  }
+
   const detailItems = details.map((detail) => detail.item || {}).filter(Boolean);
   const detailRows = details.flatMap((detail) => (detail.rows || []).filter((row) => String(row.status || "").toLowerCase() !== "ignored"));
   const productRows = detailRows.length
     ? detailRows.map((row, index) => {
-        const normalized = row.normalized && typeof row.normalized === "object" ? row.normalized : {};
+        const normalized = row.normalized && typeof row.normalized === "object" ? row.normalized as Record<string, any> : {};
+        const currentItem = currentItemForReceptionRow(row, normalized);
         return {
           key: String(row.id || `${row.batch_id || "row"}-${row.row_no || index}`),
-          imageUrl: String((normalized as any).imageUrl || (normalized as any).image_url || row.image_url || "").trim(),
-          productCode: String(row.supplier_product_code || (normalized as any).supplierProductCode || (normalized as any).modelCode || "-").trim(),
-          title: String((normalized as any).titleRo || (normalized as any).productName || row.title_ro || row.supplier_product_code || "Névtelen termék").trim(),
-          brand: String((normalized as any).brandName || (normalized as any).brandCode || row.brand_name || "-").trim(),
-          category: String((normalized as any).categoryName || (normalized as any).categoryCode || (normalized as any).productType || "-").trim(),
-          color: String((normalized as any).colorName || row.supplier_color_code || (normalized as any).colorCode || "-").trim(),
-          size: String(row.supplier_size || (normalized as any).size || "-").trim(),
-          qty: n(row.qty ?? (normalized as any).qty),
-          buyPrice: row.buy_price_ron ?? row.buy_price ?? (normalized as any).buyPrice ?? null,
-          sellPrice: row.sell_price_ron ?? row.sell_price ?? (normalized as any).sellPriceGrossRon ?? (normalized as any).sellPrice ?? null,
-          status: String(row.status || "-").trim(),
+          variantId: firstWarehouseText(row.variant_id, row.variantId, normalized.variant_id, normalized.variantId),
+          imageUrl: firstWarehouseText(
+            currentItem?.image_url,
+            normalized.imageUrl,
+            normalized.image_url,
+            row.image_url,
+          ),
+          productCode: String(row.supplier_product_code || normalized.supplierProductCode || normalized.modelCode || "-").trim(),
+          title: String(normalized.titleRo || normalized.productName || row.title_ro || currentItem?.title_ro || row.supplier_product_code || "Névtelen termék").trim(),
+          brand: String(normalized.brandName || normalized.brandCode || row.brand_name || currentItem?.brand_name || "-").trim(),
+          category: String(normalized.categoryName || normalized.categoryCode || normalized.productType || (currentItem ? itemMainCategoryLabel(currentItem) : "-")).trim(),
+          color: String(normalized.colorName || row.supplier_color_code || normalized.colorCode || currentItem?.color_name || currentItem?.color_code || "-").trim(),
+          size: String(row.supplier_size || normalized.size || currentItem?.size || "-").trim(),
+          qty: n(row.qty ?? normalized.qty),
+          buyPrice: row.buy_price_ron ?? row.buy_price ?? normalized.buyPrice ?? currentItem?.buy_price ?? null,
+          sellPrice: row.sell_price_ron ?? row.sell_price ?? normalized.sellPriceGrossRon ?? normalized.sellPrice ?? currentItem?.sell_price ?? null,
+          status: String(row.status || currentItem?.variant_status || "-").trim(),
         };
       })
-    : option.items.map((item) => ({
-        key: item.variant_id,
-        imageUrl: String(item.image_url || "").trim(),
-        productCode: itemProductCode(item) || "-",
-        title: String(item.title_ro || item.shopify_title || "Névtelen termék"),
-        brand: String(item.brand_name || "-"),
-        category: itemMainCategoryLabel(item),
-        color: displayColorName(item.color_name, item.color_code),
-        size: String(item.size || "-"),
-        qty: n(item.total_qty),
-        buyPrice: item.buy_price ?? null,
-        sellPrice: item.sell_price ?? null,
-        status: item.variant_status || "-",
-      }));
+    : option.items.map((item) => {
+        const currentItem = currentItemByVariantId.get(String(item.variant_id || "").trim()) || item;
+        return {
+          key: item.variant_id,
+          variantId: item.variant_id,
+          imageUrl: firstWarehouseText(currentItem.image_url, item.image_url),
+          productCode: itemProductCode(currentItem) || itemProductCode(item) || "-",
+          title: String(currentItem.title_ro || currentItem.shopify_title || item.title_ro || item.shopify_title || "Névtelen termék"),
+          brand: String(currentItem.brand_name || item.brand_name || "-"),
+          category: itemMainCategoryLabel(currentItem),
+          color: displayColorName(currentItem.color_name, currentItem.color_code),
+          size: String(currentItem.size || item.size || "-"),
+          qty: n(item.total_qty),
+          buyPrice: item.buy_price ?? currentItem.buy_price ?? null,
+          sellPrice: item.sell_price ?? currentItem.sell_price ?? null,
+          status: item.variant_status || currentItem.variant_status || "-",
+        };
+      });
   const totalQty = productRows.reduce((sum, row) => sum + n(row.qty), 0);
   const invoiceTotal = detailItems.reduce((sum, item) => sum + n(item.invoice_gross), 0);
   const currencies = Array.from(new Set([...option.currencyCodes, ...detailItems.map((item) => String(item.currency_code || "").trim())].filter(Boolean)));
@@ -15804,6 +15883,7 @@ export default function AllInWarehouse() {
       <WarehouseInvoiceDetailModal
         option={invoiceDetailTarget}
         details={invoiceDetailRows}
+        currentItems={inventoryDisplayItems}
         loading={invoiceDetailBusy}
         error={invoiceDetailError}
         buyPricesVisible={buyPricesVisible}
