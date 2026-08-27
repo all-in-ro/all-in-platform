@@ -4577,11 +4577,33 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     await ensureAifSizeTables(client);
     const s = await findSizeTypeByIdOrCode(client, sizeIdOrCode);
     if (!s) return { product_variants: 0, brand_size_codes: 0 };
+
+    // A törlésnél nem elég csak a size_types.name/code mezőt nézni.
+    // A termék mérete lehet alias (pl. 38.5 egy EU 38.5 törzsadathoz),
+    // vagy márkaspecifikus méretkódon keresztül is ehhez a törzsmérethez tartozhat.
+    const directValues = Array.from(new Set([
+      s.name,
+      s.code,
+      ...(Array.isArray(s.aliases) ? s.aliases : []),
+    ].map((value) => text(value).toLowerCase()).filter(Boolean)));
+
     const r = await client.query(
       `SELECT
-         (SELECT count(*)::int FROM aif_product_variants WHERE lower(COALESCE(size,''))=lower($1) OR lower(COALESCE(size,''))=lower($2)) AS product_variants,
-         (SELECT count(*)::int FROM aif_brand_size_codes WHERE size_type_id=$3) AS brand_size_codes`,
-      [s.name, s.code, s.id]
+         (
+           SELECT count(DISTINCT v.id)::int
+           FROM aif_product_variants v
+           JOIN aif_product_models m ON m.id=v.model_id
+           WHERE lower(btrim(COALESCE(v.size,''))) = ANY($1::text[])
+              OR EXISTS (
+                SELECT 1
+                FROM aif_brand_size_codes bsc
+                WHERE bsc.size_type_id=$2
+                  AND bsc.brand_id=m.brand_id
+                  AND lower(btrim(COALESCE(bsc.size_code,'')))=lower(btrim(COALESCE(v.size,'')))
+              )
+         ) AS product_variants,
+         (SELECT count(*)::int FROM aif_brand_size_codes WHERE size_type_id=$2) AS brand_size_codes`,
+      [directValues, s.id]
     );
     return r.rows[0] || { product_variants: 0, brand_size_codes: 0 };
   }
@@ -4748,22 +4770,42 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       const size = await findSizeTypeByIdOrCode(client, id);
       if (!size) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: "size not found" });
+        return res.status(404).json({ error: "Méret nem található." });
       }
       await client.query(`SELECT id FROM aif_size_types WHERE id=$1 FOR UPDATE`, [size.id]);
       const usage = await sizeUsage(client, size.id);
-      if (Number(usage.product_variants || 0) > 0 || Number(usage.brand_size_codes || 0) > 0) {
-        await client.query(`UPDATE aif_size_types SET is_active=false, updated_at=now() WHERE id=$1`, [size.id]);
-        await client.query("COMMIT");
-        return res.json({ ok: true, mode: "deactivated", usage });
+
+      // A mérettörzs és a szűrő ugyanazt az életet éli: használt méretet nem
+      // rejtünk el inaktiválással, mert attól a terméken maradna egy szűrőből
+      // eltűnt érték. Ha termék használja, a törlés egyszerűen blokkolva van.
+      if (Number(usage.product_variants || 0) > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: `A(z) ${size.name || size.code} méret ${Number(usage.product_variants || 0)} termékvariánshoz van társítva, ezért nem törölhető.`,
+          code: "size_in_use",
+          usage,
+        });
       }
+
+      // Márkaméret-kapcsolat önmagában nem akadály: ha nincs mögötte egyetlen
+      // termék sem, a kapcsolatot a mérettel együtt véglegesen eltakarítjuk.
+      const removedMappings = await client.query(
+        `DELETE FROM aif_brand_size_codes WHERE size_type_id=$1 RETURNING id`,
+        [size.id]
+      );
       await client.query(`DELETE FROM aif_size_types WHERE id=$1`, [size.id]);
       await client.query("COMMIT");
-      res.json({ ok: true, mode: "deleted", usage });
+      res.json({
+        ok: true,
+        mode: "deleted",
+        usage,
+        removed_brand_size_codes: removedMappings.rowCount,
+        removedBrandSizeCodes: removedMappings.rowCount,
+      });
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF delete size type failed", e);
-      res.status(500).json({ error: "failed to delete size" });
+      res.status(500).json({ error: e?.message || "A méret törlése nem sikerült." });
     } finally {
       client.release();
     }
