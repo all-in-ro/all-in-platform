@@ -205,7 +205,7 @@ function mergeInventoryItems(baseItems: InventoryItem[], extraItems: InventoryIt
     const id = selectedVariantIdFromItem(item);
     if (id && !map.has(id)) map.set(id, { ...item, variant_id: id });
   }
-  return Array.from(map.values());
+  return Array.from(map.values()).slice(-600);
 }
 
 
@@ -5135,6 +5135,11 @@ function itemMatchesSearch(it: InventoryItem, query: string) {
     it.supplier_codes,
     it.internal_sku,
     it.barcode,
+    itemProductCode(it),
+    it.supplier_product_code,
+    it.supplierProductCode,
+    it.product_code,
+    it.productCode,
     it.sn_cod,
     it.snCod,
     itemCustomsTariffCode(it),
@@ -5304,6 +5309,46 @@ async function apiStock() {
 
 async function apiWarehouseInvoices() {
   return fetchJSON<{ ok?: boolean; items?: WarehouseInvoiceIndexItem[]; count?: number }>("/api/aif/warehouse-invoices");
+}
+
+type WarehouseCatalogSearchResponse = {
+  ok?: boolean;
+  code?: string;
+  exact?: boolean;
+  matchType?: string | null;
+  items?: InventoryItem[];
+  total?: number | null;
+};
+
+// A gyors /warehouse-products bootstrap szándékosan nem tölti le a 0 készletes,
+// inaktív történeti variánsokat. Pontos keresésnél viszont ezeket is meg kell
+// találni, különben a receptió jogos barcode-ütközést jelez, a Raktár pedig úgy
+// tesz, mintha a rekord nem létezne. Ez az endpoint csak kérésre fut.
+async function apiWarehouseExactLookup(code: string, signal?: AbortSignal) {
+  const clean = cleanScannedBarcode(code);
+  if (!clean) return { items: [] } as WarehouseCatalogSearchResponse;
+  const qs = new URLSearchParams();
+  qs.set("code", clean);
+  qs.set("_", String(Date.now()));
+  return fetchJSON<WarehouseCatalogSearchResponse>(`/api/aif/inventory/lookup?${qs.toString()}`, { signal });
+}
+
+async function apiWarehouseCatalogSearch(options: {
+  search?: string;
+  snCod?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
+  const qs = new URLSearchParams();
+  const searchText = String(options.search || "").trim();
+  const snCod = String(options.snCod || "").trim();
+  if (searchText) qs.set("search", searchText);
+  if (snCod) qs.set("snCod", snCod);
+  qs.set("includeZero", "1");
+  qs.set("limit", String(Math.max(1, Math.min(300, options.limit || 200))));
+  qs.set("offset", "0");
+  qs.set("_", String(Date.now()));
+  return fetchJSON<WarehouseCatalogSearchResponse>(`/api/aif/inventory?${qs.toString()}`, { signal: options.signal });
 }
 
 async function apiIncomingStockMovements(limit = 300) {
@@ -5933,6 +5978,8 @@ function overviewOpenByDefault() {
 
 export default function AllInWarehouse() {
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
+  const [catalogSearchBusy, setCatalogSearchBusy] = useState(false);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
   const [suppliers, setSuppliers] = useState<MetaItem[]>([]);
   const [brands, setBrands] = useState<MetaItem[]>([]);
@@ -6094,6 +6141,8 @@ export default function AllInWarehouse() {
   const productListRef = useRef<HTMLElement | null>(null);
   const loadSequenceRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
+  const catalogSearchSequenceRef = useRef(0);
+  const catalogSearchAbortRef = useRef<AbortController | null>(null);
   // A termékadatlap első kattintásra a raktárlistában már meglévő adatokból nyílik meg.
   // A teljes szerveres részlet háttérben érkezik, és rövid ideig cache-eljük is.
   const detailCacheRef = useRef<Map<string, { data: DetailResponse; loadedAt: number }>>(new Map());
@@ -6197,9 +6246,15 @@ export default function AllInWarehouse() {
 
   const inventoryDisplayItems = useMemo(() => {
     const baseItems = items.filter((item) => !isArchivedInventoryItem(item));
+    const catalogItems = catalogSearchItems.filter((item) => !isArchivedInventoryItem(item));
+    const baseWithCatalog = catalogItems.length
+      ? mergeInventoryItems(baseItems, catalogItems).filter((item) => !isArchivedInventoryItem(item))
+      : baseItems;
     const focusedItems = incomingFocusItems.filter((item) => !isArchivedInventoryItem(item));
-    return focusedItems.length ? mergeInventoryItems(baseItems, focusedItems).filter((item) => !isArchivedInventoryItem(item)) : baseItems;
-  }, [items, incomingFocusItems]);
+    return focusedItems.length
+      ? mergeInventoryItems(baseWithCatalog, focusedItems).filter((item) => !isArchivedInventoryItem(item))
+      : baseWithCatalog;
+  }, [items, catalogSearchItems, incomingFocusItems]);
 
   const duplicateSkuGroups = useMemo(() => {
     const groups = new Map<string, { sku: string; items: InventoryItem[] }>();
@@ -7831,6 +7886,98 @@ export default function AllInWarehouse() {
   const canSaveBrandSizeForm = Boolean(brandSizeForm.brandId && brandSizeForm.sizeCode.trim() && brandSizeForm.sizeTypeId);
   const canSaveMaterialForm = Boolean(materialForm.nameRo.trim());
 
+  function mergeWarehouseCatalogSearchItems(rows: InventoryItem[]) {
+    const cleanRows = (rows || [])
+      .map((item) => {
+        const id = selectedVariantIdFromItem(item);
+        return id ? { ...item, variant_id: id } : null;
+      })
+      .filter((item): item is InventoryItem => Boolean(item && !isArchivedInventoryItem(item)));
+    if (!cleanRows.length) return;
+    setCatalogSearchItems((current) => {
+      const map = new Map<string, InventoryItem>();
+      for (const item of current) {
+        const id = selectedVariantIdFromItem(item);
+        if (id) map.set(id, item);
+      }
+      for (const item of cleanRows) {
+        const id = selectedVariantIdFromItem(item);
+        if (!id) continue;
+        map.set(id, { ...(map.get(id) || {}), ...item, variant_id: id });
+      }
+      return Array.from(map.values());
+    });
+  }
+
+  async function runWarehouseCatalogSearch() {
+    const searchText = String(search || "").trim();
+    const snText = String(snCodFilter || "").trim();
+    setProductPage(1);
+    setListOpen(true);
+
+    if (!searchText && !snText) {
+      setMessage("Adj meg nevet, termékkódot, vonalkódot vagy S/N/COD értéket a teljes törzsadat kereséséhez.");
+      return;
+    }
+
+    const sequence = ++catalogSearchSequenceRef.current;
+    catalogSearchAbortRef.current?.abort();
+    const controller = new AbortController();
+    catalogSearchAbortRef.current = controller;
+    setCatalogSearchBusy(true);
+
+    try {
+      let rows: InventoryItem[] = [];
+      const exactNeedle = searchText || snText;
+
+      // Az exact lookup olcsó és indexbarát. Ha ez talál, nem indítjuk el a
+      // szélesebb /inventory keresést, így a gyors raktárterhelés megmarad.
+      if (exactNeedle) {
+        const exact = await apiWarehouseExactLookup(exactNeedle, controller.signal);
+        rows = Array.isArray(exact.items) ? exact.items : [];
+      }
+
+      if (!rows.length && (searchText || snText)) {
+        const broad = await apiWarehouseCatalogSearch({
+          search: searchText,
+          snCod: snText,
+          limit: 200,
+          signal: controller.signal,
+        });
+        rows = Array.isArray(broad.items) ? broad.items : [];
+      }
+
+      if (controller.signal.aborted || sequence !== catalogSearchSequenceRef.current) return;
+
+      if (rows.length) {
+        mergeWarehouseCatalogSearchItems(rows);
+        setMessage(`Teljes terméktörzs: ${rows.length} találat. A 0 készletes és inaktív variánsok is benne vannak.`);
+      } else {
+        setMessage("A teljes terméktörzsben sincs találat erre az azonosítóra / keresésre.");
+      }
+    } catch (error: any) {
+      if (controller.signal.aborted || error?.name === "AbortError") return;
+      if (sequence !== catalogSearchSequenceRef.current) return;
+      setMessage(error?.message || "A teljes terméktörzs keresése nem sikerült.");
+    } finally {
+      if (sequence === catalogSearchSequenceRef.current) setCatalogSearchBusy(false);
+      if (catalogSearchAbortRef.current === controller) catalogSearchAbortRef.current = null;
+    }
+  }
+
+  async function lookupExactWarehouseProduct(code: string) {
+    const clean = cleanScannedBarcode(code);
+    if (!clean) return [] as InventoryItem[];
+    try {
+      const result = await apiWarehouseExactLookup(clean);
+      const rows = (Array.isArray(result.items) ? result.items : []).filter((item) => !isArchivedInventoryItem(item));
+      if (rows.length) mergeWarehouseCatalogSearchItems(rows);
+      return rows;
+    } catch {
+      return [] as InventoryItem[];
+    }
+  }
+
   const filtered = useMemo(() => {
     let out = [...inventoryDisplayItems];
     const reviewMode = stockFilter === "watch";
@@ -7939,6 +8086,8 @@ export default function AllInWarehouse() {
   }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, sizeTypes, color, colorTypes, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
+    catalogSearchAbortRef.current?.abort();
+    setCatalogSearchBusy(false);
     setSearch("");
     setSnCodFilter("");
     setScannedBarcodeSearch("");
@@ -11298,7 +11447,7 @@ export default function AllInWarehouse() {
       return;
     }
 
-    const exactMatches = items.filter((item) => itemMatchesScannedBarcode(item, code));
+    const exactMatches = inventoryDisplayItems.filter((item) => itemMatchesScannedBarcode(item, code));
     if (exactMatches.length === 1) {
       focusProductInList(exactMatches[0], code, `Vonalkód beolvasva: ${code}. A terméksorra ugrottam, adatlapot nem nyitok meg.`);
       return;
@@ -11308,8 +11457,18 @@ export default function AllInWarehouse() {
       return;
     }
 
+    const serverMatches = await lookupExactWarehouseProduct(code);
+    if (serverMatches.length) {
+      focusProductInList(
+        serverMatches[0],
+        code,
+        `Vonalkód beolvasva: ${code}. A teljes törzsadatból megtaláltam${n(serverMatches[0].total_qty) <= 0 ? " a 0 készletes" : ""}${needsWarehouseActivation(serverMatches[0]) ? " inaktív" : ""} variánst.`,
+      );
+      return;
+    }
+
     resetListFiltersForProductFocus(code, code);
-    setMessage(`Vonalkód beolvasva: ${code}. Pontos egyezés nem volt, a kereső erre a kódra lett állítva.`);
+    setMessage(`Vonalkód beolvasva: ${code}. A teljes terméktörzsben sincs pontos egyezés.`);
   }
 
   useEffect(() => {
@@ -12288,7 +12447,7 @@ export default function AllInWarehouse() {
                 Keresés
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-2.5 text-white/40" size={18} />
-                  <input className={`${input} w-full pl-10 pr-12`} value={search} onChange={(e) => { setScannedBarcodeSearch(""); setSearch(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") setProductPage(1); }} placeholder="Név, beszállító, márka, vonalkód, S/N/COD, szín, méret" />
+                  <input className={`${input} w-full pl-10 pr-12`} value={search} onChange={(e) => { setScannedBarcodeSearch(""); setSearch(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void runWarehouseCatalogSearch(); } }} placeholder="Név, beszállító, márka, vonalkód, S/N/COD, szín, méret" />
                   <button
                     className="absolute right-1.5 top-1.5 inline-flex h-7 w-9 items-center justify-center rounded-lg border border-[#7bd7d4]/35 bg-[#2a8d8b]/70 text-white shadow-[0_0_10px_rgba(42,141,139,0.18)] hover:bg-[#2a8d8b] focus:outline-none focus:ring-2 focus:ring-[#7bd7d4]/45"
                     type="button"
@@ -12301,7 +12460,7 @@ export default function AllInWarehouse() {
                 </div>
               </label>
               <label className={label}>S/N/COD
-                <input className={input} value={snCodFilter} onChange={(e) => setSnCodFilter(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") setProductPage(1); }} placeholder="pl. S0626" />
+                <input className={input} value={snCodFilter} onChange={(e) => setSnCodFilter(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void runWarehouseCatalogSearch(); } }} placeholder="pl. S0626" />
               </label>
               <label className={label}>Beszállító
                 <select
@@ -12488,7 +12647,7 @@ export default function AllInWarehouse() {
                 </select>
               </label>
               <div className="flex items-end gap-2">
-                <button className={btn} onClick={() => setProductPage(1)} type="button"><Search size={16} /> Keresés</button>
+                <button className={btn} onClick={() => void runWarehouseCatalogSearch()} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
                 <button className={btnSoft} onClick={() => resetWarehouseFilters(false)} type="button">Alaphelyzet</button>
               </div>
             </div>
@@ -12553,7 +12712,7 @@ export default function AllInWarehouse() {
                     Háttérbetöltés: {inventoryLoadedCount.toLocaleString("hu-HU")}{inventoryTotalCount !== null ? `/${inventoryTotalCount.toLocaleString("hu-HU")}` : ""}
                   </span>
                 )}
-                {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{items.length}</span>}
+                {hasActiveWarehouseFilters && <span className="rounded-full border border-amber-200/30 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-50">Szűrve: {filtered.length}/{inventoryDisplayItems.length}</span>}
                 {filtered.length > 0 && <span className={chip}>{productPageStartIndex}-{productPageEndIndex} látható</span>}
                 {incomingFocus && (
                   <span className="rounded-full border border-[#7bd7d4]/35 bg-[#2a8d8b]/12 px-2.5 py-1 text-xs text-[#d7fffd]">
