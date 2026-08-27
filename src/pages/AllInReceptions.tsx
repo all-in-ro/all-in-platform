@@ -215,8 +215,8 @@ const rowActionBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg
 const rowPrimaryBtn = `${rowActionBtn} border-[#2a8d8b]/45 bg-[#2a8d8b] text-white hover:bg-[#319c99]`;
 const rowNeutralBtn = `${rowActionBtn} border-white/16 bg-white/[0.08] text-white/72 hover:bg-[#404a5b]/[0.12]`;
 const rowDangerBtn = `${rowActionBtn} border-red-500 bg-red-600 text-white hover:bg-red-500`;
-const receptionGridHeader = "grid min-w-[1260px] grid-cols-[34px_64px_118px_122px_minmax(170px,1.5fr)_72px_86px_66px_56px_76px_90px_82px_96px_108px] items-center gap-1 border-b border-white/12 bg-[#293448] px-2 py-2 text-[9px] uppercase tracking-[0.06em] text-white/72";
-const receptionGridRow = "grid min-w-[1260px] grid-cols-[34px_64px_118px_122px_minmax(170px,1.5fr)_72px_86px_66px_56px_76px_90px_82px_96px_108px] items-center gap-1 border-b border-white/10 px-2 py-1.5 transition-colors";
+const receptionGridHeader = "grid min-w-[1360px] grid-cols-[34px_64px_118px_92px_118px_minmax(150px,1.25fr)_72px_86px_66px_56px_76px_90px_82px_96px_108px] items-center gap-1 border-b border-white/12 bg-[#293448] px-2 py-2 text-[9px] uppercase tracking-[0.06em] text-white/72";
+const receptionGridRow = "grid min-w-[1360px] grid-cols-[34px_64px_118px_92px_118px_minmax(150px,1.25fr)_72px_86px_66px_56px_76px_90px_82px_96px_108px] items-center gap-1 border-b border-white/10 px-2 py-1.5 transition-colors";
 
 
 type UiSelectOption = { value: string; label: string; disabled?: boolean };
@@ -1494,6 +1494,7 @@ export default function AllInReceptions(_props: Props) {
         supplierProductCode: row.supplier_product_code || n.supplierProductCode || n.modelCode || "",
         snCod: row.sn_cod || n.snCod || n.sn_cod || "",
         sn_cod: row.sn_cod || n.snCod || n.sn_cod || "",
+        barcode: receptionRowBarcode(row),
         titleRo: n.titleRo || "",
         colorName: n.colorName || "",
         colorCode: row.supplier_color_code || n.colorCode || "",
@@ -2253,6 +2254,7 @@ export default function AllInReceptions(_props: Props) {
                       <span>Sor</span>
                       <span>Termékkód</span>
                       <span>S/N/COD</span>
+                      <span>Vonalkód</span>
                       <span>Terméknév</span>
                       <span>Méret</span>
                       <span>Szín</span>
@@ -2315,6 +2317,7 @@ export default function AllInReceptions(_props: Props) {
                           </div>
                           <input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} title={String(draft.supplierProductCode ?? "")} />
                           <input className={rowInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} title={String(draft.snCod ?? draft.sn_cod ?? "")} />
+                          <input className={`${rowInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} />
                           <input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} title={String(draft.titleRo ?? "")} />
                           <input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
                           <input className={rowInput} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} title={String(draft.colorName ?? "")} />
@@ -2371,6 +2374,7 @@ export default function AllInReceptions(_props: Props) {
                         <div className="mt-2 grid gap-2 sm:grid-cols-2">
                           <label className={rowLabel}>Termékkód<input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
                           <label className={rowLabel}>S/N/COD<input className={rowInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
+                          <label className={`${rowLabel} sm:col-span-2`}>Vonalkód<input className={`${rowInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
                           <label className={`${rowLabel} sm:col-span-2`}>Terméknév<input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} /></label>
                           <label className={rowLabel}>Méret<input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
                           <label className={rowLabel}>Szín<input className={rowInput} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
