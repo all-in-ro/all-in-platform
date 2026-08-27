@@ -1096,6 +1096,144 @@ function WarehouseMultiSelect({
 }
 
 
+type WarehouseSingleSelectOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+function WarehouseSingleSelect({
+  labelText,
+  options,
+  value,
+  onChange,
+  emptyValue = "all",
+  emptyText = "Összes",
+  showEmptyOption = true,
+  disabled = false,
+  noOptionsText = "Nincs választható érték.",
+  buttonClassName = "",
+  title,
+}: {
+  labelText: string;
+  options: WarehouseSingleSelectOption[];
+  value: string;
+  onChange: (value: string) => void;
+  emptyValue?: string;
+  emptyText?: string;
+  showEmptyOption?: boolean;
+  disabled?: boolean;
+  noOptionsText?: string;
+  buttonClassName?: string;
+  title?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = useMemo(
+    () => options.find((option) => String(option.value) === String(value)) || null,
+    [options, value]
+  );
+  const isEmpty = showEmptyOption && String(value) === String(emptyValue);
+  const summary = isEmpty ? emptyText : selected?.label || emptyText;
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || rootRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  return (
+    <div ref={rootRef} className={`${label} relative`}>
+      <span>{labelText}</span>
+      <button
+        type="button"
+        className={`flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-white/18 bg-[#3f4959] px-3 text-sm text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${buttonClassName}`}
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        title={title || summary}
+      >
+        <span className="min-w-0 truncate">{summary}</span>
+        <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/18 bg-[#293344] shadow-2xl">
+          {showEmptyOption ? (
+            <div className="border-b border-white/10 px-2 py-1.5">
+              <button
+                type="button"
+                className={`flex h-7 w-full items-center justify-between rounded-lg px-2 text-left text-[11px] transition ${isEmpty ? "bg-[#2a8d8b]/22 text-white" : "text-white/72 hover:bg-white/[0.08] hover:text-white"}`}
+                onClick={() => onChange(emptyValue)}
+                role="option"
+                aria-selected={isEmpty}
+              >
+                <span className="truncate">{emptyText}</span>
+                {isEmpty ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+              </button>
+            </div>
+          ) : null}
+
+          <div className="max-h-64 overflow-auto py-1" role="listbox">
+            {options.map((option) => {
+              const active = String(option.value) === String(value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={option.disabled}
+                  className={`flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/76 hover:bg-white/[0.07]"} disabled:cursor-not-allowed disabled:opacity-45`}
+                  onClick={() => {
+                    if (option.disabled) return;
+                    onChange(option.value);
+                  }}
+                  role="option"
+                  aria-selected={active}
+                  title={option.hint || option.label}
+                >
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
+                  {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                </button>
+              );
+            })}
+            {!options.length ? <div className="px-3 py-3 text-xs text-white/45">{noOptionsText}</div> : null}
+          </div>
+
+          <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
+            <button
+              type="button"
+              className="h-7 rounded-lg bg-[#2a8d8b] px-3 text-[11px] text-white hover:bg-[#319c99]"
+              onClick={() => setOpen(false)}
+            >
+              Kész
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
 type WarehouseMoveDropdownOption = {
   value: string;
   label: string;
@@ -12616,40 +12754,59 @@ export default function AllInWarehouse() {
               <label className={label}>S/N/COD
                 <input className={input} value={snCodFilter} onChange={(e) => setSnCodFilter(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void runWarehouseCatalogSearch(); } }} placeholder="pl. S0626" />
               </label>
-              <label className={label}>Beszállító
-                <select
-                  className={select}
-                  value={supplier}
-                  onChange={(e) => {
-                    setSupplier(e.target.value);
-                    setInvoiceFilter("all");
-                    closeInvoiceDetail();
-                  }}
-                >
-                  <option value="all">Összes</option>
-                  {suppliers.map((s) => <option key={s.id} value={s.code || s.name || s.id}>{s.name}</option>)}
-                </select>
-              </label>
-              <label className={label}>Márka
-                <select className={select} value={brand} onChange={(e) => setBrand(e.target.value)}>
-                  <option value="all">{selectedSupplier ? "Összes kapcsolt márka" : "Összes"}</option>
-                  {brandOptions.map((b) => <option key={b.id} value={b.code || b.name || b.id}>{b.name}</option>)}
-                  {selectedSupplier && !brandOptions.length && <option value="" disabled>Nincs kapcsolt márka</option>}
-                </select>
-              </label>
-              <label className={label}>Főkategória
-                <select className={select} value={category} onChange={(e) => { setCategory(e.target.value); setSubCategory("all"); }}>
-                  <option value="all">Összes</option>
-                  {categorySelectOptions.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
-                </select>
-              </label>
-              <label className={label}>Alkategória / terméktípus
-                <select className={select} value={subCategory} onChange={(e) => setSubCategory(e.target.value)}>
-                  <option value="all">Összes</option>
-                  {subCategoryFilterOptions.map((c) => <option key={c.id} value={c.code || c.name_ro || c.id}>{categoryLabel(c)}</option>)}
-                  {!subCategoryFilterOptions.length && <option value="" disabled>Nincs alkategória</option>}
-                </select>
-              </label>
+              <WarehouseSingleSelect
+                labelText="Beszállító"
+                value={supplier}
+                emptyValue="all"
+                emptyText="Összes"
+                options={suppliers.map((s) => ({
+                  value: String(s.code || s.name || s.id),
+                  label: String(s.name || s.code || s.id),
+                }))}
+                onChange={(next) => {
+                  setSupplier(next);
+                  setInvoiceFilter("all");
+                  closeInvoiceDetail();
+                }}
+              />
+              <WarehouseSingleSelect
+                labelText="Márka"
+                value={brand}
+                emptyValue="all"
+                emptyText={selectedSupplier ? "Összes kapcsolt márka" : "Összes"}
+                noOptionsText={selectedSupplier ? "Nincs kapcsolt márka." : "Nincs választható márka."}
+                options={brandOptions.map((b) => ({
+                  value: String(b.code || b.name || b.id),
+                  label: String(b.name || b.code || b.id),
+                }))}
+                onChange={setBrand}
+              />
+              <WarehouseSingleSelect
+                labelText="Főkategória"
+                value={category}
+                emptyValue="all"
+                emptyText="Összes"
+                options={categorySelectOptions.map((c) => ({
+                  value: String(c.code || c.name_ro || c.id),
+                  label: categoryLabel(c),
+                }))}
+                onChange={(next) => {
+                  setCategory(next);
+                  setSubCategory("all");
+                }}
+              />
+              <WarehouseSingleSelect
+                labelText="Alkategória / terméktípus"
+                value={subCategory}
+                emptyValue="all"
+                emptyText="Összes"
+                noOptionsText="Nincs alkategória."
+                options={subCategoryFilterOptions.map((c) => ({
+                  value: String(c.code || c.name_ro || c.id),
+                  label: categoryLabel(c),
+                }))}
+                onChange={setSubCategory}
+              />
               <WarehouseMultiSelect
                 labelText="Nem"
                 options={genderFilterOptions}
@@ -12681,46 +12838,61 @@ export default function AllInWarehouse() {
                   <ChevronDown size={15} className={`shrink-0 text-white/55 transition ${colorFilterOpen ? "rotate-180" : ""}`} />
                 </button>
                 {colorFilterOpen && (
-                  <div className="absolute left-0 right-0 top-full z-[60] mt-1 max-h-64 overflow-auto rounded-xl border border-white/18 bg-[#293344] py-1 shadow-2xl" role="listbox">
-                    <button
-                      type="button"
-                      className={`flex h-8 w-full items-center gap-2 px-3 text-left text-xs transition ${color === "all" ? "bg-white/[0.10] text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
-                      onClick={() => { setColor("all"); setColorFilterOpen(false); }}
-                      role="option"
-                      aria-selected={color === "all"}
-                    >
-                      <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" />
-                      <span className="truncate">Összes</span>
-                    </button>
-                    <div className="my-1 h-px bg-white/10" />
-                    {colorTypes.map((c) => {
-                      const value = String(c.id || c.code || c.name_ro || "");
-                      const active = color !== "all" && (colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]));
-                      return (
-                        <button
-                          key={c.id || c.code}
-                          type="button"
-                          className={`flex h-8 w-full items-center gap-2 px-3 text-left text-xs transition ${active ? "bg-white/[0.10] text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
-                          onClick={() => { setColor(value); setColorFilterOpen(false); }}
-                          title={c.name_ro || c.name_hu || c.code}
-                          role="option"
-                          aria-selected={active}
-                        >
-                          <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
-                          <span className="truncate">{colorTypeLabel(c)}</span>
-                        </button>
-                      );
-                    })}
-                    {!colorTypes.length && <span className="block px-3 py-1 text-[11px] text-white/45">Nincs szín törzsadat.</span>}
+                  <div className="absolute left-0 right-0 top-full z-[70] mt-1 overflow-hidden rounded-xl border border-white/18 bg-[#293344] shadow-2xl" role="listbox">
+                    <div className="border-b border-white/10 px-2 py-1.5">
+                      <button
+                        type="button"
+                        className={`flex h-7 w-full items-center justify-between rounded-lg px-2 text-left text-[11px] transition ${color === "all" ? "bg-[#2a8d8b]/22 text-white" : "text-white/72 hover:bg-white/[0.08] hover:text-white"}`}
+                        onClick={() => setColor("all")}
+                        role="option"
+                        aria-selected={color === "all"}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" />
+                          <span className="truncate">Összes</span>
+                        </span>
+                        {color === "all" ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                      </button>
+                    </div>
+                    <div className="max-h-64 overflow-auto py-1">
+                      {colorTypes.map((c) => {
+                        const value = String(c.id || c.code || c.name_ro || "");
+                        const active = color !== "all" && (colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]));
+                        return (
+                          <button
+                            key={c.id || c.code}
+                            type="button"
+                            className={`flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
+                            onClick={() => setColor(value)}
+                            title={c.name_ro || c.name_hu || c.code}
+                            role="option"
+                            aria-selected={active}
+                          >
+                            <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                            <span className="min-w-0 flex-1 truncate">{colorTypeLabel(c)}</span>
+                            {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                          </button>
+                        );
+                      })}
+                      {!colorTypes.length && <span className="block px-3 py-3 text-xs text-white/45">Nincs szín törzsadat.</span>}
+                    </div>
+                    <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
+                      <button type="button" className="h-7 rounded-lg bg-[#2a8d8b] px-3 text-[11px] text-white hover:bg-[#319c99]" onClick={() => setColorFilterOpen(false)}>Kész</button>
+                    </div>
                   </div>
                 )}
               </div>
-              <label className={label}>Cél hely
-                <select className={select} value={location} onChange={(e) => setLocation(e.target.value)}>
-                  <option value="all">Összes</option>
-                  {locations.map((l) => <option key={l.id} value={l.code || l.name || l.id}>{l.name}</option>)}
-                </select>
-              </label>
+              <WarehouseSingleSelect
+                labelText="Cél hely"
+                value={location}
+                emptyValue="all"
+                emptyText="Összes"
+                options={locations.map((l) => ({
+                  value: String(l.code || l.name || l.id),
+                  label: String(l.name || l.code || l.id),
+                }))}
+                onChange={setLocation}
+              />
               <WarehouseInvoicePicker
                 options={invoiceFilterOptions}
                 value={invoiceFilter}
@@ -12733,73 +12905,87 @@ export default function AllInWarehouse() {
                   void loadInvoiceDetail(option);
                 }}
               />
-              <label className={label}>Készlet állapot
-                <select className={select} value={stockFilter} onChange={(e) => setStockFilter(e.target.value as StockFilter)}>
-                  <option value="all">Összes</option>
-                  <option value="available">Készleten</option>
-                  <option value="out">Nincs készleten</option>
-                  <option value="reserved">Van foglalás</option>
-                  <option value="missing">Hiányzó adat</option>
-                  <option value="inactive">Inaktív termékek</option>
-                  <option value="watch">Aktiválandó készlet</option>
-                </select>
-              </label>
-              <label className={label}>Kép
-                <select className={select} value={imageFilter} onChange={(e) => setImageFilter(e.target.value as ImageFilter)}>
-                  <option value="all">Összes</option>
-                  <option value="with">Van kép</option>
-                  <option value="missing">Hiányzik kép</option>
-                </select>
-              </label>
-              <label className={label}>Shopify
-                <select
-                  className={select}
-                  value={shopifyFilter}
-                  onChange={(e) => {
-                    const next = e.target.value as ShopifyFilter;
-                    setShopifyFilter(next);
-                    if (next === "recent_mapped") setSortMode("shopify_connected_desc");
-                  }}
-                >
-                  <option value="all">Összes</option>
-                  <option value="mapped">Összekötve</option>
-                  <option value="recent_mapped">Legutóbb összekapcsolt</option>
-                  <option value="exported">Exportálva, párosításra vár</option>
-                  <option value="unmapped">Nincs Shopifyon</option>
-                  <option value="error">Kapcsolati / exporthiba</option>
-                </select>
-              </label>
-              <label className={label}>Bevételezés
-                <select
-                  className={`${select} ${(incomingFocus?.batchId || recentImportFocusBusy) ? "border-[#7bd7d4]/60 bg-[#31565d]" : ""}`}
-                  value={(incomingFocus?.batchId || recentImportFocusBusy) ? "latest" : "all"}
-                  disabled={busy || recentImportFocusBusy}
-                  onChange={(e) => {
-                    if (e.target.value === "latest") {
-                      void focusLatestCommittedImportBatch({ preserveCurrentFilters: true });
-                    } else {
-                      clearLatestIncomingFilter();
-                    }
-                  }}
-                  title="A legutóbb készletre vett bevételezés összes termékét tartósan mutatja, a többi szűrő megtartásával"
-                >
-                  <option value="all">Összes</option>
-                  <option value="latest">{recentImportFocusBusy ? "Betöltés..." : "Legutóbb bevételezett"}</option>
-                </select>
-              </label>
-              <label className={label}>Sorrend
-                <select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
-                  <option value="incoming_desc">Legújabb bevételezés elöl</option>
-                  <option value="incoming_asc">Legrégebbi bevételezés elöl</option>
-                  <option value="shopify_connected_desc">Legutóbb Shopifyhoz kapcsolt</option>
-                  <option value="name">Terméknév</option>
-                  <option value="brand">Márka</option>
-                  <option value="stock_desc">Készlet csökkenő</option>
-                  <option value="stock_asc">Készlet növekvő</option>
-                  <option value="value_desc">Készletérték</option>
-                  <option value="missing">Hiányzó adatok</option>
-                </select>
-              </label>
+              <WarehouseSingleSelect
+                labelText="Készlet állapot"
+                value={stockFilter}
+                emptyValue="all"
+                emptyText="Összes"
+                options={[
+                  { value: "available", label: "Készleten" },
+                  { value: "out", label: "Nincs készleten" },
+                  { value: "reserved", label: "Van foglalás" },
+                  { value: "missing", label: "Hiányzó adat" },
+                  { value: "inactive", label: "Inaktív termékek" },
+                  { value: "watch", label: "Aktiválandó készlet" },
+                ]}
+                onChange={(next) => setStockFilter(next as StockFilter)}
+              />
+              <WarehouseSingleSelect
+                labelText="Kép"
+                value={imageFilter}
+                emptyValue="all"
+                emptyText="Összes"
+                options={[
+                  { value: "with", label: "Van kép" },
+                  { value: "missing", label: "Hiányzik kép" },
+                ]}
+                onChange={(next) => setImageFilter(next as ImageFilter)}
+              />
+              <WarehouseSingleSelect
+                labelText="Shopify"
+                value={shopifyFilter}
+                emptyValue="all"
+                emptyText="Összes"
+                options={[
+                  { value: "mapped", label: "Összekötve" },
+                  { value: "recent_mapped", label: "Legutóbb összekapcsolt" },
+                  { value: "exported", label: "Exportálva, párosításra vár" },
+                  { value: "unmapped", label: "Nincs Shopifyon" },
+                  { value: "error", label: "Kapcsolati / exporthiba" },
+                ]}
+                onChange={(next) => {
+                  const mode = next as ShopifyFilter;
+                  setShopifyFilter(mode);
+                  if (mode === "recent_mapped") setSortMode("shopify_connected_desc");
+                }}
+              />
+              <WarehouseSingleSelect
+                labelText="Bevételezés"
+                value={(incomingFocus?.batchId || recentImportFocusBusy) ? "latest" : "all"}
+                emptyValue="all"
+                emptyText="Összes"
+                disabled={busy || recentImportFocusBusy}
+                buttonClassName={(incomingFocus?.batchId || recentImportFocusBusy) ? "!border-[#7bd7d4]/60 !bg-[#31565d]" : ""}
+                title="A legutóbb készletre vett bevételezés összes termékét tartósan mutatja, a többi szűrő megtartásával"
+                options={[
+                  { value: "latest", label: recentImportFocusBusy ? "Betöltés..." : "Legutóbb bevételezett" },
+                ]}
+                onChange={(next) => {
+                  if (next === "latest") {
+                    void focusLatestCommittedImportBatch({ preserveCurrentFilters: true });
+                  } else {
+                    clearLatestIncomingFilter();
+                  }
+                }}
+              />
+              <WarehouseSingleSelect
+                labelText="Sorrend"
+                value={sortMode}
+                showEmptyOption={false}
+                emptyText="Terméknév"
+                options={[
+                  { value: "incoming_desc", label: "Legújabb bevételezés elöl" },
+                  { value: "incoming_asc", label: "Legrégebbi bevételezés elöl" },
+                  { value: "shopify_connected_desc", label: "Legutóbb Shopifyhoz kapcsolt" },
+                  { value: "name", label: "Terméknév" },
+                  { value: "brand", label: "Márka" },
+                  { value: "stock_desc", label: "Készlet csökkenő" },
+                  { value: "stock_asc", label: "Készlet növekvő" },
+                  { value: "value_desc", label: "Készletérték" },
+                  { value: "missing", label: "Hiányzó adatok" },
+                ]}
+                onChange={(next) => setSortMode(next as SortMode)}
+              />
               <div className="flex items-end gap-2">
                 <button className={btn} onClick={() => void runWarehouseCatalogSearch()} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
                 <button className={btnSoft} onClick={() => resetWarehouseFilters(false)} type="button">Alaphelyzet</button>
