@@ -8844,9 +8844,21 @@ export default function AllInWarehouse() {
     if (color !== "all") {
       const selectedColorGroup = colorGroupFromFilterValue(colorGroups, color);
       if (selectedColorGroup) {
+        // A főszín szűrés is a feloldott törzsadat-színt használja. Így egy régi
+        // termék, amelynél csak a Márka + színkód kapcsolatot vezettük be később,
+        // ugyanúgy bekerül a megfelelő színcsoportba.
         out = out.filter((x) => String(standardColorTypeForItem(x)?.color_group_id || "") === String(selectedColorGroup.id));
       } else {
-        out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes, colorGroups));
+        const selectedColorType = colorTypeFromFilterValue(colorTypes, color) || findColorTypeByValue(colorTypes, color);
+        if (selectedColorType) {
+          // Konkrét színnél sem a termék régi color_name mezője az igazság, hanem
+          // a Márka + gyártói színkód -> AllIn szín kapcsolat. Ezért pl. a később
+          // felvett Under Armour 002 -> fekete/szürke mapping azonnal megtalálja a
+          // korábbi 002 színkódos termékeket is, külön termékmentés nélkül.
+          out = out.filter((x) => String(standardColorTypeForItem(x)?.id || "") === String(selectedColorType.id));
+        } else {
+          out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes, colorGroups));
+        }
       }
     }
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
@@ -16858,7 +16870,7 @@ export default function AllInWarehouse() {
                           ) : null}
                           <input
                             className={`${input} w-full ${detailBrandColorMapping ? "pl-9" : ""}`}
-                            value={edit.colorName}
+                            value={detailBrandColorMapping ? (detailMappedColorLabel || detailMappedColorName || edit.colorName) : edit.colorName}
                             readOnly={Boolean(detailBrandColorMapping)}
                             onChange={(e) => {
                               if (detailBrandColorMapping) return;
@@ -16872,15 +16884,32 @@ export default function AllInWarehouse() {
                             title={detailBrandColorMapping ? `${detailBrandColorMapping.brand_name || detailBrandColorMapping.brand_code || edit.brandCode} / ${detailBrandColorMapping.color_code || edit.colorCode} → ${detailMappedColorLabel || detailMappedColorName}` : "Szabadon megadható, ha nincs márkaszínkódhoz kötve."}
                           />
                         </div>
-                        {detailBrandColorMapping ? (
-                          <span className="text-[10px] leading-snug text-[#cffffd]/72">
-                            Márkaszínkódból automatikusan: {detailBrandColorMapping.color_code || edit.colorCode} → {detailMappedColorLabel || detailMappedColorName}
-                          </span>
-                        ) : null}
                       </label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
                       <label className={label}>Méret<input className={input} list="warehouse-standard-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
-                      <label className={label}>Vételár<input className={input} value={edit.buyPrice} onChange={(e) => setEdit((x) => ({ ...x, buyPrice: e.target.value }))} /></label>
+                      <label className={label}>
+                        Vételár
+                        <div className="relative">
+                          <input
+                            className={`${input} w-full ${buyPricesVisible ? "" : "select-none text-transparent caret-transparent"}`}
+                            value={edit.buyPrice}
+                            readOnly={!buyPricesVisible}
+                            onChange={(e) => {
+                              if (!buyPricesVisible) return;
+                              setEdit((x) => ({ ...x, buyPrice: e.target.value }));
+                            }}
+                            inputMode="decimal"
+                            title={buyPricesVisible ? "Vételár" : "Vételár rejtve"}
+                          />
+                          {!buyPricesVisible ? (
+                            <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+                              <span className="inline-block select-none rounded-md bg-white/10 px-2 py-0.5 text-white/65 blur-[3px]">
+                                {edit.buyPrice ? money(edit.buyPrice) : "••••"}
+                              </span>
+                            </span>
+                          ) : null}
+                        </div>
+                      </label>
                       <label className={label}>Eladási ár<input className={input} value={edit.sellPrice} onChange={(e) => setEdit((x) => ({ ...x, sellPrice: e.target.value }))} /></label>
                       <label className={label}>Variáns állapot (csak ez a méret/szín)<select className={select} value={edit.variantStatus} onChange={(e) => {
                         const value = e.target.value;
