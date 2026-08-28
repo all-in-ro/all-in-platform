@@ -38,6 +38,7 @@ import {
   Users,
   WalletCards,
   X,
+  ZoomIn,
 } from "lucide-react";
 import {
   apiAifAdminCustomersOverview,
@@ -519,6 +520,8 @@ function CustomerPurchasesModal({
   error: string;
   onClose: () => void;
 }) {
+  const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
+
   const totals = useMemo(() => sales.reduce((acc, sale) => {
     acc.transactions += 1;
     acc.items += numberValue(sale.itemCount);
@@ -637,33 +640,60 @@ function CustomerPurchasesModal({
 
                     <div className="space-y-2 p-3 sm:p-4">
                       {(sale.lines || []).map((line) => (
-                        <div key={line.id} className="grid gap-3 rounded-2xl border border-white/9 bg-[#2b3749] p-3 sm:grid-cols-[58px_minmax(0,1fr)_auto] sm:items-center">
-                          <div className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white/[0.06]">
-                            {line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" loading="lazy" /> : <ShoppingBag size={20} className="text-white/28" />}
+                        <div key={line.id} className="grid gap-3 rounded-2xl border border-white/10 bg-[#2b3749] p-3 sm:grid-cols-[92px_minmax(0,1fr)] lg:grid-cols-[92px_minmax(0,1fr)_minmax(360px,0.95fr)] lg:items-center">
+                          <div className="flex items-center justify-center">
+                            {line.imageUrl ? (
+                              <button
+                                type="button"
+                                onClick={() => setPreviewImage({ url: line.imageUrl || "", title: line.productTitle || "Termékkép" })}
+                                className="group relative flex h-[92px] w-[92px] items-center justify-center overflow-hidden rounded-2xl border border-white/14 bg-white shadow-[0_8px_22px_rgba(0,0,0,0.18)] transition hover:border-[#9be9e5]/55"
+                                title="Kattints a kép nagyításához"
+                              >
+                                <img src={line.imageUrl} alt={line.productTitle || "Termékkép"} className="h-full w-full object-contain p-1 transition duration-200 group-hover:scale-[1.06]" loading="lazy" />
+                                <span className="absolute bottom-1.5 right-1.5 inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/30 bg-slate-950/72 text-white opacity-0 shadow-lg transition group-hover:opacity-100">
+                                  <ZoomIn size={14} />
+                                </span>
+                              </button>
+                            ) : (
+                              <div className="flex h-[92px] w-[92px] items-center justify-center rounded-2xl border border-dashed border-white/14 bg-white/[0.04]">
+                                <ShoppingBag size={24} className="text-white/28" />
+                              </div>
+                            )}
                           </div>
+
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="min-w-0 truncate text-sm text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
-                              {line.brandName ? <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/48">{line.brandName}</span> : null}
+                              <p className="min-w-0 text-[15px] leading-snug text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
+                              {line.brandName ? <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/62">{line.brandName}</span> : null}
                             </div>
-                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/43">
-                              {line.productCode ? <span>Termékkód: <strong className="font-normal text-white/67">{line.productCode}</strong></span> : null}
-                              {line.barcode ? <span>Vonalkód: <strong className="font-normal text-white/67">{line.barcode}</strong></span> : null}
-                              {line.colorName ? <span>Szín: <strong className="font-normal text-white/67">{line.colorName}</strong></span> : null}
-                              {line.size ? <span>Méret: <strong className="font-normal text-white/67">{line.size}</strong></span> : null}
-                              <span>Darab: <strong className="font-normal text-white/80">{integer(line.quantity)}</strong></span>
-                            </div>
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              <span className="rounded-lg border border-white/8 bg-black/10 px-2 py-1 text-[9px] text-white/52">Listaár: {money(line.listPrice)}</span>
-                              <span className="rounded-lg border border-white/8 bg-black/10 px-2 py-1 text-[9px] text-white/68">Eladási ár: {money(line.unitPrice)}</span>
-                              {numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? (
-                                <span className="rounded-lg border border-amber-200/18 bg-amber-400/8 px-2 py-1 text-[9px] text-amber-50">Kedvezmény: {money(line.discountAmount)}{numberValue(line.discountPercent) > 0.005 ? ` • ${percent(line.discountPercent)}` : ""}</span>
-                              ) : null}
+                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-white/50">
+                              {line.productCode ? <span>Termékkód: <strong className="font-normal text-white/78">{line.productCode}</strong></span> : null}
+                              {line.barcode ? <span>Vonalkód: <strong className="font-normal text-white/78">{line.barcode}</strong></span> : null}
+                              {line.colorName ? <span>Szín: <strong className="font-normal text-white/78">{line.colorName}</strong></span> : null}
+                              {line.size ? <span>Méret: <strong className="font-normal text-white/78">{line.size}</strong></span> : null}
+                              <span>Darab: <strong className="font-normal text-white">{integer(line.quantity)}</strong></span>
                             </div>
                           </div>
-                          <div className="min-w-[112px] text-left sm:text-right">
-                            <p className="text-[8px] uppercase tracking-[0.1em] text-white/34">Sorösszeg</p>
-                            <p className="mt-1 text-sm text-white">{money(line.lineTotal)}</p>
+
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
+                            <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
+                              <p className="text-[8px] uppercase tracking-[0.1em] text-white/38">Listaár</p>
+                              <p className="mt-1.5 text-sm text-white/82">{money(line.listPrice)}</p>
+                            </div>
+                            <div className="rounded-xl border border-[#9be9e5]/22 bg-[#2a8d8b]/12 px-3 py-2.5">
+                              <p className="text-[8px] uppercase tracking-[0.1em] text-[#cffffd]/62">Eladási ár</p>
+                              <p className="mt-1.5 text-base text-[#e9ffff]">{money(line.unitPrice)}</p>
+                            </div>
+                            <div className={`rounded-xl border px-3 py-2.5 ${numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? "border-amber-200/28 bg-amber-400/10" : "border-white/10 bg-black/10"}`}>
+                              <p className={`text-[8px] uppercase tracking-[0.1em] ${numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? "text-amber-100/70" : "text-white/38"}`}>Kedvezmény</p>
+                              <p className={`mt-1.5 text-sm ${numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? "text-amber-50" : "text-white/58"}`}>
+                                {money(line.discountAmount)}{numberValue(line.discountPercent) > 0.005 ? ` • ${percent(line.discountPercent)}` : ""}
+                              </p>
+                            </div>
+                            <div className="rounded-xl border border-white/16 bg-[#344154] px-3 py-2.5">
+                              <p className="text-[8px] uppercase tracking-[0.1em] text-white/45">Sorösszeg</p>
+                              <p className="mt-1.5 text-base text-white">{money(line.lineTotal)}</p>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -689,6 +719,28 @@ function CustomerPurchasesModal({
           <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
         </footer>
       </section>
+
+      {previewImage ? (
+        <div
+          className="fixed inset-0 z-[560] grid place-items-center bg-slate-950/92 p-4 backdrop-blur-md"
+          onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+            if (event.currentTarget === event.target) setPreviewImage(null);
+          }}
+        >
+          <div className="relative flex max-h-[94vh] w-full max-w-[980px] items-center justify-center overflow-hidden rounded-[26px] border border-white/20 bg-white p-4 shadow-[0_38px_120px_rgba(0,0,0,0.72)]">
+            <img src={previewImage.url} alt={previewImage.title} className="max-h-[88vh] max-w-full object-contain" />
+            <button
+              type="button"
+              onClick={() => setPreviewImage(null)}
+              className="absolute right-3 top-3 inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-slate-950/78 text-white shadow-lg transition hover:bg-slate-950"
+              aria-label="Kép bezárása"
+            >
+              <X size={20} />
+            </button>
+            <div className="absolute bottom-3 left-3 right-3 rounded-xl bg-slate-950/72 px-3 py-2 text-center text-xs text-white/85 backdrop-blur">{previewImage.title}</div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
