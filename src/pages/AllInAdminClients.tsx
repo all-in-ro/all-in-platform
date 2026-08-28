@@ -110,6 +110,65 @@ type AdminShopCustomerRecord = {
   locationName?: string | null;
 };
 
+type AdminCustomerSaleLine = {
+  id: string;
+  lineNo?: number | null;
+  variantId?: string | null;
+  productTitle?: string | null;
+  productCode?: string | null;
+  barcode?: string | null;
+  brandName?: string | null;
+  categoryName?: string | null;
+  subcategoryName?: string | null;
+  colorName?: string | null;
+  size?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  listPrice: number;
+  unitPrice: number;
+  discountAmount: number;
+  discountPercent: number;
+  lineTotal: number;
+};
+
+type AdminCustomerSale = {
+  id: string;
+  saleNumber: string;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+  actor?: string | null;
+  soldAt?: string | null;
+  status?: string | null;
+  paymentStatus?: string | null;
+  saleType?: string | null;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  paidTotal: number;
+  balanceDue: number;
+  lineCount: number;
+  itemCount: number;
+  lines: AdminCustomerSaleLine[];
+};
+
+type AdminCustomerPurchasesResponse = {
+  ok: true;
+  item: AdminShopCustomerRecord;
+  location?: { id: string; code: string; name: string };
+  summary?: {
+    year?: number;
+    yearPurchaseTotal?: number;
+    lifetimePurchaseTotal?: number;
+    lifetimePaidTotal?: number;
+    openBalance?: number;
+    openSales?: number;
+    saleCount?: number;
+    lastSaleAt?: string | null;
+  };
+  sales: AdminCustomerSale[];
+};
+
 type RomaniaCountyOption = { code: string; name: string };
 type RomaniaLocalityOption = { sirutaCode: string; name: string; postalCode?: string | null };
 
@@ -162,6 +221,18 @@ async function apiAdminCustomerRecord(customerId: string, location: string, year
   return adminClientJson<{ ok: true; item: AdminShopCustomerRecord }>(`/api/aif/shop-customers/${encodeURIComponent(customerId)}?${query.toString()}`);
 }
 
+async function apiAdminCustomerPurchases(customerId: string, location: string, year: number) {
+  const query = new URLSearchParams({
+    location,
+    year: String(year),
+    salesLimit: "500",
+    paymentsLimit: "1",
+  });
+  return adminClientJson<AdminCustomerPurchasesResponse>(
+    `/api/aif/shop-customers/${encodeURIComponent(customerId)}?${query.toString()}`,
+  );
+}
+
 async function apiAdminUpdateCustomerRecord(customerId: string, location: string, payload: Record<string, unknown>) {
   return adminClientJson<{ ok: true; item: AdminShopCustomerRecord }>(`/api/aif/shop-customers/${encodeURIComponent(customerId)}`, {
     method: "PATCH",
@@ -199,6 +270,39 @@ function formatDate(value?: string | null) {
   });
 }
 
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "–";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "–";
+  return date.toLocaleString("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function saleStatusLabel(value?: string | null) {
+  const status = String(value || "").toLowerCase();
+  if (status === "completed") return "Lezárva";
+  if (status === "draft") return "Vázlat";
+  if (status === "cancelled") return "Törölve";
+  if (status === "refunded") return "Visszatérítve";
+  return value || "–";
+}
+
+function paymentStatusLabel(value?: string | null) {
+  const status = String(value || "").toLowerCase();
+  if (status === "paid") return "Fizetve";
+  if (status === "partial") return "Részben fizetve";
+  if (status === "unpaid") return "Nincs fizetve";
+  if (status === "credit") return "Hitel / tartozás";
+  return value || "–";
+}
 
 function activityText(item: AifAdminCustomerOverviewItem, year: number) {
   if (item.periodTransactions > 0) {
@@ -396,6 +500,199 @@ function SellerChips({ sellers }: { sellers: AifAdminCustomerSellerBreakdown[] }
   );
 }
 
+function CustomerPurchasesModal({
+  customerName,
+  storeName,
+  storeCode,
+  year,
+  sales,
+  loading,
+  error,
+  onClose,
+}: {
+  customerName: string;
+  storeName: string;
+  storeCode?: string | null;
+  year: number;
+  sales: AdminCustomerSale[];
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+}) {
+  const totals = useMemo(() => sales.reduce((acc, sale) => {
+    acc.transactions += 1;
+    acc.items += numberValue(sale.itemCount);
+    acc.subtotal += numberValue(sale.subtotal);
+    acc.discount += numberValue(sale.discountTotal);
+    acc.total += numberValue(sale.total);
+    acc.paid += numberValue(sale.paidTotal);
+    acc.balance += numberValue(sale.balanceDue);
+    return acc;
+  }, {
+    transactions: 0,
+    items: 0,
+    subtotal: 0,
+    discount: 0,
+    total: 0,
+    paid: 0,
+    balance: 0,
+  }), [sales]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[485] grid place-items-center bg-slate-950/88 px-3 py-4 backdrop-blur-md"
+      onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section className="flex max-h-[94vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/32 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.68)]">
+        <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] via-[#28545b] to-[#2a6f70] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.07] text-[#d7fffd]">
+              <ReceiptText size={20} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/48">Kliens vásárlási előzmények</p>
+              <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{customerName}</h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <StoreBadge code={storeCode} name={storeName} />
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{year}. év</span>
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{integer(totals.transactions)} vásárlás</span>
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{integer(totals.items)} db</span>
+              </div>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-white/[0.1]" aria-label="Vásárlások bezárása">
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+            {[
+              ["Vásárlás", integer(totals.transactions)],
+              ["Darab", `${integer(totals.items)} db`],
+              ["Eredeti összeg", money(totals.subtotal)],
+              ["Kedvezmény", money(totals.discount)],
+              ["Végösszeg", money(totals.total)],
+              ["Tartozás", money(totals.balance)],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
+                <p className="text-[8px] uppercase tracking-[0.1em] text-white/38">{String(label)}</p>
+                <p className={`mt-2 truncate text-sm ${label === "Kedvezmény" && totals.discount > 0 ? "text-amber-100" : label === "Tartozás" && totals.balance > 0.005 ? "text-rose-100" : "text-white"}`} title={String(value)}>{String(value)}</p>
+              </div>
+            ))}
+          </div>
+
+          {error ? (
+            <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-200/30 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          ) : null}
+
+          {loading ? (
+            <div className="flex min-h-[320px] items-center justify-center">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/14 bg-[#293548] px-5 py-4 text-sm text-white/78">
+                <Loader2 size={20} className="animate-spin text-[#8ee6e2]" /> Vásárlások és termékek betöltése…
+              </div>
+            </div>
+          ) : sales.length ? (
+            <div className="mt-3 space-y-3">
+              {sales.map((sale) => {
+                const saleDiscountPercent = numberValue(sale.subtotal) > 0
+                  ? numberValue(sale.discountTotal) / numberValue(sale.subtotal) * 100
+                  : 0;
+                return (
+                  <article key={sale.id} className="overflow-hidden rounded-[22px] border border-white/12 bg-[#344154]">
+                    <div className="border-b border-white/10 bg-[#293548] px-3 py-3 sm:px-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm text-white">{sale.saleNumber || "Bizonylatszám nélkül"}</span>
+                            <span className="rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-2 py-0.5 text-[9px] text-[#d7fffd]">{saleStatusLabel(sale.status)}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[9px] ${numberValue(sale.balanceDue) > 0.005 ? "border-rose-200/25 bg-rose-500/10 text-rose-50" : "border-emerald-200/20 bg-emerald-500/8 text-emerald-50"}`}>{paymentStatusLabel(sale.paymentStatus)}</span>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/48">
+                            <span>Dátum és idő: <strong className="font-normal text-white/76">{formatDateTime(sale.soldAt)}</strong></span>
+                            <span>Eladó: <strong className="font-normal text-white/76">{sale.actor || "–"}</strong></span>
+                            <span>Üzlet: <strong className="font-normal text-white/76">{sale.locationCode === "main_warehouse" ? "Csíkszereda" : sale.locationCode === "magazin_targu_secuiesc" ? "Kézdivásárhely" : (sale.locationName || storeName)}</strong></span>
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Végösszeg</p>
+                          <p className="mt-1 text-lg text-white">{money(sale.total)}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Eredeti összeg</span><span className="mt-1 block text-xs text-white/80">{money(sale.subtotal)}</span></div>
+                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Kedvezmény</span><span className={`mt-1 block text-xs ${numberValue(sale.discountTotal) > 0 ? "text-amber-100" : "text-white/55"}`}>{money(sale.discountTotal)}{saleDiscountPercent > 0.005 ? ` • ${percent(saleDiscountPercent)}` : ""}</span></div>
+                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Fizetve</span><span className="mt-1 block text-xs text-white/80">{money(sale.paidTotal)}</span></div>
+                        <div className={`rounded-xl border px-2.5 py-2 ${numberValue(sale.balanceDue) > 0.005 ? "border-rose-200/18 bg-rose-500/8" : "border-white/8 bg-black/10"}`}><span className="block text-[8px] uppercase text-white/34">Tartozás</span><span className={`mt-1 block text-xs ${numberValue(sale.balanceDue) > 0.005 ? "text-rose-100" : "text-white/55"}`}>{money(sale.balanceDue)}</span></div>
+                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Terméksor</span><span className="mt-1 block text-xs text-white/80">{integer(sale.lineCount)}</span></div>
+                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Darab</span><span className="mt-1 block text-xs text-white/80">{integer(sale.itemCount)} db</span></div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 p-3 sm:p-4">
+                      {(sale.lines || []).map((line) => (
+                        <div key={line.id} className="grid gap-3 rounded-2xl border border-white/9 bg-[#2b3749] p-3 sm:grid-cols-[58px_minmax(0,1fr)_auto] sm:items-center">
+                          <div className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white/[0.06]">
+                            {line.imageUrl ? <img src={line.imageUrl} alt="" className="h-full w-full object-contain" loading="lazy" /> : <ShoppingBag size={20} className="text-white/28" />}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="min-w-0 truncate text-sm text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
+                              {line.brandName ? <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/48">{line.brandName}</span> : null}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/43">
+                              {line.productCode ? <span>Termékkód: <strong className="font-normal text-white/67">{line.productCode}</strong></span> : null}
+                              {line.barcode ? <span>Vonalkód: <strong className="font-normal text-white/67">{line.barcode}</strong></span> : null}
+                              {line.colorName ? <span>Szín: <strong className="font-normal text-white/67">{line.colorName}</strong></span> : null}
+                              {line.size ? <span>Méret: <strong className="font-normal text-white/67">{line.size}</strong></span> : null}
+                              <span>Darab: <strong className="font-normal text-white/80">{integer(line.quantity)}</strong></span>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              <span className="rounded-lg border border-white/8 bg-black/10 px-2 py-1 text-[9px] text-white/52">Listaár: {money(line.listPrice)}</span>
+                              <span className="rounded-lg border border-white/8 bg-black/10 px-2 py-1 text-[9px] text-white/68">Eladási ár: {money(line.unitPrice)}</span>
+                              {numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? (
+                                <span className="rounded-lg border border-amber-200/18 bg-amber-400/8 px-2 py-1 text-[9px] text-amber-50">Kedvezmény: {money(line.discountAmount)}{numberValue(line.discountPercent) > 0.005 ? ` • ${percent(line.discountPercent)}` : ""}</span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="min-w-[112px] text-left sm:text-right">
+                            <p className="text-[8px] uppercase tracking-[0.1em] text-white/34">Sorösszeg</p>
+                            <p className="mt-1 text-sm text-white">{money(line.lineTotal)}</p>
+                          </div>
+                        </div>
+                      ))}
+                      {!sale.lines?.length ? (
+                        <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-xs text-white/38">Ehhez a vásárláshoz nincs terméksor elmentve.</div>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : !error ? (
+            <div className="flex min-h-[320px] flex-col items-center justify-center px-5 text-center">
+              <ReceiptText size={36} className="text-white/22" />
+              <p className="mt-3 text-base text-white/68">Ebben az évben nincs klienshez kötött vásárlás.</p>
+              <p className="mt-1 text-xs text-white/38">A lista a kiválasztott üzlet és a {year}. év vásárlásait mutatja.</p>
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
+          <p className="hidden text-[10px] text-white/38 sm:block">Minden terméksor a hozzá tartozó vásárlás pontos dátumával, idejével és kedvezményével jelenik meg.</p>
+          <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function CustomerDetailModal({
   item,
   year,
@@ -428,6 +725,10 @@ function CustomerDetailModal({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [purchasesOpen, setPurchasesOpen] = useState(false);
+  const [purchasesBusy, setPurchasesBusy] = useState(false);
+  const [purchasesError, setPurchasesError] = useState("");
+  const [purchaseSales, setPurchaseSales] = useState<AdminCustomerSale[]>([]);
 
   const activeStore = useMemo(() => {
     return editableStores.find((store) => `${store.locationId || store.locationCode}:${store.customerId}` === activeStoreKey)
@@ -472,6 +773,9 @@ function CustomerDetailModal({
   useEffect(() => {
     setEditMode(false);
     setDeleteConfirmOpen(false);
+    setPurchasesOpen(false);
+    setPurchasesError("");
+    setPurchaseSales([]);
     void loadLiveCustomer();
   }, [activeStoreKey]);
 
@@ -507,6 +811,10 @@ function CustomerDetailModal({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      if (purchasesOpen) {
+        setPurchasesOpen(false);
+        return;
+      }
       if (deleteConfirmOpen) {
         setDeleteConfirmOpen(false);
         return;
@@ -524,7 +832,7 @@ function CustomerDetailModal({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [deleteBusy, deleteConfirmOpen, editMode, liveCustomer, onClose, saveBusy]);
+  }, [deleteBusy, deleteConfirmOpen, editMode, liveCustomer, onClose, purchasesOpen, saveBusy]);
 
   const maxSeller = Math.max(1, ...item.employees.map((seller) => seller.revenue));
   const yearMetrics: Array<{
@@ -547,6 +855,23 @@ function CustomerDetailModal({
   const selectedOpenBalance = liveCustomer ? numberValue(liveCustomer.openBalance) : numberValue(item.currentOpenBalance);
   const selectedOpenSales = liveCustomer ? numberValue(liveCustomer.openSales) : numberValue(item.currentOpenSales);
   const deleteBlocked = selectedOpenBalance > 0.005;
+
+  async function openPurchases() {
+    if (!activeCustomerId || !activeLocation) return;
+    setPurchasesOpen(true);
+    setPurchasesBusy(true);
+    setPurchasesError("");
+    setPurchaseSales([]);
+    try {
+      const response = await apiAdminCustomerPurchases(activeCustomerId, activeLocation, year);
+      setPurchaseSales(Array.isArray(response.sales) ? response.sales : []);
+    } catch (caught) {
+      setPurchaseSales([]);
+      setPurchasesError(caught instanceof Error ? caught.message : "A vásárlási előzmények nem tölthetők be.");
+    } finally {
+      setPurchasesBusy(false);
+    }
+  }
 
   function startEditing() {
     if (!canManage || recordBusy || !activeCustomerId) return;
@@ -651,6 +976,10 @@ function CustomerDetailModal({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={() => void openPurchases()} disabled={!activeCustomerId || !activeLocation || saveBusy || deleteBusy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/18 bg-black/10 px-3 text-xs text-white transition hover:border-[#9be9e5]/35 hover:bg-white/[0.08] disabled:opacity-45">
+              <ReceiptText size={15} /> Vásárlások
+              <span className="rounded-full border border-white/10 bg-white/[0.07] px-1.5 py-0.5 text-[9px] text-white/70">{integer(activeStore?.transactions || 0)}</span>
+            </button>
             {canManage ? (
               <button type="button" onClick={startEditing} disabled={recordBusy || saveBusy || deleteBusy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/35 bg-[#2a8d8b]/22 px-3 text-xs text-[#d7fffd] transition hover:bg-[#2a8d8b]/34 disabled:opacity-45">
                 <Edit3 size={15} /> Szerkesztés
@@ -882,6 +1211,19 @@ function CustomerDetailModal({
           </div>
         </footer>
       </section>
+
+      {purchasesOpen ? (
+        <CustomerPurchasesModal
+          customerName={displayName}
+          storeName={activeStoreName}
+          storeCode={activeStore?.locationCode}
+          year={year}
+          sales={purchaseSales}
+          loading={purchasesBusy}
+          error={purchasesError}
+          onClose={() => setPurchasesOpen(false)}
+        />
+      ) : null}
 
       {deleteConfirmOpen ? (
         <div className="fixed inset-0 z-[470] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !deleteBusy) setDeleteConfirmOpen(false); }}>
