@@ -8247,15 +8247,53 @@ export default function AllInWarehouse() {
     return brandKeys.length ? null : (sameCodeRows.length === 1 ? sameCodeRows[0] : null);
   };
 
+  const mappedColorTypeFromBrandColor = (mapping?: Partial<BrandColorCode> | null) => {
+    if (!mapping) return null;
+    return findColorTypeByValue(colorTypes, mapping.color_type_id)
+      || findColorTypeByValue(colorTypes, mapping.color_type_code)
+      || findColorTypeByValue(colorTypes, mapping.color_name_ro)
+      || findColorTypeByValue(colorTypes, mapping.color_name_hu)
+      || null;
+  };
+
   const standardColorTypeForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
-    const visibleColorName = colorDisplay(item.color_name, item.color_code);
+    // A márka + gyártói színkód kapcsolat az elsődleges igazság. Ha pl. a 4F 91S
+    // kódot most hozzárendeljük egy AllIn színhez, a régi terméken tárolt color_name
+    // többé nem írhatja felül ezt a stabil törzsadat-kapcsolatot.
     const mappedBrandColor = brandColorForItem(item);
+    const mappedStandardColor = mappedColorTypeFromBrandColor(mappedBrandColor);
+    if (mappedStandardColor) return mappedStandardColor;
+
+    const visibleColorName = colorDisplay(item.color_name, item.color_code);
     return findColorTypeByValue(colorTypes, visibleColorName)
       || colorTypeForItem(item)
-      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_type_id)
-      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_type_code)
-      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_name_ro)
-      || findColorTypeByValue(colorTypes, mappedBrandColor?.color_name_hu);
+      || null;
+  };
+
+  const resolvedColorLabelForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    const mappedBrandColor = brandColorForItem(item);
+    const standardColorType = standardColorTypeForItem(item);
+    return firstWarehouseText(
+      standardColorType?.name_hu,
+      standardColorType?.name_ro,
+      mappedBrandColor?.color_name_hu,
+      mappedBrandColor?.color_name_ro,
+      colorDisplay(item.color_name, item.color_code),
+      item.color_code,
+    ) || "-";
+  };
+
+  const resolvedColorRoForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
+    const mappedBrandColor = brandColorForItem(item);
+    const standardColorType = standardColorTypeForItem(item);
+    return firstWarehouseText(
+      standardColorType?.name_ro,
+      mappedBrandColor?.color_name_ro,
+      standardColorType?.name_hu,
+      mappedBrandColor?.color_name_hu,
+      officialColorFromTypes(item.color_name, colorTypes),
+      item.color_name,
+    );
   };
 
   const colorHexForItem = (item: Partial<InventoryItem> | Record<string, any>) => {
@@ -8368,7 +8406,7 @@ export default function AllInWarehouse() {
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
     const code = colorCodeForItem(item);
-    const label = colorDisplay(item.color_name, item.color_code);
+    const label = resolvedColorLabelForItem(item);
     const hex = colorHexForItem(item);
     const standardColor = standardColorTypeForItem(item);
     const brandColor = brandColorForItem(item);
@@ -8514,6 +8552,60 @@ export default function AllInWarehouse() {
 
   const normalizeColor = (value: unknown) => officialColorFromTypes(value, colorTypes);
   const normalizeSize = (value: unknown) => officialSizeFromTypes(value, sizeTypes);
+
+  const detailBrandColorMapping = useMemo(() => {
+    if (!detail?.item?.id) return null;
+    return brandColorForItem({
+      ...(detail.item || {}),
+      brand_code: edit.brandCode || detail.item?.brand_code || "",
+      brand_name: detail.item?.brand_name || "",
+      color_code: edit.colorCode || detail.item?.color_code || "",
+      color_name: edit.colorName || detail.item?.color_name || "",
+    });
+  }, [detail?.item?.id, edit.brandCode, edit.colorCode, brandColorCodes, brands]);
+
+  const detailMappedColorType = useMemo(
+    () => mappedColorTypeFromBrandColor(detailBrandColorMapping),
+    [detailBrandColorMapping, colorTypes],
+  );
+
+  const detailMappedColorName = useMemo(() => firstWarehouseText(
+    detailMappedColorType?.name_ro,
+    detailBrandColorMapping?.color_name_ro,
+    detailMappedColorType?.name_hu,
+    detailBrandColorMapping?.color_name_hu,
+  ), [detailMappedColorType, detailBrandColorMapping]);
+
+  const detailMappedColorLabel = useMemo(() => firstWarehouseText(
+    detailMappedColorType?.name_hu,
+    detailMappedColorType?.name_ro,
+    detailBrandColorMapping?.color_name_hu,
+    detailBrandColorMapping?.color_name_ro,
+    detailMappedColorName,
+  ), [detailMappedColorType, detailBrandColorMapping, detailMappedColorName]);
+
+  const detailMappedColorHex = useMemo(() => firstWarehouseText(
+    detailMappedColorType?.hex,
+    detailBrandColorMapping?.color_hex,
+  ), [detailMappedColorType, detailBrandColorMapping]);
+
+  useEffect(() => {
+    if (!detail?.item?.id || !detailBrandColorMapping || !detailMappedColorName) return;
+
+    // Ha csak a Törzsadat változott (név/HEX/márkaszín kapcsolat), a nyitott adatlap
+    // azonnal átveszi, de ettől önmagában nem lesz hamis „nem mentett módosítás”.
+    const currentBrandKey = normalizeSearch(edit.brandCode);
+    const currentColorCodeKey = colorKey(edit.colorCode);
+    setEdit((current) => colorKey(current.colorName) === colorKey(detailMappedColorName)
+      ? current
+      : { ...current, colorName: detailMappedColorName });
+    setEditBaseline((current) => {
+      const sameIdentity = normalizeSearch(current.brandCode) === currentBrandKey
+        && colorKey(current.colorCode) === currentColorCodeKey;
+      if (!sameIdentity || colorKey(current.colorName) === colorKey(detailMappedColorName)) return current;
+      return { ...current, colorName: detailMappedColorName };
+    });
+  }, [detail?.item?.id, detailBrandColorMapping?.id, detailMappedColorName, edit.brandCode, edit.colorCode]);
 
   const detailHasChanges = useMemo(() => Boolean(detail?.item?.id) && !editFormsEqual(edit, editBaseline), [detail?.item?.id, edit, editBaseline]);
   const detailSaveButtonClass = detailHasChanges ? primaryBtn : btnSoft;
@@ -10222,7 +10314,7 @@ export default function AllInWarehouse() {
         category: row.item.category_name_hu || row.item.category_name_ro || "-",
         productCode: itemProductCode(row.item) || "-",
         barcode: visibleWarehouseBarcode(row.item) || row.item.barcode || row.item.internal_sku || "-",
-        color: colorDisplay(row.item.color_name, row.item.color_code),
+        color: resolvedColorLabelForItem(row.item),
         size: String(row.item.size || "-"),
         imageUrl: row.item.image_url || null,
         fromLocation: row.fromLocationName,
@@ -11624,9 +11716,10 @@ export default function AllInWarehouse() {
         colorTypeId: brandColorForm.colorTypeId,
         notes: brandColorForm.notes,
       });
+      detailCacheRef.current.clear();
       resetBrandColorForm();
       await load();
-      setMessage("Márka színkód mentve.");
+      setMessage("Márka színkód mentve. A meglévő ilyen színkódú termékek azonnal felismerik az AllIn színt.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a márka színkódot.");
     } finally {
@@ -11795,19 +11888,37 @@ export default function AllInWarehouse() {
     }
     setTaxonomyBusy(true);
     try {
+      const existingColor = colorForm.id
+        ? colorTypes.find((row) => String(row.id) === String(colorForm.id)) || null
+        : null;
+      const nextOfficialNames = new Set([colorForm.nameRo, colorForm.nameHu, colorForm.nameEn, colorForm.nameDe].map(colorKey).filter(Boolean));
+      const aliasMap = new Map<string, string>();
+      const addAlias = (value: unknown) => {
+        const raw = String(value || "").trim();
+        const key = colorKey(raw);
+        if (!raw || !key || nextOfficialNames.has(key) || aliasMap.has(key)) return;
+        aliasMap.set(key, raw);
+      };
+      String(colorForm.aliases || "").split(",").forEach(addAlias);
+      // Átnevezéskor a régi hivatalos nevek aliasok maradnak. Ettől a régi terméksorok
+      // továbbra is ugyanarra a color_type_id-ra oldódnak fel, viszont már az ÚJ nevet
+      // és ÚJ színpöttyöt mutatják.
+      [existingColor?.name_ro, existingColor?.name_hu, existingColor?.name_en, existingColor?.name_de].forEach(addAlias);
+
       await apiSaveColorType(colorForm.id, {
         colorGroupId: colorForm.colorGroupId || null,
         nameRo: colorForm.nameRo,
         nameHu: colorForm.nameHu,
         nameEn: colorForm.nameEn,
         nameDe: colorForm.nameDe,
-        aliases: colorForm.aliases,
+        aliases: Array.from(aliasMap.values()).join(", "),
         hex: colorForm.hex,
         sortOrder: colorForm.sortOrder,
       });
+      detailCacheRef.current.clear();
       resetColorForm();
       await load();
-      setMessage("Szín törzsadat mentve.");
+      setMessage("Szín törzsadat mentve. A termékek az új nevet és színpöttyöt használják.");
     } catch (e: any) {
       setMessage(e.message || "Nem sikerült menteni a szín törzsadatot.");
     } finally {
@@ -11877,6 +11988,7 @@ export default function AllInWarehouse() {
       if (deleteTarget.kind === "material") await apiDeleteMaterialType(deleteTarget.id);
       if (deleteTarget.kind === "size") await apiDeleteSizeType(deleteTarget.id);
       if (deleteTarget.kind === "brandSize") await apiDeleteBrandSizeCode(deleteTarget.id);
+      if (["color", "brandColor"].includes(deleteTarget.kind)) detailCacheRef.current.clear();
       setDeleteTarget(null);
       setOpenTaxonomyMenu(null);
       await load();
@@ -12161,7 +12273,18 @@ export default function AllInWarehouse() {
         items.find((it) => String(it.variant_id || "") === String(id));
       nextForm.brandCode = findBrandCodeForName(d.item?.brand_name || listItem?.brand_name || "");
     }
-    nextForm.colorName = officialColorFromTypes(nextForm.colorName, colorTypes);
+
+    // A termék adatlap színe mindig a JELENLEGI törzsadatból származzon.
+    // Brand színkód esetén a brand_id/brand + color_code -> color_type_id kapcsolat
+    // az elsődleges, ezért egy régi/üres color_name sem tud többé beragadni.
+    const colorSource = {
+      ...(d.item || {}),
+      brand_code: nextForm.brandCode || d.item?.brand_code || "",
+      brand_name: d.item?.brand_name || "",
+      color_code: nextForm.colorCode || d.item?.color_code || "",
+      color_name: nextForm.colorName || d.item?.color_name || "",
+    };
+    nextForm.colorName = resolvedColorRoForItem(colorSource) || officialColorFromTypes(nextForm.colorName, colorTypes);
     nextForm.size = officialSizeFromTypes(nextForm.size, sizeTypes);
     return nextForm;
   }
@@ -13970,7 +14093,7 @@ export default function AllInWarehouse() {
                           <div className="truncate text-white/90">{itemMainCategoryLabel(it)}</div>
                           {itemSubCategoryLabel(it) ? <div className="truncate text-[10px] leading-3 text-white/48">{itemSubCategoryLabel(it)}</div> : null}
                         </td>
-                        <td className="px-2 py-2.5 text-center align-middle" title={colorDisplay(it.color_name, it.color_code)}><ColorNameWithCode item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
+                        <td className="px-2 py-2.5 text-center align-middle" title={resolvedColorLabelForItem(it)}><ColorNameWithCode item={it} openUp={index >= Math.max(0, productPageItems.length - 3)} /></td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">{it.size || "-"}</td>
                         <td className="px-2 py-2.5 text-center align-middle whitespace-nowrap">
                           <div className="flex flex-col items-center justify-center gap-1">
@@ -14044,7 +14167,7 @@ export default function AllInWarehouse() {
                           <button className="block min-w-0 flex-1 truncate text-left text-sm text-white hover:text-[#cffffd] focus:outline-none focus:underline" onMouseEnter={() => prefetchVariantDetail(it.variant_id)} onFocus={() => prefetchVariantDetail(it.variant_id)} onClick={() => openDetail(it.variant_id)} type="button" title={String(it.title_ro || "-")}>{it.title_ro || "-"}</button>
                           <WarehouseShopifyStatusIcon item={it} size="sm" />
                         </div>
-                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                        <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {resolvedColorLabelForItem(it)} • {it.size || "-"}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <ProductCodeTooltipButton item={it} />
                         </div>
@@ -14160,7 +14283,7 @@ export default function AllInWarehouse() {
                     <div className="min-w-0">
                       <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
                       <p className="mt-1 text-xs text-white/55">
-                        {it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}
+                        {it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {resolvedColorLabelForItem(it)} • {it.size || "-"}
                       </p>
                       {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                       <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • SKU: {visibleWarehouseBarcode(it) || "-"}</p>
@@ -14743,11 +14866,11 @@ export default function AllInWarehouse() {
 
                               <div
                                 className="min-w-0"
-                                title={`${it.title_ro || "-"} • ${it.brand_name || "-"} • ${itemMainCategoryLabel(it)} • ${colorDisplay(it.color_name, it.color_code)} • ${it.size || "-"} • Készlet: ${n(it.total_qty)} db • Vonalkód: ${visibleWarehouseBarcode(it) || "-"} • Termékkód: ${itemProductCode(it) || "-"}`}
+                                title={`${it.title_ro || "-"} • ${it.brand_name || "-"} • ${itemMainCategoryLabel(it)} • ${resolvedColorLabelForItem(it)} • ${it.size || "-"} • Készlet: ${n(it.total_qty)} db • Vonalkód: ${visibleWarehouseBarcode(it) || "-"} • Termékkód: ${itemProductCode(it) || "-"}`}
                               >
                                 <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
                                 <p className="mt-0.5 truncate text-[11px] text-white/58">
-                                  {it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"} • készlet {n(it.total_qty)} db
+                                  {it.brand_name || "-"} • {resolvedColorLabelForItem(it)} • {it.size || "-"} • készlet {n(it.total_qty)} db
                                 </p>
                               </div>
 
@@ -14989,10 +15112,10 @@ export default function AllInWarehouse() {
                                 iconSize={15}
                               />
 
-                              <div className="min-w-0" title={`${it.title_ro || "-"} • ${it.brand_name || "-"} • ${colorDisplay(it.color_name, it.color_code)} • ${it.size || "-"} • ${itemProductCode(it) || "-"}`}>
+                              <div className="min-w-0" title={`${it.title_ro || "-"} • ${it.brand_name || "-"} • ${resolvedColorLabelForItem(it)} • ${it.size || "-"} • ${itemProductCode(it) || "-"}`}>
                                 <p className="truncate text-[13px] text-white">{it.title_ro || "-"}</p>
                                 <p className="mt-0.5 truncate text-[11px] text-white/58">
-                                  {it.brand_name || "-"} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"} • {itemProductCode(it) || "nincs termékkód"}
+                                  {it.brand_name || "-"} • {resolvedColorLabelForItem(it)} • {it.size || "-"} • {itemProductCode(it) || "nincs termékkód"}
                                 </p>
                               </div>
 
@@ -15105,7 +15228,7 @@ export default function AllInWarehouse() {
                         <WarehouseProductImage src={it.image_url} alt={it.title_ro || ""} thumbClassName="h-12 w-12 rounded-lg" iconSize={18} />
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
-                          <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          <p className="mt-1 text-xs text-white/55">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {resolvedColorLabelForItem(it)} • {it.size || "-"}</p>
                           {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                           <p className="mt-1 text-xs text-white/45">Készlet: {n(it.total_qty)} • Vonalkód: {visibleWarehouseBarcode(it) || "-"}</p>
                         </div>
@@ -15414,7 +15537,7 @@ export default function AllInWarehouse() {
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-white/45">Készlet célhelyenként</p>
                 <h2 className="mt-1 text-lg text-white">{stockEditorTarget.title_ro || "Termék"}</h2>
-                <p className="mt-1 text-xs text-white/58">{stockEditorTarget.brand_name || "-"} • {colorDisplay(stockEditorTarget.color_name, stockEditorTarget.color_code)} • {stockEditorTarget.size || "-"}</p>
+                <p className="mt-1 text-xs text-white/58">{stockEditorTarget.brand_name || "-"} • {resolvedColorLabelForItem(stockEditorTarget)} • {stockEditorTarget.size || "-"}</p>
               </div>
               <button className={btnSoft} onClick={closeStockEditor} disabled={stockEditorSaving} type="button"><X size={14} /> Bezárás</button>
             </div>
@@ -15646,7 +15769,7 @@ export default function AllInWarehouse() {
                         </div>
                         <div className="min-w-0">
                           <p className="truncate text-sm text-white">{it.title_ro || "-"}</p>
-                          <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {colorDisplay(it.color_name, it.color_code)} • {it.size || "-"}</p>
+                          <p className="mt-1 text-xs text-white/58">{it.brand_name || "-"} • {itemMainCategoryLabel(it)}{itemSubCategoryLabel(it) ? ` / ${itemSubCategoryLabel(it)}` : ""} • {resolvedColorLabelForItem(it)} • {it.size || "-"}</p>
                           {modelStatusNeedsAttention(it) ? <div className="mt-1"><ModelStatusBadge item={it} compact /></div> : null}
                           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-white/45">
                             <span>Vonalkód: {visibleWarehouseBarcode(it) || "-"}</span>
@@ -16724,7 +16847,37 @@ export default function AllInWarehouse() {
                       ) : null}
                       <label className={label}>S/N/COD<input className={input} value={edit.snCod} onChange={(e) => setEdit((x) => ({ ...x, snCod: e.target.value }))} placeholder="belső azonosító" /></label>
                       <label className={label}>Vámtarifa kód<input className={input} value={edit.customsTariffCode} onChange={(e) => setEdit((x) => ({ ...x, customsTariffCode: e.target.value }))} placeholder="pl. 61102091" /></label>
-                      <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, colorName: normalizeColor(x.colorName) }))} placeholder="pl. negru" /></label>
+                      <label className={label}>
+                        Szín
+                        <div className="relative">
+                          {detailBrandColorMapping ? (
+                            <span
+                              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-white/35 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]"
+                              style={detailMappedColorHex ? { backgroundColor: detailMappedColorHex } : undefined}
+                            />
+                          ) : null}
+                          <input
+                            className={`${input} w-full ${detailBrandColorMapping ? "pl-9" : ""}`}
+                            value={edit.colorName}
+                            readOnly={Boolean(detailBrandColorMapping)}
+                            onChange={(e) => {
+                              if (detailBrandColorMapping) return;
+                              setEdit((x) => ({ ...x, colorName: e.target.value }));
+                            }}
+                            onBlur={() => {
+                              if (detailBrandColorMapping) return;
+                              setEdit((x) => ({ ...x, colorName: normalizeColor(x.colorName) }));
+                            }}
+                            placeholder="pl. negru"
+                            title={detailBrandColorMapping ? `${detailBrandColorMapping.brand_name || detailBrandColorMapping.brand_code || edit.brandCode} / ${detailBrandColorMapping.color_code || edit.colorCode} → ${detailMappedColorLabel || detailMappedColorName}` : "Szabadon megadható, ha nincs márkaszínkódhoz kötve."}
+                          />
+                        </div>
+                        {detailBrandColorMapping ? (
+                          <span className="text-[10px] leading-snug text-[#cffffd]/72">
+                            Márkaszínkódból automatikusan: {detailBrandColorMapping.color_code || edit.colorCode} → {detailMappedColorLabel || detailMappedColorName}
+                          </span>
+                        ) : null}
+                      </label>
                       <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
                       <label className={label}>Méret<input className={input} list="warehouse-standard-size-options" value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} onBlur={() => setEdit((x) => ({ ...x, size: normalizeSize(x.size) }))} /></label>
                       <label className={label}>Vételár<input className={input} value={edit.buyPrice} onChange={(e) => setEdit((x) => ({ ...x, buyPrice: e.target.value }))} /></label>
