@@ -19872,6 +19872,18 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
 
   function aifShopCustomerSaleHistoryResponse(row = {}) {
     const rawLines = Array.isArray(row.lines) ? row.lines : [];
+    const storedPayments = Array.isArray(row.sale_payments) ? row.sale_payments : [];
+    const rawSale = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+    const fallbackPaymentMethod = text(rawSale.paymentMethod || rawSale.payment_method);
+    const salePayments = storedPayments.length
+      ? storedPayments
+      : fallbackPaymentMethod
+        ? [{
+            method: fallbackPaymentMethod,
+            amount: aifNumber(row.paid_total),
+            paidAt: row.sold_at || null,
+          }]
+        : [];
     return {
       id: String(row.id),
       saleNumber: row.sale_number || "",
@@ -19890,6 +19902,13 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       balanceDue: aifNumber(row.balance_due),
       lineCount: aifNumber(row.line_count),
       itemCount: aifNumber(row.item_count),
+      payments: salePayments.map((payment) => ({
+        method: payment?.method || "other",
+        amount: aifNumber(payment?.amount),
+        paidAt: payment?.paidAt || payment?.paid_at
+          ? new Date(payment.paidAt || payment.paid_at).toISOString()
+          : null,
+      })),
       lines: rawLines.map((line) => ({
         id: String(line.id || ""),
         lineNo: aifNumber(line.lineNo ?? line.line_no),
@@ -19901,6 +19920,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         categoryName: line.categoryName || line.category_name || null,
         subcategoryName: line.subcategoryName || line.subcategory_name || null,
         colorName: line.colorName || line.color_name || null,
+        colorHex: line.colorHex || line.color_hex || null,
         size: line.size || null,
         imageUrl: line.imageUrl || line.image_url || null,
         quantity: aifNumber(line.quantity),
@@ -20679,6 +20699,21 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            count(sl.id)::int AS line_count,
            COALESCE(sum(sl.quantity),0)::int AS item_count,
            COALESCE(
+             (
+               SELECT jsonb_agg(
+                 jsonb_build_object(
+                   'method', sp.method,
+                   'amount', sp.amount,
+                   'paidAt', sp.paid_at
+                 )
+                 ORDER BY sp.paid_at ASC, sp.id ASC
+               )
+               FROM aif_shop_sale_payments sp
+               WHERE sp.sale_id=s.id
+             ),
+             '[]'::jsonb
+           ) AS sale_payments,
+           COALESCE(
              jsonb_agg(
                jsonb_build_object(
                  'id', sl.id::text,
@@ -20691,6 +20726,30 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  'categoryName', sl.category_name,
                  'subcategoryName', sl.subcategory_name,
                  'colorName', sl.color_name,
+                 'colorHex', COALESCE(
+                   NULLIF(sale_ct.hex,''),
+                   (
+                     SELECT NULLIF(ct.hex,'')
+                     FROM aif_color_types ct
+                     WHERE ct.is_active=true
+                       AND NULLIF(btrim(COALESCE(ct.hex,'')),'') IS NOT NULL
+                       AND (
+                         lower(btrim(COALESCE(ct.code,'')))=lower(btrim(COALESCE(v.color_name,sl.color_name,'')))
+                         OR lower(btrim(COALESCE(ct.name_ro,'')))=lower(btrim(COALESCE(v.color_name,sl.color_name,'')))
+                         OR lower(btrim(COALESCE(ct.name_hu,'')))=lower(btrim(COALESCE(v.color_name,sl.color_name,'')))
+                         OR lower(btrim(COALESCE(ct.name_en,'')))=lower(btrim(COALESCE(v.color_name,sl.color_name,'')))
+                         OR lower(btrim(COALESCE(ct.name_de,'')))=lower(btrim(COALESCE(v.color_name,sl.color_name,'')))
+                         OR EXISTS (
+                           SELECT 1
+                           FROM unnest(COALESCE(ct.aliases,'{}'::text[])) alias
+                           WHERE lower(btrim(alias))=lower(btrim(COALESCE(v.color_name,sl.color_name,'')))
+                         )
+                       )
+                     ORDER BY ct.sort_order ASC, ct.name_ro ASC
+                     LIMIT 1
+                   ),
+                   NULLIF(v.color_hex,'')
+                 ),
                  'size', sl.size,
                  'imageUrl', COALESCE(
                    NULLIF(sl.image_url,''),
@@ -20751,6 +20810,14 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
          LEFT JOIN aif_locations l ON l.id=s.location_id
          LEFT JOIN aif_shop_sale_lines sl ON sl.sale_id=s.id
          LEFT JOIN aif_product_variants v ON v.id=sl.variant_id
+         LEFT JOIN aif_product_models sale_model ON sale_model.id=v.model_id
+         LEFT JOIN aif_brand_color_codes sale_bcc
+           ON sale_bcc.brand_id=sale_model.brand_id
+          AND sale_bcc.is_active=true
+          AND lower(btrim(COALESCE(sale_bcc.color_code,'')))=lower(btrim(COALESCE(v.color_code,'')))
+         LEFT JOIN aif_color_types sale_ct
+           ON sale_ct.id=sale_bcc.color_type_id
+          AND sale_ct.is_active=true
          WHERE s.customer_id=$1
            AND s.location_id=$2
            AND EXTRACT(YEAR FROM (s.sold_at AT TIME ZONE 'Europe/Bucharest'))=$3::int
