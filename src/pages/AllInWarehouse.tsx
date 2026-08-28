@@ -5236,14 +5236,94 @@ function sizeTypeLabel(s?: SizeType | null) {
   return s.name_hu || s.name || s.code || "-";
 }
 
+const WAREHOUSE_ALPHA_SIZE_ORDER = [
+  "XXXS", "3XS", "XXS", "2XS", "XS", "XS/S", "S", "S/M", "M", "M/L", "L", "L/XL",
+  "XL", "XL/XXL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "ST", "MT", "LT", "XLT",
+];
+const WAREHOUSE_ALPHA_SIZE_RANK = new Map(WAREHOUSE_ALPHA_SIZE_ORDER.map((value, index) => [value, index]));
+const WAREHOUSE_ONE_SIZE_KEYS = new Set(["OSFM", "OSFA", "OSFW", "ONE SIZE", "ONESIZE", "ONE-SIZE", "OS", "UNI", "UNIVERSAL", "TU"]);
+
+function warehouseSizeSortDescriptor(value: unknown) {
+  const display = String(value ?? "").trim().replace(/,/g, ".");
+  const upper = display.toUpperCase().replace(/\s+/g, " ").trim();
+  const compact = upper.replace(/\s+/g, "");
+
+  const alphaRank = WAREHOUSE_ALPHA_SIZE_RANK.get(compact);
+  if (alphaRank !== undefined) return { group: 0, primary: alphaRank, secondary: 0, display };
+
+  // Kombinált ruhaméretek, pl. S/40, M/42, XL/46 maradjanak a betűméretek mellett.
+  const alphaNumeric = compact.match(/^([A-Z0-9]+)\/(\d+(?:\.\d+)?)$/);
+  if (alphaNumeric) {
+    const rank = WAREHOUSE_ALPHA_SIZE_RANK.get(alphaNumeric[1]);
+    if (rank !== undefined) return { group: 0, primary: rank, secondary: Number(alphaNumeric[2]) || 0, display };
+  }
+
+  if (WAREHOUSE_ONE_SIZE_KEYS.has(upper) || WAREHOUSE_ONE_SIZE_KEYS.has(compact)) {
+    return { group: 1, primary: 0, secondary: 0, display };
+  }
+
+  // EU 36.5 ugyanúgy a numerikus sorba kerüljön, mint a 36.5.
+  const numericSource = upper.replace(/^EU\s*/, "");
+  const simpleNumber = numericSource.match(/^(\d+(?:\.\d+)?)$/);
+  if (simpleNumber) return { group: 2, primary: Number(simpleNumber[1]), secondary: 0, display };
+
+  // Emberi törtek: 28 1/2, 31 1/3, 36 2/3.
+  const mixedFraction = numericSource.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+  if (mixedFraction) {
+    const denominator = Number(mixedFraction[3]) || 1;
+    const numeric = Number(mixedFraction[1]) + Number(mixedFraction[2]) / denominator;
+    return { group: 2, primary: numeric, secondary: 0.1, display };
+  }
+
+  // Tartományok / páros méretek: 32-34, 38/40, 122/128.
+  const range = numericSource.match(/^(\d+(?:\.\d+)?)\s*[-/]\s*(\d+(?:\.\d+)?)$/);
+  if (range) return { group: 3, primary: Number(range[1]), secondary: Number(range[2]), display };
+
+  // Ha valami számmal indul, legalább a kezdő szám szerint kerüljön a helyére,
+  // de a 4XL ide már nem jut el, mert fent a ruhaméretek között kezeljük.
+  const numericPrefix = numericSource.match(/^(\d+(?:\.\d+)?)/);
+  if (numericPrefix) return { group: 4, primary: Number(numericPrefix[1]), secondary: 0, display };
+
+  return { group: 5, primary: 0, secondary: 0, display };
+}
+
 function compareWarehouseSizeLabels(leftValue: unknown, rightValue: unknown) {
-  const left = String(leftValue ?? "").trim().replace(/,/g, ".");
-  const right = String(rightValue ?? "").trim().replace(/,/g, ".");
-  return left.localeCompare(right, "hu", { numeric: true, sensitivity: "base" });
+  const left = warehouseSizeSortDescriptor(leftValue);
+  const right = warehouseSizeSortDescriptor(rightValue);
+  if (left.group !== right.group) return left.group - right.group;
+  if (left.primary !== right.primary) return left.primary - right.primary;
+  if (left.secondary !== right.secondary) return left.secondary - right.secondary;
+  return left.display.localeCompare(right.display, "hu", { numeric: true, sensitivity: "base" });
 }
 
 function compareWarehouseSizeTypes(left: SizeType, right: SizeType) {
   return compareWarehouseSizeLabels(sizeTypeLabel(left), sizeTypeLabel(right));
+}
+
+function warehouseSelectedSizeMatchKeys(selected: string[], rows: SizeType[]) {
+  const selectedExact = new Set((selected || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const selectedKeys = new Set((selected || []).map(colorKey).filter(Boolean));
+  const allowed = new Set<string>();
+
+  for (const row of rows || []) {
+    if (row.is_active === false) continue;
+    const values = [row.id, row.code, row.name, row.name_hu, ...(Array.isArray(row.aliases) ? row.aliases : [])]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const selectedRow = selectedExact.has(String(row.id || "")) || values.some((value) => selectedKeys.has(colorKey(value)));
+    if (!selectedRow) continue;
+    for (const value of values) {
+      const key = colorKey(value);
+      if (key) allowed.add(key);
+    }
+  }
+
+  // Régebbi mentett szűrőértékekhez kompatibilitás.
+  for (const value of selected || []) {
+    const key = colorKey(value);
+    if (key) allowed.add(key);
+  }
+  return allowed;
 }
 
 function categoryLabel(c: MetaItem) {
@@ -7501,6 +7581,21 @@ export default function AllInWarehouse() {
       }));
   }, [sizeTypes]);
 
+  // A régi szűrés minden egyes terméknél végigjárta a 78 kijelölt méretet,
+  // és azon belül újra végigkereste a teljes mérettörzset. "Mind kijelölése"
+  // esetén ez milliónyi felesleges string-normalizálás volt. Most egyszer épül
+  // egy Set, a termékeknél pedig O(1) lookup történik.
+  const selectedSizeMatchKeys = useMemo(
+    () => warehouseSelectedSizeMatchKeys(sizeFilters, sizeTypes),
+    [sizeFilters, sizeTypes]
+  );
+
+  const selectedSizeFilterLabels = useMemo(() => {
+    if (!sizeFilters.length) return [] as string[];
+    const selected = new Set(sizeFilters.map((value) => String(value)));
+    return sizeFilterOptions.filter((option) => selected.has(String(option.value))).map((option) => option.label);
+  }, [sizeFilters, sizeFilterOptions]);
+
   const invoiceFilterOptions = useMemo<WarehouseInvoiceFilterOption[]>(() => {
     if (invoiceIndexRows.length) {
       const itemById = new Map(inventoryDisplayItems.map((item) => [String(item.variant_id || ""), item] as const));
@@ -8314,7 +8409,7 @@ export default function AllInWarehouse() {
     if (category !== "all") out = out.filter((x) => itemMatchesMainCategory(x, category, categorySelectOptions));
     if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
     if (genderFilters.length) out = out.filter((x) => itemMatchesGenderSelections(x, genderFilters, genderTypes));
-    if (sizeFilters.length) out = out.filter((x) => itemMatchesSizeSelections(x, sizeFilters, sizeTypes));
+    if (sizeFilters.length) out = out.filter((x) => selectedSizeMatchKeys.has(colorKey(x.size)));
     if (color !== "all") out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes));
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
@@ -8384,7 +8479,7 @@ export default function AllInWarehouse() {
       return compareWarehouseVariantPresentation(a, b);
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, sizeTypes, color, colorTypes, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     catalogSearchAbortRef.current?.abort();
@@ -8432,7 +8527,13 @@ export default function AllInWarehouse() {
     if (category !== "all") labels.push(`Főkategória: ${labelForMetaValue(categories, category)}`);
     if (subCategory !== "all") labels.push(`Alkategória / terméktípus: ${labelForMetaValue(subCategories, subCategory)}`);
     if (genderFilters.length) labels.push(`Nem: ${genderFilters.map((value) => genderLabel(value, genderTypes)).join(" + ")}`);
-    if (sizeFilters.length) labels.push(`Méret: ${sizeFilters.join(" + ")}`);
+    if (sizeFilters.length) {
+      const count = selectedSizeFilterLabels.length || sizeFilters.length;
+      const sizeSummary = count <= 4
+        ? (selectedSizeFilterLabels.length ? selectedSizeFilterLabels.join(" + ") : `${count} méret`)
+        : `${count} méret kiválasztva`;
+      labels.push(`Méret: ${sizeSummary}`);
+    }
     if (color !== "all") labels.push(`Szín: ${labelForMetaValue(colorTypes as any, color)}`);
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
     if (invoiceFilter !== "all") labels.push(`Számla: ${selectedInvoiceFilterOption?.invoiceNumber || invoiceFilter}`);
@@ -8466,7 +8567,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, selectedSizeFilterLabels, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
