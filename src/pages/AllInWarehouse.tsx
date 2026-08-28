@@ -1246,6 +1246,182 @@ function WarehouseSingleSelect({
 }
 
 
+type WarehouseTaxonomySelectOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+function WarehouseTaxonomySelect({
+  labelText,
+  options,
+  value,
+  onChange,
+  placeholder = "Válassz...",
+  disabled = false,
+  helperText = "",
+  compact = false,
+  className = "",
+}: {
+  labelText?: string;
+  options: WarehouseTaxonomySelectOption[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  helperText?: string;
+  compact?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const selected = options.find((option) => String(option.value) === String(value)) || null;
+
+  const updateMenuPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const viewportPadding = 10;
+    const gap = 5;
+    const desiredHeight = Math.min(300, 52 + Math.max(1, options.length + 1) * 34);
+    const roomBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+    const roomAbove = Math.max(0, rect.top - viewportPadding);
+    const openUp = roomBelow < Math.min(180, desiredHeight) && roomAbove > roomBelow;
+    const maxHeight = Math.max(112, Math.min(desiredHeight, openUp ? roomAbove - gap : roomBelow - gap));
+    const width = Math.min(
+      Math.max(rect.width, compact ? 210 : 250),
+      Math.max(compact ? 210 : 250, window.innerWidth - viewportPadding * 2),
+    );
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+    );
+
+    setMenuStyle({
+      position: "fixed",
+      left,
+      top: openUp ? Math.max(viewportPadding, rect.top - gap) : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap),
+      width,
+      maxHeight,
+      transform: openUp ? "translateY(-100%)" : "none",
+      zIndex: 2147483100,
+    });
+  }, [compact, options.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onMove = () => updateMenuPosition();
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, updateMenuPosition]);
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  const menu = open && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className="overflow-hidden rounded-xl border border-white/18 bg-[#293344] text-white shadow-[0_24px_70px_rgba(2,6,23,0.72)]"
+          style={menuStyle}
+          role="listbox"
+          aria-label={labelText || placeholder}
+        >
+          <div className="max-h-[inherit] overflow-y-auto py-1">
+            <button
+              type="button"
+              className={`flex min-h-8 w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs transition ${!value ? "bg-[#2a8d8b]/22 text-white" : "text-white/72 hover:bg-white/[0.08] hover:text-white"}`}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+              role="option"
+              aria-selected={!value}
+            >
+              <span className="min-w-0 flex-1 truncate">{placeholder}</span>
+              {!value ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+            </button>
+            <div className="mx-2 border-t border-white/10" />
+            {options.map((option) => {
+              const active = String(option.value) === String(value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={option.disabled}
+                  className={`flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/76 hover:bg-white/[0.07]"} disabled:cursor-not-allowed disabled:opacity-45`}
+                  onClick={() => {
+                    if (option.disabled) return;
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  role="option"
+                  aria-selected={active}
+                  title={option.hint || option.label}
+                >
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
+                  {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                </button>
+              );
+            })}
+            {!options.length ? <div className="px-3 py-3 text-xs text-white/45">Nincs választható érték.</div> : null}
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <div className={`${compact ? "min-w-0" : taxonomyField} ${className}`.trim()}>
+      {labelText ? <span className={compact ? "text-[10px] text-white/48" : undefined}>{labelText}</span> : null}
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 border border-white/18 bg-[#3f4959] text-left text-white outline-none transition hover:bg-[#475365] focus:border-[#7bd7d4]/55 focus:ring-2 focus:ring-[#7bd7d4]/25 disabled:cursor-not-allowed disabled:opacity-50 ${compact ? "h-7 rounded-lg px-2 text-[11px]" : "h-9 rounded-xl px-3 text-[13px]"}`}
+        onClick={() => {
+          updateMenuPosition();
+          setOpen((current) => !current);
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={selected?.label || placeholder}
+      >
+        <span className={`min-w-0 flex-1 truncate ${selected ? "text-white" : "text-white/62"}`}>{selected?.label || placeholder}</span>
+        <ChevronDown size={compact ? 13 : 15} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {helperText ? <span className="text-[11px] text-white/45">{helperText}</span> : null}
+      {menu}
+    </div>
+  );
+}
+
+
 type WarehouseMoveDropdownOption = {
   value: string;
   label: string;
@@ -15703,12 +15879,14 @@ export default function AllInWarehouse() {
                       {subCategoryForm.id && <button className={taxonomySmallBtn} onClick={resetSubCategoryForm}>Új</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={`${taxonomyField} md:col-span-2`}>Főkategória
-                        <select className={taxonomyInput} value={subCategoryForm.parentId} onChange={(e) => setSubCategoryForm((x) => ({ ...x, parentId: e.target.value }))}>
-                          <option value="">Válassz főkategóriát</option>
-                          {(mainCategories.length ? mainCategories : categories).map((c) => <option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}
-                        </select>
-                      </label>
+                      <WarehouseTaxonomySelect
+                        className="md:col-span-2"
+                        labelText="Főkategória"
+                        value={subCategoryForm.parentId}
+                        onChange={(parentId) => setSubCategoryForm((x) => ({ ...x, parentId }))}
+                        placeholder="Válassz főkategóriát"
+                        options={(mainCategories.length ? mainCategories : categories).map((c) => ({ value: String(c.id), label: categoryLabel(c) }))}
+                      />
                       <label className={taxonomyField}>Megnevezés románul<input className={taxonomyInput} value={subCategoryForm.nameRo} onChange={(e) => setSubCategoryForm((x) => ({ ...x, nameRo: e.target.value }))} /></label>
                       <label className={taxonomyField}>Megnevezés magyarul<input className={taxonomyInput} value={subCategoryForm.nameHu} onChange={(e) => setSubCategoryForm((x) => ({ ...x, nameHu: e.target.value }))} /></label>
                       <label className={`${taxonomyField} md:col-span-2`}>Aliasok / import nevek<textarea className={taxonomyTextarea} value={subCategoryForm.aliases} onChange={(e) => setSubCategoryForm((x) => ({ ...x, aliases: e.target.value }))} placeholder="RODESCR, SUBCATEGORIE, PRODUCT TYPE, TRICOU" /></label>
@@ -15886,13 +16064,15 @@ export default function AllInWarehouse() {
                       {colorForm.id && <button className={taxonomySmallBtn} onClick={resetColorForm}>Új szín</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={`${taxonomyField} md:col-span-2`}>Főszín / színcsoport
-                        <select className={taxonomyInput} value={colorForm.colorGroupId} onChange={(e) => setColorForm((x) => ({ ...x, colorGroupId: e.target.value }))}>
-                          <option value="">Nincs csoporthoz rendelve</option>
-                          {colorGroups.map((group) => <option key={group.id} value={group.id}>{colorGroupLabel(group)}</option>)}
-                        </select>
-                        <span className="text-[11px] text-white/45">Példa: petrolkék → Kék. Ettől a konkrét szín neve megmarad petrolkéknek.</span>
-                      </label>
+                      <WarehouseTaxonomySelect
+                        className="md:col-span-2"
+                        labelText="Főszín / színcsoport"
+                        value={colorForm.colorGroupId}
+                        onChange={(colorGroupId) => setColorForm((x) => ({ ...x, colorGroupId }))}
+                        placeholder="Nincs csoporthoz rendelve"
+                        helperText="Példa: petrolkék → Kék. Ettől a konkrét szín neve megmarad petrolkéknek."
+                        options={colorGroups.map((group) => ({ value: String(group.id), label: colorGroupLabel(group) }))}
+                      />
                       <label className={taxonomyField}>Román hivatalos név<input className={taxonomyInput} value={colorForm.nameRo} onChange={(e) => setColorForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. negru" /></label>
                       <label className={taxonomyField}>Magyar név<input className={taxonomyInput} value={colorForm.nameHu} onChange={(e) => setColorForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. fekete" /></label>
                       <label className={taxonomyField}>Angol név<input className={taxonomyInput} value={colorForm.nameEn} onChange={(e) => setColorForm((x) => ({ ...x, nameEn: e.target.value }))} placeholder="pl. black" /></label>
@@ -15931,17 +16111,16 @@ export default function AllInWarehouse() {
                                 </div>
                                 <p className="mt-0.5 text-[11px] text-white/50">HU: {c.name_hu || "-"} • EN: {c.name_en || "-"} • DE: {c.name_de || "-"}</p>
                                 {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
-                                <label className="mt-2 flex max-w-[330px] items-center gap-2 text-[10px] text-white/48">Főszín
-                                  <select
-                                    className="h-7 min-w-0 flex-1 rounded-lg border border-white/16 bg-[#354153] px-2 text-[11px] text-white outline-none focus:border-[#7bd7d4]/45"
-                                    value={String(c.color_group_id || "")}
-                                    disabled={taxonomyBusy}
-                                    onChange={(e) => void quickAssignColorGroup(c, e.target.value)}
-                                  >
-                                    <option value="">Nincs csoport</option>
-                                    {colorGroups.map((groupRow) => <option key={groupRow.id} value={groupRow.id}>{colorGroupLabel(groupRow)}</option>)}
-                                  </select>
-                                </label>
+                                <WarehouseTaxonomySelect
+                                  className="mt-2 max-w-[330px]"
+                                  labelText="Főszín"
+                                  compact
+                                  value={String(c.color_group_id || "")}
+                                  disabled={taxonomyBusy}
+                                  onChange={(colorGroupId) => void quickAssignColorGroup(c, colorGroupId)}
+                                  placeholder="Nincs csoport"
+                                  options={colorGroups.map((groupRow) => ({ value: String(groupRow.id), label: colorGroupLabel(groupRow) }))}
+                                />
                               </div>
                             </div>
                             {taxonomyActionMenu({
@@ -15970,21 +16149,26 @@ export default function AllInWarehouse() {
                       {brandColorForm.id && <button className={taxonomySmallBtn} onClick={resetBrandColorForm}>Új színkód</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={taxonomyField}>Márka
-                        <select className={taxonomyInput} value={brandColorForm.brandId} onChange={(e) => setBrandColorForm((x) => ({ ...x, brandId: e.target.value }))}>
-                          <option value="">Válassz márkát</option>
-                          {brands.map((b) => <option key={b.id} value={b.id}>{brandLabel(b)}</option>)}
-                        </select>
-                      </label>
+                      <WarehouseTaxonomySelect
+                        labelText="Márka"
+                        value={brandColorForm.brandId}
+                        onChange={(brandId) => setBrandColorForm((x) => ({ ...x, brandId }))}
+                        placeholder="Válassz márkát"
+                        options={brands.map((b) => ({ value: String(b.id), label: brandLabel(b) }))}
+                      />
                       <label className={taxonomyField}>Gyártói színkód
                         <input className={taxonomyInput} value={brandColorForm.colorCode} onChange={(e) => setBrandColorForm((x) => ({ ...x, colorCode: e.target.value.toUpperCase() }))} placeholder="pl. 100 vagy 001" />
                       </label>
-                      <label className={taxonomyField}>AllIn szín
-                        <select className={taxonomyInput} value={brandColorForm.colorTypeId} onChange={(e) => setBrandColorForm((x) => ({ ...x, colorTypeId: e.target.value }))}>
-                          <option value="">Válassz színt</option>
-                          {colorTypes.map((c) => <option key={c.id} value={c.id}>{colorTypeLabel(c)}{c.name_ro && c.name_hu ? ` • ${c.name_ro}` : ""}</option>)}
-                        </select>
-                      </label>
+                      <WarehouseTaxonomySelect
+                        labelText="AllIn szín"
+                        value={brandColorForm.colorTypeId}
+                        onChange={(colorTypeId) => setBrandColorForm((x) => ({ ...x, colorTypeId }))}
+                        placeholder="Válassz színt"
+                        options={colorTypes.map((c) => ({
+                          value: String(c.id),
+                          label: `${colorTypeLabel(c)}${c.name_ro && c.name_hu ? ` • ${c.name_ro}` : ""}`,
+                        }))}
+                      />
                       <label className={`${taxonomyField} md:col-span-2`}>Megjegyzés
                         <textarea className={taxonomyTextarea} value={brandColorForm.notes} onChange={(e) => setBrandColorForm((x) => ({ ...x, notes: e.target.value }))} placeholder="pl. Under Armour CODPRODUS utolsó része: 100 = fekete/negru" />
                       </label>
@@ -16103,21 +16287,26 @@ export default function AllInWarehouse() {
                       {brandSizeForm.id && <button className={taxonomySmallBtn} onClick={resetBrandSizeForm}>Új márkaméret</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
-                      <label className={taxonomyField}>Márka
-                        <select className={taxonomyInput} value={brandSizeForm.brandId} onChange={(e) => setBrandSizeForm((x) => ({ ...x, brandId: e.target.value }))}>
-                          <option value="">Válassz márkát</option>
-                          {brands.map((b) => <option key={b.id} value={b.id}>{brandLabel(b)}</option>)}
-                        </select>
-                      </label>
+                      <WarehouseTaxonomySelect
+                        labelText="Márka"
+                        value={brandSizeForm.brandId}
+                        onChange={(brandId) => setBrandSizeForm((x) => ({ ...x, brandId }))}
+                        placeholder="Válassz márkát"
+                        options={brands.map((b) => ({ value: String(b.id), label: brandLabel(b) }))}
+                      />
                       <label className={taxonomyField}>Gyártói méret / méretkód
                         <input className={taxonomyInput} value={brandSizeForm.sizeCode} onChange={(e) => setBrandSizeForm((x) => ({ ...x, sizeCode: e.target.value.toUpperCase() }))} placeholder="pl. 8.5, 42, MENS 9" />
                       </label>
-                      <label className={taxonomyField}>Standard AllIn méret
-                        <select className={taxonomyInput} value={brandSizeForm.sizeTypeId} onChange={(e) => setBrandSizeForm((x) => ({ ...x, sizeTypeId: e.target.value }))}>
-                          <option value="">Válassz standard méretet</option>
-                          {sizeTypes.map((st) => <option key={st.id} value={st.id}>{sizeTypeLabel(st)}</option>)}
-                        </select>
-                      </label>
+                      <WarehouseTaxonomySelect
+                        labelText="Standard AllIn méret"
+                        value={brandSizeForm.sizeTypeId}
+                        onChange={(sizeTypeId) => setBrandSizeForm((x) => ({ ...x, sizeTypeId }))}
+                        placeholder="Válassz standard méretet"
+                        options={sizeTypes
+                          .slice()
+                          .sort(compareWarehouseSizeTypes)
+                          .map((st) => ({ value: String(st.id), label: sizeTypeLabel(st) }))}
+                      />
                       <label className={`${taxonomyField} md:col-span-2`}>Megjegyzés
                         <textarea className={taxonomyTextarea} value={brandSizeForm.notes} onChange={(e) => setBrandSizeForm((x) => ({ ...x, notes: e.target.value }))} placeholder="pl. Adidas US 8.5 = EU 42" />
                       </label>
