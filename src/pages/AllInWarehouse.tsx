@@ -5788,6 +5788,12 @@ function warehouseYieldToBrowser() {
   });
 }
 
+const WAREHOUSE_AUTH_EXPIRED_MESSAGE = "A munkamenet lejárt. A háttérfrissítést leállítottam, hogy ne küldjön folyamatos 401-es kéréseket. Jelentkezz be újra.";
+
+function isWarehouseUnauthorizedError(error: unknown) {
+  return Number((error as Record<string, any> | null)?.status || 0) === 401;
+}
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const method = String(options?.method || "GET").toUpperCase();
   const res = await fetch(url, {
@@ -6765,6 +6771,50 @@ export default function AllInWarehouse() {
   const pendingProductJumpViewportTopRef = useRef<number | null>(null);
   const pendingProductJumpCandidateIdsRef = useRef<string[]>([]);
   const pendingProductJumpFallbackRef = useRef<{ productPage: number; scrollY: number } | null>(null);
+  const backgroundAuthBlockedRef = useRef(false);
+  const backgroundAuthProbeRef = useRef<Promise<boolean> | null>(null);
+  const backgroundAuthProbeAtRef = useRef(0);
+
+  const markWarehouseBackgroundUnauthorized = useCallback(() => {
+    backgroundAuthBlockedRef.current = true;
+    setMessage(WAREHOUSE_AUTH_EXPIRED_MESSAGE);
+  }, []);
+
+  const probeWarehouseBackgroundAuth = useCallback(async () => {
+    if (!backgroundAuthBlockedRef.current) return true;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+    if (backgroundAuthProbeRef.current) return backgroundAuthProbeRef.current;
+
+    const now = Date.now();
+    if (now - backgroundAuthProbeAtRef.current < 5000) return false;
+    backgroundAuthProbeAtRef.current = now;
+
+    const probe = (async () => {
+      try {
+        const response = await fetch("/api/auth/me", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!response.ok) return false;
+        const body = await response.json().catch(() => null);
+        const authenticated = Boolean(body?.session);
+        if (authenticated) {
+          backgroundAuthBlockedRef.current = false;
+          setMessage((current) => current === WAREHOUSE_AUTH_EXPIRED_MESSAGE ? "" : current);
+        }
+        return authenticated;
+      } catch {
+        return false;
+      }
+    })();
+
+    backgroundAuthProbeRef.current = probe;
+    try {
+      return await probe;
+    } finally {
+      if (backgroundAuthProbeRef.current === probe) backgroundAuthProbeRef.current = null;
+    }
+  }, []);
 
   const refreshOpenTransferPreparations = useCallback(async () => {
     setOpenTransferPreparationsBusy(true);
@@ -6821,12 +6871,19 @@ export default function AllInWarehouse() {
   }, [refreshOpenTransferPreparations, selectedWorkPanel, stockEditorAllowTotalChange, stockEditorTarget?.variant_id]);
 
   const loadOpenPurchaseOrderState = useCallback(async () => {
+    if (backgroundAuthBlockedRef.current) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     try {
       setOpenPurchaseOrdersByVariant(await fetchOpenPurchaseOrderVariantMap());
-    } catch {
-      // A raktárlista ettől még használható; a jelzés a következő fókusznál újrapróbálkozik.
+    } catch (error) {
+      if (isWarehouseUnauthorizedError(error)) {
+        markWarehouseBackgroundUnauthorized();
+        return;
+      }
+      // A raktárlista ettől még használható; valódi hálózati / szerverhibánál
+      // a következő fókusznál újrapróbálkozik.
     }
-  }, []);
+  }, [markWarehouseBackgroundUnauthorized]);
 
   const incomingFocusVariantIdsKey = useMemo(() => (incomingFocus?.variantIds || []).join("|"), [incomingFocus]);
   const incomingFocusVariantSet = useMemo(() => new Set(incomingFocus?.variantIds || []), [incomingFocusVariantIdsKey]);
@@ -6837,7 +6894,11 @@ export default function AllInWarehouse() {
 
   useEffect(() => {
     if (!primaryDataReady || typeof window === "undefined") return;
-    const refreshOrders = () => void loadOpenPurchaseOrderState();
+    const refreshOrders = () => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (backgroundAuthBlockedRef.current) return;
+      void loadOpenPurchaseOrderState();
+    };
     // A rendelési jelzések fontosak, de nem fontosabbak az első terméksoroknál.
     // Kis késleltetéssel indulnak, ezért nem versenyeznek a raktár bootstrap kéréseivel.
     const initialTimer = window.setTimeout(refreshOrders, 350);
@@ -10391,6 +10452,8 @@ export default function AllInWarehouse() {
   }
 
   async function refreshSelectedVariantSelection(options: { force?: boolean; quiet?: boolean } = {}) {
+    if (backgroundAuthBlockedRef.current) return null;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return null;
     if (selectedMutationCountRef.current > 0) return null;
 
     // Soha ne fusson egynél több közös-munkalista GET egyszerre. A korábbi
@@ -10414,6 +10477,10 @@ export default function AllInWarehouse() {
         applyPersistedSelectedWorklist(saved.items || []);
         return saved;
       } catch (error) {
+        if (isWarehouseUnauthorizedError(error)) {
+          markWarehouseBackgroundUnauthorized();
+          return null;
+        }
         if (!options.quiet) console.error("AIF selected variants refresh failed", error);
         return null;
       }
@@ -10442,12 +10509,16 @@ export default function AllInWarehouse() {
       }
       return saved;
     } catch (error) {
-      console.error("AIF selected variants mutation failed", error);
-      setMessage(error instanceof Error && error.message ? error.message : errorText);
+      if (isWarehouseUnauthorizedError(error)) {
+        markWarehouseBackgroundUnauthorized();
+      } else {
+        console.error("AIF selected variants mutation failed", error);
+        setMessage(error instanceof Error && error.message ? error.message : errorText);
+      }
       throw error;
     } finally {
       selectedMutationCountRef.current = Math.max(0, selectedMutationCountRef.current - 1);
-      if (selectedMutationCountRef.current === 0) {
+      if (selectedMutationCountRef.current === 0 && !backgroundAuthBlockedRef.current) {
         void refreshSelectedVariantSelection({ force: true, quiet: true });
       }
     }
@@ -11248,6 +11319,8 @@ export default function AllInWarehouse() {
     let disposed = false;
     const refreshSharedSelection = () => {
       if (disposed || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (backgroundAuthBlockedRef.current) return;
       void refreshSelectedVariantSelection({ quiet: true });
     };
 
@@ -11268,6 +11341,37 @@ export default function AllInWarehouse() {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [primaryDataReady]);
+
+  useEffect(() => {
+    if (!primaryDataReady) return;
+    let disposed = false;
+
+    const tryRecoverBackgroundAuth = () => {
+      if (disposed || !backgroundAuthBlockedRef.current) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+
+      void probeWarehouseBackgroundAuth().then((authenticated) => {
+        if (disposed || !authenticated) return;
+        void refreshSelectedVariantSelection({ force: true, quiet: true });
+        void loadOpenPurchaseOrderState();
+      });
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") tryRecoverBackgroundAuth();
+    };
+
+    window.addEventListener("focus", tryRecoverBackgroundAuth);
+    window.addEventListener("online", tryRecoverBackgroundAuth);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", tryRecoverBackgroundAuth);
+      window.removeEventListener("online", tryRecoverBackgroundAuth);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [loadOpenPurchaseOrderState, primaryDataReady, probeWarehouseBackgroundAuth]);
 
   useEffect(() => {
     if (selectedPanelOpen && selectedCount <= 0) setSelectedPanelOpen(false);
@@ -11970,6 +12074,10 @@ export default function AllInWarehouse() {
           applyPersistedSelectedWorklist((savedSelection.items || []).filter((row) => selectedVariantIdFromItem(row)));
         })
         .catch((selectionError) => {
+          if (isWarehouseUnauthorizedError(selectionError)) {
+            markWarehouseBackgroundUnauthorized();
+            return;
+          }
           console.error("AIF selected variants load skipped", selectionError);
         });
 
@@ -11979,7 +12087,7 @@ export default function AllInWarehouse() {
       setItems(latestInventory);
       setInventoryLoadedCount(latestInventory.length);
       setInventoryTotalCount((current) => current ?? latestInventory.length);
-      setMessage("");
+      if (!backgroundAuthBlockedRef.current) setMessage("");
 
       if (loadedMeta && inventoryComplete) {
         warehouseBootstrapCache = {
