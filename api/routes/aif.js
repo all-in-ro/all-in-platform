@@ -20692,7 +20692,51 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
                  'subcategoryName', sl.subcategory_name,
                  'colorName', sl.color_name,
                  'size', sl.size,
-                 'imageUrl', COALESCE(NULLIF(sl.image_url,''), NULLIF(v.image_url,'')),
+                 'imageUrl', COALESCE(
+                   NULLIF(sl.image_url,''),
+                   NULLIF(v.image_url,''),
+                   NULLIF(sl.raw->>'imageUrl',''),
+                   NULLIF(sl.raw->>'image_url',''),
+                   (
+                     SELECT NULLIF(vb.image_url,'')
+                     FROM aif_product_variants vb
+                     WHERE NULLIF(vb.image_url,'') IS NOT NULL
+                       AND NULLIF(btrim(COALESCE(sl.barcode,'')),'') IS NOT NULL
+                       AND lower(btrim(COALESCE(vb.barcode,'')))=lower(btrim(sl.barcode))
+                     ORDER BY CASE WHEN vb.id=sl.variant_id THEN 0 ELSE 1 END,
+                              vb.updated_at DESC NULLS LAST,
+                              vb.created_at DESC NULLS LAST
+                     LIMIT 1
+                   ),
+                   (
+                     SELECT NULLIF(vm.image_url,'')
+                     FROM aif_product_variants vm
+                     WHERE NULLIF(vm.image_url,'') IS NOT NULL
+                       AND v.model_id IS NOT NULL
+                       AND vm.model_id=v.model_id
+                     ORDER BY CASE WHEN vm.id=sl.variant_id THEN 0 ELSE 1 END,
+                              vm.updated_at DESC NULLS LAST,
+                              vm.created_at DESC NULLS LAST
+                     LIMIT 1
+                   ),
+                   (
+                     SELECT NULLIF(vp.image_url,'')
+                     FROM aif_product_variants vp
+                     JOIN aif_product_models mp ON mp.id=vp.model_id
+                     LEFT JOIN aif_variant_supplier_codes scp
+                       ON scp.variant_id=vp.id AND COALESCE(scp.is_active,true)=true
+                     WHERE NULLIF(vp.image_url,'') IS NOT NULL
+                       AND NULLIF(btrim(COALESCE(sl.product_code,'')),'') IS NOT NULL
+                       AND (
+                         lower(btrim(COALESCE(vp.internal_sku,'')))=lower(btrim(sl.product_code))
+                         OR lower(btrim(COALESCE(mp.model_code,'')))=lower(btrim(sl.product_code))
+                         OR lower(btrim(COALESCE(scp.supplier_product_code,'')))=lower(btrim(sl.product_code))
+                       )
+                     ORDER BY vp.updated_at DESC NULLS LAST,
+                              vp.created_at DESC NULLS LAST
+                     LIMIT 1
+                   )
+                 ),
                  'quantity', sl.quantity,
                  'listPrice', sl.list_price,
                  'unitPrice', sl.unit_price,
