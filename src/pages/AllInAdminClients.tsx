@@ -631,24 +631,25 @@ function CustomerPurchasesModal({
   error: string;
   onClose: () => void;
 }) {
-  const totals = useMemo(() => sales.reduce((acc, sale) => {
+  const orderedSales = useMemo(
+    () => [...sales].sort((a, b) => new Date(String(b.soldAt || 0)).getTime() - new Date(String(a.soldAt || 0)).getTime()),
+    [sales],
+  );
+
+  const totals = useMemo(() => orderedSales.reduce((acc, sale) => {
     acc.transactions += 1;
     acc.items += numberValue(sale.itemCount);
-    acc.subtotal += numberValue(sale.subtotal);
     acc.discount += numberValue(sale.discountTotal);
     acc.total += numberValue(sale.total);
-    acc.paid += numberValue(sale.paidTotal);
     acc.balance += numberValue(sale.balanceDue);
     return acc;
   }, {
     transactions: 0,
     items: 0,
-    subtotal: 0,
     discount: 0,
     total: 0,
-    paid: 0,
     balance: 0,
-  }), [sales]);
+  }), [orderedSales]);
 
   return (
     <div
@@ -657,20 +658,20 @@ function CustomerPurchasesModal({
         if (event.currentTarget === event.target) onClose();
       }}
     >
-      <section className="flex max-h-[94vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/32 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.68)]">
+      <section className="flex max-h-[94vh] w-full max-w-[1220px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/32 bg-[#303a4c] text-white shadow-[0_38px_120px_rgba(0,0,0,0.68)]">
         <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] via-[#28545b] to-[#2a6f70] px-4 py-4 sm:px-5">
           <div className="flex min-w-0 items-start gap-3">
             <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.07] text-[#d7fffd]">
               <ReceiptText size={20} />
             </span>
             <div className="min-w-0">
-              <p className="text-[9px] uppercase tracking-[0.16em] text-white/48">Kliens vásárlási előzmények</p>
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/48">Vásárlási történet</p>
               <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{customerName}</h3>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <StoreBadge code={storeCode} name={storeName} />
-                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{year}. év</span>
-                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{integer(totals.transactions)} vásárlás</span>
-                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{integer(totals.items)} db</span>
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/62">{year}. év</span>
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/62">{integer(totals.transactions)} vásárlás</span>
+                <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/62">{integer(totals.items)} db</span>
               </div>
             </div>
           </div>
@@ -680,20 +681,27 @@ function CustomerPurchasesModal({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-            {[
-              ["Vásárlás", integer(totals.transactions)],
-              ["Darab", `${integer(totals.items)} db`],
-              ["Eredeti összeg", money(totals.subtotal)],
-              ["Kedvezmény", money(totals.discount)],
-              ["Végösszeg", money(totals.total)],
-              ["Tartozás", money(totals.balance)],
-            ].map(([label, value]) => (
-              <div key={String(label)} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
-                <p className="text-[8px] uppercase tracking-[0.1em] text-white/38">{String(label)}</p>
-                <p className={`mt-2 truncate text-sm ${label === "Kedvezmény" && totals.discount > 0 ? "text-amber-100" : label === "Tartozás" && totals.balance > 0.005 ? "text-rose-100" : "text-white"}`} title={String(value)}>{String(value)}</p>
-              </div>
-            ))}
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3">
+              <p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Vásárlások</p>
+              <p className="mt-1.5 text-xl text-white">{integer(totals.transactions)}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3">
+              <p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Megvett darab</p>
+              <p className="mt-1.5 text-xl text-white">{integer(totals.items)} db</p>
+            </div>
+            <div className="rounded-2xl border border-[#9be9e5]/22 bg-[#2a8d8b]/14 px-4 py-3">
+              <p className="text-[8px] uppercase tracking-[0.12em] text-[#d7fffd]/60">Összes vásárlás</p>
+              <p className="mt-1.5 text-xl text-[#efffff]">{money(totals.total)}</p>
+            </div>
+            <div className={`rounded-2xl border px-4 py-3 ${totals.discount > 0.005 ? "border-amber-200/28 bg-amber-400/10" : "border-white/10 bg-[#293548]"}`}>
+              <p className={`text-[8px] uppercase tracking-[0.12em] ${totals.discount > 0.005 ? "text-amber-100/70" : "text-white/38"}`}>Kapott kedvezmény</p>
+              <p className={`mt-1.5 text-xl ${totals.discount > 0.005 ? "text-amber-50" : "text-white/60"}`}>{money(totals.discount)}</p>
+            </div>
+            <div className={`rounded-2xl border px-4 py-3 ${totals.balance > 0.005 ? "border-rose-200/30 bg-rose-500/12" : "border-white/10 bg-[#293548]"}`}>
+              <p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Tartozás</p>
+              <p className={`mt-1.5 text-xl ${totals.balance > 0.005 ? "text-rose-50" : "text-white/60"}`}>{money(totals.balance)}</p>
+            </div>
           </div>
 
           {error ? (
@@ -709,94 +717,111 @@ function CustomerPurchasesModal({
                 <Loader2 size={20} className="animate-spin text-[#8ee6e2]" /> Vásárlások és termékek betöltése…
               </div>
             </div>
-          ) : sales.length ? (
-            <div className="mt-3 space-y-3">
-              {sales.map((sale) => {
+          ) : orderedSales.length ? (
+            <div className="mt-4 space-y-4">
+              {orderedSales.map((sale, saleIndex) => {
                 const saleDiscountPercent = numberValue(sale.subtotal) > 0
                   ? numberValue(sale.discountTotal) / numberValue(sale.subtotal) * 100
                   : 0;
+                const saleStoreName = sale.locationCode === "main_warehouse"
+                  ? "Csíkszereda"
+                  : sale.locationCode === "magazin_targu_secuiesc"
+                    ? "Kézdivásárhely"
+                    : (sale.locationName || storeName);
+
                 return (
-                  <article key={sale.id} className="overflow-hidden rounded-[22px] border border-white/12 bg-[#344154]">
-                    <div className="border-b border-white/10 bg-[#293548] px-3 py-3 sm:px-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm text-white">{sale.saleNumber || "Bizonylatszám nélkül"}</span>
-                            <span className="rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-2 py-0.5 text-[9px] text-[#d7fffd]">{saleStatusLabel(sale.status)}</span>
-                            <span className={`rounded-full border px-2 py-0.5 text-[9px] ${numberValue(sale.balanceDue) > 0.005 ? "border-rose-200/25 bg-rose-500/10 text-rose-50" : "border-emerald-200/20 bg-emerald-500/8 text-emerald-50"}`}>{paymentStatusLabel(sale.paymentStatus)}</span>
-                          </div>
-                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/48">
-                            <span>Dátum és idő: <strong className="font-normal text-white/76">{formatDateTime(sale.soldAt)}</strong></span>
-                            <span>Eladó: <strong className="font-normal text-white/76">{sale.actor || "–"}</strong></span>
-                            <span>Üzlet: <strong className="font-normal text-white/76">{sale.locationCode === "main_warehouse" ? "Csíkszereda" : sale.locationCode === "magazin_targu_secuiesc" ? "Kézdivásárhely" : (sale.locationName || storeName)}</strong></span>
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Végösszeg</p>
-                          <p className="mt-1 text-lg text-white">{money(sale.total)}</p>
-                        </div>
+                  <article key={sale.id} className="overflow-hidden rounded-[24px] border border-white/12 bg-[#344154] shadow-[0_16px_34px_rgba(15,23,42,0.16)]">
+                    <div className="grid gap-3 border-b border-white/10 bg-[#293548] px-4 py-3.5 lg:grid-cols-[180px_minmax(0,1fr)_auto] lg:items-center">
+                      <div className="rounded-2xl border border-[#9be9e5]/24 bg-[#2a8d8b]/12 px-3 py-2.5">
+                        <p className="text-[8px] uppercase tracking-[0.14em] text-[#cffffd]/58">Vásárlás ideje</p>
+                        <p className="mt-1 text-[15px] text-white">{formatDate(sale.soldAt)}</p>
+                        <p className="mt-0.5 font-mono text-[13px] text-[#bff8f5]">{formatDateTime(sale.soldAt).split(" ").slice(-1)[0]}</p>
                       </div>
 
-                      <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Eredeti összeg</span><span className="mt-1 block text-xs text-white/80">{money(sale.subtotal)}</span></div>
-                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Kedvezmény</span><span className={`mt-1 block text-xs ${numberValue(sale.discountTotal) > 0 ? "text-amber-100" : "text-white/55"}`}>{money(sale.discountTotal)}{saleDiscountPercent > 0.005 ? ` • ${percent(saleDiscountPercent)}` : ""}</span></div>
-                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Fizetve</span><span className="mt-1 block text-xs text-white/80">{money(sale.paidTotal)}</span></div>
-                        <div className={`rounded-xl border px-2.5 py-2 ${numberValue(sale.balanceDue) > 0.005 ? "border-rose-200/18 bg-rose-500/8" : "border-white/8 bg-black/10"}`}><span className="block text-[8px] uppercase text-white/34">Tartozás</span><span className={`mt-1 block text-xs ${numberValue(sale.balanceDue) > 0.005 ? "text-rose-100" : "text-white/55"}`}>{money(sale.balanceDue)}</span></div>
-                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Terméksor</span><span className="mt-1 block text-xs text-white/80">{integer(sale.lineCount)}</span></div>
-                        <div className="rounded-xl border border-white/8 bg-black/10 px-2.5 py-2"><span className="block text-[8px] uppercase text-white/34">Darab</span><span className="mt-1 block text-xs text-white/80">{integer(sale.itemCount)} db</span></div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[15px] text-white">{sale.saleNumber || `Vásárlás ${saleIndex + 1}`}</span>
+                          <span className="rounded-full border border-[#9be9e5]/22 bg-[#2a8d8b]/10 px-2 py-0.5 text-[9px] text-[#d7fffd]">{saleStatusLabel(sale.status)}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[9px] ${numberValue(sale.balanceDue) > 0.005 ? "border-rose-200/25 bg-rose-500/10 text-rose-50" : "border-emerald-200/20 bg-emerald-500/8 text-emerald-50"}`}>{paymentStatusLabel(sale.paymentStatus)}</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/52">
+                          <span>Eladó: <strong className="font-normal text-white/82">{sale.actor || "–"}</strong></span>
+                          <span>Üzlet: <strong className="font-normal text-white/82">{saleStoreName}</strong></span>
+                          <span>{integer(sale.itemCount)} db • {integer(sale.lineCount)} termék</span>
+                        </div>
+                        {numberValue(sale.discountTotal) > 0.005 ? (
+                          <div className="mt-2 inline-flex rounded-lg border border-amber-200/22 bg-amber-400/8 px-2.5 py-1 text-[11px] text-amber-50">
+                            Kedvezmény: {money(sale.discountTotal)}{saleDiscountPercent > 0.005 ? ` • ${percent(saleDiscountPercent)}` : ""}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="min-w-[150px] text-left lg:text-right">
+                        <p className="text-[8px] uppercase tracking-[0.12em] text-white/38">Fizetett végösszeg</p>
+                        <p className="mt-1 text-2xl text-white">{money(sale.total)}</p>
+                        {numberValue(sale.balanceDue) > 0.005 ? <p className="mt-1 text-[11px] text-rose-100">Tartozás: {money(sale.balanceDue)}</p> : null}
                       </div>
                     </div>
 
-                    <div className="space-y-2 p-3 sm:p-4">
-                      {(sale.lines || []).map((line) => (
-                        <div key={line.id} className="grid gap-3 rounded-2xl border border-white/10 bg-[#2b3749] p-3 sm:grid-cols-[92px_minmax(0,1fr)] lg:grid-cols-[92px_minmax(0,1fr)_minmax(360px,0.95fr)] lg:items-center">
-                          <div className="flex items-center justify-center">
+                    <div className="divide-y divide-white/[0.07]">
+                      {(sale.lines || []).map((line) => {
+                        const hasDiscount = numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005;
+                        return (
+                          <div key={line.id} className="grid gap-3 px-4 py-3.5 transition hover:bg-white/[0.025] sm:grid-cols-[78px_minmax(0,1fr)] lg:grid-cols-[78px_minmax(0,1fr)_310px] lg:items-center">
                             <WarehouseProductImage
                               src={line.imageUrl}
                               alt={line.productTitle || "Termékkép"}
-                              thumbClassName="h-[92px] w-[92px] rounded-2xl"
-                              iconSize={24}
+                              thumbClassName="h-[78px] w-[78px] rounded-2xl"
+                              iconSize={22}
                             />
-                          </div>
 
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="min-w-0 text-[15px] leading-snug text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
-                              {line.brandName ? <span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/62">{line.brandName}</span> : null}
-                            </div>
-                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-white/50">
-                              {line.productCode ? <span>Termékkód: <strong className="font-normal text-white/78">{line.productCode}</strong></span> : null}
-                              {line.barcode ? <span>Vonalkód: <strong className="font-normal text-white/78">{line.barcode}</strong></span> : null}
-                              {line.colorName ? <span>Szín: <strong className="font-normal text-white/78">{line.colorName}</strong></span> : null}
-                              {line.size ? <span>Méret: <strong className="font-normal text-white/78">{line.size}</strong></span> : null}
-                              <span>Darab: <strong className="font-normal text-white">{integer(line.quantity)}</strong></span>
-                            </div>
-                          </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="min-w-0 text-[15px] leading-snug text-white" title={line.productTitle || ""}>{line.productTitle || "Névtelen termék"}</p>
+                                {line.brandName ? <span className="rounded-full border border-white/10 bg-black/10 px-2 py-0.5 text-[9px] text-white/56">{line.brandName}</span> : null}
+                              </div>
 
-                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
-                            <div className="rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
-                              <p className="text-[8px] uppercase tracking-[0.1em] text-white/38">Listaár</p>
-                              <p className="mt-1.5 text-sm text-white/82">{money(line.listPrice)}</p>
+                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                {line.size ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1 text-[10px] text-white/72">Méret: {line.size}</span> : null}
+                                {line.colorName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1 text-[10px] text-white/72">Szín: {line.colorName}</span> : null}
+                                <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1 text-[10px] text-white/72">Darab: {integer(line.quantity)}</span>
+                              </div>
+
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/42">
+                                {line.productCode ? <span>Termékkód: <strong className="font-normal text-white/68">{line.productCode}</strong></span> : null}
+                                {line.barcode ? <span>Vonalkód: <strong className="font-normal text-white/68">{line.barcode}</strong></span> : null}
+                              </div>
+
+                              <div className="mt-2 inline-flex items-center gap-2 rounded-xl border border-[#9be9e5]/20 bg-[#2a8d8b]/10 px-2.5 py-1.5 text-[10px] text-[#d7fffd]">
+                                <span className="text-[#9be9e5]">Vásárolva</span>
+                                <strong className="font-normal text-white">{formatDateTime(sale.soldAt)}</strong>
+                              </div>
                             </div>
-                            <div className="rounded-xl border border-[#9be9e5]/22 bg-[#2a8d8b]/12 px-3 py-2.5">
-                              <p className="text-[8px] uppercase tracking-[0.1em] text-[#cffffd]/62">Eladási ár</p>
-                              <p className="mt-1.5 text-base text-[#e9ffff]">{money(line.unitPrice)}</p>
-                            </div>
-                            <div className={`rounded-xl border px-3 py-2.5 ${numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? "border-amber-200/28 bg-amber-400/10" : "border-white/10 bg-black/10"}`}>
-                              <p className={`text-[8px] uppercase tracking-[0.1em] ${numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? "text-amber-100/70" : "text-white/38"}`}>Kedvezmény</p>
-                              <p className={`mt-1.5 text-sm ${numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005 ? "text-amber-50" : "text-white/58"}`}>
-                                {money(line.discountAmount)}{numberValue(line.discountPercent) > 0.005 ? ` • ${percent(line.discountPercent)}` : ""}
-                              </p>
-                            </div>
-                            <div className="rounded-xl border border-white/16 bg-[#344154] px-3 py-2.5">
-                              <p className="text-[8px] uppercase tracking-[0.1em] text-white/45">Sorösszeg</p>
-                              <p className="mt-1.5 text-base text-white">{money(line.lineTotal)}</p>
+
+                            <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+                              <div className="rounded-2xl border border-[#9be9e5]/24 bg-[#2a8d8b]/14 px-3 py-2.5">
+                                <p className="text-[8px] uppercase tracking-[0.12em] text-[#cffffd]/62">{numberValue(line.quantity) > 1 ? "Eladási ár / db" : "Eladási ár"}</p>
+                                <p className="mt-1 text-[19px] text-[#efffff]">{money(line.unitPrice)}</p>
+                              </div>
+
+                              <div className={`rounded-2xl border px-3 py-2.5 ${hasDiscount ? "border-amber-200/28 bg-amber-400/10" : "border-white/10 bg-black/10"}`}>
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-[9px] uppercase tracking-[0.1em] text-white/42">Listaár</span>
+                                  <span className="text-[12px] text-white/72">{money(line.listPrice)}</span>
+                                </div>
+                                <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-white/8 pt-1.5">
+                                  <span className={`text-[9px] uppercase tracking-[0.1em] ${hasDiscount ? "text-amber-100/72" : "text-white/38"}`}>Kedvezmény</span>
+                                  <span className={`text-[12px] ${hasDiscount ? "text-amber-50" : "text-white/45"}`}>
+                                    {hasDiscount ? `${money(line.discountAmount)}${numberValue(line.discountPercent) > 0.005 ? ` • ${percent(line.discountPercent)}` : ""}` : "Nincs"}
+                                  </span>
+                                </div>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                       {!sale.lines?.length ? (
-                        <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-xs text-white/38">Ehhez a vásárláshoz nincs terméksor elmentve.</div>
+                        <div className="px-4 py-7 text-center text-xs text-white/38">Ehhez a vásárláshoz nincs terméksor elmentve.</div>
                       ) : null}
                     </div>
                   </article>
@@ -812,12 +837,10 @@ function CustomerPurchasesModal({
           ) : null}
         </div>
 
-        <footer className="flex items-center justify-between gap-3 border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
-          <p className="hidden text-[10px] text-white/38 sm:block">Minden terméksor a hozzá tartozó vásárlás pontos dátumával, idejével és kedvezményével jelenik meg.</p>
+        <footer className="flex items-center justify-end border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
           <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
         </footer>
       </section>
-
     </div>
   );
 }
