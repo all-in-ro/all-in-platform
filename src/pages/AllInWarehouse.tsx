@@ -855,6 +855,17 @@ function latestWarehouseImportMovementFocus(rows: Array<Record<string, any>>): W
 
 type MetaItem = { id: string; code?: string; parent_id?: string | null; parentId?: string | null; name?: string; name_ro?: string; name_hu?: string | null; aliases?: string[] | null; shopify_collection_handle?: string | null; sort_order?: number | string | null; is_active?: boolean };
 type GenderType = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
+type ColorGroup = {
+  id: string;
+  code: string;
+  name_ro: string;
+  name_hu?: string | null;
+  hex?: string | null;
+  sort_order?: number | string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
 type ColorType = {
   id: string;
   code: string;
@@ -864,6 +875,7 @@ type ColorType = {
   name_de?: string | null;
   aliases?: string[] | null;
   hex?: string | null;
+  color_group_id?: string | null;
   sort_order?: number | string | null;
   is_active?: boolean;
 };
@@ -5204,11 +5216,59 @@ function findColorTypeByValue(colors: ColorType[], value: unknown) {
   return (colors || []).find((c) => colorTypeValues(c).some((candidate) => colorKey(candidate) === key)) || null;
 }
 
-function itemMatchesColorSelection(it: Partial<InventoryItem> | Record<string, any>, selectedValue: unknown, colors: ColorType[]) {
-  const selectedKey = colorKey(selectedValue);
-  if (!selectedKey || selectedKey === "all") return true;
-  const selectedColor = findColorTypeByValue(colors, selectedValue);
-  const allowed = new Set([selectedKey, ...colorTypeValues(selectedColor).map(colorKey)].filter(Boolean));
+function colorGroupLabel(group?: Partial<ColorGroup> | null) {
+  if (!group) return "-";
+  return String(group.name_hu || group.name_ro || group.code || "-").trim() || "-";
+}
+
+function colorFilterGroupValue(group?: Partial<ColorGroup> | null) {
+  const id = String(group?.id || "").trim();
+  return id ? `group:${id}` : "";
+}
+
+function colorFilterTypeValue(color?: Partial<ColorType> | null) {
+  const id = String(color?.id || "").trim();
+  return id ? `color:${id}` : "";
+}
+
+function colorTypeFromFilterValue(colors: ColorType[], value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "all" || raw.startsWith("group:")) return null;
+  const id = raw.startsWith("color:") ? raw.slice(6) : raw;
+  return (colors || []).find((row) => String(row.id || "") === id) || findColorTypeByValue(colors, id);
+}
+
+function colorGroupFromFilterValue(groups: ColorGroup[], value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("group:")) return null;
+  const id = raw.slice(6);
+  return (groups || []).find((row) => String(row.id || "") === id) || null;
+}
+
+function itemMatchesColorSelection(
+  it: Partial<InventoryItem> | Record<string, any>,
+  selectedValue: unknown,
+  colors: ColorType[],
+  groups: ColorGroup[] = [],
+) {
+  const rawSelected = String(selectedValue || "").trim();
+  if (!rawSelected || rawSelected === "all") return true;
+
+  const selectedGroup = colorGroupFromFilterValue(groups, rawSelected);
+  if (selectedGroup) {
+    const itemColor = findColorTypeByValue(colors, it.color_name)
+      || findColorTypeByValue(colors, it.color_code)
+      || findColorTypeByValue(colors, officialColorFromTypes(it.color_name, colors))
+      || findColorTypeByValue(colors, officialColorFromTypes(it.color_code, colors));
+    return Boolean(itemColor?.color_group_id && String(itemColor.color_group_id) === String(selectedGroup.id));
+  }
+
+  const selectedColor = colorTypeFromFilterValue(colors, rawSelected) || findColorTypeByValue(colors, rawSelected);
+  const selectedKey = colorKey(selectedColor?.id || rawSelected);
+  const allowed = new Set([
+    selectedKey,
+    ...colorTypeValues(selectedColor).map(colorKey),
+  ].filter(Boolean));
   const itemValues = [
     it.color_name,
     it.color_code,
@@ -5473,6 +5533,7 @@ type WarehouseMetaResponse = {
   brands: MetaItem[];
   categories: MetaItem[];
   genderTypes?: GenderType[];
+  colorGroups?: ColorGroup[];
   colorTypes?: ColorType[];
   brandColorCodes?: BrandColorCode[];
   materialTypes?: MaterialType[];
@@ -5993,6 +6054,19 @@ async function apiDeleteGenderType(code: string) {
   return fetchJSON<{ ok: true; mode?: string }>(`/api/aif/gender-types/${encodeURIComponent(code)}`, { method: "DELETE" });
 }
 
+async function apiSaveColorGroup(id: string, payload: Record<string, unknown>) {
+  const url = id ? `/api/aif/color-groups/${encodeURIComponent(id)}` : "/api/aif/color-groups";
+  return fetchJSON<{ item: ColorGroup }>(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function apiDeleteColorGroup(id: string) {
+  return fetchJSON<{ ok: true; mode?: string; usage?: Record<string, unknown> }>(`/api/aif/color-groups/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 async function apiSaveColorType(id: string, payload: Record<string, unknown>) {
   const url = id ? `/api/aif/color-types/${encodeURIComponent(id)}` : "/api/aif/color-types";
   return fetchJSON<{ item: ColorType }>(url, {
@@ -6331,6 +6405,7 @@ export default function AllInWarehouse() {
   const [materialTypes, setMaterialTypes] = useState<MaterialType[]>([]);
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
   const [brandSizeCodes, setBrandSizeCodes] = useState<BrandSizeCode[]>([]);
+  const [colorGroups, setColorGroups] = useState<ColorGroup[]>([]);
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
   const [brandColorCodes, setBrandColorCodes] = useState<BrandColorCode[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
@@ -6385,17 +6460,18 @@ export default function AllInWarehouse() {
   const [newProductBarcodeConflict, setNewProductBarcodeConflict] = useState<WarehouseBarcodeConflictInfo | null>(null);
   const [editBarcodeConflict, setEditBarcodeConflict] = useState<WarehouseBarcodeConflictInfo | null>(null);
   const [taxonomyOpen, setTaxonomyOpen] = useState(false);
-  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "subCategories" | "genders" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
+  const [taxonomyTab, setTaxonomyTab] = useState<"categories" | "subCategories" | "genders" | "colorGroups" | "colors" | "brandColors" | "materials" | "sizes" | "brandSizes">("categories");
   const [taxonomyBusy, setTaxonomyBusy] = useState(false);
   const [categoryForm, setCategoryForm] = useState({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [subCategoryForm, setSubCategoryForm] = useState({ id: "", parentId: "", nameRo: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [genderForm, setGenderForm] = useState({ code: "", name: "", aliases: "", sortOrder: "10" });
-  const [colorForm, setColorForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
+  const [colorGroupForm, setColorGroupForm] = useState({ id: "", nameRo: "", nameHu: "", hex: "", sortOrder: "10" });
+  const [colorForm, setColorForm] = useState({ id: "", colorGroupId: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: "10" });
   const [brandColorForm, setBrandColorForm] = useState({ id: "", brandId: "", colorCode: "", colorTypeId: "", notes: "" });
   const [materialForm, setMaterialForm] = useState({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", sortOrder: "10" });
   const [sizeForm, setSizeForm] = useState({ id: "", code: "", name: "", nameHu: "", aliases: "", sortOrder: "10" });
   const [brandSizeForm, setBrandSizeForm] = useState({ id: "", brandId: "", sizeCode: "", sizeTypeId: "", notes: "" });
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "subCategory" | "gender" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "category" | "subCategory" | "gender" | "colorGroup" | "color" | "brandColor" | "material" | "size" | "brandSize"; id: string; name: string } | null>(null);
   const [openTaxonomyMenu, setOpenTaxonomyMenu] = useState<string | null>(null);
   const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
   const [bulkProductDeleteTarget, setBulkProductDeleteTarget] = useState<{ ids: string[]; items: InventoryItem[]; context: "warehouse" | "incoming" } | null>(null);
@@ -7489,6 +7565,7 @@ export default function AllInWarehouse() {
   const nextSubCategorySortOrder = useMemo(() => nextSortOrder(subCategories), [subCategories]);
   const subCategoryParentLabel = (row: MetaItem) => categoryLabel(mainCategories.find((c) => String(c.id) === String((row as any).parent_id || (row as any).parentId)) || categories.find((c) => String(c.id) === String((row as any).parent_id || (row as any).parentId)) || {} as MetaItem);
   const nextGenderSortOrder = useMemo(() => nextSortOrder(genderTypes), [genderTypes]);
+  const nextColorGroupSortOrder = useMemo(() => nextSortOrder(colorGroups), [colorGroups]);
   const nextColorSortOrder = useMemo(() => nextSortOrder(colorTypes), [colorTypes]);
   const nextMaterialSortOrder = useMemo(() => nextSortOrder(materialTypes), [materialTypes]);
   const nextSizeSortOrder = useMemo(() => nextSortOrder(sizeTypes), [sizeTypes]);
@@ -7503,6 +7580,9 @@ export default function AllInWarehouse() {
     }
     if (taxonomyTab === "genders" && !genderForm.code && !genderForm.name.trim()) {
       setGenderForm((x) => x.sortOrder === nextGenderSortOrder ? x : { ...x, sortOrder: nextGenderSortOrder });
+    }
+    if (taxonomyTab === "colorGroups" && !colorGroupForm.id && !colorGroupForm.nameRo.trim() && !colorGroupForm.nameHu.trim()) {
+      setColorGroupForm((x) => x.sortOrder === nextColorGroupSortOrder ? x : { ...x, sortOrder: nextColorGroupSortOrder });
     }
     if (taxonomyTab === "colors" && !colorForm.id && !colorForm.nameRo.trim()) {
       setColorForm((x) => x.sortOrder === nextColorSortOrder ? x : { ...x, sortOrder: nextColorSortOrder });
@@ -7519,6 +7599,7 @@ export default function AllInWarehouse() {
     nextCategorySortOrder,
     nextSubCategorySortOrder,
     nextGenderSortOrder,
+    nextColorGroupSortOrder,
     nextColorSortOrder,
     nextMaterialSortOrder,
     nextSizeSortOrder,
@@ -7534,6 +7615,9 @@ export default function AllInWarehouse() {
     mainCategories,
     genderForm.code,
     genderForm.name,
+    colorGroupForm.id,
+    colorGroupForm.nameRo,
+    colorGroupForm.nameHu,
     colorForm.id,
     colorForm.nameRo,
     materialForm.id,
@@ -8236,6 +8320,7 @@ export default function AllInWarehouse() {
   const canSaveCategoryForm = Boolean(categoryForm.nameRo.trim());
   const canSaveSubCategoryForm = Boolean(subCategoryForm.parentId && subCategoryForm.nameRo.trim());
   const canSaveGenderForm = Boolean(genderForm.name.trim());
+  const canSaveColorGroupForm = Boolean(colorGroupForm.nameRo.trim() || colorGroupForm.nameHu.trim());
   const canSaveColorForm = Boolean(colorForm.nameRo.trim());
   const canSaveBrandColorForm = Boolean(brandColorForm.brandId && brandColorForm.colorCode.trim() && brandColorForm.colorTypeId);
   const canSaveSizeForm = Boolean(sizeForm.name.trim());
@@ -8410,7 +8495,14 @@ export default function AllInWarehouse() {
     if (subCategory !== "all") out = out.filter((x) => itemMatchesSubCategory(x, subCategory, subCategories));
     if (genderFilters.length) out = out.filter((x) => itemMatchesGenderSelections(x, genderFilters, genderTypes));
     if (sizeFilters.length) out = out.filter((x) => selectedSizeMatchKeys.has(colorKey(x.size)));
-    if (color !== "all") out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes));
+    if (color !== "all") {
+      const selectedColorGroup = colorGroupFromFilterValue(colorGroups, color);
+      if (selectedColorGroup) {
+        out = out.filter((x) => String(standardColorTypeForItem(x)?.color_group_id || "") === String(selectedColorGroup.id));
+      } else {
+        out = out.filter((x) => itemMatchesColorSelection(x, color, colorTypes, colorGroups));
+      }
+    }
     if (imageFilter === "with") out = out.filter((x) => Boolean(x.image_url));
     if (imageFilter === "missing") out = out.filter((x) => !x.image_url);
     if (shopifyFilter === "mapped") out = out.filter((x) => isShopifyMappedItem(x));
@@ -8479,7 +8571,7 @@ export default function AllInWarehouse() {
       return compareWarehouseVariantPresentation(a, b);
     });
     return out;
-  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
+  }, [inventoryDisplayItems, incomingFocus?.batchId, incomingFocus?.mode, incomingFocusVariantIdsKey, search, snCodFilter, scannedBarcodeSearch, supplier, brand, category, subCategory, categorySelectOptions, subCategories, genderFilters, genderTypes, sizeFilters, selectedSizeMatchKeys, color, colorTypes, colorGroups, brandColorCodes, brands, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, sortMode, stockMap]);
 
   function resetWarehouseFilters(showMessage = true) {
     catalogSearchAbortRef.current?.abort();
@@ -8534,7 +8626,11 @@ export default function AllInWarehouse() {
         : `${count} méret kiválasztva`;
       labels.push(`Méret: ${sizeSummary}`);
     }
-    if (color !== "all") labels.push(`Szín: ${labelForMetaValue(colorTypes as any, color)}`);
+    if (color !== "all") {
+      const selectedGroup = colorGroupFromFilterValue(colorGroups, color);
+      const selectedType = colorTypeFromFilterValue(colorTypes, color);
+      labels.push(`Szín: ${selectedGroup ? `${colorGroupLabel(selectedGroup)} (összes árnyalat)` : selectedType ? colorTypeLabel(selectedType) : labelForMetaValue(colorTypes as any, color)}`);
+    }
     if (location !== "all") labels.push(`Célhely: ${labelForMetaValue(locations, location)}`);
     if (invoiceFilter !== "all") labels.push(`Számla: ${selectedInvoiceFilterOption?.invoiceNumber || invoiceFilter}`);
     if (stockFilter !== "all") {
@@ -8567,7 +8663,7 @@ export default function AllInWarehouse() {
       labels.push(`Utolsó bevételezés: ${incomingFocus.rows.length} sor / ${incomingFocus.variantIds.length} variáns`);
     }
     return labels;
-  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, selectedSizeFilterLabels, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, locations, incomingFocus]);
+  }, [search, snCodFilter, supplier, brand, category, subCategory, genderFilters, sizeFilters, selectedSizeFilterLabels, color, location, invoiceFilter, selectedInvoiceFilterOption, stockFilter, imageFilter, shopifyFilter, suppliers, brands, categories, subCategories, genderTypes, colorTypes, colorGroups, locations, incomingFocus]);
 
   const hasActiveWarehouseFilters = activeWarehouseFilterLabels.length > 0;
 
@@ -11096,14 +11192,53 @@ export default function AllInWarehouse() {
     });
   }
 
+  function resetColorGroupForm() {
+    setColorGroupForm({ id: "", nameRo: "", nameHu: "", hex: "", sortOrder: nextColorGroupSortOrder });
+  }
+
+  function editColorGroupRow(group: ColorGroup) {
+    setTaxonomyTab("colorGroups");
+    setColorGroupForm({
+      id: String(group.id || ""),
+      nameRo: String(group.name_ro || ""),
+      nameHu: String(group.name_hu || ""),
+      hex: String(group.hex || ""),
+      sortOrder: group.sort_order == null ? nextColorGroupSortOrder : String(group.sort_order),
+    });
+  }
+
+  async function saveColorGroupForm() {
+    if (!colorGroupForm.nameRo.trim() && !colorGroupForm.nameHu.trim()) {
+      setMessage("A színcsoport megnevezése kötelező.");
+      return;
+    }
+    setTaxonomyBusy(true);
+    try {
+      await apiSaveColorGroup(colorGroupForm.id, {
+        nameRo: colorGroupForm.nameRo.trim() || colorGroupForm.nameHu.trim(),
+        nameHu: colorGroupForm.nameHu.trim(),
+        hex: colorGroupForm.hex,
+        sortOrder: colorGroupForm.sortOrder,
+      });
+      resetColorGroupForm();
+      await load();
+      setMessage("Színcsoport mentve. A meglévő színeket most ehhez a főszínhez rendelheted.");
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült menteni a színcsoportot.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
+  }
+
   function resetColorForm() {
-    setColorForm({ id: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: nextColorSortOrder });
+    setColorForm({ id: "", colorGroupId: "", nameRo: "", nameHu: "", nameEn: "", nameDe: "", aliases: "", hex: "", sortOrder: nextColorSortOrder });
   }
 
   function editColorRow(c: ColorType) {
     setTaxonomyTab("colors");
     setColorForm({
       id: String(c.id || ""),
+      colorGroupId: String(c.color_group_id || ""),
       nameRo: String(c.name_ro || ""),
       nameHu: String(c.name_hu || ""),
       nameEn: String(c.name_en || ""),
@@ -11112,6 +11247,21 @@ export default function AllInWarehouse() {
       hex: String(c.hex || ""),
       sortOrder: c.sort_order == null ? nextColorSortOrder : String(c.sort_order),
     });
+  }
+
+  async function quickAssignColorGroup(colorRow: ColorType, colorGroupId: string) {
+    if (!colorRow.id) return;
+    setTaxonomyBusy(true);
+    try {
+      const result = await apiSaveColorType(String(colorRow.id), { colorGroupId: colorGroupId || null });
+      setColorTypes((current) => current.map((row) => String(row.id) === String(colorRow.id) ? { ...row, ...(result.item || {}), color_group_id: result.item?.color_group_id ?? null } : row));
+      const group = colorGroups.find((row) => String(row.id) === String(colorGroupId));
+      setMessage(colorGroupId ? `${colorTypeLabel(colorRow)} → ${colorGroupLabel(group)} csoporthoz rendelve.` : `${colorTypeLabel(colorRow)} leválasztva a színcsoportról.`);
+    } catch (e: any) {
+      setMessage(e.message || "Nem sikerült módosítani a színcsoportot.");
+    } finally {
+      setTaxonomyBusy(false);
+    }
   }
 
   function colorTypeLabel(c?: ColorType | null) {
@@ -11349,6 +11499,7 @@ export default function AllInWarehouse() {
     setTaxonomyBusy(true);
     try {
       await apiSaveColorType(colorForm.id, {
+        colorGroupId: colorForm.colorGroupId || null,
         nameRo: colorForm.nameRo,
         nameHu: colorForm.nameHu,
         nameEn: colorForm.nameEn,
@@ -11423,6 +11574,7 @@ export default function AllInWarehouse() {
     try {
       if (deleteTarget.kind === "category" || deleteTarget.kind === "subCategory") await apiDeleteCategory(deleteTarget.id);
       if (deleteTarget.kind === "gender") await apiDeleteGenderType(deleteTarget.id);
+      if (deleteTarget.kind === "colorGroup") await apiDeleteColorGroup(deleteTarget.id);
       if (deleteTarget.kind === "color") await apiDeleteColorType(deleteTarget.id);
       if (deleteTarget.kind === "brandColor") await apiDeleteBrandColorCode(deleteTarget.id);
       if (deleteTarget.kind === "material") await apiDeleteMaterialType(deleteTarget.id);
@@ -11445,6 +11597,7 @@ export default function AllInWarehouse() {
     setSupplierBrands(meta.supplierBrands || []);
     setCategories((meta.categories || []).slice().sort((a: MetaItem, b: MetaItem) => categoryLabel(a).localeCompare(categoryLabel(b), "hu", { sensitivity: "base" })));
     setGenderTypes(meta.genderTypes || []);
+    setColorGroups((meta.colorGroups || []).slice().sort((a: ColorGroup, b: ColorGroup) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || colorGroupLabel(a).localeCompare(colorGroupLabel(b), "hu", { sensitivity: "base" })));
     setColorTypes(meta.colorTypes || []);
     setBrandColorCodes(meta.brandColorCodes || []);
     setMaterialTypes((meta.materialTypes || []).slice().sort((a: MaterialType, b: MaterialType) => (a.name_hu || a.name_ro || a.code).localeCompare(b.name_hu || b.name_ro || b.code, "hu", { sensitivity: "base" })));
@@ -12754,9 +12907,20 @@ export default function AllInWarehouse() {
   }
 
 
-  const selectedColorFilter = color === "all" ? null : findColorTypeByValue(colorTypes, color);
-  const selectedColorFilterLabel = selectedColorFilter ? colorTypeLabel(selectedColorFilter) : (color === "all" ? "Összes" : String(color || "-"));
-  const selectedColorFilterHex = selectedColorFilter?.hex || "";
+  const activeColorGroups = colorGroups.filter((row) => row.is_active !== false).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || colorGroupLabel(a).localeCompare(colorGroupLabel(b), "hu", { sensitivity: "base" }));
+  const groupedColorTypes = activeColorGroups.map((group) => ({
+    group,
+    colors: colorTypes.filter((row) => row.is_active !== false && String(row.color_group_id || "") === String(group.id)).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || colorTypeLabel(a).localeCompare(colorTypeLabel(b), "hu", { sensitivity: "base" })),
+  }));
+  const ungroupedColorTypes = colorTypes.filter((row) => row.is_active !== false && !String(row.color_group_id || "").trim()).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || colorTypeLabel(a).localeCompare(colorTypeLabel(b), "hu", { sensitivity: "base" }));
+  const selectedColorFilterGroup = colorGroupFromFilterValue(colorGroups, color);
+  const selectedColorFilter = colorTypeFromFilterValue(colorTypes, color);
+  const selectedColorFilterLabel = selectedColorFilterGroup
+    ? `${colorGroupLabel(selectedColorFilterGroup)} • összes árnyalat`
+    : selectedColorFilter
+      ? colorTypeLabel(selectedColorFilter)
+      : (color === "all" ? "Összes" : String(color || "-"));
+  const selectedColorFilterHex = selectedColorFilterGroup?.hex || selectedColorFilter?.hex || "";
   const showPurchaseContext = invoiceFilter !== "all" || sortMode === "incoming_desc" || sortMode === "incoming_asc";
   const showShopifyConnectionContext = shopifyFilter === "recent_mapped" || sortMode === "shopify_connected_desc";
 
@@ -12965,26 +13129,71 @@ export default function AllInWarehouse() {
                         {color === "all" ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
                       </button>
                     </div>
-                    <div className="max-h-64 overflow-auto py-1">
-                      {colorTypes.map((c) => {
-                        const value = String(c.id || c.code || c.name_ro || "");
-                        const active = color !== "all" && (colorKey(color) === colorKey(value) || itemMatchesColorSelection({ color_name: c.name_ro, color_code: c.code }, color, [c]));
+                    <div className="max-h-72 overflow-auto py-1">
+                      {groupedColorTypes.map(({ group, colors: groupColors }) => {
+                        const groupValue = colorFilterGroupValue(group);
+                        const groupActive = color === groupValue;
                         return (
-                          <button
-                            key={c.id || c.code}
-                            type="button"
-                            className={`flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/76 hover:bg-white/[0.07]"}`}
-                            onClick={() => setColor(value)}
-                            title={c.name_ro || c.name_hu || c.code}
-                            role="option"
-                            aria-selected={active}
-                          >
-                            <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
-                            <span className="min-w-0 flex-1 truncate">{colorTypeLabel(c)}</span>
-                            {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
-                          </button>
+                          <div key={group.id} className="border-b border-white/[0.06] last:border-b-0">
+                            <button
+                              type="button"
+                              className={`flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${groupActive ? "bg-[#2a8d8b]/30 text-white" : "bg-white/[0.025] text-white/90 hover:bg-white/[0.08]"}`}
+                              onClick={() => setColor(groupValue)}
+                              title={`${colorGroupLabel(group)} főszín • ${groupColors.length} árnyalat`}
+                              role="option"
+                              aria-selected={groupActive}
+                            >
+                              <span className="h-4 w-4 shrink-0 rounded-full border border-white/35 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]" style={group.hex ? { backgroundColor: group.hex } : undefined} />
+                              <span className="min-w-0 flex-1 truncate font-medium">{colorGroupLabel(group)}</span>
+                              <span className="shrink-0 rounded-full border border-white/10 bg-black/10 px-1.5 py-0.5 text-[10px] text-white/50">{groupColors.length}</span>
+                              {groupActive ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                            </button>
+                            {groupColors.map((c) => {
+                              const value = colorFilterTypeValue(c);
+                              const active = color === value;
+                              return (
+                                <button
+                                  key={c.id || c.code}
+                                  type="button"
+                                  className={`flex min-h-8 w-full items-center gap-2 border-l-2 px-3 py-1.5 pl-7 text-left text-xs transition ${active ? "border-[#7bd7d4] bg-[#2a8d8b]/22 text-white" : "border-transparent text-white/68 hover:bg-white/[0.07] hover:text-white"}`}
+                                  onClick={() => setColor(value)}
+                                  title={`${colorTypeLabel(c)} • ${colorGroupLabel(group)}`}
+                                  role="option"
+                                  aria-selected={active}
+                                >
+                                  <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                                  <span className="min-w-0 flex-1 truncate">{colorTypeLabel(c)}</span>
+                                  {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                                </button>
+                              );
+                            })}
+                          </div>
                         );
                       })}
+                      {ungroupedColorTypes.length ? (
+                        <div className="border-t border-white/10 pt-1">
+                          <div className="px-3 py-1 text-[10px] uppercase tracking-[0.12em] text-white/35">Csoport nélkül</div>
+                          {ungroupedColorTypes.map((c) => {
+                            const value = colorFilterTypeValue(c);
+                            const active = color === value;
+                            return (
+                              <button
+                                key={c.id || c.code}
+                                type="button"
+                                className={`flex min-h-8 w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition ${active ? "bg-[#2a8d8b]/22 text-white" : "text-white/68 hover:bg-white/[0.07] hover:text-white"}`}
+                                onClick={() => setColor(value)}
+                                title={`${colorTypeLabel(c)} • nincs főszínhez rendelve`}
+                                role="option"
+                                aria-selected={active}
+                              >
+                                <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/30 bg-white/10" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                                <span className="min-w-0 flex-1 truncate">{colorTypeLabel(c)}</span>
+                                {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       {!colorTypes.length && <span className="block px-3 py-3 text-xs text-white/45">Nincs szín törzsadat.</span>}
                     </div>
                     <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
@@ -15390,7 +15599,7 @@ export default function AllInWarehouse() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Főkategóriák, alkategóriák / terméktípusok, nemek, színek, méretek, márkakódok és összetevők kezelése</h2>
+                  <h2 className="mt-1 text-[22px] leading-tight text-white">Főkategóriák, terméktípusok, nemek, színcsoportok, színek, méretek, márkakódok és összetevők kezelése</h2>
                   <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
                 </div>
                 <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
@@ -15406,6 +15615,9 @@ export default function AllInWarehouse() {
                 </button>
                 <button className={taxonomyTab === "genders" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("genders"); setOpenTaxonomyMenu(null); }}>
                   Nemek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{genderTypes.length}</span>
+                </button>
+                <button className={taxonomyTab === "colorGroups" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("colorGroups"); setOpenTaxonomyMenu(null); }}>
+                  Színcsoportok <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{colorGroups.length}</span>
                 </button>
                 <button className={taxonomyTab === "colors" ? taxonomyTabActive : taxonomyTabIdle} onClick={() => { setTaxonomyTab("colors"); setOpenTaxonomyMenu(null); }}>
                   Színek <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] text-white/65">{colorTypes.length}</span>
@@ -15597,6 +15809,72 @@ export default function AllInWarehouse() {
                 </div>
               )}
 
+              {taxonomyTab === "colorGroups" && (
+                <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">{colorGroupForm.id ? "Színcsoport módosítása" : "Új színcsoport"}</p>
+                        <p className="text-[11px] text-white/50">Vevőbarát főszín, például Kék, Piros vagy Zöld. A konkrét árnyalatokat később ehhez kapcsolod.</p>
+                      </div>
+                      {colorGroupForm.id && <button className={taxonomySmallBtn} onClick={resetColorGroupForm}>Új csoport</button>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className={taxonomyField}>Megnevezés magyarul<input className={taxonomyInput} value={colorGroupForm.nameHu} onChange={(e) => setColorGroupForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. Kék" /></label>
+                      <label className={taxonomyField}>Megnevezés románul<input className={taxonomyInput} value={colorGroupForm.nameRo} onChange={(e) => setColorGroupForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. Albastru" /></label>
+                      <label className={taxonomyField}>Jelzőszín / HEX<input className={taxonomyInput} value={colorGroupForm.hex} onChange={(e) => setColorGroupForm((x) => ({ ...x, hex: e.target.value }))} placeholder="#2563EB" /></label>
+                      <label className={taxonomyField}>Sorrend
+                        <input className={taxonomyInput} value={colorGroupForm.sortOrder} onChange={(e) => setColorGroupForm((x) => ({ ...x, sortOrder: e.target.value }))} />
+                        {!colorGroupForm.id && <span className="text-[11px] text-white/45">Javasolt következő: {nextColorGroupSortOrder}</span>}
+                      </label>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-[#7bd7d4]/22 bg-[#2a8d8b]/10 px-3 py-2 text-[11px] leading-relaxed text-[#d7fffd]/80">
+                      A csoport nem írja át a színek nevét. Csak összefogja őket a kereséshez: ha a vevő „kéket” kér, a Kék csoport minden hozzárendelt árnyalata megjelenik.
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button className={taxonomyPrimaryBtn} onClick={saveColorGroupForm} disabled={taxonomyBusy || !canSaveColorGroupForm} title={!canSaveColorGroupForm ? "A színcsoport neve kötelező." : "Mentés"}><Save size={14} /> Mentés</button>
+                    </div>
+                  </section>
+                  <section className={taxonomyCard}>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm text-white/88">Színcsoportok</p>
+                        <p className="text-[11px] text-white/50">A főszínek alatt látszanak a hozzájuk rendelt meglévő színek.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorGroups.length} csoport</span>
+                    </div>
+                    <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
+                      {colorGroups.map((group, index) => {
+                        const children = colorTypes.filter((colorRow) => String(colorRow.color_group_id || "") === String(group.id));
+                        return (
+                          <div key={group.id} className={taxonomyRow}>
+                            <div className="flex min-w-0 items-start gap-3">
+                              <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={group.hex ? { backgroundColor: group.hex } : undefined} />
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm text-white">{colorGroupLabel(group)}</p>
+                                  <span className="rounded-full border border-[#7bd7d4]/25 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]">{children.length} szín</span>
+                                  {group.hex && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/45">{group.hex}</span>}
+                                </div>
+                                <p className="mt-0.5 text-[11px] text-white/50">RO: {group.name_ro || "-"} • HU: {group.name_hu || "-"}</p>
+                                <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">{children.length ? children.map(colorTypeLabel).join(", ") : "Még nincs szín ehhez a csoporthoz rendelve."}</p>
+                              </div>
+                            </div>
+                            {taxonomyActionMenu({
+                              menuId: `color-group-${group.id}`,
+                              openUp: taxonomyMenuOpensUp(index, colorGroups.length),
+                              onEdit: () => editColorGroupRow(group),
+                              onDelete: () => setDeleteTarget({ kind: "colorGroup", id: String(group.id), name: colorGroupLabel(group) }),
+                            })}
+                          </div>
+                        );
+                      })}
+                      {!colorGroups.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Még nincs színcsoport. Hozz létre például Kék, Piros, Zöld főszíneket.</p>}
+                    </div>
+                  </section>
+                </div>
+              )}
+
               {taxonomyTab === "colors" && (
                 <div className="grid gap-3 lg:grid-cols-[0.95fr,1.28fr]">
                   <section className={taxonomyCard}>
@@ -15608,6 +15886,13 @@ export default function AllInWarehouse() {
                       {colorForm.id && <button className={taxonomySmallBtn} onClick={resetColorForm}>Új szín</button>}
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
+                      <label className={`${taxonomyField} md:col-span-2`}>Főszín / színcsoport
+                        <select className={taxonomyInput} value={colorForm.colorGroupId} onChange={(e) => setColorForm((x) => ({ ...x, colorGroupId: e.target.value }))}>
+                          <option value="">Nincs csoporthoz rendelve</option>
+                          {colorGroups.map((group) => <option key={group.id} value={group.id}>{colorGroupLabel(group)}</option>)}
+                        </select>
+                        <span className="text-[11px] text-white/45">Példa: petrolkék → Kék. Ettől a konkrét szín neve megmarad petrolkéknek.</span>
+                      </label>
                       <label className={taxonomyField}>Román hivatalos név<input className={taxonomyInput} value={colorForm.nameRo} onChange={(e) => setColorForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. negru" /></label>
                       <label className={taxonomyField}>Magyar név<input className={taxonomyInput} value={colorForm.nameHu} onChange={(e) => setColorForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. fekete" /></label>
                       <label className={taxonomyField}>Angol név<input className={taxonomyInput} value={colorForm.nameEn} onChange={(e) => setColorForm((x) => ({ ...x, nameEn: e.target.value }))} placeholder="pl. black" /></label>
@@ -15632,28 +15917,42 @@ export default function AllInWarehouse() {
                       <span className="rounded-full border border-white/10 bg-black/10 px-2 py-1 text-[11px] text-white/55">{colorTypes.length} elem</span>
                     </div>
                     <div className="max-h-[56vh] space-y-2 overflow-auto pr-1">
-                      {colorTypes.map((c, index) => (
-                        <div key={c.id} className={taxonomyRow}>
-                          <div className="flex min-w-0 items-start gap-3">
-                            <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/25 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={c.hex ? { backgroundColor: c.hex } : undefined} />
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-sm text-white">{c.name_ro}</p>
-                                {c.hex && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">{c.hex}</span>}
-                                {c.sort_order !== undefined && c.sort_order !== null && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">#{c.sort_order}</span>}
+                      {colorTypes.map((c, index) => {
+                        const group = colorGroups.find((row) => String(row.id) === String(c.color_group_id || "")) || null;
+                        return (
+                          <div key={c.id} className={taxonomyRow}>
+                            <div className="flex min-w-0 flex-1 items-start gap-3">
+                              <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full border border-white/25 bg-white/10 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]" style={c.hex ? { backgroundColor: c.hex } : undefined} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm text-white">{c.name_ro}</p>
+                                  {group ? <span className="inline-flex items-center gap-1 rounded-full border border-[#7bd7d4]/28 bg-[#2a8d8b]/16 px-2 py-0.5 text-[10px] text-[#d7fffd]"><span className="h-2.5 w-2.5 rounded-full border border-white/25" style={group.hex ? { backgroundColor: group.hex } : undefined} />{colorGroupLabel(group)}</span> : <span className="rounded-full border border-amber-200/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100/75">Nincs főszín</span>}
+                                  {c.hex && <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/55">{c.hex}</span>}
+                                </div>
+                                <p className="mt-0.5 text-[11px] text-white/50">HU: {c.name_hu || "-"} • EN: {c.name_en || "-"} • DE: {c.name_de || "-"}</p>
+                                {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
+                                <label className="mt-2 flex max-w-[330px] items-center gap-2 text-[10px] text-white/48">Főszín
+                                  <select
+                                    className="h-7 min-w-0 flex-1 rounded-lg border border-white/16 bg-[#354153] px-2 text-[11px] text-white outline-none focus:border-[#7bd7d4]/45"
+                                    value={String(c.color_group_id || "")}
+                                    disabled={taxonomyBusy}
+                                    onChange={(e) => void quickAssignColorGroup(c, e.target.value)}
+                                  >
+                                    <option value="">Nincs csoport</option>
+                                    {colorGroups.map((groupRow) => <option key={groupRow.id} value={groupRow.id}>{colorGroupLabel(groupRow)}</option>)}
+                                  </select>
+                                </label>
                               </div>
-                              <p className="mt-0.5 text-[11px] text-white/50">HU: {c.name_hu || "-"} • EN: {c.name_en || "-"} • DE: {c.name_de || "-"}</p>
-                              {!!c.aliases?.length && <p className="mt-1 max-w-xl truncate text-[11px] text-white/42">Alias: {c.aliases.join(", ")}</p>}
                             </div>
+                            {taxonomyActionMenu({
+                              menuId: `color-${c.id}`,
+                              openUp: taxonomyMenuOpensUp(index, colorTypes.length),
+                              onEdit: () => editColorRow(c),
+                              onDelete: () => setDeleteTarget({ kind: "color", id: String(c.id), name: c.name_ro }),
+                            })}
                           </div>
-                          {taxonomyActionMenu({
-                            menuId: `color-${c.id}`,
-                            openUp: taxonomyMenuOpensUp(index, colorTypes.length),
-                            onEdit: () => editColorRow(c),
-                            onDelete: () => setDeleteTarget({ kind: "color", id: String(c.id), name: c.name_ro }),
-                          })}
-                        </div>
-                      ))}
+                        );
+                      })}
                       {!colorTypes.length && <p className="rounded-xl border border-white/10 bg-black/10 px-3 py-5 text-center text-sm text-white/50">Nincs aktív szín.</p>}
                     </div>
                   </section>
@@ -15935,7 +16234,9 @@ export default function AllInWarehouse() {
                 <p className="text-base text-white">Törlés megerősítése</p>
                 <p className="mt-1 text-sm text-white/68">{deleteTarget.kind === "size"
                   ? "A méret csak akkor törölhető véglegesen, ha egyetlen termékhez sincs társítva. Ha használatban van, a rendszer nem engedi törölni."
-                  : "A kiválasztott törzsadat törlésre kerül. Ha már használatban van, a rendszer inaktiválja, hogy a korábbi adatok ne sérüljenek."}</p>
+                  : deleteTarget.kind === "colorGroup"
+                    ? "A színcsoport csak akkor törölhető, ha már nincs alá rendelve egyetlen szín sem. Előbb helyezd át vagy válaszd le a színeket."
+                    : "A kiválasztott törzsadat törlésre kerül. Ha már használatban van, a rendszer inaktiválja, hogy a korábbi adatok ne sérüljenek."}</p>
               </div>
             </div>
             <div className="mt-3 rounded-xl border border-white/12 bg-[#354153] px-3 py-2 text-sm text-white">
