@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
   type ComponentType,
@@ -17,6 +18,7 @@ import {
   Edit3,
   Filter,
   Home,
+  ImagePlus,
   Loader2,
   Mail,
   MapPin,
@@ -37,7 +39,6 @@ import {
   Users,
   WalletCards,
   X,
-  ZoomIn,
 } from "lucide-react";
 import {
   apiAifAdminCustomersOverview,
@@ -525,6 +526,92 @@ function SellerChips({ sellers }: { sellers: AifAdminCustomerSellerBreakdown[] }
   );
 }
 
+function WarehouseProductImage({
+  src,
+  alt = "",
+  thumbClassName = "h-11 w-11 rounded-lg",
+  iconSize = 17,
+}: {
+  src?: string | null;
+  alt?: string;
+  thumbClassName?: string;
+  iconSize?: number;
+}) {
+  const thumbRef = useRef<HTMLSpanElement | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewStyle, setPreviewStyle] = useState<Record<string, string | number>>({});
+  const cleanSrc = String(src || "").trim();
+
+  function updatePreviewPosition() {
+    if (!cleanSrc || typeof window === "undefined") return;
+    const thumb = thumbRef.current;
+    if (!thumb) return;
+    const rect = thumb.getBoundingClientRect();
+    const previewWidth = 248;
+    const previewHeight = 300;
+    const gap = 12;
+    const padding = 10;
+    let left = rect.right + gap;
+    if (left + previewWidth > window.innerWidth - padding) left = rect.left - previewWidth - gap;
+    if (left < padding) left = Math.min(Math.max(padding, rect.left + rect.width / 2 - previewWidth / 2), Math.max(padding, window.innerWidth - previewWidth - padding));
+    const maxTop = Math.max(padding, window.innerHeight - previewHeight - padding);
+    const top = Math.min(Math.max(padding, rect.top + rect.height / 2 - previewHeight / 2), maxTop);
+    setPreviewStyle({ position: "fixed", left, top, width: previewWidth });
+  }
+
+  function openPreview() {
+    if (!cleanSrc) return;
+    updatePreviewPosition();
+    setPreviewOpen(true);
+  }
+
+  useEffect(() => {
+    if (!previewOpen || !cleanSrc) return;
+    updatePreviewPosition();
+    const onMove = () => updatePreviewPosition();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [previewOpen, cleanSrc]);
+
+  const thumb = (
+    <span
+      ref={thumbRef}
+      className={`inline-flex shrink-0 items-center justify-center overflow-hidden border border-white/18 bg-white text-slate-400 shadow-sm ${thumbClassName}`}
+      onMouseEnter={openPreview}
+      onMouseLeave={() => setPreviewOpen(false)}
+      onFocus={openPreview}
+      onBlur={() => setPreviewOpen(false)}
+      tabIndex={cleanSrc ? 0 : undefined}
+      aria-label={cleanSrc ? "Termékkép nagyítása" : "Nincs termékkép"}
+    >
+      {cleanSrc ? (
+        <img src={cleanSrc} alt={alt} className="h-full w-full object-contain p-0.5" loading="lazy" decoding="async" />
+      ) : (
+        <ImagePlus size={iconSize} />
+      )}
+    </span>
+  );
+
+  const preview = cleanSrc && previewOpen && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          className="pointer-events-none z-[9999] rounded-2xl border border-white/80 bg-white p-2 shadow-2xl shadow-black/45"
+          style={previewStyle}
+          role="tooltip"
+        >
+          <img src={cleanSrc} alt="" className="max-h-[280px] w-full rounded-xl bg-white object-contain" />
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return <>{thumb}{preview}</>;
+}
+
 function CustomerPurchasesModal({
   customerName,
   storeName,
@@ -544,8 +631,6 @@ function CustomerPurchasesModal({
   error: string;
   onClose: () => void;
 }) {
-  const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
-
   const totals = useMemo(() => sales.reduce((acc, sale) => {
     acc.transactions += 1;
     acc.items += numberValue(sale.itemCount);
@@ -666,23 +751,12 @@ function CustomerPurchasesModal({
                       {(sale.lines || []).map((line) => (
                         <div key={line.id} className="grid gap-3 rounded-2xl border border-white/10 bg-[#2b3749] p-3 sm:grid-cols-[92px_minmax(0,1fr)] lg:grid-cols-[92px_minmax(0,1fr)_minmax(360px,0.95fr)] lg:items-center">
                           <div className="flex items-center justify-center">
-                            {line.imageUrl ? (
-                              <button
-                                type="button"
-                                onClick={() => setPreviewImage({ url: line.imageUrl || "", title: line.productTitle || "Termékkép" })}
-                                className="group relative flex h-[92px] w-[92px] items-center justify-center overflow-hidden rounded-2xl border border-white/14 bg-white shadow-[0_8px_22px_rgba(0,0,0,0.18)] transition hover:border-[#9be9e5]/55"
-                                title="Kattints a kép nagyításához"
-                              >
-                                <img src={line.imageUrl} alt={line.productTitle || "Termékkép"} className="h-full w-full object-contain p-1 transition duration-200 group-hover:scale-[1.06]" loading="lazy" />
-                                <span className="absolute bottom-1.5 right-1.5 inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/30 bg-slate-950/72 text-white opacity-0 shadow-lg transition group-hover:opacity-100">
-                                  <ZoomIn size={14} />
-                                </span>
-                              </button>
-                            ) : (
-                              <div className="flex h-[92px] w-[92px] items-center justify-center rounded-2xl border border-dashed border-white/14 bg-white/[0.04]">
-                                <ShoppingBag size={24} className="text-white/28" />
-                              </div>
-                            )}
+                            <WarehouseProductImage
+                              src={line.imageUrl}
+                              alt={line.productTitle || "Termékkép"}
+                              thumbClassName="h-[92px] w-[92px] rounded-2xl"
+                              iconSize={24}
+                            />
                           </div>
 
                           <div className="min-w-0">
@@ -744,27 +818,6 @@ function CustomerPurchasesModal({
         </footer>
       </section>
 
-      {previewImage ? (
-        <div
-          className="fixed inset-0 z-[560] grid place-items-center bg-slate-950/92 p-4 backdrop-blur-md"
-          onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
-            if (event.currentTarget === event.target) setPreviewImage(null);
-          }}
-        >
-          <div className="relative flex max-h-[94vh] w-full max-w-[980px] items-center justify-center overflow-hidden rounded-[26px] border border-white/20 bg-white p-4 shadow-[0_38px_120px_rgba(0,0,0,0.72)]">
-            <img src={previewImage.url} alt={previewImage.title} className="max-h-[88vh] max-w-full object-contain" />
-            <button
-              type="button"
-              onClick={() => setPreviewImage(null)}
-              className="absolute right-3 top-3 inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/25 bg-slate-950/78 text-white shadow-lg transition hover:bg-slate-950"
-              aria-label="Kép bezárása"
-            >
-              <X size={20} />
-            </button>
-            <div className="absolute bottom-3 left-3 right-3 rounded-xl bg-slate-950/72 px-3 py-2 text-center text-xs text-white/85 backdrop-blur">{previewImage.title}</div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
