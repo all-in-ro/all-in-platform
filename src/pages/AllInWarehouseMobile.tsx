@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   Barcode,
   Boxes,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   Edit3,
   Eye,
@@ -16,9 +18,12 @@ import {
   RefreshCw,
   Save,
   Search,
+  ShoppingBag,
+  Trash2,
   X,
 } from "lucide-react";
 import ShopifyStatusIcon, { isShopifyExportPending, isShopifyMappedItem, shopifyMappingHasError } from "../components/ShopifyStatusIcon";
+import ShopifySyncCenterModal from "../components/ShopifySyncCenterModal";
 
 type Props = {
   apiBase?: string;
@@ -37,10 +42,21 @@ type MetaItem = {
   parent_id?: string | null;
   parentId?: string | null;
   aliases?: string[] | null;
+  sort_order?: number | string | null;
   is_active?: boolean;
 };
 
-type GenderType = { code: string; name: string; aliases?: string[] | null; is_active?: boolean };
+type GenderType = { code: string; name: string; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
+
+type ColorGroup = {
+  id: string;
+  code: string;
+  name_ro: string;
+  name_hu?: string | null;
+  hex?: string | null;
+  sort_order?: number | string | null;
+  is_active?: boolean;
+};
 
 type ColorType = {
   id: string;
@@ -51,10 +67,28 @@ type ColorType = {
   name_de?: string | null;
   aliases?: string[] | null;
   hex?: string | null;
+  color_group_id?: string | null;
+  sort_order?: number | string | null;
   is_active?: boolean;
 };
 
-type SizeType = { id: string; code?: string; name?: string; name_hu?: string | null; aliases?: string[] | null; is_active?: boolean };
+type BrandColorCode = {
+  id: string;
+  brand_id: string;
+  brand_code?: string | null;
+  brand_name?: string | null;
+  color_code: string;
+  color_type_id: string;
+  color_type_code?: string | null;
+  color_name_ro?: string | null;
+  color_name_hu?: string | null;
+  color_hex?: string | null;
+  is_active?: boolean;
+};
+
+type SizeType = { id: string; code?: string; name?: string; name_hu?: string | null; aliases?: string[] | null; sort_order?: number | string | null; is_active?: boolean };
+
+type SupplierBrandLink = { id: string; supplier_id: string; brand_id: string; is_preferred?: boolean; is_active?: boolean };
 
 type StockItem = {
   variant_id: string;
@@ -78,6 +112,10 @@ type InventoryItem = {
   product_code?: string | null;
   productCode?: string | null;
   supplier_codes?: string | null;
+  supplier_source_codes?: string | null;
+  supplier_names?: string | null;
+  supplier_ids?: string | null;
+  suppliers?: Array<{ id?: string; code?: string; name?: string }> | null;
   sn_cod?: string | null;
   snCod?: string | null;
   customs_tariff_code?: string | null;
@@ -128,6 +166,8 @@ type InventoryItem = {
   shopify_product_title?: string | null;
   shopify_variant_title?: string | null;
   shopify_product_status?: string | null;
+  shopify_mapped_at?: string | null;
+  shopify_connected_at?: string | null;
   shopify_last_synced_at?: string | null;
   shopify_last_error?: string | null;
   shopify_outbox_error?: string | null;
@@ -248,6 +288,13 @@ type VariantHistoryEvent = {
   invoice_number?: string | null;
   source_file_name?: string | null;
   supplier_name?: string | null;
+  old_buy_price?: number | string | null;
+  new_buy_price?: number | string | null;
+  old_sell_price?: number | string | null;
+  new_sell_price?: number | string | null;
+  old_compare_at_price?: number | string | null;
+  new_compare_at_price?: number | string | null;
+  price_change_fields?: string[] | null;
 };
 
 type VariantHistorySummary = {
@@ -296,11 +343,18 @@ type EditForm = {
   variantStatus: string;
 };
 
+type NewProductForm = EditForm & {
+  supplierId: string;
+  supplierVariantCode: string;
+  supplierColorCode: string;
+  supplierSize: string;
+};
 
-type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "incoming_desc" | "missing";
+
+type SortMode = "name" | "brand" | "stock_desc" | "stock_asc" | "value_desc" | "incoming_desc" | "incoming_asc" | "shopify_connected_desc" | "missing";
 type StockFilter = "all" | "available" | "out" | "reserved" | "missing" | "inactive" | "watch";
 type ImageFilter = "all" | "with" | "missing";
-type ShopifyFilter = "all" | "mapped" | "exported" | "unmapped" | "error";
+type ShopifyFilter = "all" | "mapped" | "recent_mapped" | "exported" | "unmapped" | "error";
 
 const WAREHOUSE_SALES_TVA_RATE_PERCENT = 21;
 const page = "min-h-screen bg-[#4b5362] pb-28 text-white font-normal";
@@ -352,15 +406,32 @@ type MobileWarehouseMetaResponse = {
   brands?: MetaItem[];
   categories?: MetaItem[];
   genderTypes?: GenderType[];
+  colorGroups?: ColorGroup[];
   colorTypes?: ColorType[];
+  brandColorCodes?: BrandColorCode[];
   sizeTypes?: SizeType[];
   locations?: MetaItem[];
+  supplierBrands?: SupplierBrandLink[];
+};
+
+type MobileWarehouseInvoiceIndexItem = {
+  key: string;
+  reception_id?: string | null;
+  invoice_number: string;
+  supplier_id?: string | null;
+  supplier_code?: string | null;
+  supplier_name?: string | null;
+  invoice_date?: string | null;
+  reception_date?: string | null;
+  imported_at?: string | null;
+  variant_ids?: string[] | null;
 };
 
 type MobileWarehouseBootstrapCache = {
   meta: MobileWarehouseMetaResponse;
   stock: StockItem[];
   items: InventoryItem[];
+  invoices: MobileWarehouseInvoiceIndexItem[];
   loadedAt: number;
 };
 
@@ -562,6 +633,63 @@ function itemProductCode(item: Partial<InventoryItem> | Record<string, any> | nu
   return model.includes(":") ? (model.split(":").pop() || model).trim() : model;
 }
 
+function mobileWarehouseProductFamilyCode(item: Partial<InventoryItem> | Record<string, any> | null | undefined) {
+  const source = (item || {}) as Record<string, any>;
+  const colorCode = firstText(source.color_code, source.colorCode, source.supplier_color_code, source.supplierColorCode);
+  const productCode = firstText(itemProductCode(source));
+  const modelCode = firstText(source.model_code, source.modelCode);
+  const withoutColorSuffix = (value: string) => {
+    const cleanValue = String(value || "").trim();
+    const cleanColor = String(colorCode || "").trim();
+    if (!cleanValue || !cleanColor) return cleanValue;
+    const escaped = cleanColor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return cleanValue.replace(new RegExp(`(?:[-_./:\\s]+)?${escaped}$`, "i"), "").replace(/[-_./:\\s]+$/g, "").trim() || cleanValue;
+  };
+  return withoutColorSuffix(productCode) || withoutColorSuffix(modelCode.includes(":") ? modelCode.split(":").pop() || modelCode : modelCode) || firstText(source.title_ro, source.shopify_title, source.internal_sku);
+}
+
+function mobileWarehouseVariantSizeSortRank(value: unknown) {
+  const key = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+  const rank = MOBILE_WAREHOUSE_ALPHA_SIZE_RANK.get(key);
+  if (rank !== undefined) return rank;
+  const numeric = mobileWarehouseSizeSortDescriptor(value);
+  return numeric.group * 10000 + numeric.primary * 10 + numeric.secondary;
+}
+
+function compareMobileWarehouseVariantPresentation(a: InventoryItem, b: InventoryItem) {
+  const compareText = (left: unknown, right: unknown) => String(left || "").localeCompare(String(right || ""), "hu", { numeric: true, sensitivity: "base" });
+  const byTitle = compareText(a.title_ro || a.shopify_title, b.title_ro || b.shopify_title);
+  if (byTitle !== 0) return byTitle;
+  const byFamily = compareText(mobileWarehouseProductFamilyCode(a), mobileWarehouseProductFamilyCode(b));
+  if (byFamily !== 0) return byFamily;
+  const byColor = compareText(firstText(a.color_code, a.color_name), firstText(b.color_code, b.color_name));
+  if (byColor !== 0) return byColor;
+  const aSizeRank = mobileWarehouseVariantSizeSortRank(a.size);
+  const bSizeRank = mobileWarehouseVariantSizeSortRank(b.size);
+  if (aSizeRank !== bSizeRank) return aSizeRank - bSizeRank;
+  const bySize = compareMobileWarehouseSizeLabels(a.size, b.size);
+  if (bySize !== 0) return bySize;
+  return compareText(a.variant_id, b.variant_id);
+}
+
+function supplierMatches(item: InventoryItem, selected: string) {
+  if (!selected || selected === "all") return true;
+  const key = normalizeSearch(selected);
+  const values = [
+    ...splitCsv(item.supplier_ids),
+    ...splitCsv(item.supplier_source_codes),
+    ...splitCsv(item.supplier_codes),
+    ...splitCsv(item.supplier_names),
+    ...(item.suppliers || []).flatMap((row) => [row.id, row.code, row.name]),
+  ].map(normalizeSearch);
+  return values.some((value) => value === key);
+}
+
+function shopifyConnectionMs(item: Partial<InventoryItem>) {
+  if (!isShopifyMappedItem(item)) return 0;
+  return Math.max(dateTimeMs(item.shopify_mapped_at), dateTimeMs(item.shopify_connected_at));
+}
+
 function mobileWarehouseSameColorSizeSibling(a: Partial<InventoryItem> | Record<string, any>, b: Partial<InventoryItem> | Record<string, any>) {
   const aId = selectedVariantIdFromItem(a as any);
   const bId = selectedVariantIdFromItem(b as any);
@@ -713,6 +841,118 @@ function officialColorFromTypes(value: unknown, colors: ColorType[]) {
   return found?.name_ro || officialColorRo(value);
 }
 
+function colorTypeLabel(row?: Partial<ColorType> | null) {
+  if (!row) return "-";
+  return firstText(row.name_hu, row.name_ro, row.name_en, row.name_de, row.code) || "-";
+}
+
+function colorGroupLabel(row?: Partial<ColorGroup> | null) {
+  if (!row) return "-";
+  return firstText(row.name_hu, row.name_ro, row.code) || "-";
+}
+
+function colorFilterGroupValue(row?: Partial<ColorGroup> | null) {
+  const id = String(row?.id || "").trim();
+  return id ? `group:${id}` : "";
+}
+
+function colorFilterTypeValue(row?: Partial<ColorType> | null) {
+  const id = String(row?.id || "").trim();
+  return id ? `color:${id}` : "";
+}
+
+function colorGroupFromFilterValue(groups: ColorGroup[], value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("group:")) return null;
+  const id = raw.slice(6);
+  return groups.find((row) => String(row.id || "") === id) || null;
+}
+
+function colorTypeFromFilterValue(colors: ColorType[], value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "all" || raw.startsWith("group:")) return null;
+  const id = raw.startsWith("color:") ? raw.slice(6) : raw;
+  return colors.find((row) => String(row.id || "") === id) || findColorTypeByValue(colors, id);
+}
+
+function officialSizeFromTypes(value: unknown, sizes: SizeType[]) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const key = colorKey(raw);
+  const found = (sizes || []).find((row) => [row.code, row.name, row.name_hu, ...(Array.isArray(row.aliases) ? row.aliases : [])]
+    .filter(Boolean)
+    .some((candidate) => colorKey(candidate) === key));
+  return found?.name || raw.toUpperCase();
+}
+
+function sizeTypeLabel(row?: Partial<SizeType> | null) {
+  if (!row) return "-";
+  return firstText(row.name_hu, row.name, row.code) || "-";
+}
+
+const MOBILE_WAREHOUSE_ALPHA_SIZE_ORDER = [
+  "XXXS", "3XS", "XXS", "2XS", "XS", "XS/S", "S", "S/M", "M", "M/L", "L", "L/XL",
+  "XL", "XL/XXL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "ST", "MT", "LT", "XLT",
+];
+const MOBILE_WAREHOUSE_ALPHA_SIZE_RANK = new Map(MOBILE_WAREHOUSE_ALPHA_SIZE_ORDER.map((value, index) => [value, index]));
+const MOBILE_WAREHOUSE_ONE_SIZE_KEYS = new Set(["OSFM", "OSFA", "OSFW", "ONE SIZE", "ONESIZE", "ONE-SIZE", "OS", "UNI", "UNIVERSAL", "TU"]);
+
+function mobileWarehouseSizeSortDescriptor(value: unknown) {
+  const display = String(value ?? "").trim().replace(/,/g, ".");
+  const upper = display.toUpperCase().replace(/\s+/g, " ").trim();
+  const compact = upper.replace(/\s+/g, "");
+  const alphaRank = MOBILE_WAREHOUSE_ALPHA_SIZE_RANK.get(compact);
+  if (alphaRank !== undefined) return { group: 0, primary: alphaRank, secondary: 0, display };
+  const alphaNumeric = compact.match(/^([A-Z0-9]+)\/(\d+(?:\.\d+)?)$/);
+  if (alphaNumeric) {
+    const rank = MOBILE_WAREHOUSE_ALPHA_SIZE_RANK.get(alphaNumeric[1]);
+    if (rank !== undefined) return { group: 0, primary: rank, secondary: Number(alphaNumeric[2]) || 0, display };
+  }
+  if (MOBILE_WAREHOUSE_ONE_SIZE_KEYS.has(upper) || MOBILE_WAREHOUSE_ONE_SIZE_KEYS.has(compact)) return { group: 1, primary: 0, secondary: 0, display };
+  const numericSource = upper.replace(/^EU\s*/, "");
+  const simpleNumber = numericSource.match(/^(\d+(?:\.\d+)?)$/);
+  if (simpleNumber) return { group: 2, primary: Number(simpleNumber[1]), secondary: 0, display };
+  const mixedFraction = numericSource.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+  if (mixedFraction) {
+    const denominator = Number(mixedFraction[3]) || 1;
+    return { group: 2, primary: Number(mixedFraction[1]) + Number(mixedFraction[2]) / denominator, secondary: 0.1, display };
+  }
+  const range = numericSource.match(/^(\d+(?:\.\d+)?)\s*[-/]\s*(\d+(?:\.\d+)?)$/);
+  if (range) return { group: 3, primary: Number(range[1]), secondary: Number(range[2]), display };
+  const numericPrefix = numericSource.match(/^(\d+(?:\.\d+)?)/);
+  if (numericPrefix) return { group: 4, primary: Number(numericPrefix[1]), secondary: 0, display };
+  return { group: 5, primary: 0, secondary: 0, display };
+}
+
+function compareMobileWarehouseSizeLabels(leftValue: unknown, rightValue: unknown) {
+  const left = mobileWarehouseSizeSortDescriptor(leftValue);
+  const right = mobileWarehouseSizeSortDescriptor(rightValue);
+  if (left.group !== right.group) return left.group - right.group;
+  if (left.primary !== right.primary) return left.primary - right.primary;
+  if (left.secondary !== right.secondary) return left.secondary - right.secondary;
+  return left.display.localeCompare(right.display, "hu", { numeric: true, sensitivity: "base" });
+}
+
+function compareMobileWarehouseSizeTypes(left: SizeType, right: SizeType) {
+  return compareMobileWarehouseSizeLabels(sizeTypeLabel(left), sizeTypeLabel(right));
+}
+
+function mobileSelectedSizeMatchKeys(selected: string[], rows: SizeType[]) {
+  const selectedExact = new Set((selected || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const selectedKeys = new Set((selected || []).map(colorKey).filter(Boolean));
+  const allowed = new Set<string>();
+  for (const row of rows || []) {
+    if (row.is_active === false) continue;
+    const values = [row.id, row.code, row.name, row.name_hu, ...(Array.isArray(row.aliases) ? row.aliases : [])]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (!selectedExact.has(String(row.id || "")) && !values.some((value) => selectedKeys.has(colorKey(value)))) continue;
+    values.forEach((value) => { const key = colorKey(value); if (key) allowed.add(key); });
+  }
+  selected.forEach((value) => { const key = colorKey(value); if (key) allowed.add(key); });
+  return allowed;
+}
+
 function normalizeSize(value: unknown) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -806,6 +1046,16 @@ function emptyForm(): EditForm {
 }
 
 
+function emptyNewProductForm(): NewProductForm {
+  return {
+    ...emptyForm(),
+    supplierId: "",
+    supplierVariantCode: "",
+    supplierColorCode: "",
+    supplierSize: "",
+  };
+}
+
 function fieldValue(value: unknown) {
   return value === null || value === undefined ? "" : String(value);
 }
@@ -842,6 +1092,16 @@ function formFromItem(item: Partial<InventoryItem> & Record<string, any>): EditF
   };
 }
 
+const mobileEditComparableKeys: Array<keyof EditForm> = [
+  "titleRo", "titleHu", "descriptionRo", "gender", "productType", "season", "material", "shopifyTitle",
+  "modelStatus", "brandCode", "categoryCode", "subCategoryCode", "barcode", "supplierProductCode", "snCod",
+  "customsTariffCode", "colorCode", "colorName", "size", "buyPrice", "sellPrice", "compareAtPrice", "imageUrl", "variantStatus",
+];
+
+function mobileEditFormsEqual(a: EditForm, b: EditForm) {
+  return mobileEditComparableKeys.every((key) => String(a[key] ?? "").trim() === String(b[key] ?? "").trim());
+}
+
 function ProductImage({ src, alt, onPreview, size = "normal" }: { src?: string | null; alt?: string; onPreview?: () => void; size?: "normal" | "large" }) {
   const clean = String(src || "").trim();
   const cls = size === "large" ? "h-28 w-24" : "h-[92px] w-[74px]";
@@ -860,6 +1120,178 @@ function ProductImage({ src, alt, onPreview, size = "normal" }: { src?: string |
 
 function MobileBackdrop({ onClose }: { onClose: () => void }) {
   return <button type="button" aria-label="Bezárás" className="fixed inset-0 z-[60] bg-black/55 backdrop-blur-sm" onClick={onClose} />;
+}
+
+type MobileSelectOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  swatch?: string;
+  depth?: number;
+  disabled?: boolean;
+};
+
+function MobileSingleSelect({
+  labelText,
+  value,
+  options,
+  onChange,
+  emptyValue = "all",
+  emptyText = "Összes",
+  showEmptyOption = true,
+  disabled = false,
+}: {
+  labelText: string;
+  value: string;
+  options: MobileSelectOption[];
+  onChange: (value: string) => void;
+  emptyValue?: string;
+  emptyText?: string;
+  showEmptyOption?: boolean;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => String(option.value) === String(value)) || null;
+  const isEmpty = showEmptyOption && String(value) === String(emptyValue);
+  const summary = isEmpty ? emptyText : selected?.label || emptyText;
+
+  const picker = open && typeof document !== "undefined" ? createPortal(
+    <>
+      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/58 backdrop-blur-sm" onClick={() => setOpen(false)} />
+      <section className="fixed inset-x-0 bottom-0 z-[89] max-h-[78vh] overflow-hidden rounded-t-[28px] border border-white/18 bg-[#303a4c] shadow-2xl shadow-black/55">
+        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Kiválasztás</p>
+            <h3 className="truncate text-base text-white">{labelText}</h3>
+          </div>
+          <button className={iconBtn} type="button" onClick={() => setOpen(false)} aria-label="Bezárás"><X size={17} /></button>
+        </div>
+        <div className="max-h-[calc(78vh-72px)] overflow-y-auto overscroll-contain p-2">
+          {showEmptyOption ? (
+            <button
+              type="button"
+              className={`flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 text-left text-sm transition ${isEmpty ? "bg-[#2a8d8b]/28 text-white" : "text-white/78 hover:bg-white/[0.07]"}`}
+              onClick={() => { onChange(emptyValue); setOpen(false); }}
+            >
+              <span className="min-w-0 flex-1 truncate">{emptyText}</span>
+              {isEmpty ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
+            </button>
+          ) : null}
+          {options.map((option) => {
+            const active = String(option.value) === String(value);
+            return (
+              <button
+                key={option.value}
+                type="button"
+                disabled={option.disabled}
+                className={`mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 text-left text-sm transition ${active ? "bg-[#2a8d8b]/28 text-white" : "text-white/78 hover:bg-white/[0.07]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                onClick={() => { if (!option.disabled) { onChange(option.value); setOpen(false); } }}
+                title={option.hint || option.label}
+              >
+                <span style={{ width: `${Math.max(0, Number(option.depth || 0)) * 12}px` }} className="shrink-0" />
+                {option.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/35 bg-white/10" style={{ backgroundColor: option.swatch }} /> : null}
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {option.hint ? <span className="max-w-[38%] shrink-0 truncate text-[10px] text-white/38">{option.hint}</span> : null}
+                {active ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
+              </button>
+            );
+          })}
+          {!options.length ? <div className="px-3 py-6 text-center text-sm text-white/45">Nincs választható érték.</div> : null}
+        </div>
+      </section>
+    </>,
+    document.body,
+  ) : null;
+
+  return (
+    <div className={label}>
+      {labelText}
+      <button
+        type="button"
+        disabled={disabled}
+        className="flex h-11 w-full min-w-0 items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm text-white outline-none transition hover:bg-[#2e3b50] focus:border-[#7bd7d4]/65 disabled:cursor-not-allowed disabled:opacity-45"
+        onClick={() => setOpen(true)}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          {selected?.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/35" style={{ backgroundColor: selected.swatch }} /> : null}
+          <span className={`min-w-0 flex-1 truncate ${selected || isEmpty ? "text-white" : "text-white/52"}`}>{summary}</span>
+        </span>
+        <ChevronDown size={16} className="shrink-0 text-white/48" />
+      </button>
+      {picker}
+    </div>
+  );
+}
+
+function MobileMultiSelect({
+  labelText,
+  values,
+  options,
+  onChange,
+  emptyText = "Összes",
+}: {
+  labelText: string;
+  values: string[];
+  options: MobileSelectOption[];
+  onChange: (values: string[]) => void;
+  emptyText?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedSet = useMemo(() => new Set((values || []).map(String)), [values]);
+  const selectedRows = options.filter((option) => selectedSet.has(String(option.value)));
+  const summary = !selectedRows.length ? emptyText : selectedRows.length <= 2 ? selectedRows.map((row) => row.label).join(" + ") : `${selectedRows.length} kiválasztva`;
+  const toggle = (value: string) => {
+    const next = new Set((values || []).map(String));
+    if (next.has(String(value))) next.delete(String(value)); else next.add(String(value));
+    onChange(Array.from(next));
+  };
+
+  const picker = open && typeof document !== "undefined" ? createPortal(
+    <>
+      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/58 backdrop-blur-sm" onClick={() => setOpen(false)} />
+      <section className="fixed inset-x-0 bottom-0 z-[89] max-h-[82vh] overflow-hidden rounded-t-[28px] border border-white/18 bg-[#303a4c] shadow-2xl shadow-black/55">
+        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+          <div><p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Több érték</p><h3 className="text-base text-white">{labelText}</h3></div>
+          <button className={iconBtn} type="button" onClick={() => setOpen(false)}><X size={17} /></button>
+        </div>
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+          <button className={softBtn} type="button" onClick={() => onChange([])}>Összes</button>
+          <button className={softBtn} type="button" onClick={() => onChange(options.filter((o) => !o.disabled).map((o) => o.value))}>Mind kijelölése</button>
+        </div>
+        <div className="max-h-[calc(82vh-138px)] overflow-y-auto overscroll-contain p-2">
+          {options.map((option) => {
+            const active = selectedSet.has(String(option.value));
+            return (
+              <button
+                key={option.value}
+                type="button"
+                disabled={option.disabled}
+                className={`mt-1 flex min-h-11 w-full items-center gap-3 rounded-2xl px-3 text-left text-sm transition ${active ? "bg-[#2a8d8b]/28 text-white" : "text-white/78 hover:bg-white/[0.07]"} disabled:opacity-40`}
+                onClick={() => !option.disabled && toggle(option.value)}
+              >
+                <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${active ? "border-[#7bd7d4]/70 bg-[#2a8d8b]" : "border-white/25 bg-[#263246]"}`}>{active ? <CheckCircle2 size={14} /> : null}</span>
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+        <div className="border-t border-white/10 p-3"><button className={`${primaryBtn} w-full`} type="button" onClick={() => setOpen(false)}>Kész</button></div>
+      </section>
+    </>,
+    document.body,
+  ) : null;
+
+  return (
+    <div className={label}>
+      {labelText}
+      <button type="button" className="flex h-11 w-full items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm text-white" onClick={() => setOpen(true)}>
+        <span className="min-w-0 flex-1 truncate">{summary}</span>
+        <span className="flex shrink-0 items-center gap-1.5">{selectedRows.length ? <span className="rounded-full bg-[#2a8d8b]/35 px-1.5 py-0.5 text-[10px] text-[#d7fffd]">{selectedRows.length}</span> : null}<ChevronDown size={16} className="text-white/48" /></span>
+      </button>
+      {picker}
+    </div>
+  );
 }
 
 
@@ -882,9 +1314,28 @@ function historyQty(value: unknown, signed = false) {
   return `${signed && x > 0 ? "+" : ""}${x.toLocaleString("hu-HU")} db`;
 }
 
+function historyIsPriceEvent(event: VariantHistoryEvent) {
+  const type = String(event.event_type || "").toLowerCase();
+  const source = String(event.source_type || "").toLowerCase();
+  const movement = String(event.movement_type || "").toLowerCase();
+  return type === "price" || type === "price_change" || source.includes("price") || movement.includes("price");
+}
+
+function mobileHistoryPriceRows(event: VariantHistoryEvent) {
+  const rawRows = Array.isArray(event.raw?.priceChanges) ? event.raw?.priceChanges as Array<Record<string, unknown>> : [];
+  if (rawRows.length) return rawRows.map((row) => ({ label: firstText(row.label, row.key) || "Ár", oldValue: row.oldValue, newValue: row.newValue }));
+  const rows = [
+    { label: "Vételár", oldValue: event.old_buy_price, newValue: event.new_buy_price },
+    { label: "Eladási ár", oldValue: event.old_sell_price, newValue: event.new_sell_price },
+    { label: "Akció előtti ár", oldValue: event.old_compare_at_price, newValue: event.new_compare_at_price },
+  ].filter((row) => String(row.oldValue ?? "") !== String(row.newValue ?? ""));
+  return rows.length ? rows : (event.price_change_fields || []).map((label) => ({ label, oldValue: null, newValue: null }));
+}
+
 function historyEventBadge(event: VariantHistoryEvent) {
   const type = String(event.event_type || "").toLowerCase();
   const direction = String(event.direction || "").toLowerCase();
+  if (historyIsPriceEvent(event)) return { label: "Árváltozás", cls: "border-amber-300/35 bg-amber-500/16 text-amber-50" };
   if (type === "transfer") return { label: "Áthelyezés", cls: "border-sky-300/35 bg-sky-500/16 text-sky-50" };
   if (type === "inventory") return { label: "Leltár", cls: "border-violet-300/35 bg-violet-500/16 text-violet-50" };
   if (type === "incoming" || direction === "in") return { label: "Bevételezés", cls: "border-[#7bd7d4]/35 bg-[#2a8d8b]/24 text-[#d7fffd]" };
@@ -956,6 +1407,8 @@ function MobileHistorySheet({
           <div className="divide-y divide-white/10">
             {events.map((event) => {
               const badge = historyEventBadge(event);
+              const isPrice = historyIsPriceEvent(event);
+              const priceRows = isPrice ? mobileHistoryPriceRows(event) : [];
               const route = event.from_location_name || event.to_location_name
                 ? `${event.from_location_name || event.location_name || "-"} → ${event.to_location_name || event.location_name || "-"}`
                 : event.location_name || "-";
@@ -967,21 +1420,32 @@ function MobileHistorySheet({
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="min-w-0 text-xs text-white/62">
-                      <p className="truncate">{route}</p>
+                      <p className="truncate">{isPrice ? `Módosított mező: ${priceRows.map((row) => row.label).join(", ") || "Ár"}` : route}</p>
                       {event.supplier_name ? <p className="truncate">Beszállító: {event.supplier_name}</p> : null}
                       {event.invoice_number ? <p className="truncate">Számla: {event.invoice_number}</p> : null}
                       {event.source_file_name ? <p className="truncate">{event.source_file_name}</p> : null}
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className="text-lg leading-none text-white">{historyQty(event.qty_delta, true)}</p>
-                      <p className="mt-1 text-[11px] text-white/46">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</p>
+                      <p className="text-lg leading-none text-white">{isPrice ? "Ár" : historyQty(event.qty_delta, true)}</p>
+                      {!isPrice ? <p className="mt-1 text-[11px] text-white/46">{historyQty(event.qty_before)} → {historyQty(event.qty_after)}</p> : null}
                     </div>
                   </div>
-                  <div className="mt-2 rounded-2xl border border-white/10 bg-[#202838] px-3 py-2 text-[11px] text-white/62">
-                    <div className="flex justify-between gap-3"><span>Vételár</span><strong className="text-white">{pricesVisible ? money(event.effective_buy_price) : "••••"}</strong></div>
-                    <div className="mt-1 flex justify-between gap-3"><span>Eladási ár</span><strong className="text-white">{money(event.effective_sell_price)}</strong></div>
-                    <div className="mt-1 flex justify-between gap-3"><span>Haszon TVA nélkül</span><strong className="text-[#cffffd]">{pricesVisible ? priceMarkupPercentText(event.effective_buy_price, event.effective_sell_price) || "-" : "••••"}</strong></div>
-                  </div>
+                  {isPrice ? (
+                    <div className="mt-2 rounded-2xl border border-amber-200/15 bg-amber-500/10 px-3 py-2 text-[11px] text-white/70">
+                      {priceRows.length ? priceRows.map((row, index) => (
+                        <div key={`${row.label}-${index}`} className="mt-1 flex justify-between gap-3 first:mt-0">
+                          <span>{row.label}</span>
+                          <strong className="text-white">{row.label === "Vételár" && !pricesVisible ? "•••• → ••••" : `${money(row.oldValue)} → ${money(row.newValue)}`}</strong>
+                        </div>
+                      )) : <span>Ár módosítva.</span>}
+                    </div>
+                  ) : (
+                    <div className="mt-2 rounded-2xl border border-white/10 bg-[#202838] px-3 py-2 text-[11px] text-white/62">
+                      <div className="flex justify-between gap-3"><span>Vételár</span><strong className="text-white">{pricesVisible ? money(event.effective_buy_price) : "••••"}</strong></div>
+                      <div className="mt-1 flex justify-between gap-3"><span>Eladási ár</span><strong className="text-white">{money(event.effective_sell_price)}</strong></div>
+                      <div className="mt-1 flex justify-between gap-3"><span>Haszon TVA nélkül</span><strong className="text-[#cffffd]">{pricesVisible ? priceMarkupPercentText(event.effective_buy_price, event.effective_sell_price) || "-" : "••••"}</strong></div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -999,18 +1463,28 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [catalogSearchItems, setCatalogSearchItems] = useState<InventoryItem[]>([]);
   const [catalogSearchBusy, setCatalogSearchBusy] = useState(false);
   const [stockRows, setStockRows] = useState<StockItem[]>([]);
+  const [suppliers, setSuppliers] = useState<MetaItem[]>([]);
+  const [supplierBrands, setSupplierBrands] = useState<SupplierBrandLink[]>([]);
   const [brands, setBrands] = useState<MetaItem[]>([]);
   const [categories, setCategories] = useState<MetaItem[]>([]);
   const [genderTypes, setGenderTypes] = useState<GenderType[]>([]);
+  const [colorGroups, setColorGroups] = useState<ColorGroup[]>([]);
   const [colorTypes, setColorTypes] = useState<ColorType[]>([]);
+  const [brandColorCodes, setBrandColorCodes] = useState<BrandColorCode[]>([]);
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
   const [locations, setLocations] = useState<MetaItem[]>([]);
+  const [invoiceIndexRows, setInvoiceIndexRows] = useState<MobileWarehouseInvoiceIndexItem[]>([]);
   const [search, setSearch] = useState("");
+  const [snCodFilter, setSnCodFilter] = useState("");
+  const [supplier, setSupplier] = useState("all");
   const [brand, setBrand] = useState("all");
   const [category, setCategory] = useState("all");
   const [subCategory, setSubCategory] = useState("all");
-  const [gender, setGender] = useState("all");
+  const [genderFilters, setGenderFilters] = useState<string[]>([]);
+  const [sizeFilters, setSizeFilters] = useState<string[]>([]);
   const [color, setColor] = useState("all");
+  const [location, setLocation] = useState("all");
+  const [invoiceFilter, setInvoiceFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [imageFilter, setImageFilter] = useState<ImageFilter>("all");
   const [shopifyFilter, setShopifyFilter] = useState<ShopifyFilter>("all");
@@ -1021,8 +1495,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [duplicateSkuOpen, setDuplicateSkuOpen] = useState(false);
+  const [newProductOpen, setNewProductOpen] = useState(false);
+  const [newProduct, setNewProduct] = useState<NewProductForm>(() => emptyNewProductForm());
+  const [newProductStockRows, setNewProductStockRows] = useState<Record<string, string>>({});
+  const [newProductSaving, setNewProductSaving] = useState(false);
+  const [newProductBarcodeConflict, setNewProductBarcodeConflict] = useState<MobileBarcodeConflictInfo | null>(null);
+  const [shopifySyncCenterOpen, setShopifySyncCenterOpen] = useState(false);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [edit, setEdit] = useState<EditForm>(emptyForm());
+  const [editBaseline, setEditBaseline] = useState<EditForm>(emptyForm());
+  const [detailCloseConfirmOpen, setDetailCloseConfirmOpen] = useState(false);
+  const [productDeleteTarget, setProductDeleteTarget] = useState<InventoryItem | null>(null);
   const [editBarcodeConflict, setEditBarcodeConflict] = useState<MobileBarcodeConflictInfo | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [historyTarget, setHistoryTarget] = useState<InventoryItem | null>(null);
@@ -1147,6 +1630,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<{ items: StockItem[] }>(`/stock?compact=1`, { signal });
   }
 
+  async function apiWarehouseInvoices(signal?: AbortSignal) {
+    return fetchAifJSON<{ items?: MobileWarehouseInvoiceIndexItem[] }>(`/warehouse-invoices`, { signal });
+  }
+
   async function apiInventoryLookup(code: string, signal?: AbortSignal) {
     const clean = cleanScannedBarcode(code);
     if (!clean) return { items: [] as InventoryItem[] };
@@ -1156,11 +1643,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<{ ok?: boolean; code?: string; matchType?: string | null; items?: InventoryItem[] }>(`/inventory/lookup?${qs.toString()}`, { signal });
   }
 
-  async function apiCatalogSearch(searchText: string, signal?: AbortSignal) {
+  async function apiCatalogSearch(searchText: string, signal?: AbortSignal, snCodText = "") {
     const clean = String(searchText || "").trim();
-    if (!clean) return { items: [] as InventoryItem[] };
+    const cleanSn = String(snCodText || "").trim();
+    if (!clean && !cleanSn) return { items: [] as InventoryItem[] };
     const qs = new URLSearchParams();
-    qs.set("search", clean);
+    if (clean) qs.set("search", clean);
+    if (cleanSn) qs.set("snCod", cleanSn);
     qs.set("includeZero", "1");
     qs.set("limit", "200");
     qs.set("offset", "0");
@@ -1243,6 +1732,14 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return fetchAifJSON<{ ok: true; barcode: string; conflict: Record<string, any> | null }>(`/barcode-conflict?${qs.toString()}`, { signal });
   }
 
+  async function apiCreateManualProduct(payload: Record<string, unknown>) {
+    return fetchAifJSON<{ ok: true; variantId: string; modelId?: string | null; qty?: number }>(`/manual-products`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async function apiVariantDelete(id: string) {
+    return fetchAifJSON<{ ok: true; mode?: string }>(`/variants/${encodeURIComponent(id)}?force=1&_=${Date.now()}`, { method: "DELETE" });
+  }
+
   async function apiVariantStockUpdate(
     id: string,
     rows: Array<{ locationId?: string; locationCode?: string; qty: number; reservedQty?: number }>,
@@ -1294,6 +1791,34 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return data as { key: string; url: string };
   }
 
+  const newProductBarcodeMatches = useMemo(() => {
+    if (!newProductOpen) return [] as InventoryItem[];
+    const barcode = cleanScannedBarcode(newProduct.barcode);
+    if (!barcode) return [] as InventoryItem[];
+    const key = barcode.toLowerCase();
+    return mergeMobileInventoryItems(items, catalogSearchItems)
+      .filter((item) => cleanScannedBarcode(item.barcode || "").toLowerCase() === key)
+      .slice(0, 4);
+  }, [newProductOpen, newProduct.barcode, items, catalogSearchItems]);
+
+  const effectiveNewProductBarcodeConflict = useMemo(
+    () => newProductBarcodeConflict || (newProductBarcodeMatches[0] ? mobileBarcodeConflictInfoFromItem(newProductBarcodeMatches[0], newProduct.barcode) : null),
+    [newProductBarcodeConflict, newProductBarcodeMatches, newProduct.barcode],
+  );
+
+  useEffect(() => {
+    if (!newProductOpen) { setNewProductBarcodeConflict(null); return; }
+    const barcode = cleanScannedBarcode(newProduct.barcode);
+    if (!barcode) { setNewProductBarcodeConflict(null); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void apiBarcodeConflictCheck(barcode)
+        .then((result) => { if (!cancelled) setNewProductBarcodeConflict(result.conflict ? barcodeConflictInfoFromApi({ barcode: result.barcode, conflict: result.conflict }) : null); })
+        .catch(() => undefined);
+    }, 320);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [newProductOpen, newProduct.barcode]);
+
   const editBarcodeMatches = useMemo(() => {
     const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
     const barcode = cleanScannedBarcode(edit.barcode);
@@ -1309,6 +1834,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     () => editBarcodeConflict || (editBarcodeMatches[0] ? mobileBarcodeConflictInfoFromItem(editBarcodeMatches[0], edit.barcode) : null),
     [editBarcodeConflict, editBarcodeMatches, edit.barcode],
   );
+  const detailHasChanges = useMemo(() => detailOpen && !mobileEditFormsEqual(edit, editBaseline), [detailOpen, edit, editBaseline]);
 
   useEffect(() => {
     const currentVariantId = String(detail?.item?.id || detail?.item?.variant_id || "").trim();
@@ -1338,8 +1864,20 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     };
   }, [detailOpen, detail?.item?.id, detail?.item?.variant_id, edit.barcode]);
 
+  const stockMap = useMemo(() => {
+    const map = new Map<string, StockItem[]>();
+    for (const row of stockRows) {
+      const id = String(row.variant_id || "").trim();
+      if (!id) continue;
+      const current = map.get(id) || [];
+      current.push(row);
+      map.set(id, current);
+    }
+    return map;
+  }, [stockRows]);
+
   function stockRowsForVariant(variantId?: string | null) {
-    return stockRows.filter((row) => String(row.variant_id || "") === String(variantId || ""));
+    return stockMap.get(String(variantId || "")) || [];
   }
 
   function locationKey(location: MetaItem) {
@@ -1411,11 +1949,15 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }
 
   function applyMobileWarehouseMeta(meta: MobileWarehouseMetaResponse) {
+    setSuppliers((meta.suppliers || []).filter((x) => x.is_active !== false));
+    setSupplierBrands((meta.supplierBrands || []).filter((x) => x.is_active !== false));
     setBrands((meta.brands || []).filter((x) => x.is_active !== false));
     setCategories((meta.categories || []).filter((x) => x.is_active !== false));
     setGenderTypes((meta.genderTypes || []).filter((x) => x.is_active !== false));
+    setColorGroups((meta.colorGroups || []).filter((x) => x.is_active !== false).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || colorGroupLabel(a).localeCompare(colorGroupLabel(b), "hu", { sensitivity: "base" })));
     setColorTypes((meta.colorTypes || []).filter((x) => x.is_active !== false));
-    setSizeTypes((meta.sizeTypes || []).filter((x) => x.is_active !== false));
+    setBrandColorCodes((meta.brandColorCodes || []).filter((x) => x.is_active !== false));
+    setSizeTypes((meta.sizeTypes || []).filter((x) => x.is_active !== false).slice().sort(compareMobileWarehouseSizeTypes));
     setLocations((meta.locations || []).filter((x) => x.is_active !== false));
   }
 
@@ -1434,6 +1976,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     const visibleSnapshot = cached?.items || (items.length ? items : null);
     let loadedMeta: MobileWarehouseMetaResponse | null = cached?.meta || null;
     let loadedStock: StockItem[] = cached?.stock || [];
+    let loadedInvoices: MobileWarehouseInvoiceIndexItem[] = cached?.invoices || [];
     let latestInventory: InventoryItem[] = cached?.items || [];
     let firstInventoryArrived = Boolean(cached);
     let inventoryComplete = false;
@@ -1454,6 +1997,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     if (cached) {
       applyMobileWarehouseMeta(cached.meta);
       setStockRows(cached.stock);
+      setInvoiceIndexRows(cached.invoices || []);
       setItems(cached.items);
       lastSuccessfulLoadAtRef.current = cached.loadedAt;
       setBusy(false);
@@ -1488,6 +2032,14 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
           if (cached) return loadedStock;
           throw error;
         });
+
+      const invoiceTask = apiWarehouseInvoices(controller.signal)
+        .then((result) => {
+          loadedInvoices = result.items || [];
+          if (isCurrent()) setInvoiceIndexRows(loadedInvoices);
+          return loadedInvoices;
+        })
+        .catch(() => loadedInvoices);
 
       const inventoryTask = apiInventory({
         signal: controller.signal,
@@ -1536,7 +2088,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       await firstInventoryReady;
       if (isCurrent()) setBusy(false);
 
-      await Promise.all([inventoryTask, metaTask, stockTask]);
+      await Promise.all([inventoryTask, metaTask, stockTask, invoiceTask]);
       if (!isCurrent()) return;
 
       const finalItems = loadedStock.length
@@ -1552,6 +2104,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
           meta: loadedMeta,
           stock: loadedStock,
           items: finalItems,
+          invoices: loadedInvoices,
           loadedAt: Date.now(),
         };
       }
@@ -1641,13 +2194,80 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return subCategories.filter((row) => categoryParentId(row) === String(parent.id));
   }, [category, categoryOptions, subCategories]);
 
+  const newProductSubCategoryOptions = useMemo(() => {
+    if (!newProduct.categoryCode) return subCategories;
+    const parent = categoryOptions.find((row) => metaMatches(row, newProduct.categoryCode));
+    if (!parent) return subCategories;
+    return subCategories.filter((row) => categoryParentId(row) === String(parent.id));
+  }, [newProduct.categoryCode, categoryOptions, subCategories]);
+
+  const selectedSupplier = useMemo(() => {
+    if (supplier === "all") return null;
+    const key = normalizeSearch(supplier);
+    return suppliers.find((row) => [row.id, row.code, row.name, row.name_ro].map(normalizeSearch).includes(key)) || null;
+  }, [supplier, suppliers]);
+
+  const brandOptions = useMemo(() => {
+    if (!selectedSupplier) return brands;
+    const linked = new Set(supplierBrands.filter((row) => row.is_active !== false && String(row.supplier_id) === String(selectedSupplier.id)).map((row) => String(row.brand_id)));
+    return brands.filter((row) => linked.has(String(row.id)));
+  }, [brands, supplierBrands, selectedSupplier]);
+
+  useEffect(() => {
+    if (brand === "all") return;
+    const key = normalizeSearch(brand);
+    if (!brandOptions.some((row) => [row.id, row.code, row.name, row.name_ro].map(normalizeSearch).includes(key))) setBrand("all");
+  }, [brand, brandOptions]);
+
+  const genderFilterOptions = useMemo<MobileSelectOption[]>(() => genderTypes
+    .filter((row) => row.is_active !== false)
+    .slice()
+    .sort((a, b) => String(a.name || a.code).localeCompare(String(b.name || b.code), "hu", { sensitivity: "base" }))
+    .map((row) => ({ value: String(row.code), label: String(row.name || row.code) })), [genderTypes]);
+
+  const sizeFilterOptions = useMemo<MobileSelectOption[]>(() => sizeTypes
+    .filter((row) => row.is_active !== false)
+    .slice()
+    .sort(compareMobileWarehouseSizeTypes)
+    .map((row) => ({ value: String(row.id || row.name || row.code), label: sizeTypeLabel(row) })), [sizeTypes]);
+
+  const selectedSizeMatchKeys = useMemo(() => mobileSelectedSizeMatchKeys(sizeFilters, sizeTypes), [sizeFilters, sizeTypes]);
+
+  const colorFilterOptions = useMemo<MobileSelectOption[]>(() => {
+    const activeGroups = colorGroups.filter((row) => row.is_active !== false).slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || colorGroupLabel(a).localeCompare(colorGroupLabel(b), "hu", { sensitivity: "base" }));
+    const rows: MobileSelectOption[] = [];
+    for (const group of activeGroups) {
+      const children = colorTypes.filter((row) => row.is_active !== false && String(row.color_group_id || "") === String(group.id)).slice().sort((a, b) => colorTypeLabel(a).localeCompare(colorTypeLabel(b), "hu", { sensitivity: "base" }));
+      rows.push({ value: colorFilterGroupValue(group), label: `${colorGroupLabel(group)} • összes árnyalat`, hint: `${children.length} szín`, swatch: group.hex || undefined });
+      children.forEach((row) => rows.push({ value: colorFilterTypeValue(row), label: colorTypeLabel(row), swatch: row.hex || undefined, depth: 1, hint: colorGroupLabel(group) }));
+    }
+    const ungrouped = colorTypes.filter((row) => row.is_active !== false && !String(row.color_group_id || "").trim()).slice().sort((a, b) => colorTypeLabel(a).localeCompare(colorTypeLabel(b), "hu", { sensitivity: "base" }));
+    ungrouped.forEach((row) => rows.push({ value: colorFilterTypeValue(row), label: colorTypeLabel(row), swatch: row.hex || undefined, hint: "Nincs főszín" }));
+    return rows;
+  }, [colorGroups, colorTypes]);
+
+  const invoiceFilterOptions = useMemo<MobileSelectOption[]>(() => invoiceIndexRows
+    .filter((row) => String(row.invoice_number || "").trim())
+    .slice()
+    .sort((a, b) => Math.max(dateTimeMs(b.reception_date), dateTimeMs(b.invoice_date), dateTimeMs(b.imported_at)) - Math.max(dateTimeMs(a.reception_date), dateTimeMs(a.invoice_date), dateTimeMs(a.imported_at)))
+    .map((row) => ({
+      value: String(row.reception_id ? `reception:${row.reception_id}` : row.key || row.invoice_number),
+      label: String(row.invoice_number),
+      hint: [row.supplier_name, dateShort(row.invoice_date || row.reception_date || row.imported_at), `${(row.variant_ids || []).length} variáns`].filter(Boolean).join(" • "),
+    })), [invoiceIndexRows]);
+
+  const selectedInvoiceRow = useMemo(() => {
+    if (invoiceFilter === "all") return null;
+    return invoiceIndexRows.find((row) => String(row.reception_id ? `reception:${row.reception_id}` : row.key || row.invoice_number) === invoiceFilter) || null;
+  }, [invoiceFilter, invoiceIndexRows]);
+
   const searchInventoryItems = useMemo(() => {
     // A normál mobil lista marad a gyors /warehouse-products eredménye. A 0 készletes
     // inaktív rekordok csak konkrét kereséskor kerülnek mellé, így a gyors indulás
     // és a mostani DB-terhelés nem romlik el.
-    const includeCatalogRows = Boolean(search.trim() || stockFilter === "inactive" || stockFilter === "out" || stockFilter === "missing");
+    const includeCatalogRows = Boolean(search.trim() || snCodFilter.trim() || stockFilter === "inactive" || stockFilter === "out" || stockFilter === "missing");
     return includeCatalogRows ? mergeMobileInventoryItems(items, catalogSearchItems) : items;
-  }, [items, catalogSearchItems, search, stockFilter]);
+  }, [items, catalogSearchItems, search, snCodFilter, stockFilter]);
 
   function mergeMobileCatalogSearchItems(rows: InventoryItem[]) {
     const cleanRows = (rows || [])
@@ -1662,10 +2282,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
   async function runMobileWarehouseSearch(searchValue = search) {
     const clean = String(searchValue || "").trim();
+    const cleanSn = String(snCodFilter || "").trim();
     setVisibleCount(40);
     setFocusVariantIds([]);
     setFocusLabel("");
-    if (!clean) {
+    if (!clean && !cleanSn) {
       searchInputRef.current?.focus();
       return;
     }
@@ -1686,7 +2307,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         rows = Array.isArray(exact.items) ? exact.items : [];
       }
       if (!rows.length) {
-        const broad = await apiCatalogSearch(clean, controller.signal);
+        const broad = await apiCatalogSearch(clean, controller.signal, cleanSn);
         rows = Array.isArray(broad.items) ? broad.items : [];
       }
       if (controller.signal.aborted || sequence !== catalogSearchSequenceRef.current) return;
@@ -1716,17 +2337,40 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
   }, [search]);
 
   const hasActiveFilters = Boolean(
-    search.trim() || brand !== "all" || category !== "all" || subCategory !== "all" || gender !== "all" || color !== "all" || stockFilter !== "all" || imageFilter !== "all" || shopifyFilter !== "all" || focusVariantIds.length
+    search.trim() || snCodFilter.trim() || supplier !== "all" || brand !== "all" || category !== "all" || subCategory !== "all" ||
+    genderFilters.length || sizeFilters.length || color !== "all" || location !== "all" || invoiceFilter !== "all" ||
+    stockFilter !== "all" || imageFilter !== "all" || shopifyFilter !== "all" || focusVariantIds.length
   );
 
+  function itemSupplierText(item: InventoryItem) {
+    return firstText(item.supplier_names, (item.suppliers || []).map((row) => row.name).filter(Boolean).join(" "), splitCsv(item.supplier_codes).join(" "));
+  }
+
+  function brandColorForItem(item: Partial<InventoryItem>) {
+    const codeKey = colorKey(item.color_code);
+    if (!codeKey) return null;
+    const brandKeys = [item.brand_code, item.brand_name].map(normalizeSearch).filter(Boolean);
+    const rows = brandColorCodes.filter((row) => colorKey(row.color_code) === codeKey);
+    if (!rows.length) return null;
+    return rows.find((row) => [row.brand_code, row.brand_name].map(normalizeSearch).filter(Boolean).some((key) => brandKeys.includes(key))) || (brandKeys.length ? null : rows[0]);
+  }
+
+  function standardColorTypeForItem(item: Partial<InventoryItem>) {
+    const direct = findColorTypeByValue(colorTypes, item.color_name) || findColorTypeByValue(colorTypes, item.color_code);
+    if (direct) return direct;
+    const mapped = brandColorForItem(item);
+    return findColorTypeByValue(colorTypes, mapped?.color_type_id) || findColorTypeByValue(colorTypes, mapped?.color_type_code) || findColorTypeByValue(colorTypes, mapped?.color_name_ro) || findColorTypeByValue(colorTypes, mapped?.color_name_hu);
+  }
+
   function colorLabel(item: Partial<InventoryItem>) {
-    return officialColorFromTypes(firstText(item.color_name, item.color_code), colorTypes) || "-";
+    const standard = standardColorTypeForItem(item);
+    return firstText(standard?.name_hu, standard?.name_ro, officialColorFromTypes(firstText(item.color_name, item.color_code), colorTypes), item.color_name, item.color_code) || "-";
   }
 
   function colorHex(item: Partial<InventoryItem>) {
-    const visible = colorLabel(item);
-    const colorType = findColorTypeByValue(colorTypes, visible) || findColorTypeByValue(colorTypes, item.color_name) || findColorTypeByValue(colorTypes, item.color_code);
-    return firstText(colorType?.hex, item.color_hex);
+    const standard = standardColorTypeForItem(item);
+    const brandColor = brandColorForItem(item);
+    return firstText(standard?.hex, brandColor?.color_hex, item.color_hex);
   }
 
   function itemMatchesMeta(values: unknown[], selected: string, rows: MetaItem[]) {
@@ -1738,34 +2382,45 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
   function itemMatchesColor(item: InventoryItem) {
     if (color === "all") return true;
-    const selectedColor = findColorTypeByValue(colorTypes, color);
+    const group = colorGroupFromFilterValue(colorGroups, color);
+    const standard = standardColorTypeForItem(item);
+    if (group) return Boolean(standard?.color_group_id && String(standard.color_group_id) === String(group.id));
+    const selectedColor = colorTypeFromFilterValue(colorTypes, color) || findColorTypeByValue(colorTypes, color);
     const allowed = new Set([colorKey(color), ...colorValues(selectedColor).map(colorKey)].filter(Boolean));
-    const itemValues = [item.color_name, item.color_code, officialColorFromTypes(item.color_name, colorTypes), officialColorFromTypes(item.color_code, colorTypes)].map(colorKey).filter(Boolean);
+    const itemValues = [item.color_name, item.color_code, standard?.id, standard?.code, standard?.name_ro, standard?.name_hu, officialColorFromTypes(item.color_name, colorTypes), officialColorFromTypes(item.color_code, colorTypes)].map(colorKey).filter(Boolean);
     return itemValues.some((value) => allowed.has(value));
   }
 
   const filteredItems = useMemo(() => {
     const q = normalizeSearch(search);
+    const snKey = normalizeSearch(snCodFilter);
     const focusSet = new Set(focusVariantIds.map(String));
+    const invoiceVariantSet = new Set((selectedInvoiceRow?.variant_ids || []).map(String));
     return searchInventoryItems
       .filter((item) => {
         if (focusSet.size && !focusSet.has(String(item.variant_id))) return false;
         if (q) {
           const haystack = [
-            itemTitle(item), item.brand_name, item.brand_code, itemSupplierText(item), item.supplier_codes, item.internal_sku,
+            itemTitle(item), item.brand_name, item.brand_code, itemSupplierText(item), item.supplier_codes, item.supplier_names, item.internal_sku,
             visibleWarehouseBarcode(item), item.sn_cod, item.snCod, itemCustomsTariffCode(item), item.model_code,
             itemMainCategory(item), itemSubCategory(item), item.color_name, item.color_code, item.size, itemProductCode(item),
           ].map(normalizeSearch).join(" ");
           if (!haystack.includes(q)) return false;
         }
+        if (snKey && !normalizeSearch(firstText(item.sn_cod, item.snCod)).includes(snKey)) return false;
+        if (supplier !== "all" && !supplierMatches(item, supplier)) return false;
         if (!itemMatchesMeta([item.brand_code, item.brand_name], brand, brands)) return false;
         if (!itemMatchesMeta([item.category_code, item.category_name_ro, item.category_name_hu], category, categoryOptions)) return false;
         if (!itemMatchesMeta([item.subcategory_id, item.subcategory_code, item.subcategory_name_ro, item.subcategory_name_hu, item.product_type], subCategory, subCategories)) return false;
-        if (gender !== "all" && normalizeSearch(item.gender) !== normalizeSearch(gender)) return false;
+        if (genderFilters.length && !genderFilters.some((value) => normalizeSearch(item.gender) === normalizeSearch(value))) return false;
+        if (sizeFilters.length && !selectedSizeMatchKeys.has(colorKey(item.size))) return false;
         if (!itemMatchesColor(item)) return false;
+        if (location !== "all" && !(stockMap.get(String(item.variant_id)) || []).some((row) => (String(row.location_code || "") === location || String(row.location_name || "") === location || String(row.location_id || "") === location) && n(row.qty) > 0)) return false;
+        if (invoiceFilter !== "all" && !invoiceVariantSet.has(String(item.variant_id))) return false;
         if (imageFilter === "with" && !item.image_url) return false;
         if (imageFilter === "missing" && item.image_url) return false;
         if (shopifyFilter === "mapped" && !isShopifyMappedItem(item)) return false;
+        if (shopifyFilter === "recent_mapped" && !(isShopifyMappedItem(item) && shopifyConnectionMs(item) > 0)) return false;
         if (shopifyFilter === "exported" && !isShopifyExportPending(item)) return false;
         if (shopifyFilter === "unmapped" && (isShopifyMappedItem(item) || isShopifyExportPending(item))) return false;
         if (shopifyFilter === "error" && !shopifyMappingHasError(item)) return false;
@@ -1778,19 +2433,23 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         return true;
       })
       .sort((a, b) => {
-        if (sortMode === "stock_desc") return n(b.total_qty) - n(a.total_qty);
-        if (sortMode === "stock_asc") return n(a.total_qty) - n(b.total_qty);
-        if (sortMode === "value_desc") return n(b.total_qty) * n(b.buy_price) - n(a.total_qty) * n(a.buy_price);
-        if (sortMode === "incoming_desc") return latestIncomingMs(b) - latestIncomingMs(a);
-        if (sortMode === "missing") return Number(needsAttention(b)) - Number(needsAttention(a));
-        if (sortMode === "brand") return firstText(a.brand_name, a.brand_code).localeCompare(firstText(b.brand_name, b.brand_code), "hu", { sensitivity: "base" }) || itemTitle(a).localeCompare(itemTitle(b), "hu", { sensitivity: "base" });
-        return itemTitle(a).localeCompare(itemTitle(b), "hu", { sensitivity: "base" });
+        const effectiveSort = shopifyFilter === "recent_mapped" ? "shopify_connected_desc" : sortMode;
+        if (effectiveSort === "stock_desc") return n(b.total_qty) - n(a.total_qty) || compareMobileWarehouseVariantPresentation(a, b);
+        if (effectiveSort === "stock_asc") return n(a.total_qty) - n(b.total_qty) || compareMobileWarehouseVariantPresentation(a, b);
+        if (effectiveSort === "value_desc") return (n(b.total_qty) * n(b.buy_price) - n(a.total_qty) * n(a.buy_price)) || compareMobileWarehouseVariantPresentation(a, b);
+        if (effectiveSort === "incoming_desc") return (latestIncomingMs(b) - latestIncomingMs(a)) || compareMobileWarehouseVariantPresentation(a, b);
+        if (effectiveSort === "incoming_asc") {
+          const aTime = latestIncomingMs(a), bTime = latestIncomingMs(b);
+          if (!aTime && bTime) return 1;
+          if (aTime && !bTime) return -1;
+          return (aTime - bTime) || compareMobileWarehouseVariantPresentation(a, b);
+        }
+        if (effectiveSort === "shopify_connected_desc") return (shopifyConnectionMs(b) - shopifyConnectionMs(a)) || compareMobileWarehouseVariantPresentation(a, b);
+        if (effectiveSort === "missing") return (Number(needsAttention(b)) - Number(needsAttention(a))) || compareMobileWarehouseVariantPresentation(a, b);
+        if (effectiveSort === "brand") return firstText(a.brand_name, a.brand_code).localeCompare(firstText(b.brand_name, b.brand_code), "hu", { numeric: true, sensitivity: "base" }) || compareMobileWarehouseVariantPresentation(a, b);
+        return compareMobileWarehouseVariantPresentation(a, b);
       });
-  }, [searchInventoryItems, focusVariantIds, search, brand, brands, category, categoryOptions, subCategory, subCategories, gender, color, colorTypes, stockFilter, imageFilter, shopifyFilter, sortMode]);
-
-  function itemSupplierText(item: InventoryItem) {
-    return firstText((item as any).supplier_names, splitCsv((item as any).supplier_codes).join(" "));
-  }
+  }, [searchInventoryItems, focusVariantIds, search, snCodFilter, supplier, brand, brands, category, categoryOptions, subCategory, subCategories, genderFilters, sizeFilters, selectedSizeMatchKeys, color, colorTypes, colorGroups, brandColorCodes, location, stockMap, invoiceFilter, selectedInvoiceRow, stockFilter, imageFilter, shopifyFilter, sortMode]);
 
   const totals = useMemo(() => {
     return filteredItems.reduce((acc, item) => {
@@ -1808,11 +2467,16 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     catalogSearchAbortRef.current?.abort();
     setCatalogSearchBusy(false);
     setSearch("");
+    setSnCodFilter("");
+    setSupplier("all");
     setBrand("all");
     setCategory("all");
     setSubCategory("all");
-    setGender("all");
+    setGenderFilters([]);
+    setSizeFilters([]);
     setColor("all");
+    setLocation("all");
+    setInvoiceFilter("all");
     setStockFilter("all");
     setImageFilter("all");
     setShopifyFilter("all");
@@ -1940,6 +2604,109 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     }
   }
 
+  function openNewProductSheet() {
+    const next = emptyNewProductForm();
+    if (brand !== "all") next.brandCode = brand;
+    if (category !== "all") next.categoryCode = category;
+    if (genderFilters.length === 1) next.gender = genderFilters[0];
+    next.supplierId = supplier !== "all" ? String(selectedSupplier?.id || "") : "";
+    setNewProduct(next);
+    setNewProductStockRows(stockLocationRows.reduce<Record<string, string>>((acc, loc) => { acc[locationKey(loc)] = "0"; return acc; }, {}));
+    setNewProductBarcodeConflict(null);
+    setNewProductOpen(true);
+    setMessage("");
+  }
+
+  function closeNewProductSheet() {
+    if (newProductSaving) return;
+    setNewProductOpen(false);
+    setNewProduct(emptyNewProductForm());
+    setNewProductStockRows({});
+    setNewProductBarcodeConflict(null);
+  }
+
+  function newProductTotalQty() {
+    return stockLocationRows.reduce((sum, loc) => sum + Math.max(0, Math.floor(n(newProductStockRows[locationKey(loc)]))), 0);
+  }
+
+  function setNewProductLocationQty(locationRow: MetaItem, value: string) {
+    const cleaned = String(value || "").replace(/[^0-9]/g, "");
+    setNewProductStockRows((current) => ({ ...current, [locationKey(locationRow)]: cleaned }));
+  }
+
+  async function saveNewProduct() {
+    if (!newProduct.titleRo.trim()) { setMessage("A terméknév románul kötelező."); return; }
+    if (!newProduct.size.trim()) { setMessage("A méret kötelező."); return; }
+    const totalQty = newProductTotalQty();
+    if (totalQty <= 0) { setMessage("Legalább egy célhelyre adj meg készletet."); return; }
+    if (effectiveNewProductBarcodeConflict) { setNewProductBarcodeConflict(effectiveNewProductBarcodeConflict); return; }
+    setNewProductSaving(true);
+    setMessage("");
+    try {
+      const requestedBarcode = cleanScannedBarcode(newProduct.barcode);
+      if (requestedBarcode) {
+        const check = await apiBarcodeConflictCheck(requestedBarcode);
+        const conflict = check.conflict ? barcodeConflictInfoFromApi({ barcode: check.barcode, conflict: check.conflict }) : null;
+        if (conflict) { setNewProductBarcodeConflict(conflict); return; }
+      }
+      const normalizedColor = officialColorFromTypes(newProduct.colorName, colorTypes);
+      const normalizedSize = officialSizeFromTypes(newProduct.size, sizeTypes);
+      const stockRowsPayload = stockLocationRows.map((loc) => ({
+        locationId: String(loc.id || ""),
+        locationCode: String(loc.code || ""),
+        qty: Math.max(0, Math.floor(n(newProductStockRows[locationKey(loc)]))),
+      })).filter((row) => row.qty > 0);
+      const payload = {
+        titleRo: newProduct.titleRo,
+        titleHu: newProduct.titleHu,
+        descriptionRo: newProduct.descriptionRo,
+        brandCode: newProduct.brandCode || null,
+        categoryCode: newProduct.categoryCode || null,
+        parentCategoryCode: newProduct.categoryCode || null,
+        subcategoryCode: newProduct.subCategoryCode || null,
+        subCategoryCode: newProduct.subCategoryCode || null,
+        gender: newProduct.gender || "unisex",
+        productType: newProduct.productType,
+        season: newProduct.season,
+        material: newProduct.material,
+        shopifyTitle: newProduct.shopifyTitle || newProduct.titleRo,
+        modelStatus: newProduct.modelStatus || "active",
+        barcode: newProduct.barcode,
+        snCod: newProduct.snCod,
+        customsTariffCode: newProduct.customsTariffCode,
+        colorCode: newProduct.colorCode,
+        colorName: normalizedColor,
+        size: normalizedSize,
+        buyPrice: newProduct.buyPrice,
+        sellPrice: newProduct.sellPrice,
+        compareAtPrice: newProduct.compareAtPrice,
+        imageUrl: newProduct.imageUrl,
+        status: newProduct.variantStatus || "active",
+        supplierId: newProduct.supplierId || null,
+        supplierProductCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
+        supplierVariantCode: newProduct.supplierVariantCode,
+        supplierColorCode: newProduct.supplierColorCode || newProduct.colorCode,
+        supplierSize: newProduct.supplierSize || normalizedSize,
+        modelCode: newProduct.supplierProductCode || newProduct.barcode || newProduct.titleRo,
+        qty: totalQty,
+        stockRows: stockRowsPayload,
+      };
+      const created = await apiCreateManualProduct(payload);
+      notifyStockMovesChanged({ variantId: created.variantId, source: "warehouse_mobile_manual_product_create" });
+      closeNewProductSheet();
+      await load({ preferCache: false });
+      setSearch(String(newProduct.barcode || newProduct.supplierProductCode || newProduct.titleRo || "").trim());
+      setVisibleCount(40);
+      setMessage(`Új termék rögzítve ${totalQty} db készlettel.`);
+    } catch (error: any) {
+      const conflict = barcodeConflictInfoFromApi(error);
+      if (conflict) setNewProductBarcodeConflict(conflict);
+      else setMessage(error?.message || "Nem sikerült létrehozni az új terméket.");
+    } finally {
+      setNewProductSaving(false);
+    }
+  }
+
   async function openDetail(item: InventoryItem) {
     const id = String(item.variant_id || item.id || "").trim();
     if (!id) return;
@@ -1947,7 +2714,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     setEditBarcodeConflict(null);
     setDetailBusy(true);
     setDetail(null);
-    setEdit(formFromItem(item as any));
+    const optimisticForm = formFromItem(item as any);
+    setEdit(optimisticForm);
+    setEditBaseline(optimisticForm);
+    setDetailCloseConfirmOpen(false);
     setMessage("");
     try {
       const data = await apiVariantDetail(id);
@@ -1955,11 +2725,34 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       if (!nextForm.brandCode) nextForm.brandCode = findBrandCodeForName(data.item?.brand_name || item.brand_name || "");
       setDetail(data);
       setEdit(nextForm);
+      setEditBaseline(nextForm);
     } catch (error: any) {
       setMessage(error?.message || "A termék adatlapja nem tölthető be.");
     } finally {
       setDetailBusy(false);
     }
+  }
+
+  function closeDetailImmediately() {
+    if (saving) return;
+    setDetailCloseConfirmOpen(false);
+    setDetailOpen(false);
+    setDetail(null);
+    setEdit(emptyForm());
+    setEditBaseline(emptyForm());
+    setEditBarcodeConflict(null);
+  }
+
+  function requestCloseDetail() {
+    if (saving) return;
+    if (detailHasChanges) { setDetailCloseConfirmOpen(true); return; }
+    closeDetailImmediately();
+  }
+
+  function discardDetailChangesAndClose() {
+    if (saving) return;
+    closeDetailImmediately();
+    setMessage("A módosítások mentés nélkül eldobva.");
   }
 
   async function openHistory(item: InventoryItem) {
@@ -2040,13 +2833,13 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         setEditBarcodeConflict(null);
       }
 
-      const normalizedEditColor = normalizeColor(edit.colorName);
-      const normalizedEditSize = normalizeSize(edit.size);
+      const normalizedEditColor = officialColorFromTypes(edit.colorName, colorTypes);
+      const normalizedEditSize = officialSizeFromTypes(edit.size, sizeTypes);
       const activatingSharedModel = previousModelStatus !== "active" && nextModelStatus === "active";
       if (activatingSharedModel) {
         const currentModelId = firstText(detail?.item?.model_id, detail?.item?.modelId);
         if (currentModelId) {
-          const siblingIds = Array.from(new Set(
+          const siblingIds: string[] = Array.from(new Set<string>(
             items
               .filter((item) => selectedVariantIdFromItem(item as any) !== id)
               .filter((item) => firstText(item.model_id, (item as any).modelId) === currentModelId)
@@ -2165,8 +2958,10 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
       // Mentés kész: a lap azonnal záródik. Nem tartjuk nyitva addig, amíg
       // a teljes raktár újra letöltődik.
+      setDetailCloseConfirmOpen(false);
       setDetailOpen(false);
       setDetail(null);
+      setEditBaseline(emptyForm());
       const siblingMessage = inheritedSiblingCount
         ? ` Azonos színű további ${inheritedSiblingCount} méretváltozat átvette a képet/leírást.${inheritedSiblingFailed ? ` ${inheritedSiblingFailed} méret frissítése nem sikerült.` : ''}`
         : inheritedSiblingFailed
@@ -2181,6 +2976,26 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
       } else {
         setMessage(error?.message || "Nem sikerült menteni a terméket.");
       }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteProductNow() {
+    const target = productDeleteTarget;
+    const id = String(target?.variant_id || target?.id || "").trim();
+    if (!id) return;
+    setSaving(true);
+    try {
+      await apiVariantDelete(id);
+      setItems((current) => current.filter((item) => selectedVariantIdFromItem(item as any) !== id));
+      setCatalogSearchItems((current) => current.filter((item) => selectedVariantIdFromItem(item as any) !== id));
+      setStockRows((current) => current.filter((row) => String(row.variant_id || "") !== id));
+      setProductDeleteTarget(null);
+      if (String(detail?.item?.id || detail?.item?.variant_id || "") === id) closeDetailImmediately();
+      setMessage("Termékvariáns véglegesen törölve.");
+    } catch (error: any) {
+      setMessage(error?.message || "Nem sikerült törölni a terméket.");
     } finally {
       setSaving(false);
     }
@@ -2283,6 +3098,19 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     return stockLocationRows.reduce((sum, loc) => sum + Math.max(stockEditorReservedQty(loc), Math.floor(n(rows[locationKey(loc)]))), 0);
   }
 
+  function preferredStockReceiverLocation(targetKey: string, rows: Record<string, string>) {
+    const candidates = stockLocationRows.filter((loc) => locationKey(loc) !== targetKey);
+    return candidates.sort((a, b) => {
+      const aq = Math.floor(n(rows[locationKey(a)]));
+      const bq = Math.floor(n(rows[locationKey(b)]));
+      const an = String(a.name || a.code || "").toLowerCase();
+      const bn = String(b.name || b.code || "").toLowerCase();
+      const aMain = /miercurea|ciuc|main|warehouse|depozit|raktar|raktár/.test(an) ? 1 : 0;
+      const bMain = /miercurea|ciuc|main|warehouse|depozit|raktar|raktár/.test(bn) ? 1 : 0;
+      return bMain - aMain || bq - aq;
+    })[0] || null;
+  }
+
   function setStockEditorQty(location: MetaItem, value: string) {
     const key = locationKey(location);
     const minQty = stockEditorReservedQty(location);
@@ -2290,7 +3118,67 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
     const next = { ...stockEditorRows, [key]: String(cleaned) };
     setStockEditorRows(next);
     const delta = stockEditorDraftTotal(next) - stockEditorOriginalTotal();
-    setStockEditorWarning(delta !== 0 ? `A teljes készlet ${delta > 0 ? "+" : ""}${delta} db-bal változik. Korrekció mód kell hozzá.` : "");
+    setStockEditorWarning(delta !== 0 ? `A teljes készlet ${delta > 0 ? "+" : ""}${delta} db-bal változik. Mozgatásnál használd a + / − gombot, korrekciónál kapcsold be a készletkorrekció módot.` : "");
+  }
+
+  function adjustStockEditorQty(location: MetaItem, delta: number) {
+    const key = locationKey(location);
+    const next = { ...stockEditorRows };
+    const minTarget = stockEditorReservedQty(location);
+    const currentQty = Math.max(minTarget, Math.floor(n(next[key])));
+    const wantedQty = Math.max(minTarget, currentQty + delta);
+    const effectiveDelta = wantedQty - currentQty;
+    if (!effectiveDelta) return;
+
+    if (stockEditorAllowTotalChange) {
+      next[key] = String(wantedQty);
+      setStockEditorRows(next);
+      const totalDelta = stockEditorDraftTotal(next) - stockEditorOriginalTotal();
+      setStockEditorWarning(totalDelta !== 0 ? `Készletkorrekció mód: a teljes készlet ${totalDelta > 0 ? "+" : ""}${totalDelta} db-bal változik.` : "");
+      return;
+    }
+
+    if (effectiveDelta > 0) {
+      let need = effectiveDelta;
+      const donors = stockLocationRows
+        .filter((loc) => locationKey(loc) !== key)
+        .map((loc) => {
+          const locKey = locationKey(loc);
+          const qtyValue = Math.max(stockEditorReservedQty(loc), Math.floor(n(next[locKey])));
+          const reserved = stockEditorReservedQty(loc);
+          return { key: locKey, qty: qtyValue, movable: Math.max(0, qtyValue - reserved) };
+        })
+        .filter((row) => row.movable > 0)
+        .sort((a, b) => b.movable - a.movable);
+      for (const donor of donors) {
+        if (need <= 0) break;
+        const moved = Math.min(need, donor.movable);
+        next[donor.key] = String(donor.qty - moved);
+        need -= moved;
+      }
+      const moved = effectiveDelta - need;
+      if (moved <= 0) {
+        setStockEditorWarning("Nincs másik helyen szabad készlet. Új áruhoz kapcsold be a készletkorrekció módot.");
+        return;
+      }
+      next[key] = String(currentQty + moved);
+      setStockEditorRows(next);
+      setStockEditorWarning(need > 0 ? `Csak ${moved} db-ot tudtam átvezetni, mert máshol nincs több szabad készlet.` : "A darabot automatikusan átvezettem másik helyről, a teljes készlet nem változott.");
+      return;
+    }
+
+    next[key] = String(wantedQty);
+    const receiver = preferredStockReceiverLocation(key, next);
+    if (!receiver) {
+      setStockEditorRows(next);
+      setStockEditorWarning("A teljes készlet csökkenne. Törés / korrekció esetén kapcsold be a készletkorrekció módot.");
+      return;
+    }
+    const receiverKey = locationKey(receiver);
+    const receiverQty = Math.max(stockEditorReservedQty(receiver), Math.floor(n(next[receiverKey])));
+    next[receiverKey] = String(receiverQty + Math.abs(effectiveDelta));
+    setStockEditorRows(next);
+    setStockEditorWarning("A csökkentett darabot automatikusan áttettem másik célhelyre, így a teljes készlet nem változott.");
   }
 
   async function saveStockEditor() {
@@ -2593,11 +3481,15 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 onChange={(event) => { setSearch(event.target.value); setVisibleCount(40); }}
                 onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void runMobileWarehouseSearch(); } }}
                 enterKeyHint="search"
-                placeholder="Név, márka, vonalkód, szín, méret"
+                placeholder="Név, beszállító, márka, vonalkód, szín, méret"
               />
               {search && <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-white/45 hover:bg-white/10 hover:text-white" type="button" onClick={() => setSearch("")}><X size={15} /></button>}
             </div>
             <button className={headerIconBtn} onClick={() => void startBarcodeScanner()} type="button" aria-label="Vonalkód scanner"><Barcode size={17} /></button>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button className={`${softBtn} h-9 rounded-xl`} type="button" onClick={openNewProductSheet}><Plus size={15} /> Új termék</button>
+            <button className={`${softBtn} h-9 rounded-xl`} type="button" onClick={() => setShopifySyncCenterOpen(true)}><ShoppingBag size={15} /> Shopify központ</button>
           </div>
         </div>
       </header>
@@ -2723,7 +3615,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         <div className="grid grid-cols-3 gap-2">
           <button className={softBtn} onClick={() => setFiltersOpen(true)} type="button"><Filter size={16} /> Szűrő</button>
           <button className={softBtn} onClick={() => focusLatestIncoming(true)} disabled={busy} type="button"><PackageCheck size={16} /> Utolsó</button>
-          <button className={softBtn} onClick={() => { if (search.trim()) void runMobileWarehouseSearch(); else searchInputRef.current?.focus(); }} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
+          <button className={softBtn} onClick={() => { if (search.trim() || snCodFilter.trim()) void runMobileWarehouseSearch(); else searchInputRef.current?.focus(); }} disabled={catalogSearchBusy} type="button">{catalogSearchBusy ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />} {catalogSearchBusy ? "Keresés..." : "Keresés"}</button>
         </div>
       </nav>
 
@@ -2747,23 +3639,112 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <div>
                 <p className="text-[11px] uppercase tracking-[0.16em] text-[#cffffd]/70">Szűrés</p>
                 <h2 className="text-lg text-white">Raktár nézet</h2>
+                <p className="mt-1 text-xs text-white/48">Ugyanazok a törzsadatok és szűrési szabályok, mint az asztali Raktárban.</p>
               </div>
               <button className={iconBtn} onClick={() => setFiltersOpen(false)} type="button"><X size={18} /></button>
             </div>
             <div className="grid gap-3">
-              <label className={label}>Márka<select className={select} value={brand} onChange={(e) => { setBrand(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{brands.map((row) => <option key={row.id} value={row.code || row.id}>{row.name || row.name_ro || row.code}</option>)}</select></label>
-              <label className={label}>Főkategória<select className={select} value={category} onChange={(e) => { setCategory(e.target.value); setSubCategory("all"); setVisibleCount(40); }}><option value="all">Összes</option>{categoryOptions.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label>
-              <label className={label}>Alkategória<select className={select} value={subCategory} onChange={(e) => { setSubCategory(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{subCategoryOptions.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label>
-              <label className={label}>Nem<select className={select} value={gender} onChange={(e) => { setGender(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{genderTypes.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
-              <label className={label}>Szín<select className={select} value={color} onChange={(e) => { setColor(e.target.value); setVisibleCount(40); }}><option value="all">Összes</option>{colorTypes.map((row) => <option key={row.id} value={row.code || row.name_ro}>{row.name_ro}</option>)}</select></label>
-              <label className={label}>Készlet<select className={select} value={stockFilter} onChange={(e) => { setStockFilter(e.target.value as StockFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="available">Van elérhető</option><option value="out">Nulla készlet</option><option value="reserved">Van foglalás</option><option value="missing">Hiányzó adat</option><option value="inactive">Inaktív termékek</option><option value="watch">Aktiválandó készlet</option></select></label>
-              <label className={label}>Kép<select className={select} value={imageFilter} onChange={(e) => { setImageFilter(e.target.value as ImageFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="with">Van kép</option><option value="missing">Nincs kép</option></select></label>
-              <label className={label}>Shopify<select className={select} value={shopifyFilter} onChange={(e) => { setShopifyFilter(e.target.value as ShopifyFilter); setVisibleCount(40); }}><option value="all">Összes</option><option value="mapped">Összekötve</option><option value="exported">Exportálva, párosításra vár</option><option value="unmapped">Nincs Shopifyon</option><option value="error">Szinkronhiba</option></select></label>
-              <label className={label}>Sorrend<select className={select} value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}><option value="name">Terméknév</option><option value="brand">Márka</option><option value="stock_desc">Készlet csökkenő</option><option value="stock_asc">Készlet növekvő</option><option value="value_desc">Érték</option><option value="incoming_desc">Utolsó bevételezés</option><option value="missing">Javítandók előre</option></select></label>
+              <label className={label}>S/N/COD<input className={input} value={snCodFilter} onChange={(e) => { setSnCodFilter(e.target.value); setVisibleCount(40); }} placeholder="pl. S0626" /></label>
+              <MobileSingleSelect
+                labelText="Beszállító"
+                value={supplier}
+                options={suppliers.map((row) => ({ value: String(row.code || row.name || row.id), label: String(row.name || row.name_ro || row.code || row.id) }))}
+                onChange={(next) => { setSupplier(next); setInvoiceFilter("all"); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Márka"
+                value={brand}
+                emptyText={selectedSupplier ? "Összes kapcsolt márka" : "Összes"}
+                options={brandOptions.map((row) => ({ value: String(row.code || row.name || row.id), label: String(row.name || row.name_ro || row.code || row.id) }))}
+                onChange={(next) => { setBrand(next); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Főkategória"
+                value={category}
+                options={categoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))}
+                onChange={(next) => { setCategory(next); setSubCategory("all"); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Alkategória / terméktípus"
+                value={subCategory}
+                options={subCategoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))}
+                onChange={(next) => { setSubCategory(next); setVisibleCount(40); }}
+              />
+              <MobileMultiSelect labelText="Nem" values={genderFilters} options={genderFilterOptions} onChange={(next) => { setGenderFilters(next); setVisibleCount(40); }} />
+              <MobileMultiSelect labelText="Méret" values={sizeFilters} options={sizeFilterOptions} onChange={(next) => { setSizeFilters(next); setVisibleCount(40); }} />
+              <MobileSingleSelect
+                labelText="Szín / főszín"
+                value={color}
+                options={colorFilterOptions}
+                onChange={(next) => { setColor(next); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Cél hely"
+                value={location}
+                options={locations.map((row) => ({ value: String(row.code || row.name || row.id), label: String(row.name || row.code || row.id) }))}
+                onChange={(next) => { setLocation(next); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Számla"
+                value={invoiceFilter}
+                options={invoiceFilterOptions}
+                onChange={(next) => { setInvoiceFilter(next); if (next !== "all" && sortMode === "name") setSortMode("incoming_asc"); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Készlet"
+                value={stockFilter}
+                options={[
+                  { value: "available", label: "Készleten" },
+                  { value: "out", label: "Nincs készleten" },
+                  { value: "reserved", label: "Van foglalás" },
+                  { value: "missing", label: "Hiányzó adat" },
+                  { value: "inactive", label: "Inaktív termékek" },
+                  { value: "watch", label: "Aktiválandó készlet" },
+                ]}
+                onChange={(next) => { setStockFilter(next as StockFilter); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect labelText="Kép" value={imageFilter} options={[{ value: "with", label: "Van kép" }, { value: "missing", label: "Hiányzik kép" }]} onChange={(next) => { setImageFilter(next as ImageFilter); setVisibleCount(40); }} />
+              <MobileSingleSelect
+                labelText="Shopify"
+                value={shopifyFilter}
+                options={[
+                  { value: "mapped", label: "Összekötve" },
+                  { value: "recent_mapped", label: "Legutóbb összekapcsolt" },
+                  { value: "exported", label: "Exportálva, párosításra vár" },
+                  { value: "unmapped", label: "Nincs Shopifyon" },
+                  { value: "error", label: "Kapcsolati / exporthiba" },
+                ]}
+                onChange={(next) => { const mode = next as ShopifyFilter; setShopifyFilter(mode); if (mode === "recent_mapped") setSortMode("shopify_connected_desc"); setVisibleCount(40); }}
+              />
+              <MobileSingleSelect
+                labelText="Bevételezés"
+                value={focusVariantIds.length ? "latest" : "all"}
+                options={[{ value: "latest", label: busy ? "Betöltés..." : "Legutóbb bevételezett" }]}
+                onChange={(next) => { if (next === "latest") void focusLatestIncoming(true); else { setFocusVariantIds([]); setFocusLabel(""); } }}
+                disabled={busy}
+              />
+              <MobileSingleSelect
+                labelText="Sorrend"
+                value={sortMode}
+                showEmptyOption={false}
+                emptyText="Terméknév"
+                options={[
+                  { value: "incoming_desc", label: "Legújabb bevételezés elöl" },
+                  { value: "incoming_asc", label: "Legrégebbi bevételezés elöl" },
+                  { value: "shopify_connected_desc", label: "Legutóbb Shopifyhoz kapcsolt" },
+                  { value: "name", label: "Terméknév" },
+                  { value: "brand", label: "Márka" },
+                  { value: "stock_desc", label: "Készlet csökkenő" },
+                  { value: "stock_asc", label: "Készlet növekvő" },
+                  { value: "value_desc", label: "Készletérték" },
+                  { value: "missing", label: "Hiányzó adatok" },
+                ]}
+                onChange={(next) => { setSortMode(next as SortMode); setVisibleCount(40); }}
+              />
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button className={softBtn} onClick={() => resetFilters()} type="button">Alaphelyzet</button>
-              <button className={primaryBtn} onClick={() => setFiltersOpen(false)} type="button">Alkalmaz</button>
+              <button className={primaryBtn} onClick={() => setFiltersOpen(false)} type="button">Kész</button>
             </div>
           </div>
         </>
@@ -2818,9 +3799,63 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         </>
       )}
 
+      {newProductOpen && (
+        <>
+          <MobileBackdrop onClose={closeNewProductSheet} />
+          <section className={`${sheetPanel} z-[76]`}>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div><p className="text-[10px] uppercase tracking-[0.16em] text-[#cffffd]/70">Új termék</p><h2 className="mt-1 text-lg text-white">Kézi termékfelvétel</h2><p className="mt-1 text-xs text-white/50">Ugyanazt a termék- és törzsadatlogikát használja, mint az asztali Raktár.</p></div>
+              <button className={iconBtn} type="button" onClick={closeNewProductSheet}><X size={18} /></button>
+            </div>
+            <div className="grid gap-3">
+              <label className={label}>Terméknév románul<input className={input} value={newProduct.titleRo} onChange={(e) => setNewProduct((x) => ({ ...x, titleRo: e.target.value }))} /></label>
+              <label className={label}>Terméknév magyarul<input className={input} value={newProduct.titleHu} onChange={(e) => setNewProduct((x) => ({ ...x, titleHu: e.target.value }))} /></label>
+              <MobileSingleSelect labelText="Beszállító" value={newProduct.supplierId} emptyValue="" emptyText="Nincs" options={suppliers.map((row) => ({ value: String(row.id), label: String(row.name || row.name_ro || row.code || row.id) }))} onChange={(next) => setNewProduct((x) => ({ ...x, supplierId: next }))} />
+              <MobileSingleSelect labelText="Márka" value={newProduct.brandCode} emptyValue="" emptyText="Nincs" options={brands.map((row) => ({ value: String(row.code || row.id), label: String(row.name || row.name_ro || row.code || row.id) }))} onChange={(next) => setNewProduct((x) => ({ ...x, brandCode: next }))} />
+              <div className="grid grid-cols-2 gap-2">
+                <MobileSingleSelect labelText="Főkategória" value={newProduct.categoryCode} emptyValue="" emptyText="Nincs" options={categoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, categoryCode: next, subCategoryCode: "" }))} />
+                <MobileSingleSelect labelText="Alkategória" value={newProduct.subCategoryCode} emptyValue="" emptyText="Nincs" options={newProductSubCategoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, subCategoryCode: next }))} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <MobileSingleSelect labelText="Nem" value={newProduct.gender} showEmptyOption={false} options={genderTypes.map((row) => ({ value: String(row.code), label: String(row.name || row.code) }))} onChange={(next) => setNewProduct((x) => ({ ...x, gender: next }))} />
+                <MobileSingleSelect labelText="Méret" value={newProduct.size} emptyValue="" emptyText="Válassz" options={sizeTypes.slice().sort(compareMobileWarehouseSizeTypes).map((row) => ({ value: String(row.name || row.code || row.id), label: sizeTypeLabel(row) }))} onChange={(next) => setNewProduct((x) => ({ ...x, size: next, supplierSize: next }))} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <MobileSingleSelect labelText="Szín" value={newProduct.colorName} emptyValue="" emptyText="Nincs" options={colorTypes.map((row) => ({ value: String(row.name_ro || row.code), label: colorTypeLabel(row), swatch: row.hex || undefined }))} onChange={(next) => setNewProduct((x) => ({ ...x, colorName: next }))} />
+                <label className={label}>Színkód<input className={input} value={newProduct.colorCode} onChange={(e) => setNewProduct((x) => ({ ...x, colorCode: e.target.value, supplierColorCode: e.target.value }))} /></label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className={label}>Vételár<input className={input} inputMode="decimal" value={newProduct.buyPrice} onChange={(e) => setNewProduct((x) => ({ ...x, buyPrice: e.target.value }))} /></label>
+                <label className={label}>Eladási ár TVA-val<input className={input} inputMode="decimal" value={newProduct.sellPrice} onChange={(e) => setNewProduct((x) => ({ ...x, sellPrice: e.target.value }))} /></label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className={label}>Termékkód<input className={input} value={newProduct.supplierProductCode} onChange={(e) => setNewProduct((x) => ({ ...x, supplierProductCode: e.target.value }))} /></label>
+                <label className={label}>Vonalkód / Shopify SKU<input className={input} value={newProduct.barcode} onChange={(e) => { setNewProductBarcodeConflict(null); setNewProduct((x) => ({ ...x, barcode: e.target.value })); }} /></label>
+              </div>
+              {effectiveNewProductBarcodeConflict ? <MobileBarcodeConflictNotice info={effectiveNewProductBarcodeConflict} /> : null}
+              <div className="grid grid-cols-2 gap-2">
+                <label className={label}>S/N/COD<input className={input} value={newProduct.snCod} onChange={(e) => setNewProduct((x) => ({ ...x, snCod: e.target.value }))} /></label>
+                <label className={label}>Vámtarifa kód<input className={input} value={newProduct.customsTariffCode} onChange={(e) => setNewProduct((x) => ({ ...x, customsTariffCode: e.target.value }))} /></label>
+              </div>
+              <label className={label}>Anyag / összetétel<input className={input} value={newProduct.material} onChange={(e) => setNewProduct((x) => ({ ...x, material: e.target.value }))} /></label>
+              <label className={label}>Leírás<textarea className={`${input} h-24 py-3`} value={newProduct.descriptionRo} onChange={(e) => setNewProduct((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
+              <div className="rounded-2xl border border-white/12 bg-white/[0.05] p-3">
+                <p className="text-sm text-white">Kezdő készlet</p>
+                <p className="mt-1 text-xs text-white/45">Legalább egy helyre adj meg darabszámot.</p>
+                <div className="mt-3 grid gap-2">
+                  {stockLocationRows.map((loc) => <label key={locationKey(loc)} className="grid grid-cols-[1fr_92px] items-center gap-2 rounded-xl bg-[#263246] px-3 py-2 text-sm text-white"><span className="truncate">{loc.name || loc.code}</span><input className={`${input} h-9 text-center`} inputMode="numeric" value={newProductStockRows[locationKey(loc)] || "0"} onChange={(e) => setNewProductLocationQty(loc, e.target.value)} /></label>)}
+                </div>
+                <div className="mt-2 text-right text-sm text-[#cffffd]">Összesen: {qty(newProductTotalQty())} db</div>
+              </div>
+              <button className={`${primaryBtn} h-12`} type="button" onClick={saveNewProduct} disabled={newProductSaving || newProductTotalQty() <= 0 || Boolean(effectiveNewProductBarcodeConflict)}><Save size={16} /> {newProductSaving ? "Mentés..." : "Termék mentése"}</button>
+            </div>
+          </section>
+        </>
+      )}
+
       {detailOpen && (
         <>
-          <MobileBackdrop onClose={() => { setDetailOpen(false); setEditBarcodeConflict(null); }} />
+          <MobileBackdrop onClose={requestCloseDetail} />
           <div className={sheetPanel}>
             <div className="mb-3 flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -2828,7 +3863,7 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 <h2 className="mt-1 line-clamp-2 text-lg text-white">{edit.titleRo || itemTitle(detail?.item || {})}</h2>
                 {detailBusy ? <p className="mt-1 text-xs text-white/50">Betöltés...</p> : null}
               </div>
-              <button className={iconBtn} onClick={() => { setDetailOpen(false); setEditBarcodeConflict(null); }} type="button"><X size={18} /></button>
+              <button className={iconBtn} onClick={requestCloseDetail} type="button"><X size={18} /></button>
             </div>
 
             <div className="grid gap-3">
@@ -2845,17 +3880,17 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
 
               <label className={label}>Terméknév románul<input className={input} value={edit.titleRo} onChange={(e) => setEdit((x) => ({ ...x, titleRo: e.target.value }))} /></label>
               <label className={label}>Terméknév magyarul<input className={input} value={edit.titleHu} onChange={(e) => setEdit((x) => ({ ...x, titleHu: e.target.value }))} /></label>
-              <label className={label}>Márka<select className={select} value={edit.brandCode} onChange={(e) => setEdit((x) => ({ ...x, brandCode: e.target.value }))}><option value="">Nincs</option>{brands.map((row) => <option key={row.id} value={row.code || row.id}>{row.name || row.name_ro || row.code}</option>)}</select></label>
+              <MobileSingleSelect labelText="Márka" value={edit.brandCode} emptyValue="" emptyText="Nincs" options={brands.map((row) => ({ value: String(row.code || row.id), label: String(row.name || row.name_ro || row.code || row.id) }))} onChange={(next) => setEdit((x) => ({ ...x, brandCode: next }))} />
               <div className="grid grid-cols-2 gap-2">
-                <label className={label}>Főkategória<select className={select} value={edit.categoryCode} onChange={(e) => setEdit((x) => ({ ...x, categoryCode: e.target.value, subCategoryCode: "" }))}><option value="">Nincs</option>{categoryOptions.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label>
-                <label className={label}>Alkategória<select className={select} value={edit.subCategoryCode} onChange={(e) => setEdit((x) => ({ ...x, subCategoryCode: e.target.value }))}><option value="">Nincs</option>{subCategories.map((row) => <option key={row.id} value={row.code || row.id}>{categoryLabel(row)}</option>)}</select></label>
+                <MobileSingleSelect labelText="Főkategória" value={edit.categoryCode} emptyValue="" emptyText="Nincs" options={categoryOptions.map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setEdit((x) => ({ ...x, categoryCode: next, subCategoryCode: "" }))} />
+                <MobileSingleSelect labelText="Alkategória" value={edit.subCategoryCode} emptyValue="" emptyText="Nincs" options={subCategories.filter((row) => { const parent = categoryOptions.find((cat) => metaMatches(cat, edit.categoryCode)); return !parent || categoryParentId(row) === String(parent.id); }).map((row) => ({ value: String(row.code || row.id), label: categoryLabel(row) }))} onChange={(next) => setEdit((x) => ({ ...x, subCategoryCode: next }))} />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <label className={label}>Nem<select className={select} value={edit.gender} onChange={(e) => setEdit((x) => ({ ...x, gender: e.target.value }))}><option value="unisex">Unisex</option>{genderTypes.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
-                <label className={label}>Méret<input className={input} value={edit.size} onChange={(e) => setEdit((x) => ({ ...x, size: e.target.value }))} list="warehouse-mobile-size-options" /></label>
+                <MobileSingleSelect labelText="Nem" value={edit.gender} showEmptyOption={false} options={genderTypes.map((row) => ({ value: String(row.code), label: String(row.name || row.code) }))} onChange={(next) => setEdit((x) => ({ ...x, gender: next }))} />
+                <MobileSingleSelect labelText="Méret" value={edit.size} emptyValue="" emptyText="Nincs" options={[...(edit.size && !sizeTypes.some((row) => [row.name, row.name_hu, row.code, ...(row.aliases || [])].map(colorKey).includes(colorKey(edit.size))) ? [{ value: edit.size, label: edit.size, hint: "Jelenlegi érték" }] : []), ...sizeTypes.slice().sort(compareMobileWarehouseSizeTypes).map((row) => ({ value: String(row.name || row.code || row.id), label: sizeTypeLabel(row) }))]} onChange={(next) => setEdit((x) => ({ ...x, size: next }))} />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <label className={label}>Szín<input className={input} value={edit.colorName} onChange={(e) => setEdit((x) => ({ ...x, colorName: e.target.value }))} list="warehouse-mobile-color-options" /></label>
+                <MobileSingleSelect labelText="Szín" value={edit.colorName} emptyValue="" emptyText="Nincs" options={[...(edit.colorName && !colorTypes.some((row) => colorValues(row).map(colorKey).includes(colorKey(edit.colorName))) ? [{ value: edit.colorName, label: edit.colorName, hint: "Jelenlegi érték" }] : []), ...colorTypes.map((row) => ({ value: String(row.name_ro || row.code), label: colorTypeLabel(row), swatch: row.hex || undefined }))]} onChange={(next) => setEdit((x) => ({ ...x, colorName: next }))} />
                 <label className={label}>Színkód<input className={input} value={edit.colorCode} onChange={(e) => setEdit((x) => ({ ...x, colorCode: e.target.value }))} /></label>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -2883,15 +3918,47 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
               <label className={label}>Anyag / összetétel<input className={input} value={edit.material} onChange={(e) => setEdit((x) => ({ ...x, material: e.target.value }))} /></label>
               <label className={label}>Leírás<textarea className={`${input} h-24 py-3`} value={edit.descriptionRo} onChange={(e) => setEdit((x) => ({ ...x, descriptionRo: e.target.value }))} /></label>
               <div className="grid grid-cols-2 gap-2">
-                <label className={label}>Modell állapot<select className={select} value={edit.modelStatus} onChange={(e) => setEdit((x) => ({ ...x, modelStatus: e.target.value }))}><option value="draft">Előkészítés</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
-                <label className={label}>Variáns állapot<select className={select} value={edit.variantStatus} onChange={(e) => { const value = e.target.value; setEdit((x) => ({ ...x, variantStatus: value, modelStatus: value === "active" && ["draft", "inactive"].includes(String(x.modelStatus || "").toLowerCase()) ? "active" : x.modelStatus })); }}><option value="inactive">Inaktív</option><option value="active">Aktív</option><option value="archived">Archivált</option></select></label>
+                <MobileSingleSelect labelText="Modell állapot" value={edit.modelStatus} showEmptyOption={false} options={[{ value: "draft", label: "Előkészítés" }, { value: "active", label: "Aktív" }, { value: "archived", label: "Archivált" }]} onChange={(next) => setEdit((x) => ({ ...x, modelStatus: next }))} />
+                <MobileSingleSelect labelText="Variáns állapot" value={edit.variantStatus} showEmptyOption={false} options={[{ value: "inactive", label: "Inaktív" }, { value: "active", label: "Aktív" }, { value: "archived", label: "Archivált" }]} onChange={(next) => setEdit((x) => ({ ...x, variantStatus: next, modelStatus: next === "active" && ["draft", "inactive"].includes(String(x.modelStatus || "").toLowerCase()) ? "active" : x.modelStatus }))} />
               </div>
-              <div className="grid gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1">
                 <button className={softBtn} onClick={() => detail?.item && openStockEditor(detail.item)} type="button"><Boxes size={15} /> Készlet</button>
+                <button className={`${softBtn} border-rose-300/30 bg-rose-500/12 text-rose-50`} onClick={() => detail?.item && setProductDeleteTarget(detail.item)} type="button"><Trash2 size={15} /> Törlés</button>
               </div>
-              <button className={`${primaryBtn} h-12`} onClick={saveDetail} disabled={saving || detailBusy || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : undefined} type="button"><Save size={16} /> {saving ? "Mentés..." : "Mentés"}</button>
+              <button className={`${primaryBtn} h-12`} onClick={saveDetail} disabled={saving || detailBusy || !detailHasChanges || Boolean(effectiveEditBarcodeConflict)} title={effectiveEditBarcodeConflict ? "Ez az SKU már egy másik termékhez tartozik. Adj meg másik egyedi SKU-t." : undefined} type="button"><Save size={16} /> {saving ? "Mentés..." : "Mentés"}</button>
             </div>
           </div>
+        </>
+      )}
+
+      {productDeleteTarget && (
+        <>
+          <button type="button" aria-label="Törlés kérdés" className="fixed inset-0 z-[94] bg-black/70 backdrop-blur-sm" onClick={() => !saving && setProductDeleteTarget(null)} />
+          <section className="fixed inset-x-0 bottom-0 z-[95] rounded-t-[28px] border border-rose-300/25 bg-[#303a4c] p-4 shadow-2xl shadow-black/60">
+            <p className="text-[10px] uppercase tracking-[0.16em] text-rose-100/65">Végleges törlés</p>
+            <h3 className="mt-1 line-clamp-2 text-lg text-white">{itemTitle(productDeleteTarget)}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-white/58">A rendszer a backend használati ellenőrzései alapján csak akkor törli véglegesen, ha a művelet biztonságosan végrehajtható.</p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button className={softBtn} type="button" onClick={() => setProductDeleteTarget(null)} disabled={saving}>Mégse</button>
+              <button className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-rose-300/35 bg-[#d31126] px-3 text-sm text-white disabled:opacity-50" type="button" onClick={() => void deleteProductNow()} disabled={saving}><Trash2 size={16} /> {saving ? "Törlés..." : "Végleges törlés"}</button>
+            </div>
+          </section>
+        </>
+      )}
+
+      {detailCloseConfirmOpen && (
+        <>
+          <button type="button" aria-label="Bezárási kérdés" className="fixed inset-0 z-[92] bg-black/68 backdrop-blur-sm" onClick={() => setDetailCloseConfirmOpen(false)} />
+          <section className="fixed inset-x-0 bottom-0 z-[93] rounded-t-[28px] border border-white/18 bg-[#303a4c] p-4 shadow-2xl shadow-black/60">
+            <p className="text-[10px] uppercase tracking-[0.16em] text-amber-100/65">Nem mentett módosítás</p>
+            <h3 className="mt-1 text-lg text-white">Mit csináljunk a változtatásokkal?</h3>
+            <p className="mt-1 text-sm leading-relaxed text-white/58">A termékadatlap módosult. Bezáráskor ne vesszen el csendben semmi.</p>
+            <div className="mt-4 grid gap-2">
+              <button className={`${primaryBtn} h-12 w-full`} type="button" onClick={() => void saveDetail()} disabled={saving || Boolean(effectiveEditBarcodeConflict)}><Save size={16} /> Mentés és bezárás</button>
+              <button className={`${softBtn} h-12 w-full border-rose-300/25 bg-rose-500/12 text-rose-50`} type="button" onClick={discardDetailChangesAndClose}>Módosítások eldobása</button>
+              <button className={`${softBtn} h-11 w-full`} type="button" onClick={() => setDetailCloseConfirmOpen(false)}>Mégse</button>
+            </div>
+          </section>
         </>
       )}
 
@@ -2918,9 +3985,9 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                       {reserved > 0 ? <span className="rounded-full bg-white/[0.08] px-2 py-1 text-[11px] text-white/58">foglalt {reserved}</span> : null}
                     </div>
                     <div className="grid grid-cols-[44px_1fr_44px] gap-2">
-                      <button className={softBtn} type="button" onClick={() => setStockEditorQty(loc, String(Math.max(reserved, n(stockEditorRows[key]) - 1)))}>-</button>
+                      <button className={softBtn} type="button" onClick={() => adjustStockEditorQty(loc, -1)}>-</button>
                       <input className={`${input} text-center text-lg`} value={stockEditorRows[key] || "0"} inputMode="numeric" onChange={(e) => setStockEditorQty(loc, e.target.value)} />
-                      <button className={softBtn} type="button" onClick={() => setStockEditorQty(loc, String(n(stockEditorRows[key]) + 1))}>+</button>
+                      <button className={softBtn} type="button" onClick={() => adjustStockEditorQty(loc, 1)}>+</button>
                     </div>
                   </div>
                 );
@@ -2934,18 +4001,23 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
                 <div className="rounded-2xl border border-amber-200/25 bg-amber-300/10 p-3">
                   <p className="text-sm text-amber-50">Korrekció oka</p>
                   <p className="mt-1 text-xs leading-relaxed text-amber-100/65">Kötelező, ha a teljes darabszám változik. Ez bekerül a készletmozgás naplójába.</p>
-                  <label className={`${label} mt-3`}>
-                    Ok
-                    <select className={select} value={stockEditorReasonCode} onChange={(e) => { setStockEditorReasonCode(e.target.value); if (e.target.value !== "other") setStockEditorReasonText(""); }}>
-                      <option value="">Válassz okot</option>
-                      <option value="inventory_difference">Leltáreltérés</option>
-                      <option value="incorrect_reception">Téves bevételezés</option>
-                      <option value="invoice_correction">Számlakorrekció</option>
-                      <option value="damaged_or_lost">Sérült vagy elveszett termék</option>
-                      <option value="admin_correction">Adminisztrációs javítás</option>
-                      <option value="other">Egyéb</option>
-                    </select>
-                  </label>
+                  <div className="mt-3">
+                    <MobileSingleSelect
+                      labelText="Ok"
+                      value={stockEditorReasonCode}
+                      emptyValue=""
+                      emptyText="Válassz okot"
+                      options={[
+                        { value: "inventory_difference", label: "Leltáreltérés" },
+                        { value: "incorrect_reception", label: "Téves bevételezés" },
+                        { value: "invoice_correction", label: "Számlakorrekció" },
+                        { value: "damaged_or_lost", label: "Sérült vagy elveszett termék" },
+                        { value: "admin_correction", label: "Adminisztrációs javítás" },
+                        { value: "other", label: "Egyéb" },
+                      ]}
+                      onChange={(next) => { setStockEditorReasonCode(next); if (next !== "other") setStockEditorReasonText(""); }}
+                    />
+                  </div>
                   {stockEditorReasonCode === "other" ? <label className={`${label} mt-3`}>Egyéb ok<input className={input} value={stockEditorReasonText} onChange={(e) => setStockEditorReasonText(e.target.value)} placeholder="Miért szükséges a korrekció?" /></label> : null}
                 </div>
               ) : null}
@@ -3000,8 +4072,11 @@ export default function AllInWarehouseMobile({ apiBase = "/api" }: Props) {
         </div>
       )}
 
-      <datalist id="warehouse-mobile-size-options">{sizeTypes.map((row) => <option key={row.id} value={row.name || row.code}>{row.name_hu || row.code}</option>)}</datalist>
-      <datalist id="warehouse-mobile-color-options">{colorTypes.map((row) => <option key={row.id} value={row.name_ro}>{row.name_hu || row.code}</option>)}</datalist>
+      <ShopifySyncCenterModal
+        open={shopifySyncCenterOpen}
+        onClose={() => setShopifySyncCenterOpen(false)}
+        onChanged={() => void load({ preferCache: false })}
+      />
     </main>
   );
 }
