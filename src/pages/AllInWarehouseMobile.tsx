@@ -1151,52 +1151,105 @@ function MobileSingleSelect({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
   const selected = options.find((option) => String(option.value) === String(value)) || null;
   const isEmpty = showEmptyOption && String(value) === String(emptyValue);
   const summary = isEmpty ? emptyText : selected?.label || emptyText;
+  const searchable = options.length > 8;
+  const pickerSearchKey = normalizeSearch(pickerSearch);
+  const visibleOptions = pickerSearchKey
+    ? options.filter((option) => normalizeSearch(`${option.label} ${option.hint || ""}`).includes(pickerSearchKey))
+    : options;
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  function closePicker() {
+    setOpen(false);
+    setPickerSearch("");
+  }
 
   const picker = open && typeof document !== "undefined" ? createPortal(
     <>
-      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/58 backdrop-blur-sm" onClick={() => setOpen(false)} />
-      <section className="fixed inset-x-0 bottom-0 z-[89] max-h-[78vh] overflow-hidden rounded-t-[28px] border border-white/18 bg-[#303a4c] shadow-2xl shadow-black/55">
-        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Kiválasztás</p>
-            <h3 className="truncate text-base text-white">{labelText}</h3>
+      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/68 backdrop-blur-[2px]" onClick={closePicker} />
+      <section
+        className="fixed inset-x-2 z-[89] flex min-h-0 flex-col overflow-hidden rounded-[26px] border border-white/20 bg-[#303a4c] shadow-[0_28px_90px_rgba(0,0,0,.62)]"
+        style={{ top: "max(8px, env(safe-area-inset-top))", bottom: "max(8px, env(safe-area-inset-bottom))" }}
+      >
+        <div className="shrink-0 border-b border-white/10 bg-[#354153] px-3 pb-2.5 pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Kiválasztás</p>
+              <h3 className="mt-0.5 truncate text-[17px] font-medium text-white">{labelText}</h3>
+              <p className="mt-0.5 text-[11px] text-white/45">{options.length} választható érték</p>
+            </div>
+            <button className={iconBtn} type="button" onClick={closePicker} aria-label="Bezárás"><X size={18} /></button>
           </div>
-          <button className={iconBtn} type="button" onClick={() => setOpen(false)} aria-label="Bezárás"><X size={17} /></button>
+          {searchable ? (
+            <div className="relative mt-2.5">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" />
+              <input
+                className={`${input} h-10 pl-9 pr-9`}
+                value={pickerSearch}
+                onChange={(event) => setPickerSearch(event.target.value)}
+                placeholder={`Keresés: ${labelText.toLowerCase()}`}
+                autoFocus
+              />
+              {pickerSearch ? <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-white/48 hover:bg-white/10 hover:text-white" onClick={() => setPickerSearch("")}><X size={14} /></button> : null}
+            </div>
+          ) : null}
         </div>
-        <div className="max-h-[calc(78vh-72px)] overflow-y-auto overscroll-contain p-2">
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2 [scrollbar-gutter:stable]">
           {showEmptyOption ? (
             <button
               type="button"
-              className={`flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 text-left text-sm transition ${isEmpty ? "bg-[#2a8d8b]/28 text-white" : "text-white/78 hover:bg-white/[0.07]"}`}
-              onClick={() => { onChange(emptyValue); setOpen(false); }}
+              className={`mb-1 flex min-h-11 w-full items-center gap-2 rounded-2xl border px-3 text-left text-sm transition ${isEmpty ? "border-[#7bd7d4]/40 bg-[#2a8d8b]/32 text-white" : "border-white/10 bg-white/[0.035] text-white/82 hover:bg-white/[0.08]"}`}
+              onClick={() => { onChange(emptyValue); closePicker(); }}
             >
               <span className="min-w-0 flex-1 truncate">{emptyText}</span>
               {isEmpty ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
             </button>
           ) : null}
-          {options.map((option) => {
-            const active = String(option.value) === String(value);
-            return (
-              <button
-                key={option.value}
-                type="button"
-                disabled={option.disabled}
-                className={`mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 text-left text-sm transition ${active ? "bg-[#2a8d8b]/28 text-white" : "text-white/78 hover:bg-white/[0.07]"} disabled:cursor-not-allowed disabled:opacity-40`}
-                onClick={() => { if (!option.disabled) { onChange(option.value); setOpen(false); } }}
-                title={option.hint || option.label}
-              >
-                <span style={{ width: `${Math.max(0, Number(option.depth || 0)) * 12}px` }} className="shrink-0" />
-                {option.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/35 bg-white/10" style={{ backgroundColor: option.swatch }} /> : null}
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                {option.hint ? <span className="max-w-[38%] shrink-0 truncate text-[10px] text-white/38">{option.hint}</span> : null}
-                {active ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
-              </button>
-            );
-          })}
-          {!options.length ? <div className="px-3 py-6 text-center text-sm text-white/45">Nincs választható érték.</div> : null}
+
+          <div className="grid gap-1.5">
+            {visibleOptions.map((option) => {
+              const active = String(option.value) === String(value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={option.disabled}
+                  className={`flex min-h-11 w-full items-center gap-2 rounded-2xl border px-3 py-2 text-left text-sm transition ${active ? "border-[#7bd7d4]/38 bg-[#2a8d8b]/30 text-white" : "border-white/[0.07] bg-[#293548] text-white/84 hover:bg-[#334158]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                  onClick={() => { if (!option.disabled) { onChange(option.value); closePicker(); } }}
+                  title={option.hint || option.label}
+                >
+                  <span style={{ width: `${Math.max(0, Number(option.depth || 0)) * 13}px` }} className="shrink-0" />
+                  {option.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/40 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,.035)]" style={{ backgroundColor: option.swatch }} /> : null}
+                  <span className="min-w-0 flex-1 truncate font-medium">{option.label}</span>
+                  {option.hint ? <span className="max-w-[42%] shrink-0 truncate text-[10px] text-white/42">{option.hint}</span> : null}
+                  {active ? <CheckCircle2 size={16} className="shrink-0 text-[#d7fffd]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          {!visibleOptions.length ? <div className="grid min-h-36 place-items-center px-4 text-center text-sm text-white/48">Nincs találat erre a keresésre.</div> : null}
+        </div>
+
+        <div className="shrink-0 border-t border-white/10 bg-[#2b3546] p-3">
+          <button className={`${primaryBtn} h-11 w-full`} type="button" onClick={closePicker}>Kész</button>
         </div>
       </section>
     </>,
@@ -1210,7 +1263,7 @@ function MobileSingleSelect({
         type="button"
         disabled={disabled}
         className="flex h-11 w-full min-w-0 items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm text-white outline-none transition hover:bg-[#2e3b50] focus:border-[#7bd7d4]/65 disabled:cursor-not-allowed disabled:opacity-45"
-        onClick={() => setOpen(true)}
+        onClick={() => { setPickerSearch(""); setOpen(true); }}
       >
         <span className="flex min-w-0 flex-1 items-center gap-2">
           {selected?.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/35" style={{ backgroundColor: selected.swatch }} /> : null}
@@ -1237,46 +1290,110 @@ function MobileMultiSelect({
   emptyText?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
   const selectedSet = useMemo(() => new Set((values || []).map(String)), [values]);
   const selectedRows = options.filter((option) => selectedSet.has(String(option.value)));
   const summary = !selectedRows.length ? emptyText : selectedRows.length <= 2 ? selectedRows.map((row) => row.label).join(" + ") : `${selectedRows.length} kiválasztva`;
+  const searchable = options.length > 10;
+  const pickerSearchKey = normalizeSearch(pickerSearch);
+  const visibleOptions = pickerSearchKey
+    ? options.filter((option) => normalizeSearch(`${option.label} ${option.hint || ""}`).includes(pickerSearchKey))
+    : options;
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  function closePicker() {
+    setOpen(false);
+    setPickerSearch("");
+  }
+
   const toggle = (value: string) => {
     const next = new Set((values || []).map(String));
     if (next.has(String(value))) next.delete(String(value)); else next.add(String(value));
     onChange(Array.from(next));
   };
 
+  function selectVisible() {
+    const next = new Set((values || []).map(String));
+    for (const option of visibleOptions) if (!option.disabled) next.add(String(option.value));
+    onChange(Array.from(next));
+  }
+
   const picker = open && typeof document !== "undefined" ? createPortal(
     <>
-      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/58 backdrop-blur-sm" onClick={() => setOpen(false)} />
-      <section className="fixed inset-x-0 bottom-0 z-[89] max-h-[82vh] overflow-hidden rounded-t-[28px] border border-white/18 bg-[#303a4c] shadow-2xl shadow-black/55">
-        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
-          <div><p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Több érték</p><h3 className="text-base text-white">{labelText}</h3></div>
-          <button className={iconBtn} type="button" onClick={() => setOpen(false)}><X size={17} /></button>
+      <button type="button" aria-label="Választó bezárása" className="fixed inset-0 z-[88] bg-black/68 backdrop-blur-[2px]" onClick={closePicker} />
+      <section
+        className="fixed inset-x-2 z-[89] flex min-h-0 flex-col overflow-hidden rounded-[26px] border border-white/20 bg-[#303a4c] shadow-[0_28px_90px_rgba(0,0,0,.62)]"
+        style={{ top: "max(8px, env(safe-area-inset-top))", bottom: "max(8px, env(safe-area-inset-bottom))" }}
+      >
+        <div className="shrink-0 border-b border-white/10 bg-[#354153] px-3 pb-2.5 pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.14em] text-[#cffffd]/65">Több érték</p>
+              <h3 className="mt-0.5 truncate text-[17px] font-medium text-white">{labelText}</h3>
+              <p className="mt-0.5 text-[11px] text-white/45">{selectedRows.length ? `${selectedRows.length} kijelölve • ` : ""}{options.length} választható</p>
+            </div>
+            <button className={iconBtn} type="button" onClick={closePicker} aria-label="Bezárás"><X size={18} /></button>
+          </div>
+          {searchable ? (
+            <div className="relative mt-2.5">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/42" />
+              <input
+                className={`${input} h-10 pl-9 pr-9`}
+                value={pickerSearch}
+                onChange={(event) => setPickerSearch(event.target.value)}
+                placeholder={`Keresés: ${labelText.toLowerCase()}`}
+                autoFocus
+              />
+              {pickerSearch ? <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-white/48 hover:bg-white/10 hover:text-white" onClick={() => setPickerSearch("")}><X size={14} /></button> : null}
+            </div>
+          ) : null}
         </div>
-        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
-          <button className={softBtn} type="button" onClick={() => onChange([])}>Összes</button>
-          <button className={softBtn} type="button" onClick={() => onChange(options.filter((o) => !o.disabled).map((o) => o.value))}>Mind kijelölése</button>
+
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-white/10 bg-[#2f394a] px-3 py-2.5">
+          <button className={`${softBtn} h-9`} type="button" onClick={() => onChange([])}>Összes</button>
+          <button className={`${softBtn} h-9`} type="button" onClick={selectVisible} disabled={!visibleOptions.some((option) => !option.disabled)}>{pickerSearchKey ? "Találatok kijelölése" : "Mind kijelölése"}</button>
         </div>
-        <div className="max-h-[calc(82vh-138px)] overflow-y-auto overscroll-contain p-2">
-          {options.map((option) => {
-            const active = selectedSet.has(String(option.value));
-            return (
-              <button
-                key={option.value}
-                type="button"
-                disabled={option.disabled}
-                className={`mt-1 flex min-h-11 w-full items-center gap-3 rounded-2xl px-3 text-left text-sm transition ${active ? "bg-[#2a8d8b]/28 text-white" : "text-white/78 hover:bg-white/[0.07]"} disabled:opacity-40`}
-                onClick={() => !option.disabled && toggle(option.value)}
-              >
-                <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${active ? "border-[#7bd7d4]/70 bg-[#2a8d8b]" : "border-white/25 bg-[#263246]"}`}>{active ? <CheckCircle2 size={14} /> : null}</span>
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
-              </button>
-            );
-          })}
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2 [scrollbar-gutter:stable]">
+          <div className="grid gap-1.5">
+            {visibleOptions.map((option) => {
+              const active = selectedSet.has(String(option.value));
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={option.disabled}
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left text-sm transition ${active ? "border-[#7bd7d4]/38 bg-[#2a8d8b]/30 text-white" : "border-white/[0.07] bg-[#293548] text-white/84 hover:bg-[#334158]"} disabled:cursor-not-allowed disabled:opacity-40`}
+                  onClick={() => !option.disabled && toggle(option.value)}
+                  title={option.hint || option.label}
+                >
+                  <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${active ? "border-[#7bd7d4]/70 bg-[#2a8d8b]" : "border-white/28 bg-[#202b3b]"}`}>{active ? <CheckCircle2 size={14} /> : null}</span>
+                  {option.swatch ? <span className="h-4 w-4 shrink-0 rounded-full border border-white/40" style={{ backgroundColor: option.swatch }} /> : null}
+                  <span className="min-w-0 flex-1 truncate font-medium">{option.label}</span>
+                  {option.hint ? <span className="max-w-[42%] shrink-0 truncate text-[10px] text-white/42">{option.hint}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+          {!visibleOptions.length ? <div className="grid min-h-36 place-items-center px-4 text-center text-sm text-white/48">Nincs találat erre a keresésre.</div> : null}
         </div>
-        <div className="border-t border-white/10 p-3"><button className={`${primaryBtn} w-full`} type="button" onClick={() => setOpen(false)}>Kész</button></div>
+
+        <div className="shrink-0 border-t border-white/10 bg-[#2b3546] p-3">
+          <button className={`${primaryBtn} h-11 w-full`} type="button" onClick={closePicker}>Kész{selectedRows.length ? ` • ${selectedRows.length} kijelölve` : ""}</button>
+        </div>
       </section>
     </>,
     document.body,
@@ -1285,7 +1402,7 @@ function MobileMultiSelect({
   return (
     <div className={label}>
       {labelText}
-      <button type="button" className="flex h-11 w-full items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm text-white" onClick={() => setOpen(true)}>
+      <button type="button" className="flex h-11 w-full items-center justify-between gap-2 rounded-2xl border border-white/16 bg-[#263246] px-3 text-left text-sm text-white" onClick={() => { setPickerSearch(""); setOpen(true); }}>
         <span className="min-w-0 flex-1 truncate">{summary}</span>
         <span className="flex shrink-0 items-center gap-1.5">{selectedRows.length ? <span className="rounded-full bg-[#2a8d8b]/35 px-1.5 py-0.5 text-[10px] text-[#d7fffd]">{selectedRows.length}</span> : null}<ChevronDown size={16} className="text-white/48" /></span>
       </button>
@@ -1293,7 +1410,6 @@ function MobileMultiSelect({
     </div>
   );
 }
-
 
 function historyDateTime(value?: string | null) {
   if (!value) return "-";
