@@ -11,7 +11,6 @@ import {
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
-  BarChart3,
   CheckCircle2,
   ChevronRight,
   CircleDollarSign,
@@ -339,12 +338,16 @@ function SummaryCard({
   hint,
   icon: Icon,
   tone = "normal",
+  active = false,
+  onClick,
 }: {
   label: string;
   value: string;
   hint: string;
   icon: ComponentType<{ size?: number; className?: string }>;
   tone?: "normal" | "green" | "blue" | "red" | "gold";
+  active?: boolean;
+  onClick?: () => void;
 }) {
   const toneClass = tone === "green"
     ? "border-emerald-200/28 bg-gradient-to-br from-[#1f7666] via-[#28665f] to-[#344154]"
@@ -355,20 +358,42 @@ function SummaryCard({
         : tone === "gold"
           ? "border-amber-200/26 bg-gradient-to-br from-[#65593d] to-[#344154]"
           : "border-white/16 bg-gradient-to-br from-[#3d4b5f] to-[#344154]";
-  return (
-    <article className={`min-w-0 rounded-[21px] border p-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.16)] ${toneClass}`}>
+  const interactiveClass = onClick
+    ? "cursor-pointer text-left transition hover:-translate-y-0.5 hover:border-[#9be9e5]/55 hover:shadow-[0_16px_34px_rgba(15,23,42,0.28)] focus:outline-none focus:ring-2 focus:ring-[#9be9e5]/45 active:translate-y-0"
+    : "";
+  const activeClass = active
+    ? "ring-2 ring-[#9be9e5]/65 border-[#b9fffb]/70 shadow-[0_0_0_1px_rgba(155,233,229,0.16),0_18px_38px_rgba(15,23,42,0.30)]"
+    : "";
+  const className = `min-w-0 rounded-[21px] border p-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.16)] ${toneClass} ${interactiveClass} ${activeClass}`;
+  const content = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[9px] uppercase tracking-[0.14em] text-white/55">{label}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-[9px] uppercase tracking-[0.14em] text-white/55">{label}</p>
+            {active ? <span className="rounded-full border border-[#cffffd]/30 bg-[#2a8d8b]/36 px-2 py-0.5 text-[8px] uppercase tracking-[0.08em] text-[#e8ffff]">Aktív szűrő</span> : null}
+          </div>
           <p className="mt-2 truncate text-[clamp(1.05rem,1.6vw,1.55rem)] leading-none text-white" title={value}>{value}</p>
         </div>
         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-white/[0.07] text-[#d7fffd]">
           <Icon size={17} />
         </span>
       </div>
-      <p className="mt-2.5 truncate text-[10px] text-white/50" title={hint}>{hint}</p>
-    </article>
+      <div className="mt-2.5 flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-[10px] text-white/50" title={hint}>{hint}</p>
+        {onClick ? <span className="shrink-0 text-[9px] text-[#bff8f5]/72">{active ? "Törlés" : "Szűrés"}</span> : null}
+      </div>
+    </>
   );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} aria-pressed={active} className={className}>
+        {content}
+      </button>
+    );
+  }
+  return <article className={className}>{content}</article>;
 }
 
 function StorePerformanceCard({ store }: { store: AifAdminCustomerStoreSummary }) {
@@ -466,9 +491,8 @@ function EmployeePerformance({
               <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-[#202b3c]">
                 <div className="h-full rounded-full bg-gradient-to-r from-[#2a8d8b] to-[#69ddd8]" style={{ width: `${Math.max(3, item.revenue / maxRevenue * 100)}%` }} />
               </div>
-              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-white/45">
+              <div className="mt-2 text-[10px] text-white/45">
                 <span>{integer(item.customers)} kliens • {integer(item.transactions)} vásárlás</span>
-                <span>{money(item.averageBasket)} / kosár</span>
               </div>
             </button>
           );
@@ -895,7 +919,6 @@ function CustomerDetailModal({
     { label: "Forgalom", value: money(item.periodRevenue), icon: CircleDollarSign },
     { label: "Vásárlás", value: integer(item.periodTransactions), icon: ReceiptText },
     { label: "Darab", value: `${integer(item.periodItemsSold)} db`, icon: ShoppingBag },
-    { label: "Átlagkosár", value: money(item.periodAverageBasket), icon: BarChart3 },
     { label: "Kedvezmény", value: money(item.periodDiscountTotal), icon: TrendingUp },
   ];
 
@@ -1160,7 +1183,7 @@ function CustomerDetailModal({
               </div>
               <span className="rounded-full border border-[#9be9e5]/25 bg-[#2a8d8b]/12 px-3 py-1 text-xs text-[#d7fffd]">{activityText(item, year)}</span>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {yearMetrics.map(({ label, value, icon: Icon }) => (
                 <div key={label} className="rounded-2xl border border-white/10 bg-[#293548] p-3">
                   <div className="flex items-center justify-between gap-2">
@@ -1304,6 +1327,8 @@ function CustomerDetailModal({
   );
 }
 
+type SummaryQuickFilter = "" | "revenue" | "buyers" | "transactions" | "repeat" | "debt";
+
 export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: Props) {
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
@@ -1320,6 +1345,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [summaryQuickFilter, setSummaryQuickFilter] = useState<SummaryQuickFilter>("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1380,6 +1406,42 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
     setTopTen(false);
     setSearchDraft("");
     setSearch("");
+    setSummaryQuickFilter("");
+  }
+
+  function applySummaryQuickFilter(next: Exclude<SummaryQuickFilter, "">) {
+    if (summaryQuickFilter === next) {
+      setSummaryQuickFilter("");
+      setActivity("all");
+      setSort("revenue");
+      setTopTen(false);
+      return;
+    }
+
+    setSummaryQuickFilter(next);
+    setTopTen(false);
+    if (next === "revenue") {
+      setActivity("buyers");
+      setSort("revenue");
+      return;
+    }
+    if (next === "buyers") {
+      setActivity("buyers");
+      setSort("name");
+      return;
+    }
+    if (next === "transactions") {
+      setActivity("buyers");
+      setSort("transactions");
+      return;
+    }
+    if (next === "repeat") {
+      setActivity("repeat");
+      setSort("revenue");
+      return;
+    }
+    setActivity("debt");
+    setSort("debt");
   }
 
   async function handleCustomerChanged(message: string, deleted = false) {
@@ -1470,6 +1532,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
             <button
               type="button"
               onClick={() => {
+                setSummaryQuickFilter("");
                 setTopTen((value) => {
                   const next = !value;
                   if (next) {
@@ -1501,7 +1564,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
             </label>
             <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/45">
               Aktivitás
-              <select value={activity} onChange={(event: ChangeEvent<HTMLSelectElement>) => setActivity(event.target.value as AifAdminCustomerActivityFilter)} className={`${control} w-full`}>
+              <select value={activity} onChange={(event: ChangeEvent<HTMLSelectElement>) => { setSummaryQuickFilter(""); setActivity(event.target.value as AifAdminCustomerActivityFilter); }} className={`${control} w-full`}>
                 <option value="all">Minden kliens</option>
                 <option value="buyers">Vásárolt ebben az évben</option>
                 <option value="repeat">Visszatérő kliens</option>
@@ -1511,11 +1574,10 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
             </label>
             <label className="grid gap-1 text-[9px] uppercase tracking-[0.1em] text-white/45">
               Rendezés
-              <select value={sort} disabled={topTen} onChange={(event: ChangeEvent<HTMLSelectElement>) => setSort(event.target.value as AifAdminCustomerSort)} className={`${control} w-full disabled:cursor-not-allowed disabled:opacity-45`}>
+              <select value={sort} disabled={topTen} onChange={(event: ChangeEvent<HTMLSelectElement>) => { setSummaryQuickFilter(""); setSort(event.target.value as AifAdminCustomerSort); }} className={`${control} w-full disabled:cursor-not-allowed disabled:opacity-45`}>
                 <option value="revenue">Forgalom szerint</option>
                 <option value="transactions">Vásárlások szerint</option>
                 <option value="items">Darabszám szerint</option>
-                <option value="average">Átlagkosár szerint</option>
                 <option value="last_sale">Utolsó vásárlás szerint</option>
                 <option value="debt">Tartozás szerint</option>
                 <option value="name">Név szerint</option>
@@ -1571,14 +1633,52 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
           </div>
         ) : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-          <SummaryCard label="Forgalom" value={money(summary?.revenue)} hint={`${year} • ${data?.scope.locationName || "Mindkét üzlet"}`} icon={CircleDollarSign} tone="green" />
-          <SummaryCard label="Vásárló kliensek" value={integer(summary?.buyingCustomers)} hint={`${integer(summary?.newCustomers)} új • ${integer(summary?.inactiveCustomers)} nem vásárolt ebben az évben`} icon={UserCheck} tone="blue" />
-          <SummaryCard label="Vásárlások" value={integer(summary?.transactions)} hint={`${integer(summary?.itemsSold)} eladott darab`} icon={ReceiptText} />
-          <SummaryCard label="Átlag / kliens" value={money(summary?.averageCustomerValue)} hint="Csak az adott évben vásárlók alapján" icon={TrendingUp} tone="green" />
-          <SummaryCard label="Átlagkosár" value={money(summary?.averageBasket)} hint="Egy lezárt vásárlás átlagértéke" icon={ShoppingBag} />
-          <SummaryCard label="Visszatérők" value={integer(summary?.repeatCustomers)} hint="Legalább 2 vásárlás a kiválasztott évben" icon={Users} tone="gold" />
-          <SummaryCard label="Jelenlegi tartozás" value={money(summary?.currentOpenBalance)} hint={`${money(summary?.periodBalanceDue)} a kiválasztott év eladásaiból`} icon={WalletCards} tone={numberValue(summary?.currentOpenBalance) > 0 ? "red" : "normal"} />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+          <SummaryCard
+            label="Forgalom"
+            value={money(summary?.revenue)}
+            hint={`${year} • ${data?.scope.locationName || "Mindkét üzlet"} • forgalom szerint`}
+            icon={CircleDollarSign}
+            tone="green"
+            active={summaryQuickFilter === "revenue"}
+            onClick={() => applySummaryQuickFilter("revenue")}
+          />
+          <SummaryCard
+            label="Vásárló kliensek"
+            value={integer(summary?.buyingCustomers)}
+            hint={`${integer(summary?.newCustomers)} új • kattints a vásárlókhoz`}
+            icon={UserCheck}
+            tone="blue"
+            active={summaryQuickFilter === "buyers"}
+            onClick={() => applySummaryQuickFilter("buyers")}
+          />
+          <SummaryCard
+            label="Vásárlások"
+            value={integer(summary?.transactions)}
+            hint={`${integer(summary?.itemsSold)} eladott darab • vásárlásszám szerint`}
+            icon={ReceiptText}
+            active={summaryQuickFilter === "transactions"}
+            onClick={() => applySummaryQuickFilter("transactions")}
+          />
+          <SummaryCard label="Átlag / kliens" value={money(summary?.averageCustomerValue)} hint="Az adott évben vásárló kliensek átlagos értéke" icon={TrendingUp} tone="green" />
+          <SummaryCard
+            label="Visszatérők"
+            value={integer(summary?.repeatCustomers)}
+            hint="Legalább 2 vásárlás a kiválasztott évben"
+            icon={Users}
+            tone="gold"
+            active={summaryQuickFilter === "repeat"}
+            onClick={() => applySummaryQuickFilter("repeat")}
+          />
+          <SummaryCard
+            label="Jelenlegi tartozás"
+            value={money(summary?.currentOpenBalance)}
+            hint={`${money(summary?.periodBalanceDue)} a kiválasztott év eladásaiból`}
+            icon={WalletCards}
+            tone={numberValue(summary?.currentOpenBalance) > 0 ? "red" : "normal"}
+            active={summaryQuickFilter === "debt"}
+            onClick={() => applySummaryQuickFilter("debt")}
+          />
         </section>
 
         <section className="grid gap-3 lg:grid-cols-2">
@@ -1600,7 +1700,7 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
           </div>
 
           <div className="hidden overflow-x-auto lg:block">
-            <table className="w-full min-w-[1260px] border-collapse text-xs">
+            <table className="w-full min-w-[1120px] border-collapse text-xs">
               <thead className="bg-[#293548] text-[9px] uppercase tracking-[0.08em] text-white/43">
                 <tr>
                   {topTen ? <th className="w-[54px] px-3 py-3 text-center">#</th> : null}
@@ -1608,7 +1708,6 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                   <th className="min-w-[150px] px-3 py-3 text-left">Üzlet</th>
                   <th className="px-3 py-3 text-right">{year}. évi forgalom</th>
                   <th className="px-3 py-3 text-center">Vásárlás / db</th>
-                  <th className="px-3 py-3 text-right">Átlagkosár</th>
                   <th className="min-w-[260px] px-3 py-3 text-left">Eladó(k)</th>
                   <th className="min-w-[180px] px-3 py-3 text-left">Aktivitás</th>
                   <th className="px-3 py-3 text-right">Tartozás</th>
@@ -1646,7 +1745,6 @@ export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: P
                       ) : null}
                     </td>
                     <td className="px-3 py-3 text-center"><p className="text-white">{integer(item.periodTransactions)} / {integer(item.periodItemsSold)} db</p></td>
-                    <td className="whitespace-nowrap px-3 py-3 text-right text-white/78">{money(item.periodAverageBasket)}</td>
                     <td className="px-3 py-3"><SellerChips sellers={item.employees} /></td>
                     <td className="px-3 py-3"><p className={item.periodTransactions > 0 ? "text-white/70" : "text-amber-50/72"}>{activityText(item, year)}</p></td>
                     <td className={`whitespace-nowrap px-3 py-3 text-right ${item.currentOpenBalance > 0.005 ? "text-rose-50" : "text-white/45"}`}>{money(item.currentOpenBalance)}</td>
