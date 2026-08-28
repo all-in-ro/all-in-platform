@@ -10,10 +10,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlertTriangle,
   BarChart3,
   CheckCircle2,
   ChevronRight,
   CircleDollarSign,
+  Edit3,
   Filter,
   Home,
   Loader2,
@@ -23,10 +25,12 @@ import {
   Phone,
   ReceiptText,
   RefreshCw,
+  Save,
   Search,
   ShoppingBag,
   SlidersHorizontal,
   Store,
+  Trash2,
   TrendingUp,
   Trophy,
   UserCheck,
@@ -80,6 +84,107 @@ function percent(value: unknown) {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   })}%`;
+}
+
+type AdminShopCustomerRecord = {
+  id: string;
+  fullName: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  city?: string | null;
+  countryCode?: string | null;
+  countyCode?: string | null;
+  countyName?: string | null;
+  localityCode?: string | null;
+  localityName?: string | null;
+  postalCode?: string | null;
+  formattedAddress?: string | null;
+  notes?: string | null;
+  creditLimit?: number | null;
+  openBalance?: number | null;
+  openSales?: number | null;
+  saleCount?: number | null;
+  locationId?: string | null;
+  locationCode?: string | null;
+  locationName?: string | null;
+};
+
+type RomaniaCountyOption = { code: string; name: string };
+type RomaniaLocalityOption = { sirutaCode: string; name: string; postalCode?: string | null };
+
+type CustomerEditorForm = {
+  fullName: string;
+  phone: string;
+  email: string;
+  countyCode: string;
+  localityCode: string;
+  city: string;
+  address: string;
+  postalCode: string;
+  notes: string;
+  creditLimit: string;
+};
+
+function customerEditorFromRecord(record?: AdminShopCustomerRecord | null): CustomerEditorForm {
+  return {
+    fullName: String(record?.fullName || ""),
+    phone: String(record?.phone || ""),
+    email: String(record?.email || ""),
+    countyCode: String(record?.countyCode || ""),
+    localityCode: String(record?.localityCode || ""),
+    city: String(record?.city || record?.localityName || ""),
+    address: String(record?.address || ""),
+    postalCode: String(record?.postalCode || ""),
+    notes: String(record?.notes || ""),
+    creditLimit: String(numberValue(record?.creditLimit || 0)),
+  };
+}
+
+async function adminClientJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "include",
+    cache: "no-store",
+    ...options,
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error(body?.error || `HTTP ${response.status}`) as Error & { status?: number; code?: string };
+    error.status = response.status;
+    error.code = body?.code || undefined;
+    throw error;
+  }
+  return body as T;
+}
+
+async function apiAdminCustomerRecord(customerId: string, location: string, year: number) {
+  const query = new URLSearchParams({ location, year: String(year), salesLimit: "1", paymentsLimit: "1" });
+  return adminClientJson<{ ok: true; item: AdminShopCustomerRecord }>(`/api/aif/shop-customers/${encodeURIComponent(customerId)}?${query.toString()}`);
+}
+
+async function apiAdminUpdateCustomerRecord(customerId: string, location: string, payload: Record<string, unknown>) {
+  return adminClientJson<{ ok: true; item: AdminShopCustomerRecord }>(`/api/aif/shop-customers/${encodeURIComponent(customerId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, location }),
+  });
+}
+
+async function apiAdminDeleteCustomerRecord(customerId: string, location: string) {
+  const query = new URLSearchParams({ location });
+  return adminClientJson<{ ok: true; mode: "deleted" | "archived"; usage?: { sales?: number; payments?: number; openBalance?: number } }>(
+    `/api/aif/shop-customers/${encodeURIComponent(customerId)}?${query.toString()}`,
+    { method: "DELETE" },
+  );
+}
+
+async function apiAdminRomaniaCounties() {
+  return adminClientJson<{ ok: true; items: RomaniaCountyOption[] }>("/api/aif/romania/counties");
+}
+
+async function apiAdminRomaniaLocalities(countyCode: string) {
+  const query = new URLSearchParams({ county: countyCode, limit: "1000" });
+  return adminClientJson<{ ok: true; items: RomaniaLocalityOption[] }>(`/api/aif/romania/localities?${query.toString()}`);
 }
 
 function formatDate(value?: string | null) {
@@ -294,24 +399,132 @@ function SellerChips({ sellers }: { sellers: AifAdminCustomerSellerBreakdown[] }
 function CustomerDetailModal({
   item,
   year,
+  canManage,
   onClose,
+  onChanged,
 }: {
   item: AifAdminCustomerOverviewItem;
   year: number;
+  canManage: boolean;
   onClose: () => void;
+  onChanged: (message: string, deleted?: boolean) => Promise<void> | void;
 }) {
+  const editableStores = useMemo(
+    () => item.stores.filter((store) => String(store.customerId || "").trim() && String(store.locationCode || store.locationId || "").trim()),
+    [item.stores],
+  );
+  const firstStoreKey = editableStores[0]
+    ? `${editableStores[0].locationId || editableStores[0].locationCode}:${editableStores[0].customerId}`
+    : "";
+  const [activeStoreKey, setActiveStoreKey] = useState(firstStoreKey);
+  const [liveCustomer, setLiveCustomer] = useState<AdminShopCustomerRecord | null>(null);
+  const [recordBusy, setRecordBusy] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editor, setEditor] = useState<CustomerEditorForm>(() => customerEditorFromRecord(null));
+  const [counties, setCounties] = useState<RomaniaCountyOption[]>([]);
+  const [localities, setLocalities] = useState<RomaniaLocalityOption[]>([]);
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  const activeStore = useMemo(() => {
+    return editableStores.find((store) => `${store.locationId || store.locationCode}:${store.customerId}` === activeStoreKey)
+      || editableStores[0]
+      || null;
+  }, [activeStoreKey, editableStores]);
+  const activeCustomerId = String(activeStore?.customerId || "").trim();
+  const activeLocation = String(activeStore?.locationCode || activeStore?.locationId || "").trim();
+  const activeStoreName = activeStore?.locationCode === "main_warehouse"
+    ? "Csíkszereda"
+    : activeStore?.locationCode === "magazin_targu_secuiesc"
+      ? "Kézdivásárhely"
+      : String(activeStore?.locationName || "Üzlet");
+
+  const loadLiveCustomer = useCallback(async () => {
+    if (!activeCustomerId || !activeLocation) {
+      setLiveCustomer(null);
+      return null;
+    }
+    setRecordBusy(true);
+    setActionError("");
+    try {
+      const response = await apiAdminCustomerRecord(activeCustomerId, activeLocation, year);
+      setLiveCustomer(response.item);
+      if (!editMode) setEditor(customerEditorFromRecord(response.item));
+      return response.item;
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "A kliens aktuális adatai nem tölthetők be.");
+      return null;
+    } finally {
+      setRecordBusy(false);
+    }
+  }, [activeCustomerId, activeLocation, editMode, year]);
+
+  useEffect(() => {
+    setActiveStoreKey(firstStoreKey);
+    setEditMode(false);
+    setDeleteConfirmOpen(false);
+    setActionError("");
+  }, [firstStoreKey, item.key]);
+
+  useEffect(() => {
+    setEditMode(false);
+    setDeleteConfirmOpen(false);
+    void loadLiveCustomer();
+  }, [activeStoreKey]);
+
+  useEffect(() => {
+    if (!editMode || counties.length) return;
+    let cancelled = false;
+    void apiAdminRomaniaCounties()
+      .then((response) => { if (!cancelled) setCounties(response.items || []); })
+      .catch((caught) => { if (!cancelled) setActionError(caught instanceof Error ? caught.message : "A megyék nem tölthetők be."); });
+    return () => { cancelled = true; };
+  }, [counties.length, editMode]);
+
+  useEffect(() => {
+    if (!editMode || !editor.countyCode) {
+      setLocalities([]);
+      return;
+    }
+    let cancelled = false;
+    setGeoBusy(true);
+    void apiAdminRomaniaLocalities(editor.countyCode)
+      .then((response) => {
+        if (cancelled) return;
+        setLocalities(response.items || []);
+      })
+      .catch((caught) => { if (!cancelled) setActionError(caught instanceof Error ? caught.message : "A helységek nem tölthetők be."); })
+      .finally(() => { if (!cancelled) setGeoBusy(false); });
+    return () => { cancelled = true; };
+  }, [editMode, editor.countyCode]);
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (deleteConfirmOpen) {
+        setDeleteConfirmOpen(false);
+        return;
+      }
+      if (editMode && !saveBusy) {
+        setEditMode(false);
+        setEditor(customerEditorFromRecord(liveCustomer));
+        setActionError("");
+        return;
+      }
+      if (!saveBusy && !deleteBusy) onClose();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [onClose]);
+  }, [deleteBusy, deleteConfirmOpen, editMode, liveCustomer, onClose, saveBusy]);
 
   const maxSeller = Math.max(1, ...item.employees.map((seller) => seller.revenue));
   const yearMetrics: Array<{
@@ -326,48 +539,235 @@ function CustomerDetailModal({
     { label: "Kedvezmény", value: money(item.periodDiscountTotal), icon: TrendingUp },
   ];
 
+  const displayName = liveCustomer?.fullName || item.fullName;
+  const displayPhone = liveCustomer?.phone ?? item.phone;
+  const displayEmail = liveCustomer?.email ?? item.email;
+  const displayAddress = liveCustomer?.formattedAddress || liveCustomer?.address || item.address;
+  const displayNotes = liveCustomer?.notes ?? item.note;
+  const selectedOpenBalance = liveCustomer ? numberValue(liveCustomer.openBalance) : numberValue(item.currentOpenBalance);
+  const selectedOpenSales = liveCustomer ? numberValue(liveCustomer.openSales) : numberValue(item.currentOpenSales);
+  const deleteBlocked = selectedOpenBalance > 0.005;
+
+  function startEditing() {
+    if (!canManage || recordBusy || !activeCustomerId) return;
+    if (!liveCustomer) {
+      void loadLiveCustomer().then((record) => {
+        if (!record) return;
+        setEditor(customerEditorFromRecord(record));
+        setEditMode(true);
+      });
+      return;
+    }
+    setEditor(customerEditorFromRecord(liveCustomer));
+    setActionError("");
+    setEditMode(true);
+  }
+
+  async function saveCustomer() {
+    if (!activeCustomerId || !activeLocation) return;
+    if (!editor.fullName.trim()) {
+      setActionError("A kliens neve kötelező.");
+      return;
+    }
+    if (editor.countyCode && !editor.localityCode) {
+      setActionError("A kiválasztott megyéhez helységet is válassz.");
+      return;
+    }
+    const creditLimit = Number(String(editor.creditLimit || "0").replace(",", "."));
+    if (!Number.isFinite(creditLimit) || creditLimit < 0) {
+      setActionError("A hitelkeret 0 vagy pozitív szám lehet.");
+      return;
+    }
+
+    setSaveBusy(true);
+    setActionError("");
+    try {
+      const payload: Record<string, unknown> = {
+        fullName: editor.fullName.trim(),
+        phone: editor.phone.trim(),
+        email: editor.email.trim() || null,
+        address: editor.address.trim() || null,
+        city: editor.city.trim() || null,
+        postalCode: editor.postalCode.trim() || null,
+        notes: editor.notes.trim() || null,
+        creditLimit,
+      };
+      if (editor.countyCode || editor.localityCode) {
+        payload.countryCode = "RO";
+        payload.countyCode = editor.countyCode;
+        payload.localityCode = editor.localityCode;
+      }
+      const response = await apiAdminUpdateCustomerRecord(activeCustomerId, activeLocation, payload);
+      setLiveCustomer(response.item);
+      setEditor(customerEditorFromRecord(response.item));
+      setEditMode(false);
+      await onChanged(`Kliens módosítva: ${response.item.fullName} • ${activeStoreName}.`);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "A kliens mentése nem sikerült.");
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function deleteCustomer() {
+    if (!activeCustomerId || !activeLocation || deleteBlocked) return;
+    setDeleteBusy(true);
+    setActionError("");
+    try {
+      const response = await apiAdminDeleteCustomerRecord(activeCustomerId, activeLocation);
+      const message = response.mode === "archived"
+        ? `A kliens archiválva lett ${activeStoreName} üzletben. A vásárlási előzmények megmaradtak.`
+        : `A kliens végleg törölve lett ${activeStoreName} üzletből.`;
+      setDeleteConfirmOpen(false);
+      await onChanged(message, true);
+    } catch (caught) {
+      setDeleteConfirmOpen(false);
+      setActionError(caught instanceof Error ? caught.message : "A kliens törlése nem sikerült.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return createPortal(
     <div
       className="fixed inset-0 z-[420] grid place-items-center bg-slate-950/82 px-3 py-5 backdrop-blur-sm"
       onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
-        if (event.currentTarget === event.target) onClose();
+        if (event.currentTarget === event.target && !editMode && !saveBusy && !deleteBusy) onClose();
       }}
     >
-      <section className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/30 bg-[#303a4c] text-white shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
+      <section className="flex max-h-[92vh] w-full max-w-[1040px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/30 bg-[#303a4c] text-white shadow-[0_34px_110px_rgba(0,0,0,0.62)]">
         <header className="flex items-start justify-between gap-3 border-b border-white/12 bg-gradient-to-r from-[#25354a] via-[#28545b] to-[#2a6f70] px-4 py-4 sm:px-5">
           <div className="flex min-w-0 items-start gap-3">
             <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/22 bg-white/[0.08] text-[#d7fffd]">
               <UserRound size={23} />
             </span>
             <div className="min-w-0">
-              <p className="text-[9px] uppercase tracking-[0.16em] text-white/48">Kliens teljesítménylap</p>
-              <h2 className="mt-1 truncate text-xl text-white sm:text-2xl">{item.fullName}</h2>
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/48">Kliens adatlap és kezelés</p>
+              <h2 className="mt-1 truncate text-xl text-white sm:text-2xl">{displayName}</h2>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {item.stores.map((store) => <StoreBadge key={`${store.locationId}-${store.customerId}`} code={store.locationCode} name={store.locationName} />)}
                 {item.combined ? <span className="rounded-full border border-amber-200/28 bg-amber-400/10 px-2.5 py-1 text-[10px] text-amber-50">Két üzletből összevonva</span> : null}
               </div>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-white/[0.1]" aria-label="Bezárás">
-            <X size={18} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {canManage ? (
+              <button type="button" onClick={startEditing} disabled={recordBusy || saveBusy || deleteBusy} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#9be9e5]/35 bg-[#2a8d8b]/22 px-3 text-xs text-[#d7fffd] transition hover:bg-[#2a8d8b]/34 disabled:opacity-45">
+                <Edit3 size={15} /> Szerkesztés
+              </button>
+            ) : null}
+            <button type="button" onClick={onClose} disabled={saveBusy || deleteBusy} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/18 bg-black/10 text-white transition hover:bg-white/[0.1] disabled:opacity-45" aria-label="Bezárás">
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-          <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
-            <div className="rounded-2xl border border-white/10 bg-[#293548] p-4">
-              <p className="text-[9px] uppercase tracking-[0.12em] text-white/40">Kapcsolati adatok</p>
-              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-white/70">
-                {item.phone ? <span className="inline-flex items-center gap-2"><Phone size={14} className="text-[#8ee6e2]" />{item.phone}</span> : null}
-                {item.email ? <span className="inline-flex items-center gap-2"><Mail size={14} className="text-[#8ee6e2]" />{item.email}</span> : null}
-                {item.address ? <span className="inline-flex min-w-0 items-center gap-2"><MapPin size={14} className="shrink-0 text-[#8ee6e2]" /><span>{item.address}</span></span> : null}
-                {!item.phone && !item.email && !item.address ? <span className="text-white/38">Nincs további kapcsolati adat.</span> : null}
+          {editableStores.length > 1 ? (
+            <div className="mb-3 rounded-2xl border border-amber-200/20 bg-amber-400/7 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-amber-50/50">Melyik üzleti kliensrekordot kezeled?</p>
+                  <p className="mt-1 text-xs text-amber-50/72">A két üzlet kliensállománya külön él. A módosítás és törlés csak a kiválasztott üzlet rekordját érinti.</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {editableStores.map((store) => {
+                    const key = `${store.locationId || store.locationCode}:${store.customerId}`;
+                    const active = key === activeStoreKey;
+                    return (
+                      <button key={key} type="button" disabled={saveBusy || deleteBusy} onClick={() => setActiveStoreKey(key)} className={`h-9 rounded-xl border px-3 text-xs transition ${active ? "border-[#9be9e5]/50 bg-[#2a8d8b] text-white" : "border-white/14 bg-[#293548] text-white/62 hover:bg-[#37445a]"}`}>
+                        {store.locationCode === "main_warehouse" ? "Csíkszereda" : store.locationCode === "magazin_targu_secuiesc" ? "Kézdivásárhely" : (store.locationName || "Üzlet")}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-            <div className={`min-w-[230px] rounded-2xl border p-4 ${item.currentOpenBalance > 0.005 ? "border-rose-200/30 bg-rose-500/14" : "border-emerald-200/22 bg-emerald-500/8"}`}>
+          ) : null}
+
+          {actionError ? (
+            <div className="mb-3 flex items-start gap-2 rounded-2xl border border-rose-200/30 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{actionError}</span>
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+            <div className="rounded-2xl border border-white/10 bg-[#293548] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-white/40">Kapcsolati adatok</p>
+                  <p className="mt-1 text-xs text-white/45">{activeStoreName} • {recordBusy ? "frissítés…" : "élő kliensadat"}</p>
+                </div>
+                {recordBusy ? <Loader2 size={17} className="animate-spin text-[#8ee6e2]" /> : null}
+              </div>
+
+              {editMode ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-[10px] text-white/58">Név
+                    <input className={`${control} w-full`} value={editor.fullName} onChange={(event) => setEditor((current) => ({ ...current, fullName: event.target.value }))} />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58">Telefonszám
+                    <input className={`${control} w-full`} value={editor.phone} onChange={(event) => setEditor((current) => ({ ...current, phone: event.target.value }))} placeholder="pl. 0740 000 000" />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58">E-mail
+                    <input className={`${control} w-full`} type="email" value={editor.email} onChange={(event) => setEditor((current) => ({ ...current, email: event.target.value }))} placeholder="nev@email.ro" />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58">Hitelkeret
+                    <input className={`${control} w-full`} inputMode="decimal" value={editor.creditLimit} onChange={(event) => setEditor((current) => ({ ...current, creditLimit: event.target.value }))} placeholder="0,00" />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58">Megye
+                    <select className={`${control} w-full`} value={editor.countyCode} onChange={(event) => setEditor((current) => ({ ...current, countyCode: event.target.value, localityCode: "" }))}>
+                      <option value="">Nincs megadva / régi adat marad</option>
+                      {counties.map((county) => <option key={county.code} value={county.code}>{county.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58">Helység
+                    <select className={`${control} w-full`} disabled={!editor.countyCode || geoBusy} value={editor.localityCode} onChange={(event) => {
+                      const locality = localities.find((row) => row.sirutaCode === event.target.value);
+                      setEditor((current) => ({
+                        ...current,
+                        localityCode: event.target.value,
+                        city: locality?.name || current.city,
+                        postalCode: current.postalCode || locality?.postalCode || "",
+                      }));
+                    }}>
+                      <option value="">{geoBusy ? "Betöltés…" : "Válassz helységet"}</option>
+                      {localities.map((locality) => <option key={locality.sirutaCode} value={locality.sirutaCode}>{locality.name}</option>)}
+                    </select>
+                  </label>
+                  {!editor.countyCode ? (
+                    <label className="grid gap-1 text-[10px] text-white/58">Város / helység (régi szöveges adat)
+                      <input className={`${control} w-full`} value={editor.city} onChange={(event) => setEditor((current) => ({ ...current, city: event.target.value }))} />
+                    </label>
+                  ) : null}
+                  <label className="grid gap-1 text-[10px] text-white/58">Irányítószám
+                    <input className={`${control} w-full`} value={editor.postalCode} onChange={(event) => setEditor((current) => ({ ...current, postalCode: event.target.value }))} />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58 sm:col-span-2">Cím
+                    <input className={`${control} w-full`} value={editor.address} onChange={(event) => setEditor((current) => ({ ...current, address: event.target.value }))} placeholder="Utca, házszám, tömb, lakrész…" />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-white/58 sm:col-span-2">Megjegyzés
+                    <textarea className="min-h-[92px] rounded-xl border border-white/16 bg-[#293548] px-3 py-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-[#7bd7d4]/65 focus:ring-2 focus:ring-[#7bd7d4]/15" value={editor.notes} onChange={(event) => setEditor((current) => ({ ...current, notes: event.target.value }))} placeholder="Belső megjegyzés a klienshez" />
+                  </label>
+                </div>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-white/70">
+                  {displayPhone ? <span className="inline-flex items-center gap-2"><Phone size={14} className="text-[#8ee6e2]" />{displayPhone}</span> : null}
+                  {displayEmail ? <span className="inline-flex items-center gap-2"><Mail size={14} className="text-[#8ee6e2]" />{displayEmail}</span> : null}
+                  {displayAddress ? <span className="inline-flex min-w-0 items-center gap-2"><MapPin size={14} className="shrink-0 text-[#8ee6e2]" /><span>{displayAddress}</span></span> : null}
+                  {!displayPhone && !displayEmail && !displayAddress ? <span className="text-white/38">Nincs további kapcsolati adat.</span> : null}
+                  {liveCustomer ? (
+                    <span className="w-full pt-1 text-[10px] text-white/38">Hitelkeret: {money(liveCustomer.creditLimit || 0)} • Kliensrekord: {activeStoreName}</span>
+                  ) : null}
+                  {displayNotes ? <span className="w-full rounded-xl border border-white/8 bg-black/10 px-3 py-2 text-xs leading-relaxed text-white/58">{displayNotes}</span> : null}
+                </div>
+              )}
+            </div>
+            <div className={`min-w-[230px] rounded-2xl border p-4 ${selectedOpenBalance > 0.005 ? "border-rose-200/30 bg-rose-500/14" : "border-emerald-200/22 bg-emerald-500/8"}`}>
               <p className="text-[9px] uppercase tracking-[0.12em] text-white/48">Jelenlegi tartozás</p>
-              <p className="mt-2 text-2xl text-white">{money(item.currentOpenBalance)}</p>
-              <p className="mt-1 text-xs text-white/48">{integer(item.currentOpenSales)} nyitott vásárlás</p>
+              <p className="mt-2 text-2xl text-white">{money(selectedOpenBalance)}</p>
+              <p className="mt-1 text-xs text-white/48">{integer(selectedOpenSales)} nyitott vásárlás • {activeStoreName}</p>
             </div>
           </div>
 
@@ -460,25 +860,57 @@ function CustomerDetailModal({
               </div>
             ))}
           </section>
-
-          {item.note ? (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-[#293548] p-4">
-              <p className="text-[9px] uppercase tracking-[0.1em] text-white/38">Kliens megjegyzése</p>
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-white/65">{item.note}</p>
-            </div>
-          ) : null}
         </div>
 
-        <footer className="flex justify-end border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
-          <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
+        <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
+          <div>
+            {canManage ? (
+              <button type="button" disabled={recordBusy || saveBusy || deleteBusy || !activeCustomerId} onClick={() => setDeleteConfirmOpen(true)} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-rose-200/30 bg-rose-600/90 px-3 text-sm text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-45">
+                <Trash2 size={16} /> Kliens törlése
+              </button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            {editMode ? (
+              <>
+                <button type="button" disabled={saveBusy} onClick={() => { setEditMode(false); setEditor(customerEditorFromRecord(liveCustomer)); setActionError(""); }} className={neutralButton}><X size={16} /> Mégse</button>
+                <button type="button" disabled={saveBusy || recordBusy} onClick={() => void saveCustomer()} className={primaryButton}>{saveBusy ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Mentés</button>
+              </>
+            ) : (
+              <button type="button" onClick={onClose} className={neutralButton}><X size={16} /> Bezárás</button>
+            )}
+          </div>
         </footer>
       </section>
+
+      {deleteConfirmOpen ? (
+        <div className="fixed inset-0 z-[470] grid place-items-center bg-slate-950/80 px-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.currentTarget === event.target && !deleteBusy) setDeleteConfirmOpen(false); }}>
+          <div className="w-full max-w-[520px] rounded-[24px] border border-rose-200/30 bg-[#303a4c] p-4 text-white shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-rose-200/25 bg-rose-500/15 text-rose-100"><Trash2 size={20} /></span>
+              <div>
+                <p className="text-lg">Kliens törlése</p>
+                <p className="mt-1 text-sm leading-relaxed text-white/58"><strong className="font-normal text-white">{displayName}</strong> • {activeStoreName}</p>
+              </div>
+            </div>
+            {deleteBlocked ? (
+              <div className="mt-4 rounded-2xl border border-rose-200/25 bg-rose-500/12 px-3 py-2.5 text-sm text-rose-50">A kliensnek még {money(selectedOpenBalance)} tartozása van. Ezt előbb rendezni kell, utána törölhető.</div>
+            ) : (
+              <div className="mt-4 rounded-2xl border border-white/10 bg-[#293548] px-3 py-3 text-sm leading-relaxed text-white/62">Ha van vásárlási vagy befizetési előzménye, a rendszer <strong className="font-normal text-white">archiválja</strong> a klienst és eltünteti az aktív klienslistából, de a bizonylati történetet nem törli. Ha nincs előzménye, a kliensrekord végleg törlődik.</div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" disabled={deleteBusy} onClick={() => setDeleteConfirmOpen(false)} className={neutralButton}>Mégse</button>
+              <button type="button" disabled={deleteBusy || deleteBlocked} onClick={() => void deleteCustomer()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-rose-200/30 bg-rose-600 px-4 text-sm text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-45">{deleteBusy ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />} Törlés</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>,
     document.body,
   );
 }
 
-export default function AllInAdminClients({ actor = "ADMIN" }: Props) {
+export default function AllInAdminClients({ actor = "ADMIN", role = "admin" }: Props) {
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
   const [location, setLocation] = useState<LocationScope>("all");
@@ -493,6 +925,7 @@ export default function AllInAdminClients({ actor = "ADMIN" }: Props) {
   const [selected, setSelected] = useState<AifAdminCustomerOverviewItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -513,8 +946,10 @@ export default function AllInAdminClients({ actor = "ADMIN" }: Props) {
       if (!response.filterOptions.years.includes(year) && response.filterOptions.years.length) {
         setYear(response.filterOptions.years[0]);
       }
+      return response;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "A klienskimutatás nem tölthető be.");
+      return null;
     } finally {
       setLoading(false);
     }
@@ -551,6 +986,19 @@ export default function AllInAdminClients({ actor = "ADMIN" }: Props) {
     setTopTen(false);
     setSearchDraft("");
     setSearch("");
+  }
+
+  async function handleCustomerChanged(message: string, deleted = false) {
+    setActionMessage(message);
+    const previousIds = new Set((selected?.stores || []).map((store) => String(store.customerId || "")).filter(Boolean));
+    const response = await load();
+    if (deleted) {
+      setSelected(null);
+      return;
+    }
+    if (!response || !previousIds.size) return;
+    const refreshed = (response.customers || []).find((customer) => customer.stores.some((store) => previousIds.has(String(store.customerId || ""))));
+    if (refreshed) setSelected(refreshed);
   }
 
   return (
@@ -709,6 +1157,12 @@ export default function AllInAdminClients({ actor = "ADMIN" }: Props) {
         {error ? (
           <div className="rounded-2xl border border-rose-200/30 bg-rose-500/14 px-4 py-3 text-sm text-rose-50">{error}</div>
         ) : null}
+        {actionMessage ? (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-200/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-50">
+            <span className="inline-flex items-center gap-2"><CheckCircle2 size={16} /> {actionMessage}</span>
+            <button type="button" className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/12 bg-black/10 text-white/55 hover:text-white" onClick={() => setActionMessage("")} aria-label="Üzenet bezárása"><X size={13} /></button>
+          </div>
+        ) : null}
 
         {employee ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#9be9e5]/28 bg-[#244f55] px-4 py-3">
@@ -842,7 +1296,7 @@ export default function AllInAdminClients({ actor = "ADMIN" }: Props) {
         </section>
       </div>
 
-      {selected ? <CustomerDetailModal item={selected} year={year} onClose={() => setSelected(null)} /> : null}
+      {selected ? <CustomerDetailModal item={selected} year={year} canManage={role !== "shop"} onClose={() => setSelected(null)} onChanged={handleCustomerChanged} /> : null}
 
       {loading ? (
         <div className="fixed inset-0 z-[390] grid place-items-center bg-slate-950/24 backdrop-blur-[2px]">
