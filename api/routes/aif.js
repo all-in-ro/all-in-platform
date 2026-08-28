@@ -20337,15 +20337,19 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       await client.query("BEGIN");
 
       const body = req.body || {};
-      const location = await aifResolveShopLocation(req, client, body.location);
+      const requestedLocation = text(body.location || body.locationCode || body.location_code || req.query.location);
+      let requestedLocationRow = null;
+      if (requestedLocation) requestedLocationRow = await aifResolveShopLocation(req, client, requestedLocation);
+
       const current = await client.query(
-        `SELECT *
-         FROM aif_shop_customers
-         WHERE id::text=$1
-           AND location_id=$2
-           AND is_active=true
+        `SELECT c.*, l.code AS location_code, l.name AS location_name
+         FROM aif_shop_customers c
+         JOIN aif_locations l ON l.id=c.location_id
+         WHERE c.id::text=$1
+           AND c.is_active=true
+           ${requestedLocationRow ? "AND c.location_id=$2" : ""}
          FOR UPDATE`,
-        [customerId, location.id]
+        requestedLocationRow ? [customerId, requestedLocationRow.id] : [customerId]
       );
       if (!current.rowCount) {
         const error = new Error("A kliens nem található ebben az üzletben, vagy már törölve lett.");
@@ -20353,34 +20357,122 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         throw error;
       }
 
-      const fullName = text(body.fullName || body.full_name || body.name);
-      const phone = text(body.phone);
-      const email = emptyToNull(body.email);
-      const address = emptyToNull(body.address || body.addressLine || body.address_line);
-      const notes = emptyToNull(body.note || body.notes);
+      const existing = current.rows[0];
+      const location = requestedLocationRow || {
+        id: existing.location_id,
+        code: existing.location_code,
+        name: existing.location_name,
+      };
+      const has = (...keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(body, key));
+      const field = (...keys) => {
+        for (const key of keys) {
+          if (Object.prototype.hasOwnProperty.call(body, key)) return body[key];
+        }
+        return undefined;
+      };
+
+      const fullName = has("fullName", "full_name", "name")
+        ? text(field("fullName", "full_name", "name"))
+        : text(existing.full_name);
       if (!fullName) {
         const error = new Error("A kliens neve kötelező.");
         error.statusCode = 400;
         throw error;
       }
-      const geo = await aifResolveRomaniaCustomerGeo(client, body, { required: true });
-      const phoneConflict = await client.query(
-        `SELECT id, full_name
-         FROM aif_shop_customers
-         WHERE id<>$1
-           AND location_id=$2
-           AND is_active=true
-           AND NULLIF(btrim($3),'') IS NOT NULL
-           AND lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) =
-               lower(regexp_replace($3,'[^0-9+]','','g'))
-         LIMIT 1`,
-        [current.rows[0].id, location.id, phone]
+
+      const phone = has("phone") ? text(body.phone) : text(existing.phone);
+      const email = has("email") ? emptyToNull(body.email) : existing.email;
+      const address = has("address", "addressLine", "address_line")
+        ? emptyToNull(field("address", "addressLine", "address_line"))
+        : existing.address;
+      const notes = has("note", "notes") ? emptyToNull(field("note", "notes")) : existing.notes;
+
+      const geoInputProvided = has(
+        "countryCode", "country_code",
+        "countyCode", "county_code",
+        "localityCode", "locality_code", "sirutaCode", "siruta_code",
+        "postalCode", "postal_code"
       );
-      if (phoneConflict.rowCount) {
-        const error = new Error(`Ez a telefonszám ebben az üzletben már egy másik aktív klienshez tartozik: ${phoneConflict.rows[0].full_name || "ismeretlen kliens"}.`);
-        error.statusCode = 409;
-        error.code = "shop_customer_phone_conflict";
-        throw error;
+      let countryCode = existing.country_code || "RO";
+      let countyCode = existing.county_code || null;
+      let countyName = existing.county_name || null;
+      let localityCode = existing.locality_code || null;
+      let localityName = existing.locality_name || existing.city || null;
+      let postalCode = existing.postal_code || null;
+      let city = existing.city || existing.locality_name || null;
+
+      if (geoInputProvided) {
+        const requestedCounty = aifCleanCountyCode(field("countyCode", "county_code"));
+        const requestedLocality = text(field("localityCode", "locality_code", "sirutaCode", "siruta_code"));
+        const requestedCountry = text(field("countryCode", "country_code") || existing.country_code || "RO").toUpperCase() || "RO";
+        const requestedPostal = has("postalCode", "postal_code")
+          ? emptyToNull(field("postalCode", "postal_code"))
+          : existing.postal_code;
+
+        if (requestedCounty || requestedLocality) {
+          if (!requestedCounty || !requestedLocality) {
+            const error = new Error("Ha a megye vagy a helység változik, mindkettőt ki kell választani.");
+            error.statusCode = 400;
+            throw error;
+          }
+          const geo = await aifResolveRomaniaCustomerGeo(client, {
+            countryCode: requestedCountry,
+            countyCode: requestedCounty,
+            localityCode: requestedLocality,
+            postalCode: requestedPostal,
+          }, { required: true });
+          countryCode = geo.countryCode;
+          countyCode = geo.countyCode;
+          countyName = geo.countyName;
+          localityCode = geo.localityCode;
+          localityName = geo.localityName;
+          postalCode = geo.postalCode;
+          city = geo.localityName;
+        } else if (has("countyCode", "county_code", "localityCode", "locality_code", "sirutaCode", "siruta_code")) {
+          // A főnök szándékosan leürítheti a régi strukturált helyadatot.
+          countryCode = requestedCountry;
+          countyCode = null;
+          countyName = null;
+          localityCode = null;
+          localityName = null;
+          postalCode = requestedPostal;
+          city = has("city") ? emptyToNull(body.city) : existing.city;
+        } else {
+          countryCode = requestedCountry;
+          postalCode = requestedPostal;
+        }
+      }
+      if (has("city") && !localityCode) city = emptyToNull(body.city);
+
+      let creditLimit = aifNumber(existing.credit_limit);
+      if (has("creditLimit", "credit_limit")) {
+        const parsedCreditLimit = toMoney(field("creditLimit", "credit_limit"));
+        if (parsedCreditLimit === null || parsedCreditLimit < 0) {
+          const error = new Error("A hitelkeret 0 vagy pozitív szám lehet.");
+          error.statusCode = 400;
+          throw error;
+        }
+        creditLimit = parsedCreditLimit;
+      }
+
+      if (phone) {
+        const phoneConflict = await client.query(
+          `SELECT id, full_name
+           FROM aif_shop_customers
+           WHERE id<>$1
+             AND location_id=$2
+             AND is_active=true
+             AND lower(regexp_replace(COALESCE(phone,''),'[^0-9+]','','g')) =
+                 lower(regexp_replace($3,'[^0-9+]','','g'))
+           LIMIT 1`,
+          [existing.id, location.id, phone]
+        );
+        if (phoneConflict.rowCount) {
+          const error = new Error(`Ez a telefonszám ebben az üzletben már egy másik aktív klienshez tartozik: ${phoneConflict.rows[0].full_name || "ismeretlen kliens"}.`);
+          error.statusCode = 409;
+          error.code = "shop_customer_phone_conflict";
+          throw error;
+        }
       }
 
       const actor = actorFrom(req);
@@ -20398,31 +20490,33 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              locality_name=$11,
              postal_code=$12,
              notes=$13,
-             updated_by=$14,
+             credit_limit=$14,
+             updated_by=$15,
              updated_at=now()
          WHERE id=$1
-           AND location_id=$15
+           AND location_id=$16
          RETURNING *`,
         [
-          current.rows[0].id,
+          existing.id,
           fullName,
           phone || null,
           email,
           address,
-          geo.localityName,
-          geo.countryCode,
-          geo.countyCode,
-          geo.countyName,
-          geo.localityCode,
-          geo.localityName,
-          geo.postalCode,
+          city,
+          countryCode,
+          countyCode,
+          countyName,
+          localityCode,
+          localityName,
+          postalCode,
           notes,
+          creditLimit,
           actor,
           location.id,
         ]
       );
 
-      // Csak ennek az üzletnek a bizonylatfejléceit frissítjük.
+      // A kliens név/telefon pillanatképe a bizonylatfejeken is kövesse az admin javítást.
       await client.query(
         `UPDATE aif_shop_sales
          SET customer_name=$2,
@@ -20430,13 +20524,16 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
              updated_at=now()
          WHERE customer_id=$1
            AND location_id=$4`,
-        [current.rows[0].id, fullName, phone, location.id]
+        [existing.id, fullName, phone || null, location.id]
       );
 
       const currentYear = Number(aifBucharestIsoDate().slice(0, 4));
-      const snapshot = await aifLoadShopCustomerSnapshot(client, current.rows[0].id, currentYear, location.id);
+      const snapshot = await aifLoadShopCustomerSnapshot(client, existing.id, currentYear, location.id);
       await client.query("COMMIT");
-      res.json({ ok: true, item: aifShopCustomerResponse(snapshot || { ...updated.rows[0], location_code: location.code, location_name: location.name }) });
+      res.json({
+        ok: true,
+        item: aifShopCustomerResponse(snapshot || { ...updated.rows[0], location_code: location.code, location_name: location.name }),
+      });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("AIF shop customer update failed", error);
