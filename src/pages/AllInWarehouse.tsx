@@ -15596,13 +15596,13 @@ export default function AllInWarehouse() {
         <div className={modalWrap}>
           <div className={taxonomyModal}>
             <div className="sticky top-0 z-10 border-b border-white/12 bg-[#404a5b]/98 px-4 py-3 backdrop-blur">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
-                  <h2 className="mt-1 text-[22px] leading-tight text-white">Főkategóriák, terméktípusok, nemek, színcsoportok, színek, méretek, márkakódok és összetevők kezelése</h2>
-                  <p className="mt-1 text-sm text-white/60">Kompakt törzsadat-kezelés: bal oldalt szerkesztés, jobb oldalt lista.</p>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1 pr-2">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-white/45">Raktár törzsadatok</p>
+                  <h2 className="mt-0.5 text-[20px] leading-tight text-white">Törzsadatok kezelése</h2>
+                  <p className="mt-1 text-xs leading-snug text-white/58">Kategóriák, nemek, színcsoportok, színek, méretek, márkakódok és összetevők.</p>
                 </div>
-                <button className={taxonomySmallBtn} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
+                <button className={`${taxonomySmallBtn} shrink-0`} onClick={() => setTaxonomyOpen(false)}><X size={14} /> Bezárás</button>
               </div>
             </div>
             <div className="space-y-3 p-4">
