@@ -2901,6 +2901,34 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     return raw;
   }
 
+  function colorGroupSelect() {
+    return `SELECT id, code, name_ro, name_hu, hex, sort_order, is_active, created_at, updated_at
+            FROM aif_color_groups`;
+  }
+
+  async function findColorGroupByIdOrCode(client, value, { activeOnly = false } = {}) {
+    const raw = text(value);
+    if (!raw) return null;
+    const result = await client.query(
+      `${colorGroupSelect()}
+       WHERE (id::text=$1 OR code=$1 OR lower(name_ro)=lower($1) OR lower(COALESCE(name_hu,''))=lower($1))
+         ${activeOnly ? "AND is_active=true" : ""}
+       LIMIT 1`,
+      [raw]
+    );
+    return result.rows[0] || null;
+  }
+
+  async function colorGroupUsage(client, colorGroupId) {
+    const result = await client.query(
+      `SELECT count(*)::int AS color_types
+       FROM aif_color_types
+       WHERE color_group_id=$1`,
+      [colorGroupId]
+    );
+    return result.rows[0] || { color_types: 0 };
+  }
+
   async function colorUsage(client, colorIdOrCode) {
     const c = await client.query(
       `SELECT id, code, name_ro FROM aif_color_types WHERE id::text=$1 OR code=$1 LIMIT 1`,
@@ -3975,10 +4003,124 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     }
   });
 
+  router.get("/color-groups", requireAuthed, async (req, res) => {
+    const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
+    try {
+      const result = await pool.query(
+        `${colorGroupSelect()}
+         ${includeInactive ? "" : "WHERE is_active=true"}
+         ORDER BY is_active DESC, sort_order ASC, COALESCE(name_hu,name_ro) ASC, name_ro ASC`
+      );
+      res.json({ items: result.rows });
+    } catch (e) {
+      console.error("AIF list color groups failed", e);
+      res.status(500).json({ error: "failed to load color groups" });
+    }
+  });
+
+  router.post("/color-groups", requireAuthed, async (req, res) => {
+    const body = req.body || {};
+    const nameHu = emptyToNull(body.nameHu || body.name_hu);
+    const nameRo = text(body.nameRo || body.name_ro || body.name || nameHu);
+    const code = normCode(body.code || nameHu || nameRo);
+    const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
+    if (!nameRo) return res.status(400).json({ error: "A színcsoport neve kötelező." });
+    if (!code) return res.status(400).json({ error: "color group code required" });
+    try {
+      const result = await pool.query(
+        `INSERT INTO aif_color_groups (code, name_ro, name_hu, hex, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,$5,true)
+         ON CONFLICT (code) DO UPDATE SET
+           name_ro=EXCLUDED.name_ro,
+           name_hu=EXCLUDED.name_hu,
+           hex=EXCLUDED.hex,
+           sort_order=EXCLUDED.sort_order,
+           is_active=true,
+           updated_at=now()
+         RETURNING id, code, name_ro, name_hu, hex, sort_order, is_active, created_at, updated_at`,
+        [code, nameRo, nameHu, emptyToNull(body.hex), sortOrder]
+      );
+      res.json({ item: result.rows[0] });
+    } catch (e) {
+      console.error("AIF create color group failed", e);
+      res.status(500).json({ error: "failed to save color group" });
+    }
+  });
+
+  router.patch("/color-groups/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const body = req.body || {};
+    const sets = [];
+    const args = [];
+    let i = 1;
+    if (body.nameRo !== undefined || body.name_ro !== undefined || body.name !== undefined) {
+      const nameRo = text(body.nameRo ?? body.name_ro ?? body.name);
+      if (!nameRo) return res.status(400).json({ error: "A román színcsoportnév nem lehet üres." });
+      sets.push(`name_ro=$${i++}`); args.push(nameRo);
+    }
+    if (body.nameHu !== undefined || body.name_hu !== undefined) { sets.push(`name_hu=$${i++}`); args.push(emptyToNull(body.nameHu ?? body.name_hu)); }
+    if (body.code !== undefined) {
+      const code = normCode(body.code);
+      if (!code) return res.status(400).json({ error: "color group code required" });
+      sets.push(`code=$${i++}`); args.push(code);
+    }
+    if (body.hex !== undefined) { sets.push(`hex=$${i++}`); args.push(emptyToNull(body.hex)); }
+    if (body.sortOrder !== undefined || body.sort_order !== undefined) { sets.push(`sort_order=$${i++}`); args.push(toInt(body.sortOrder ?? body.sort_order) || 100); }
+    if (body.is_active !== undefined || body.isActive !== undefined) { sets.push(`is_active=$${i++}`); args.push(Boolean(body.is_active ?? body.isActive)); }
+    if (!sets.length) return res.json({ ok: true });
+    args.push(id);
+    try {
+      const result = await pool.query(
+        `UPDATE aif_color_groups
+         SET ${sets.join(", ")}, updated_at=now()
+         WHERE id::text=$${i} OR code=$${i}
+         RETURNING id, code, name_ro, name_hu, hex, sort_order, is_active, created_at, updated_at`,
+        args
+      );
+      if (!result.rowCount) return res.status(404).json({ error: "color group not found" });
+      res.json({ item: result.rows[0] });
+    } catch (e) {
+      console.error("AIF update color group failed", e);
+      if (e?.code === "23505") return res.status(400).json({ error: "Ez a színcsoport-kód már létezik." });
+      res.status(500).json({ error: "failed to update color group" });
+    }
+  });
+
+  router.delete("/color-groups/:id", requireAuthed, async (req, res) => {
+    const id = text(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const group = await client.query(`${colorGroupSelect()} WHERE id::text=$1 OR code=$1 FOR UPDATE`, [id]);
+      if (!group.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "color group not found" });
+      }
+      const usage = await colorGroupUsage(client, group.rows[0].id);
+      if (Number(usage.color_types || 0) > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          error: `A színcsoport nem törölhető, mert ${Number(usage.color_types || 0)} szín van hozzákapcsolva. Előbb helyezd át vagy válaszd le ezeket a színeket.`,
+          code: "color_group_in_use",
+          usage,
+        });
+      }
+      await client.query(`DELETE FROM aif_color_groups WHERE id=$1`, [group.rows[0].id]);
+      await client.query("COMMIT");
+      res.json({ ok: true, mode: "deleted", usage });
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("AIF delete color group failed", e);
+      res.status(500).json({ error: "failed to delete color group" });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/color-types", requireAuthed, async (req, res) => {
     const includeInactive = ["1", "true", "yes"].includes(text(req.query.includeInactive || req.query.include_inactive).toLowerCase());
     const r = await pool.query(
-      `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active, created_at, updated_at
+      `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active, created_at, updated_at
        FROM aif_color_types
        ${includeInactive ? "" : "WHERE is_active=true"}
        ORDER BY is_active DESC, sort_order ASC, name_ro ASC`
@@ -3992,7 +4134,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     try {
       const color = await normalizeColorName(pool, input);
       const item = await pool.query(
-        `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
+        `SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active
          FROM aif_color_types
          WHERE is_active=true AND lower(name_ro)=lower($1)
          LIMIT 1`,
@@ -4013,10 +4155,20 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     const sortOrder = toInt(body.sortOrder ?? body.sort_order) || 100;
     if (!nameRo) return res.status(400).json({ error: "color Romanian name required" });
     if (!code) return res.status(400).json({ error: "color code required" });
+    const groupInputProvided = body.colorGroupId !== undefined || body.color_group_id !== undefined;
+    let colorGroupId = null;
+    if (groupInputProvided) {
+      const groupInput = emptyToNull(body.colorGroupId ?? body.color_group_id);
+      if (groupInput) {
+        const group = await findColorGroupByIdOrCode(pool, groupInput, { activeOnly: true });
+        if (!group) return res.status(400).json({ error: "A kiválasztott színcsoport nem létezik vagy inaktív." });
+        colorGroupId = group.id;
+      }
+    }
     try {
       const r = await pool.query(
-        `INSERT INTO aif_color_types (code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active)
-         VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,true)
+        `INSERT INTO aif_color_types (code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6::text[],$7,$8,$9,true)
          ON CONFLICT (code) DO UPDATE SET
            name_ro=EXCLUDED.name_ro,
            name_hu=EXCLUDED.name_hu,
@@ -4024,11 +4176,12 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
            name_de=EXCLUDED.name_de,
            aliases=EXCLUDED.aliases,
            hex=EXCLUDED.hex,
+           color_group_id=CASE WHEN $10::boolean THEN EXCLUDED.color_group_id ELSE aif_color_types.color_group_id END,
            sort_order=EXCLUDED.sort_order,
            is_active=true,
            updated_at=now()
-         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active, created_at, updated_at`,
-        [code, nameRo, emptyToNull(body.nameHu || body.name_hu), emptyToNull(body.nameEn || body.name_en), emptyToNull(body.nameDe || body.name_de), aliases, emptyToNull(body.hex), sortOrder]
+         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active, created_at, updated_at`,
+        [code, nameRo, emptyToNull(body.nameHu || body.name_hu), emptyToNull(body.nameEn || body.name_en), emptyToNull(body.nameDe || body.name_de), aliases, emptyToNull(body.hex), colorGroupId, sortOrder, groupInputProvided]
       );
       res.json({ item: r.rows[0] });
     } catch (e) {
@@ -4060,6 +4213,17 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (body.nameDe !== undefined || body.name_de !== undefined) { sets.push(`name_de=$${i++}`); args.push(emptyToNull(body.nameDe ?? body.name_de)); }
     if (body.aliases !== undefined || body.aliasList !== undefined || body.alias_list !== undefined) { sets.push(`aliases=$${i++}::text[]`); args.push(colorAliasesFromInput(body.aliases ?? body.aliasList ?? body.alias_list)); }
     if (body.hex !== undefined) { sets.push(`hex=$${i++}`); args.push(emptyToNull(body.hex)); }
+    if (body.colorGroupId !== undefined || body.color_group_id !== undefined) {
+      const groupInput = emptyToNull(body.colorGroupId ?? body.color_group_id);
+      let colorGroupId = null;
+      if (groupInput) {
+        const group = await findColorGroupByIdOrCode(pool, groupInput, { activeOnly: true });
+        if (!group) return res.status(400).json({ error: "A kiválasztott színcsoport nem létezik vagy inaktív." });
+        colorGroupId = group.id;
+      }
+      sets.push(`color_group_id=NULLIF($${i++}, '')::uuid`);
+      args.push(colorGroupId || "");
+    }
     if (body.sortOrder !== undefined || body.sort_order !== undefined) { sets.push(`sort_order=$${i++}`); args.push(toInt(body.sortOrder ?? body.sort_order) || 100); }
     if (body.is_active !== undefined || body.isActive !== undefined) { sets.push(`is_active=$${i++}`); args.push(Boolean(body.is_active ?? body.isActive)); }
     if (!sets.length) return res.json({ ok: true });
@@ -4069,7 +4233,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         `UPDATE aif_color_types
          SET ${sets.join(", ")}, updated_at=now()
          WHERE id::text=$${i} OR code=$${i}
-         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active, created_at, updated_at`,
+         RETURNING id, code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active, created_at, updated_at`,
         args
       );
       if (!r.rowCount) return res.status(404).json({ error: "color not found" });
@@ -5553,7 +5717,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
     if (scope === "warehouse") {
       // A raktár nem használ pénznem-, importprofil- és egyéb admin-meta adatot.
       // Ezeket korábban mégis minden megnyitáskor lekértük és JSON-ba csomagoltuk.
-      const [suppliers, brands, categories, genderTypes, locations, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands] = await Promise.all([
+      const [suppliers, brands, categories, genderTypes, locations, colorGroups, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands] = await Promise.all([
         pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
         pool.query(`WITH ranked AS (
                       SELECT id, code, name, is_active,
@@ -5571,7 +5735,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         pool.query(`SELECT id, code, parent_id, name_ro, name_hu, aliases, sort_order, is_active FROM aif_categories WHERE is_active=true ORDER BY parent_id NULLS FIRST, sort_order ASC, name_ro ASC`),
         pool.query(`SELECT code, name, aliases, sort_order, is_active FROM aif_gender_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
         pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
-        pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
+        pool.query(`SELECT id, code, name_ro, name_hu, hex, sort_order, is_active
+                    FROM aif_color_groups
+                    WHERE is_active=true
+                    ORDER BY sort_order ASC, COALESCE(name_hu,name_ro) ASC, name_ro ASC`),
+        pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active
                     FROM aif_color_types
                     WHERE is_active=true
                     ORDER BY sort_order ASC, name_ro ASC`),
@@ -5604,6 +5772,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
         categories: categories.rows,
         genderTypes: genderTypes.rows,
         locations: locations.rows,
+        colorGroups: colorGroups.rows,
         colorTypes: colorTypes.rows,
         brandColorCodes: brandColorCodes.rows,
         sizeTypes: sizeTypes.rows,
@@ -5613,7 +5782,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       });
     }
 
-    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
+    const [suppliers, brands, categories, genderTypes, locations, locationTypes, currencies, colorGroups, colorTypes, brandColorCodes, sizeTypes, brandSizeCodes, materialTypes, supplierBrands, profiles] = await Promise.all([
       pool.query(`SELECT id, code, name, is_active FROM aif_suppliers WHERE is_active=true ORDER BY name ASC`),
       pool.query(`WITH ranked AS (
                     SELECT id, code, name, is_active,
@@ -5633,7 +5802,11 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       pool.query(`SELECT id, code, name, location_type, is_active FROM aif_locations WHERE is_active=true ORDER BY name ASC`),
       pool.query(`SELECT id, code, name, sort_order, is_active FROM aif_location_types WHERE is_active=true ORDER BY sort_order ASC, name ASC`),
       pool.query(`SELECT code, name, symbol, sort_order, is_active FROM aif_currencies WHERE is_active=true ORDER BY sort_order ASC, code ASC`),
-      pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, sort_order, is_active
+      pool.query(`SELECT id, code, name_ro, name_hu, hex, sort_order, is_active
+                  FROM aif_color_groups
+                  WHERE is_active=true
+                  ORDER BY sort_order ASC, COALESCE(name_hu,name_ro) ASC, name_ro ASC`),
+      pool.query(`SELECT id, code, name_ro, name_hu, name_en, name_de, aliases, hex, color_group_id, sort_order, is_active
                   FROM aif_color_types
                   WHERE is_active=true
                   ORDER BY sort_order ASC, name_ro ASC`),
@@ -5673,6 +5846,7 @@ export default function createAifRouter({ pool, requireAuthed, requireAdminOrSec
       locations: locations.rows,
       locationTypes: locationTypes.rows,
       currencies: currencies.rows,
+      colorGroups: colorGroups.rows,
       colorTypes: colorTypes.rows,
       brandColorCodes: brandColorCodes.rows,
       sizeTypes: sizeTypes.rows,
