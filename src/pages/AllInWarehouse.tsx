@@ -1251,6 +1251,7 @@ type WarehouseTaxonomySelectOption = {
   label: string;
   hint?: string;
   disabled?: boolean;
+  swatch?: string;
 };
 
 function WarehouseTaxonomySelect({
@@ -1383,6 +1384,13 @@ function WarehouseTaxonomySelect({
                   aria-selected={active}
                   title={option.hint || option.label}
                 >
+                  {option.swatch ? (
+                    <span
+                      className={`${compact ? "h-3 w-3" : "h-3.5 w-3.5"} shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]`}
+                      style={{ backgroundColor: option.swatch }}
+                      aria-hidden="true"
+                    />
+                  ) : null}
                   <span className="min-w-0 flex-1 truncate">{option.label}</span>
                   {option.hint ? <span className="shrink-0 text-[10px] text-white/38">{option.hint}</span> : null}
                   {active ? <CheckCircle2 size={13} className="shrink-0 text-[#d7fffd]" /> : null}
@@ -1412,7 +1420,16 @@ function WarehouseTaxonomySelect({
         aria-expanded={open}
         title={selected?.label || placeholder}
       >
-        <span className={`min-w-0 flex-1 truncate ${selected ? "text-white" : "text-white/62"}`}>{selected?.label || placeholder}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          {selected?.swatch ? (
+            <span
+              className={`${compact ? "h-3 w-3" : "h-3.5 w-3.5"} shrink-0 rounded-full border border-white/30 bg-white/10 shadow-[0_0_0_2px_rgba(255,255,255,0.03)]`}
+              style={{ backgroundColor: selected.swatch }}
+              aria-hidden="true"
+            />
+          ) : null}
+          <span className={`min-w-0 flex-1 truncate ${selected ? "text-white" : "text-white/62"}`}>{selected?.label || placeholder}</span>
+        </span>
         <ChevronDown size={compact ? 13 : 15} className={`shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
       </button>
       {helperText ? <span className="text-[11px] text-white/45">{helperText}</span> : null}
@@ -16071,7 +16088,11 @@ export default function AllInWarehouse() {
                         onChange={(colorGroupId) => setColorForm((x) => ({ ...x, colorGroupId }))}
                         placeholder="Nincs csoporthoz rendelve"
                         helperText="Példa: petrolkék → Kék. Ettől a konkrét szín neve megmarad petrolkéknek."
-                        options={colorGroups.map((group) => ({ value: String(group.id), label: colorGroupLabel(group) }))}
+                        options={colorGroups.map((group) => ({
+                          value: String(group.id),
+                          label: colorGroupLabel(group),
+                          swatch: String(group.hex || "").trim() || undefined,
+                        }))}
                       />
                       <label className={taxonomyField}>Román hivatalos név<input className={taxonomyInput} value={colorForm.nameRo} onChange={(e) => setColorForm((x) => ({ ...x, nameRo: e.target.value }))} placeholder="pl. negru" /></label>
                       <label className={taxonomyField}>Magyar név<input className={taxonomyInput} value={colorForm.nameHu} onChange={(e) => setColorForm((x) => ({ ...x, nameHu: e.target.value }))} placeholder="pl. fekete" /></label>
@@ -16119,7 +16140,11 @@ export default function AllInWarehouse() {
                                   disabled={taxonomyBusy}
                                   onChange={(colorGroupId) => void quickAssignColorGroup(c, colorGroupId)}
                                   placeholder="Nincs csoport"
-                                  options={colorGroups.map((groupRow) => ({ value: String(groupRow.id), label: colorGroupLabel(groupRow) }))}
+                                  options={colorGroups.map((groupRow) => ({
+                                    value: String(groupRow.id),
+                                    label: colorGroupLabel(groupRow),
+                                    swatch: String(groupRow.hex || "").trim() || undefined,
+                                  }))}
                                 />
                               </div>
                             </div>
