@@ -16892,7 +16892,7 @@ export default function AllInWarehouse() {
                         <div className="relative">
                           <input
                             className={`${input} w-full ${buyPricesVisible ? "" : "select-none text-transparent caret-transparent"}`}
-                            value={edit.buyPrice}
+                            value={buyPricesVisible ? edit.buyPrice : ""}
                             readOnly={!buyPricesVisible}
                             onChange={(e) => {
                               if (!buyPricesVisible) return;
@@ -16902,8 +16902,11 @@ export default function AllInWarehouse() {
                             title={buyPricesVisible ? "Vételár" : "Vételár rejtve"}
                           />
                           {!buyPricesVisible ? (
-                            <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
-                              <span className="inline-block select-none rounded-md bg-white/10 px-2 py-0.5 text-white/65 blur-[3px]">
+                            <span className="pointer-events-none absolute inset-0 flex items-center px-3">
+                              <span
+                                className="inline-block max-w-[88px] select-none rounded-md bg-white/10 px-2 py-0.5 text-[12px] text-white/65 blur-[4px]"
+                                aria-hidden="true"
+                              >
                                 {edit.buyPrice ? money(edit.buyPrice) : "••••"}
                               </span>
                             </span>
