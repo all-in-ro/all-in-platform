@@ -42,13 +42,16 @@ import {
   apiAifShopCashOverview,
   apiAifShopDailySummary,
   apiAifShopSaleCatalog,
+  apiAifShopSaleDetail,
   apiAifShopShiftDayOverview,
   apiAifShopShiftEmployees,
   apiAifShopStockOverview,
   type AifShopCashMovementType,
   type AifShopCashOverview,
   type AifShopDailySummaryResponse,
+  type AifShopDailySaleItem,
   type AifShopSaleCatalogItem,
+  type AifShopSaleDetailResponse,
   type AifShopShiftDayOverview,
   type AifShopShiftHandover,
   type AifShopShiftSnapshot,
@@ -308,6 +311,45 @@ function formatTime(value?: string | null) {
   return date.toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" });
 }
 
+
+function formatExactDateTime(value?: string | null) {
+  if (!value) return "–";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "–";
+  return date.toLocaleString("hu-HU", {
+    timeZone: "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function saleStatusLabel(value?: string | null) {
+  const status = String(value || "").toLowerCase();
+  if (status === "completed") return "Lezárva";
+  if (status === "cancelled") return "Törölve";
+  if (status === "refunded") return "Visszatérítve";
+  if (status === "draft") return "Vázlat";
+  return value || "–";
+}
+
+function paymentStatusLabel(value?: string | null) {
+  const status = String(value || "").toLowerCase();
+  if (status === "paid") return "Fizetve";
+  if (status === "partial") return "Részben fizetve";
+  if (status === "credit") return "Tartozás";
+  if (status === "unpaid") return "Nincs fizetve";
+  return value || "–";
+}
+
+function safeColorHex(value?: string | null) {
+  const raw = String(value || "").trim();
+  return /^#[0-9a-f]{3,8}$/i.test(raw) ? raw : "";
+}
+
 function productCode(item: AifShopSaleCatalogItem) {
   return item.productCode || item.modelCode || item.internalSku || item.barcode || "–";
 }
@@ -420,6 +462,247 @@ function ProductImage({ src, title, large = false }: { src?: string | null; titl
   );
 }
 
+
+function DailySaleDetailModal({
+  sale,
+  detail,
+  loading,
+  error,
+  onClose,
+}: {
+  sale: AifShopDailySaleItem;
+  detail: AifShopSaleDetailResponse | null;
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+}) {
+  const source = detail || sale;
+  const isExchange = String(detail?.recordType || sale.recordType || "sale") === "exchange";
+  const hasDiscount = numberValue(source.discountTotal) > 0.005;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[470] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section className="flex max-h-[94vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-[28px] border border-[#9be9e5]/38 bg-[#303a4c] text-white shadow-[0_40px_120px_rgba(0,0,0,0.66)]">
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-white/12 bg-[#285d60] px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/22 bg-white/[0.08] text-white">
+              {isExchange ? <ArrowRightLeft size={22} /> : <Receipt size={22} />}
+            </span>
+            <div className="min-w-0">
+              <p className="text-[9px] uppercase tracking-[0.16em] text-white/55">
+                {isExchange ? "Csere részletei" : "Eladás részletei"}
+              </p>
+              <h3 className="mt-1 truncate text-xl text-white sm:text-2xl">{source.saleNumber}</h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-white/18 bg-black/10 px-2.5 py-1 text-[10px] text-white/80">
+                  {formatExactDateTime(source.soldAt)}
+                </span>
+                <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/20 px-2.5 py-1 text-[10px] text-[#efffff]">
+                  {saleStatusLabel(detail?.status || "completed")}
+                </span>
+                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${
+                  numberValue(source.balanceDue) > 0.005
+                    ? "border-rose-200/28 bg-rose-500/14 text-rose-50"
+                    : "border-[#9be9e5]/30 bg-[#2a8d8b]/20 text-[#efffff]"
+                }`}>
+                  {paymentStatusLabel(detail?.paymentStatus || (numberValue(source.balanceDue) > 0.005 ? "credit" : "paid"))}
+                </span>
+                <span className="rounded-full border border-[#9be9e5]/35 bg-[#237c7a] px-2.5 py-1 text-[10px] text-white">
+                  {detail?.paymentLabel || sale.paymentLabel}
+                </span>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-black/10 text-white transition hover:bg-white/[0.1]"
+            aria-label="Eladás részleteinek bezárása"
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b] px-4 py-3">
+              <p className="text-[9px] uppercase tracking-[0.12em] text-[#dffffd]/72">Végösszeg</p>
+              <p className="mt-1.5 text-2xl text-white">{formatMoney(source.total)}</p>
+            </div>
+            <div className={`rounded-2xl border px-4 py-3 ${hasDiscount ? "border-[#9be9e5]/30 bg-[#244f55]" : "border-white/10 bg-[#293548]"}`}>
+              <p className="text-[9px] uppercase tracking-[0.12em] text-white/55">Kedvezmény</p>
+              <p className={`mt-1.5 text-xl ${hasDiscount ? "text-[#efffff]" : "text-white/55"}`}>{formatMoney(source.discountTotal)}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3">
+              <p className="text-[9px] uppercase tracking-[0.12em] text-white/45">Fizetve</p>
+              <p className="mt-1.5 text-xl text-white">{formatMoney(source.paidTotal)}</p>
+            </div>
+            <div className={`rounded-2xl border px-4 py-3 ${numberValue(source.balanceDue) > 0.005 ? "border-rose-200/30 bg-rose-500/13" : "border-white/10 bg-[#293548]"}`}>
+              <p className="text-[9px] uppercase tracking-[0.12em] text-white/45">Tartozás</p>
+              <p className={`mt-1.5 text-xl ${numberValue(source.balanceDue) > 0.005 ? "text-rose-50" : "text-white/60"}`}>{formatMoney(source.balanceDue)}</p>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <div className="rounded-2xl border border-white/10 bg-[#293548] px-4 py-3">
+              <div className="flex flex-wrap gap-x-5 gap-y-2 text-[12px] text-white/64">
+                <span>Eladó: <strong className="font-normal text-white">{detail?.actor || "–"}</strong></span>
+                <span>Üzlet: <strong className="font-normal text-white">{detail?.location?.name || "–"}</strong></span>
+                <span>Darab: <strong className="font-normal text-white">{detail?.itemCount ?? sale.itemCount}</strong></span>
+                <span>Terméksor: <strong className="font-normal text-white">{detail?.lineCount ?? sale.lineCount}</strong></span>
+              </div>
+              {(detail?.customerName || sale.customerName) ? (
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-white/8 pt-2 text-[12px]">
+                  <span className="text-white/54">Kliens: <strong className="font-normal text-[#d7fffd]">{detail?.customerName || sale.customerName}</strong></span>
+                  {(detail?.customerPhone || sale.customerPhone) ? <span className="text-white/54">Telefon: <strong className="font-normal text-white">{detail?.customerPhone || sale.customerPhone}</strong></span> : null}
+                </div>
+              ) : null}
+              {detail?.note ? <p className="mt-2 border-t border-white/8 pt-2 text-xs leading-relaxed text-white/52">{detail.note}</p> : null}
+            </div>
+
+            <div className="min-w-[250px] rounded-2xl border border-[#9be9e5]/22 bg-[#244f55] px-4 py-3">
+              <p className="text-[9px] uppercase tracking-[0.12em] text-[#cffffd]/62">Fizetési mód</p>
+              <p className="mt-1.5 text-lg text-white">{detail?.paymentLabel || sale.paymentLabel}</p>
+              {detail?.payments?.length ? (
+                <div className="mt-2 space-y-1 text-[11px] text-white/62">
+                  {detail.payments.map((payment, index) => (
+                    <div key={`${payment.method}-${index}`} className="flex items-center justify-between gap-3">
+                      <span>{payment.label}</span>
+                      <span className="text-white">{formatMoney(payment.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {isExchange && detail?.returnedLine ? (
+            <section className="mt-4 rounded-[22px] border border-[#9be9e5]/24 bg-[#244f55] p-3">
+              <p className="mb-2 text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/65">Visszahozott termék</p>
+              <div className="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:items-center">
+                <ProductImage src={detail.returnedLine.imageUrl} title={detail.returnedLine.productTitle || "Termék"} large />
+                <div className="min-w-0">
+                  <p className="text-base text-white">{detail.returnedLine.productTitle || "Ismeretlen termék"}</p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-white/72">
+                    {detail.returnedLine.brandName ? <span>{detail.returnedLine.brandName}</span> : null}
+                    {detail.returnedLine.size ? <span>Méret: {detail.returnedLine.size}</span> : null}
+                    {detail.returnedLine.colorName ? <span>Szín: {detail.returnedLine.colorName}</span> : null}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-white/45">Visszahozva</p>
+                  <p className="mt-1 text-xl text-white">{detail.exchange?.returnedQty || 0} db</p>
+                  <p className="mt-1 text-sm text-[#d7fffd]">{formatMoney(detail.exchange?.returnCredit || 0)}</p>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {error ? (
+            <div className="mt-4 rounded-2xl border border-rose-200/30 bg-rose-500/14 px-4 py-3 text-sm text-rose-50">
+              {error}
+            </div>
+          ) : null}
+
+          {loading ? (
+            <div className="flex min-h-[320px] items-center justify-center gap-3 text-white/58">
+              <Loader2 size={22} className="animate-spin text-[#8ee6e2]" /> Eladás részleteinek betöltése…
+            </div>
+          ) : detail?.lines?.length ? (
+            <div className="mt-4 space-y-2">
+              {detail.lines.map((line) => {
+                const lineDiscount = numberValue(line.discountAmount) > 0.005 || numberValue(line.discountPercent) > 0.005;
+                const colorHex = safeColorHex(line.colorHex);
+                return (
+                  <article
+                    key={line.id}
+                    className="grid gap-3 rounded-[22px] border border-white/11 bg-[#344154] p-3 sm:grid-cols-[96px_minmax(0,1fr)] lg:grid-cols-[96px_minmax(0,1fr)_270px] lg:items-center"
+                  >
+                    <ProductImage src={line.imageUrl} title={line.productTitle || "Termékkép"} large />
+
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="min-w-0 text-base leading-snug text-white">{line.productTitle || "Ismeretlen termék"}</h4>
+                        {line.brandName ? <span className="rounded-full border border-white/12 bg-black/10 px-2 py-0.5 text-[10px] text-white/68">{line.brandName}</span> : null}
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {line.size ? <span className="rounded-lg border border-white/10 bg-[#293548] px-2.5 py-1.5 text-[11px] text-white/82">Méret: <strong className="font-normal text-white">{line.size}</strong></span> : null}
+                        {line.colorName ? (
+                          <span className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-[#293548] px-2.5 py-1.5 text-[11px] text-white/82">
+                            <span
+                              className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/35"
+                              style={{ backgroundColor: colorHex || "transparent" }}
+                            />
+                            Szín: <strong className="font-normal text-white">{line.colorName}</strong>
+                          </span>
+                        ) : null}
+                        <span className="rounded-lg border border-white/10 bg-[#293548] px-2.5 py-1.5 text-[11px] text-white/82">Darab: <strong className="font-normal text-white">{line.quantity}</strong></span>
+                      </div>
+
+                      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                        {line.productCode ? (
+                          <div className="rounded-xl border border-white/9 bg-[#293548] px-3 py-2">
+                            <span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Termékkód</span>
+                            <span className="mt-1 block break-all font-mono text-[12px] text-white/90">{line.productCode}</span>
+                          </div>
+                        ) : null}
+                        {line.barcode ? (
+                          <div className="rounded-xl border border-white/9 bg-[#293548] px-3 py-2">
+                            <span className="block text-[9px] uppercase tracking-[0.1em] text-white/42">Vonalkód</span>
+                            <span className="mt-1 block break-all font-mono text-[12px] text-white/90">{line.barcode}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+                      <div className="rounded-2xl border border-[#a9f3ef]/38 bg-[#2a8d8b] px-4 py-3">
+                        <p className="text-[9px] uppercase tracking-[0.12em] text-[#dffffd]/72">{numberValue(line.quantity) > 1 ? "Eladási ár / db" : "Eladási ár"}</p>
+                        <p className="mt-1 text-xl text-white">{formatMoney(line.unitPrice)}</p>
+                      </div>
+                      <div className="rounded-2xl border border-[#7bd7d4]/28 bg-[#244f55] px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[10px] uppercase tracking-[0.1em] text-[#cffffd]/62">Listaár</span>
+                          <span className="text-[13px] text-white/88">{formatMoney(line.listPrice)}</span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-3 border-t border-[#9be9e5]/18 pt-2">
+                          <span className="text-[10px] uppercase tracking-[0.1em] text-[#bff8f5]/78">Kedvezmény</span>
+                          <span className={`text-[13px] ${lineDiscount ? "text-white" : "text-white/55"}`}>
+                            {lineDiscount
+                              ? `${formatMoney(line.discountAmount)}${numberValue(line.discountPercent) > 0.005 ? ` • ${numberValue(line.discountPercent).toLocaleString("ro-RO", { maximumFractionDigits: 1 })}%` : ""}`
+                              : "Nincs"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : !error ? (
+            <div className="mt-4 flex min-h-[260px] items-center justify-center rounded-[22px] border border-dashed border-white/12 text-sm text-white/42">
+              Ehhez a bizonylathoz nincs részletes terméksor.
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="flex items-center justify-end border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
+          <button type="button" onClick={onClose} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]">
+            <X size={16} /> Bezárás
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 export default function AllInShopOperations({
   open,
   mode,
@@ -448,6 +731,10 @@ export default function AllInShopOperations({
   const [summaryDate, setSummaryDate] = useState(todayIso());
   const [summaryData, setSummaryData] = useState<AifShopDailySummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [selectedDailySale, setSelectedDailySale] = useState<AifShopDailySaleItem | null>(null);
+  const [saleDetail, setSaleDetail] = useState<AifShopSaleDetailResponse | null>(null);
+  const [saleDetailLoading, setSaleDetailLoading] = useState(false);
+  const [saleDetailError, setSaleDetailError] = useState("");
   const [shiftData, setShiftData] = useState<AifShopShiftDayOverview | null>(null);
   const [shiftEmployees, setShiftEmployees] = useState<Array<{ name: string; current?: boolean }>>([]);
   const [shiftLoading, setShiftLoading] = useState(false);
@@ -644,6 +931,33 @@ export default function AllInShopOperations({
     await Promise.all([loadDailySummary(date), loadShiftContext(date), loadCashContext()]);
   }
 
+
+  function closeSaleDetail() {
+    setSelectedDailySale(null);
+    setSaleDetail(null);
+    setSaleDetailError("");
+    setSaleDetailLoading(false);
+  }
+
+  async function openSaleDetail(sale: AifShopDailySaleItem) {
+    setSelectedDailySale(sale);
+    setSaleDetail(null);
+    setSaleDetailError("");
+    setSaleDetailLoading(true);
+    try {
+      const detail = await apiAifShopSaleDetail({
+        location: locationCode,
+        id: sale.id,
+        recordType: sale.recordType || "sale",
+      });
+      setSaleDetail(detail);
+    } catch (caught) {
+      setSaleDetailError(caught instanceof Error ? caught.message : "Az eladás részletei nem tölthetők be.");
+    } finally {
+      setSaleDetailLoading(false);
+    }
+  }
+
   async function createShiftHandover() {
     if (!handoverTarget) {
       setError("Válaszd ki, melyik kolléga veszi át a műszakot.");
@@ -798,6 +1112,10 @@ export default function AllInShopOperations({
     setError("");
     setProductFilters(emptyProductFilters());
     setStockSummaryOpen(false);
+    setSelectedDailySale(null);
+    setSaleDetail(null);
+    setSaleDetailError("");
+    setSaleDetailLoading(false);
     if (mode === "search") {
       setSearchQuery("");
       setSearchItems([]);
@@ -844,6 +1162,10 @@ export default function AllInShopOperations({
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (selectedDailySale) {
+          closeSaleDetail();
+          return;
+        }
         if (dayCloseOpen && !dayCloseSaving) {
           setDayCloseOpen(false);
           return;
@@ -869,7 +1191,7 @@ export default function AllInShopOperations({
       window.removeEventListener("keydown", onKey);
       cancelAutoSearch();
     };
-  }, [cashMoveOpen, cashMoveSaving, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open]);
+  }, [cashMoveOpen, cashMoveSaving, dayCloseOpen, dayCloseSaving, handoverOpen, handoverSaving, mode, onClose, open, selectedDailySale]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -1485,7 +1807,33 @@ export default function AllInShopOperations({
                   <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.12em] text-white/42">Bizonylatok</p><h3 className="mt-1 text-lg">Napi eladások</h3></div><span className="rounded-full border border-white/12 bg-black/10 px-2.5 py-1 text-[10px] text-white/55">{summaryData?.sales.length || 0} bizonylat</span></div>
                   <div className="mt-3 max-h-[520px] space-y-2 overflow-y-auto pr-1">
                     {(summaryData?.sales || []).map((sale) => (
-                      <div key={sale.id} className={`rounded-2xl border p-3 ${sale.balanceDue > 0 ? "border-red-300/32 bg-red-950/18" : "border-white/10 bg-[#293548]"}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm">{sale.saleNumber}</p><p className="mt-1 text-[11px] text-white/45">{formatTime(sale.soldAt)} • {sale.paymentLabel}</p></div><p className="shrink-0 text-lg">{formatMoney(sale.total)}</p></div><div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/52"><span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{sale.itemCount} db</span>{sale.saleType === "exchange" ? <span className="rounded-lg border border-[#9be9e5]/28 bg-[#2a8d8b]/16 px-2 py-1 text-[#d7fffd]">Csere • különbözet</span> : null}{sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1"><UserRound className="mr-1 inline" size={12} />{sale.customerName}</span> : null}{sale.discountTotal > 0 ? <span className="rounded-lg border border-amber-200/18 bg-amber-400/8 px-2 py-1 text-amber-50">Kedv.: {formatMoney(sale.discountTotal)}</span> : null}{sale.balanceDue > 0 ? <span className="rounded-lg border border-red-300/45 bg-red-600 px-2 py-1 text-white">Hátralék: {formatMoney(sale.balanceDue)}</span> : null}</div></div>
+                      <button
+                        key={sale.id}
+                        type="button"
+                        onClick={() => void openSaleDetail(sale)}
+                        className={`group w-full rounded-2xl border p-3 text-left transition hover:-translate-y-[1px] hover:border-[#9be9e5]/38 hover:bg-[#314156] active:translate-y-0 ${
+                          sale.balanceDue > 0 ? "border-red-300/32 bg-red-950/18" : "border-white/10 bg-[#293548]"
+                        }`}
+                        title="Kattints az eladás részleteihez"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-white">{sale.saleNumber}</p>
+                            <p className="mt-1 text-[11px] text-white/45">{formatTime(sale.soldAt)} • {sale.paymentLabel}</p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <p className="text-lg text-white">{formatMoney(sale.total)}</p>
+                            <ChevronDown size={17} className="-rotate-90 text-white/25 transition group-hover:translate-x-0.5 group-hover:text-[#9be9e5]" />
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/52">
+                          <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1">{sale.itemCount} db</span>
+                          {sale.saleType === "exchange" ? <span className="rounded-lg border border-[#9be9e5]/28 bg-[#2a8d8b]/16 px-2 py-1 text-[#d7fffd]">Csere • különbözet</span> : null}
+                          {sale.customerName ? <span className="rounded-lg border border-white/10 bg-black/10 px-2 py-1"><UserRound className="mr-1 inline" size={12} />{sale.customerName}</span> : null}
+                          {sale.discountTotal > 0 ? <span className="rounded-lg border border-[#9be9e5]/24 bg-[#2a8d8b]/14 px-2 py-1 text-[#d7fffd]">Kedv.: {formatMoney(sale.discountTotal)}</span> : null}
+                          {sale.balanceDue > 0 ? <span className="rounded-lg border border-red-300/45 bg-red-600 px-2 py-1 text-white">Hátralék: {formatMoney(sale.balanceDue)}</span> : null}
+                        </div>
+                      </button>
                     ))}
                     {!summaryLoading && !(summaryData?.sales || []).length ? <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 text-white/42"><Receipt size={34} /><p className="mt-2 text-sm">Ezen a napon még nincs eladás.</p></div> : null}
                   </div>
@@ -1500,6 +1848,16 @@ export default function AllInShopOperations({
             </>
           ) : null}
         </div>
+
+        {selectedDailySale ? (
+          <DailySaleDetailModal
+            sale={selectedDailySale}
+            detail={saleDetail}
+            loading={saleDetailLoading}
+            error={saleDetailError}
+            onClose={closeSaleDetail}
+          />
+        ) : null}
 
         {dayCloseOpen ? createPortal(
           <div className="fixed inset-0 z-[435] flex items-center justify-center bg-[#0f172a]/90 p-3 backdrop-blur-md sm:p-5">
