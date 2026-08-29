@@ -697,6 +697,20 @@ function statusText(s?: string | null) {
   return s || "-";
 }
 
+function receptionStatusBadgeClass(s?: string | null) {
+  const v = String(s || "").toLowerCase();
+  if (v === "committed") {
+    return "border-[#9be9e5]/55 bg-[#2a8d8b] text-white shadow-[0_6px_16px_rgba(42,141,139,0.22)]";
+  }
+  if (v === "needs_review") {
+    return "border-amber-200/35 bg-amber-500/14 text-amber-50";
+  }
+  if (v === "cancelled") {
+    return "border-rose-200/35 bg-rose-500/14 text-rose-50";
+  }
+  return "border-white/14 bg-white/[0.06] text-white/78";
+}
+
 function receptionRowErrorMessages(row: any) {
   const source = Array.isArray(row?.error_messages)
     ? row.error_messages
@@ -2170,45 +2184,52 @@ export default function AllInReceptions(_props: Props) {
               <table className="w-full table-fixed text-left text-xs">
                 <colgroup>
                   <col className="w-[11%]" />
-                  <col className="w-[9%]" />
                   <col className="w-[12%]" />
+                  <col className="w-[10%]" />
                   <col className="w-[10%]" />
                   <col className="w-[9%]" />
                   <col className="w-[6%]" />
                   <col className="w-[10%]" />
                   <col className="w-[10%]" />
                   <col className="w-[5%]" />
+                  <col className="w-[9%]" />
                   <col className="w-[8%]" />
-                  <col className="w-[10%]" />
                 </colgroup>
                 <thead className="bg-[#293448] text-[10px] font-normal uppercase tracking-[0.06em] text-white/72 [&_th]:font-normal">
                   <tr>
                     <th className="px-2 py-1.5">Számla</th>
-                    <th className="px-2 py-1.5">UIT kód</th>
-                    <th className="px-2 py-1.5">Beszállító</th>
+                    <th className="px-2 py-1.5 text-center">UIT kód</th>
+                    <th className="px-2 py-1.5 text-center">Beszállító</th>
                     <th className="px-2 py-1.5 text-center">Cél hely</th>
                     <th className="px-2 py-1.5 text-center">Dátum</th>
                     <th className="px-2 py-1.5 text-center">Pénznem</th>
                     <th className="px-2 py-1.5 text-right">Nettó érték</th>
                     <th className="px-2 py-1.5 text-right">Végösszeg</th>
                     <th className="px-2 py-1.5 text-right">Darab</th>
-                    <th className="px-2 py-1.5">Állapot</th>
-                    <th className="px-2 py-1.5 text-right">Művelet</th>
+                    <th className="px-2 py-1.5 text-center">Állapot</th>
+                    <th className="px-2 py-1.5 text-center"><span className="sr-only">Műveletek</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10 bg-transparent">
                   {items.map((r) => (
                     <tr key={r.id} className="hover:bg-white/[0.04]">
                       <td className="px-2 py-2 text-white"><span className="block truncate whitespace-nowrap" title={cell(r.invoice_number)}>{cell(r.invoice_number)}</span></td>
-                      <td className="px-2 py-2 font-mono text-[11px] text-[#cffffd]"><span className="block truncate whitespace-nowrap" title={cell((r as any).uit_code || (r as any).uitCode)}>{cell((r as any).uit_code || (r as any).uitCode)}</span></td>
-                      <td className="px-2 py-2 text-white/82"><span className="block truncate whitespace-nowrap" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span></td>
+                      <td className="px-2 py-2 text-center font-mono text-[11px] text-[#cffffd]"><span className="block truncate whitespace-nowrap text-center" title={cell((r as any).uit_code || (r as any).uitCode)}>{cell((r as any).uit_code || (r as any).uitCode)}</span></td>
+                      <td className="px-2 py-2 text-center text-white/82"><span className="block truncate whitespace-nowrap text-center" title={supplierDisplayName(r.supplier_name)}>{supplierDisplayName(r.supplier_name)}</span></td>
                       <td className="px-2 py-2 text-center text-white/82"><span className="block truncate whitespace-nowrap" title={cell(r.location_name)}>{cell(r.location_name)}</span></td>
                       <td className="whitespace-nowrap px-2 py-2 text-center tabular-nums text-white/82">{dateText(r.reception_date)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-center text-white/82">{cell(r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{money(receptionNetInvoiceValue(r), r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white">{money(r.invoice_gross, r.currency_code)}</td>
                       <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-white/82">{r.total_qty || 0}</td>
-                      <td className="px-2 py-2 text-white/82"><span className="block truncate whitespace-nowrap" title={statusText(r.status)}>{statusText(r.status)}</span></td>
+                      <td className="px-2 py-2 text-center">
+                        <span
+                          className={`inline-flex max-w-full items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] leading-none ${receptionStatusBadgeClass(r.status)}`}
+                          title={statusText(r.status)}
+                        >
+                          {statusText(r.status)}
+                        </span>
+                      </td>
                       <td className="px-2 py-2">
                         <div className="flex items-center justify-end gap-1.5">
                           <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
@@ -2236,7 +2257,7 @@ export default function AllInReceptions(_props: Props) {
                       {(r as any).uit_code || (r as any).uitCode ? <p className="mt-1 font-mono text-[11px] text-[#cffffd]">UIT: {String((r as any).uit_code || (r as any).uitCode)}</p> : null}
                       <p className="mt-1 text-xs text-white/62">{supplierDisplayName(r.supplier_name)} • {cell(r.location_name)}</p>
                     </div>
-                    <span className="rounded-full border border-[#2a8d8b]/40 bg-[#2a8d8b]/10 px-2 py-1 text-xs text-white">{statusText(r.status)}</span>
+                    <span className={`inline-flex items-center justify-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${receptionStatusBadgeClass(r.status)}`}>{statusText(r.status)}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Dátum</p><p>{dateText(r.reception_date)}</p></div>
