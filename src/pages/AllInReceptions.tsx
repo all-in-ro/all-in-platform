@@ -928,81 +928,108 @@ function rowDraftValue(row: any, drafts: Record<string, Record<string, unknown>>
   return qty * buyPrice;
 }
 
+function receptionRowMoveMeta(row: any, drafts: Record<string, Record<string, unknown>>) {
+  const draft: any = drafts[row?.id] || row?.normalized || {};
+  const move = draft?.receptionMove || row?.normalized?.receptionMove;
+  return move && typeof move === "object" ? move : null;
+}
+
+function receptionFinancialsFromEnteredAmount(amount: unknown, mode: unknown, rateValue: unknown) {
+  const entered = n(amount);
+  const modeValue = String(mode || "no_tva");
+  const rate = Math.max(0, n(rateValue));
+  if (modeValue === "without_tva") {
+    const net = entered;
+    const vat = net * (rate / 100);
+    return { entered, net, vat, gross: net + vat };
+  }
+  if (modeValue === "with_tva") {
+    const gross = entered;
+    const factor = 1 + rate / 100;
+    const net = factor > 0 ? gross / factor : gross;
+    return { entered, net, vat: gross - net, gross };
+  }
+  return { entered, net: entered, vat: 0, gross: entered };
+}
+
 function receptionBalance(
   item: any,
   rows: any[],
   drafts: Record<string, Record<string, unknown>>,
   headerDraft?: Record<string, string>,
 ) {
-  const invoiceGross = n(headerDraft?.invoiceGross ?? item?.invoice_gross);
   const shipping = n(headerDraft?.shippingCost ?? item?.shipping_cost);
   const tvaRate = n(headerDraft?.tvaRate ?? item?.tva_rate);
   const tvaMode = String(headerDraft?.tvaMode ?? item?.tva_mode ?? "no_tva");
-  const rowsValue = (rows || []).reduce((sum, row) => sum + rowDraftValue(row, drafts), 0);
-  const baseTotal = rowsValue + shipping;
-  const grossFromNet = rowsValue + rowsValue * (tvaRate / 100) + shipping;
-  let tvaValue = 0;
-  let calculatedTotal = baseTotal;
+  const fallbackEnteredAmount = tvaMode === "without_tva"
+    ? (item?.invoice_net ?? item?.invoice_gross)
+    : (item?.invoice_gross ?? item?.invoice_net);
+  const enteredInvoiceAmount = n(headerDraft?.invoiceGross ?? fallbackEnteredAmount);
+  const invoiceFinancials = receptionFinancialsFromEnteredAmount(enteredInvoiceAmount, tvaMode, tvaRate);
 
-  if (tvaMode === "without_tva" && tvaRate > 0) {
-    tvaValue = rowsValue * (tvaRate / 100);
-    calculatedTotal = grossFromNet;
-  } else if (tvaMode === "with_tva" && tvaRate > 0) {
-    tvaValue = rowsValue - rowsValue / (1 + tvaRate / 100);
-    calculatedTotal = baseTotal;
+  let rowsValue = 0;
+  let movedRowsValue = 0;
+  let movedRowsCount = 0;
+  let movedQty = 0;
+  for (const row of rows || []) {
+    const value = rowDraftValue(row, drafts);
+    rowsValue += value;
+    if (row?.status !== "ignored" && receptionRowMoveMeta(row, drafts)) {
+      movedRowsValue += value;
+      movedRowsCount += 1;
+      const draft: any = drafts[row.id] || row.normalized || {};
+      movedQty += n(draft?.qty ?? row?.qty ?? row?.normalized?.qty);
+    }
   }
 
-  const diff = invoiceGross - calculatedTotal;
+  const originalRowsValue = rowsValue - movedRowsValue;
+  const comparableRowsValue = originalRowsValue + shipping;
+  const invoiceComparableValue = tvaMode === "without_tva" ? invoiceFinancials.net : invoiceFinancials.gross;
+  const diff = invoiceComparableValue - comparableRowsValue;
   const absDiff = Math.abs(diff);
   const isOk = absDiff < 0.01;
-  const noVatWouldMatch = Math.abs(invoiceGross - baseTotal) < 0.01;
-  const suggestedNoVat = !isOk && tvaMode === "without_tva" && tvaRate > 0 && noVatWouldMatch;
+  const isSmallDifference = !isOk && absDiff <= 1;
   const isMissing = diff > 0;
-  const status = isOk
-    ? "Egyezik"
-    : suggestedNoVat
-      ? "Csak a beszerzési TVA mód hibás"
-      : isMissing
-        ? "Hiányzik a sorokból"
-        : "Túllépés";
-  const className = isOk
-    ? "border-[#2a8d8b]/55 bg-[#2a8d8b]/10"
-    : suggestedNoVat
-      ? "border-amber-300/55 bg-amber-500/12 shadow-[0_0_0_1px_rgba(245,158,11,0.12)]"
-      : "border-red-300/55 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.18),0_0_24px_rgba(239,68,68,0.24)]";
+  const status = isOk ? "Egyezik" : isSmallDifference ? "Kis eltérés" : isMissing ? "Hiányzik a sorokból" : "Túllépés";
   const badgeClassName = isOk
-    ? "border-[#2a8d8b]/45 bg-[#2a8d8b]/14 text-white"
-    : suggestedNoVat
-      ? "border-amber-200/45 bg-amber-500/18 text-amber-50"
-      : "border-red-200/35 bg-red-500/18 text-red-50 shadow-[0_0_12px_rgba(239,68,68,0.35)]";
-  const amountClassName = isOk ? "text-white" : suggestedNoVat ? "text-amber-50" : "text-red-100";
-  const labelClassName = isOk ? "text-white/72" : suggestedNoVat ? "text-amber-50/88" : "text-red-100/88";
+    ? "border-[#69d7d0]/40 bg-[#2a8d8b]/20 text-[#eaffff]"
+    : isSmallDifference
+      ? "border-amber-200/36 bg-amber-400/12 text-amber-50"
+      : "border-rose-200/34 bg-rose-500/14 text-rose-50";
   const ledClassName = isOk
-    ? "bg-[#2a8d8b] shadow-[0_0_10px_rgba(42,141,139,0.85)]"
-    : suggestedNoVat
-      ? "bg-amber-300 shadow-[0_0_12px_rgba(252,211,77,0.9)]"
-      : "bg-red-400 shadow-[0_0_12px_rgba(248,113,113,1),0_0_24px_rgba(239,68,68,0.8)] animate-pulse";
+    ? "bg-[#54d5ca] shadow-[0_0_10px_rgba(84,213,202,0.72)]"
+    : isSmallDifference
+      ? "bg-amber-300 shadow-[0_0_10px_rgba(252,211,77,0.72)]"
+      : "bg-rose-400 shadow-[0_0_12px_rgba(248,113,113,0.85)]";
+  const invoiceAmountLabel = tvaMode === "without_tva"
+    ? "Számla nettó"
+    : tvaMode === "with_tva"
+      ? "Számla bruttó"
+      : "Számla összege";
 
   return {
-    invoiceGross,
+    enteredInvoiceAmount,
+    invoiceAmountLabel,
+    invoiceNet: invoiceFinancials.net,
+    invoiceVat: invoiceFinancials.vat,
+    invoiceGross: invoiceFinancials.gross,
     rowsValue,
+    originalRowsValue,
+    movedRowsValue,
+    movedRowsCount,
+    movedQty,
+    comparableRowsValue,
     shipping,
     tvaRate,
     tvaMode,
-    tvaValue,
-    baseTotal,
-    grossFromNet,
-    calculatedTotal,
+    tvaValue: invoiceFinancials.vat,
     diff,
     absDiff,
     status,
     isOk,
+    isSmallDifference,
     isMissing,
-    suggestedNoVat,
-    className,
     badgeClassName,
-    amountClassName,
-    labelClassName,
     ledClassName,
   };
 }
@@ -1782,6 +1809,10 @@ export default function AllInReceptions(_props: Props) {
   }
 
   function buildReceptionDraft(item: AifReceptionSummary) {
+    const mode = String(item.tva_mode || "without_tva");
+    const enteredInvoiceAmount = mode === "without_tva"
+      ? ((item as any).invoice_net ?? item.invoice_gross ?? "")
+      : (item.invoice_gross ?? (item as any).invoice_net ?? "");
     return {
       invoiceNumber: String(item.invoice_number || ""),
       uitCode: String((item as any).uit_code || (item as any).uitCode || ""),
@@ -1789,10 +1820,10 @@ export default function AllInReceptions(_props: Props) {
       receptionDate: dateText(item.reception_date) === "-" ? "" : dateText(item.reception_date),
       currencyCode: String(item.currency_code || ""),
       exchangeRateToRon: String(item.exchange_rate_to_ron || ""),
-      tvaMode: String(item.tva_mode || "without_tva"),
+      tvaMode: mode,
       tvaRate: String(item.tva_rate ?? ""),
       shippingCost: String(item.shipping_cost ?? ""),
-      invoiceGross: String(item.invoice_gross ?? ""),
+      invoiceGross: String(enteredInvoiceAmount),
       note: String((item as any).note || ""),
     };
   }
@@ -1857,6 +1888,11 @@ export default function AllInReceptions(_props: Props) {
     setSavingHeader(true);
     setMessage("");
     try {
+      const financials = receptionFinancialsFromEnteredAmount(
+        receptionDraft.invoiceGross,
+        receptionDraft.tvaMode,
+        receptionDraft.tvaMode === "no_tva" ? 0 : receptionDraft.tvaRate,
+      );
       const saved = await apiAifUpdateReception(detail.item.id, {
         invoiceNumber: receptionDraft.invoiceNumber,
         uitCode: receptionDraft.uitCode,
@@ -1867,9 +1903,11 @@ export default function AllInReceptions(_props: Props) {
         tvaMode: receptionDraft.tvaMode,
         tvaRate: receptionDraft.tvaMode === "no_tva" ? 0 : receptionDraft.tvaRate,
         shippingCost: receptionDraft.shippingCost,
-        invoiceGross: receptionDraft.invoiceGross,
+        invoiceNet: financials.net,
+        invoiceVat: financials.vat,
+        invoiceGross: financials.gross,
         note: receptionDraft.note,
-      });
+      } as any);
       if (saved?.item) {
         setDetail((prev) => prev ? { ...prev, item: { ...prev.item, ...saved.item } } : prev);
         setReceptionDraft((prev) => ({
@@ -1883,7 +1921,11 @@ export default function AllInReceptions(_props: Props) {
           tvaMode: String(saved.item?.tva_mode ?? prev.tvaMode ?? ""),
           tvaRate: String(saved.item?.tva_rate ?? prev.tvaRate ?? ""),
           shippingCost: String(saved.item?.shipping_cost ?? prev.shippingCost ?? ""),
-          invoiceGross: String(saved.item?.invoice_gross ?? prev.invoiceGross ?? ""),
+          invoiceGross: String(
+            String(saved.item?.tva_mode ?? prev.tvaMode ?? "") === "without_tva"
+              ? (saved.item?.invoice_net ?? prev.invoiceGross ?? "")
+              : (saved.item?.invoice_gross ?? prev.invoiceGross ?? "")
+          ),
           note: String(saved.item?.note ?? prev.note ?? ""),
         }));
       }
@@ -2483,9 +2525,11 @@ export default function AllInReceptions(_props: Props) {
               <section className="grid gap-3 lg:grid-cols-[1.35fr_0.8fr_0.72fr_0.82fr]">
                 <div className="relative overflow-hidden rounded-[24px] border border-[#a9f3ef]/36 bg-gradient-to-br from-[#2a8d8b] to-[#216e70] p-4 shadow-[0_16px_36px_rgba(42,141,139,0.20)]">
                   <div className="pointer-events-none absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/[0.08] blur-xl" />
-                  <p className="relative text-[9px] uppercase tracking-[0.14em] text-[#eaffff]/64">Számla végösszeg</p>
+                  <p className="relative text-[9px] uppercase tracking-[0.14em] text-[#eaffff]/64">Számla bruttó végösszeg</p>
                   <p className="relative mt-1 text-3xl tracking-tight text-white sm:text-4xl">{money(detail.item.invoice_gross, detail.item.currency_code)}</p>
-                  <div className="relative mt-3 flex flex-wrap gap-2 text-[10px] text-white/72">
+                  <div className="relative mt-3 flex flex-wrap gap-2 text-[10px] text-white/78">
+                    <span className="rounded-full border border-white/15 bg-black/10 px-2.5 py-1">Nettó {money((detail.item as any).invoice_net ?? receptionNetInvoiceValue(detail.item), detail.item.currency_code)}</span>
+                    {n((detail.item as any).invoice_vat) > 0 ? <span className="rounded-full border border-white/15 bg-black/10 px-2.5 py-1">TVA {money((detail.item as any).invoice_vat, detail.item.currency_code)}</span> : null}
                     <span className="rounded-full border border-white/15 bg-black/10 px-2.5 py-1">{cell(detail.item.currency_code)}</span>
                     <span className="rounded-full border border-white/15 bg-black/10 px-2.5 py-1">Árfolyam {cell(detail.item.exchange_rate_to_ron)}</span>
                     {detail.item.purchase_order_id ? (
@@ -2497,9 +2541,9 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="rounded-[24px] border border-white/10 bg-[#344155]/90 p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
-                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/40">Nettó érték</p>
-                  <p className="mt-2 text-2xl tracking-tight text-white">{money(receptionNetInvoiceValue(detail.item), detail.item.currency_code)}</p>
-                  <p className="mt-2 text-[10px] text-white/38">Beszerzési TVA alapján</p>
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/46">Számla nettó</p>
+                  <p className="mt-2 text-2xl tracking-tight text-white">{money((detail.item as any).invoice_net ?? receptionNetInvoiceValue(detail.item), detail.item.currency_code)}</p>
+                  <p className="mt-2 text-[10px] text-white/46">A számla pénzügyi fejadata</p>
                 </div>
 
                 <div className="rounded-[24px] border border-white/10 bg-[#344155]/90 p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
@@ -2521,34 +2565,36 @@ export default function AllInReceptions(_props: Props) {
               </section>
 
               {detailBalance ? (
-                <section className={`mt-3 overflow-hidden rounded-[20px] border ${detailBalance.isOk ? "border-[#7bd7d4]/22 bg-[#2a8d8b]/8" : detailBalance.suggestedNoVat ? "border-amber-200/28 bg-amber-400/8" : "border-rose-200/28 bg-rose-500/9"}`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <section className={`mt-3 overflow-hidden rounded-[18px] border ${
+                  detailBalance.isOk
+                    ? "border-[#69d7d0]/24 bg-[#2a8d8b]/8"
+                    : detailBalance.isSmallDifference
+                      ? "border-amber-200/26 bg-amber-400/[0.07]"
+                      : "border-rose-200/28 bg-rose-500/[0.08]"
+                }`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
                     <div className="flex min-w-0 items-center gap-3">
                       <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${detailBalance.ledClassName}`} />
                       <div className="min-w-0">
-                        <p className="text-[9px] uppercase tracking-[0.14em] text-white/40">Számla egyeztetés</p>
-                        <p className="mt-0.5 text-sm text-white/84">
-                          {detailBalance.suggestedNoVat
-                            ? <>A sorok összege helyes: <strong className="font-normal text-amber-50">{money(detailBalance.baseTotal, detail.item.currency_code)}</strong></>
-                            : <>Különbözet: <strong className={`font-normal ${detailBalance.isOk ? "text-[#d7fffd]" : "text-rose-50"}`}>{money(detailBalance.diff, detail.item.currency_code)}</strong></>}
+                        <p className="text-[10px] uppercase tracking-[0.13em] text-white/48">Számla egyeztetés</p>
+                        <p className="mt-0.5 text-[15px] text-white/92">
+                          Különbözet: <span className={detailBalance.isOk ? "text-[#d7fffd]" : detailBalance.isSmallDifference ? "text-amber-50" : "text-rose-50"}>{money(detailBalance.diff, detail.item.currency_code)}</span>
                         </p>
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 text-[10px] text-white/52">
-                      <span>Sorok {money(detailBalance.rowsValue, detail.item.currency_code)}</span>
-                      <span className="text-white/20">•</span>
-                      <span>TVA {money(detailBalance.tvaValue, detail.item.currency_code)}</span>
-                      <span className="text-white/20">•</span>
-                      <span>Szállítás {money(detailBalance.shipping, detail.item.currency_code)}</span>
-                      <span className={`rounded-full border px-2.5 py-1 ${detailBalance.badgeClassName}`}>{detailBalance.status}</span>
+                    <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-white/72">
+                      <span className="rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5">{detailBalance.invoiceAmountLabel} {money(detailBalance.enteredInvoiceAmount, detail.item.currency_code)}</span>
+                      <span className="rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5">Eredeti sorok {money(detailBalance.originalRowsValue, detail.item.currency_code)}</span>
+                      {detailBalance.movedRowsValue > 0 ? <span className="rounded-lg border border-sky-200/20 bg-sky-300/[0.08] px-2.5 py-1.5 text-sky-50">Áthelyezve +{money(detailBalance.movedRowsValue, detail.item.currency_code)}</span> : null}
+                      {detailBalance.movedRowsValue > 0 ? <span className="rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5">Minden termék {money(detailBalance.rowsValue, detail.item.currency_code)}</span> : null}
+                      {Math.abs(detailBalance.shipping) > 0.0001 ? <span className="rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5">Szállítás {money(detailBalance.shipping, detail.item.currency_code)}</span> : null}
+                      <span className={`rounded-full border px-2.5 py-1.5 ${detailBalance.badgeClassName}`}>{detailBalance.status}</span>
                     </div>
                   </div>
-                  {detailBalance.suggestedNoVat ? (
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-100/10 bg-black/8 px-4 py-2.5 text-xs text-amber-50/82">
-                      <span>A terméksorok találják a számlát, csak a beszerzési TVA mód hibás.</span>
-                      <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-100/24 bg-amber-300/12 px-3 text-xs text-amber-50 hover:bg-amber-300/18" onClick={() => void applyNoPurchaseVatAndSave()} disabled={savingHeader || busy} type="button">
-                        <Check size={14} /> Nincs beszerzési TVA • javítás
-                      </button>
+                  {detailBalance.movedRowsValue > 0 ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-sky-100/10 bg-sky-300/[0.045] px-4 py-2.5 text-[11px] text-sky-50/82">
+                      <span>{detailBalance.movedRowsCount} áthelyezett sor • {detailBalance.movedQty} db • +{money(detailBalance.movedRowsValue, detail.item.currency_code)}. Ezek látszanak a receptióban, de az eredeti számla egyeztetésébe nem számítanak bele.</span>
+                      <span className="rounded-full border border-sky-100/16 bg-black/10 px-2.5 py-1 text-[10px] text-sky-50/76">Nyomkövetett áthelyezés</span>
                     </div>
                   ) : null}
                 </section>
@@ -2578,7 +2624,7 @@ export default function AllInReceptions(_props: Props) {
                     <label className={lightLabel}>Beszerzési TVA<select className={lightSelect} value={receptionDraft.tvaMode || "no_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="no_tva">Nincs beszerzési TVA</option><option value="without_tva">Nettó vételár + TVA</option><option value="with_tva">Bruttó vételár, TVA benne van</option></select></label>
                     <label className={lightLabel}>TVA %<input className={lightInput} disabled={receptionDraft.tvaMode === "no_tva"} value={receptionDraft.tvaMode === "no_tva" ? "0" : (receptionDraft.tvaRate || "")} onChange={(e) => updateReceptionDraft("tvaRate", e.target.value)} /></label>
                     <label className={lightLabel}>Szállítás<input className={lightInput} value={receptionDraft.shippingCost || ""} onChange={(e) => updateReceptionDraft("shippingCost", e.target.value)} /></label>
-                    <label className={lightLabel}>Számla végösszeg<input className={lightInput} value={receptionDraft.invoiceGross || ""} onChange={(e) => updateReceptionDraft("invoiceGross", e.target.value)} /></label>
+                    <label className={lightLabel}>{receptionDraft.tvaMode === "without_tva" ? "Számla nettó összege" : receptionDraft.tvaMode === "with_tva" ? "Számla bruttó összege" : "Számla összege"}<input className={lightInput} value={receptionDraft.invoiceGross || ""} onChange={(e) => updateReceptionDraft("invoiceGross", e.target.value)} /></label>
                     <label className={`${lightLabel} md:col-span-2 xl:col-span-4`}>Megjegyzés<input className={lightInput} value={receptionDraft.note || ""} onChange={(e) => updateReceptionDraft("note", e.target.value)} /></label>
                     <div className="flex items-end sm:hidden"><button className={primaryBtn} onClick={saveReceptionHeader} disabled={busy || savingHeader} type="button"><Save size={14} /> Mentés</button></div>
                   </div>
@@ -2611,7 +2657,7 @@ export default function AllInReceptions(_props: Props) {
 
                 <div className="hidden xl:block">
                   <div className="p-2.5">
-                    <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(0,2.25fr)_56px_minmax(145px,0.82fr)_48px_116px_124px_102px] items-center gap-2 rounded-t-[14px] border border-white/[0.08] bg-[#263b4f]/[0.995] px-3 py-2.5 text-[10px] uppercase tracking-[0.065em] text-white/[0.70] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+                    <div className="sticky top-0 z-20 grid grid-cols-[32px_44px_minmax(0,2.65fr)_56px_minmax(132px,0.68fr)_48px_116px_124px_102px] items-center gap-2 rounded-t-[14px] border border-white/[0.08] bg-[#263b4f]/[0.995] px-3 py-2.5 text-[10px] uppercase tracking-[0.065em] text-white/[0.70] shadow-[0_10px_26px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                       <span className="text-center">✓</span>
                       <span className="text-center">Sor</span>
                       <span>Termék / azonosítók</span>
@@ -2644,6 +2690,7 @@ export default function AllInReceptions(_props: Props) {
                         const resolvedColorCode = receptionRowColorCode(r, draft);
                         const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
                         const colorSwatch = receptionColorSwatch(displayColorName);
+                        const moveMeta = receptionRowMoveMeta(r, rowDrafts);
                         const rowTone = r.status === "committed"
                           ? "bg-[#344d62] hover:bg-[#3b586f]"
                           : r.status === "ignored"
@@ -2658,7 +2705,7 @@ export default function AllInReceptions(_props: Props) {
                         return (
                           <article
                             key={r.id}
-                            className={`relative grid min-h-[86px] grid-cols-[32px_44px_minmax(0,2.25fr)_56px_minmax(145px,0.82fr)_48px_116px_124px_102px] items-center gap-2 border-b border-white/[0.10] px-3 py-2.5 transition-colors last:border-b-0 ${rowTone}`}
+                            className={`relative grid min-h-[92px] grid-cols-[32px_44px_minmax(0,2.65fr)_56px_minmax(132px,0.68fr)_48px_116px_124px_102px] items-center gap-2 border-b border-white/[0.10] px-3 py-2.5 transition-colors last:border-b-0 ${rowTone}`}
                           >
                             <span className={`absolute inset-y-0 left-0 w-[3px] ${r.status === "committed" ? "bg-[#2a8d8b]" : hasRowError ? "bg-rose-400" : checked ? "bg-[#7bd7d4]" : "bg-transparent"}`} />
 
@@ -2692,19 +2739,22 @@ export default function AllInReceptions(_props: Props) {
                             </div>
 
                             <div className="min-w-0 pr-1">
-                              <input
-                                className="h-8 w-full min-w-0 border-0 bg-transparent px-0 text-[15px] tracking-[0.003em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
-                                value={String(draft.titleRo ?? "")}
-                                disabled={!editable}
-                                onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
-                                title={String(draft.titleRo ?? "")}
-                                placeholder="Terméknév"
-                              />
-                              <div className="mt-2 grid min-w-0 grid-cols-[minmax(0,1.05fr)_minmax(0,0.85fr)_minmax(0,1.35fr)] gap-3">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <input
+                                  className="h-8 min-w-0 flex-1 border-0 bg-transparent px-0 text-[15px] tracking-[0.003em] text-white outline-none placeholder:text-white/[0.28] focus:text-[#eaffff] disabled:text-white/[0.90] disabled:opacity-100"
+                                  value={String(draft.titleRo ?? "")}
+                                  disabled={!editable}
+                                  onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
+                                  title={String(draft.titleRo ?? "")}
+                                  placeholder="Terméknév"
+                                />
+                                {moveMeta ? <span className="shrink-0 rounded-md border border-sky-200/20 bg-sky-300/[0.09] px-2 py-1 text-[9px] uppercase tracking-[0.05em] text-sky-50/86" title="Másik receptióból áthelyezett sor">Áthelyezett</span> : null}
+                              </div>
+                              <div className="mt-2.5 grid min-w-0 grid-cols-[minmax(0,1.08fr)_minmax(0,0.78fr)_minmax(0,1.48fr)] gap-4">
                                 <label className="flex min-w-0 items-center gap-2 border-r border-white/[0.10] pr-3">
-                                  <span className="shrink-0 text-[10px] uppercase tracking-[0.07em] text-[#aaf5f1]/[0.78]">Kód</span>
+                                  <span className="shrink-0 text-[11px] uppercase tracking-[0.065em] text-[#bffbf8]/[0.88]">Kód</span>
                                   <input
-                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[13px] text-white outline-none focus:text-[#eaffff] disabled:opacity-100"
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[14px] text-white outline-none focus:text-[#eaffff] disabled:opacity-100"
                                     value={String(draft.supplierProductCode ?? "")}
                                     disabled={!editable}
                                     onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)}
@@ -2712,9 +2762,9 @@ export default function AllInReceptions(_props: Props) {
                                   />
                                 </label>
                                 <label className="flex min-w-0 items-center gap-2 border-r border-white/[0.10] pr-3">
-                                  <span className="shrink-0 text-[10px] uppercase tracking-[0.07em] text-[#aaf5f1]/[0.78]">S/N</span>
+                                  <span className="shrink-0 text-[11px] uppercase tracking-[0.065em] text-[#bffbf8]/[0.88]">S/N</span>
                                   <input
-                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] text-white outline-none focus:text-[#eaffff] disabled:opacity-100"
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[14px] text-white outline-none focus:text-[#eaffff] disabled:opacity-100"
                                     value={String(draft.snCod ?? draft.sn_cod ?? "")}
                                     disabled={!editable}
                                     onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)}
@@ -2722,9 +2772,9 @@ export default function AllInReceptions(_props: Props) {
                                   />
                                 </label>
                                 <label className="flex min-w-0 items-center gap-2">
-                                  <span className="shrink-0 text-[10px] uppercase tracking-[0.07em] text-[#b8faf7]/[0.90]">EAN</span>
+                                  <span className="shrink-0 text-[11px] uppercase tracking-[0.065em] text-[#d1fffd]/[0.96]">EAN</span>
                                   <input
-                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] tracking-[0.018em] text-[#eaffff] outline-none focus:text-white disabled:opacity-100"
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[14px] tracking-[0.018em] text-[#efffff] outline-none focus:text-white disabled:opacity-100"
                                     value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
                                     disabled={!editable}
                                     onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)}
@@ -2864,6 +2914,7 @@ export default function AllInReceptions(_props: Props) {
                     const resolvedColorCode = receptionRowColorCode(r, draft);
                     const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
                     const colorSwatch = receptionColorSwatch(displayColorName);
+                    const moveMeta = receptionRowMoveMeta(r, rowDrafts);
                     return (
                       <article key={r.id} className={`overflow-hidden rounded-[20px] border ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.12] bg-[#3a5268]"}`}>
                         <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-2.5">
@@ -2871,7 +2922,10 @@ export default function AllInReceptions(_props: Props) {
                           {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="rounded-full border border-rose-300/20 bg-rose-500/14 px-2 py-1 text-[10px] text-rose-50">Hiba részletei</button> : <span className="rounded-full bg-black/10 px-2 py-1 text-[10px] text-white/44">{statusText(r.status)}</span>}
                         </div>
                         <div className="p-3">
-                          <input className={`${rowCompactInput} h-10 text-[14px]`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
+                          <div className="flex items-center gap-2">
+                            <input className={`${rowCompactInput} h-10 flex-1 text-[14px]`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
+                            {moveMeta ? <span className="shrink-0 rounded-md border border-sky-200/20 bg-sky-300/[0.09] px-2 py-1 text-[9px] uppercase tracking-[0.05em] text-sky-50/86">Áthelyezett</span> : null}
+                          </div>
                           <div className="mt-2 grid gap-2 sm:grid-cols-3">
                             {[
                               ["Kód", String(draft.supplierProductCode ?? ""), "supplierProductCode", false],
