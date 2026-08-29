@@ -200,6 +200,7 @@ const primaryBtn = `${btnBase} border-[#2a8d8b]/55 bg-[#2a8d8b] text-white hover
 const neutralBtn = `${btnBase} border-white/15 bg-white/[0.08] text-white hover:bg-[#404a5b]/[0.12]`;
 const dangerBtn = `${btnBase} border-red-500 bg-red-600 text-white hover:bg-red-500`;
 const tinyBtn = "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.08] px-2.5 text-[11px] text-white transition hover:bg-[#404a5b]/[0.12] disabled:cursor-not-allowed disabled:opacity-50 font-normal";
+const tinyIconBtn = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/[0.08] text-white transition hover:bg-[#404a5b]/[0.12] disabled:cursor-not-allowed disabled:opacity-50";
 const statCard = "rounded-2xl border border-white/12 bg-white/[0.06] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]";
 const lightPanel = "rounded-2xl border border-white/14 bg-[#404a5b] p-4 text-white shadow-lg";
 const lightLabel = "grid gap-1.5 text-xs text-white/70 font-normal";
@@ -2232,7 +2233,17 @@ export default function AllInReceptions(_props: Props) {
                       </td>
                       <td className="px-2 py-2">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
+                          <button
+                            className={r.status === "committed" ? tinyIconBtn : tinyBtn}
+                            onClick={() => openDetail(r.id)}
+                            disabled={busy}
+                            type="button"
+                            title={r.status === "committed" ? "Adatok" : "Folytatás"}
+                            aria-label={r.status === "committed" ? "Adatok" : "Folytatás"}
+                          >
+                            <Eye size={13} />
+                            {r.status === "committed" ? null : "Folytatás"}
+                          </button>
                           <ReceptionActionsMenu
                             disabled={busy}
                             canDelete={Boolean(r.can_delete)}
@@ -2266,7 +2277,17 @@ export default function AllInReceptions(_props: Props) {
                     <div className={statCard}><p className="text-[11px] uppercase text-white/56">Darab</p><p>{r.total_qty || 0}</p></div>
                   </div>
                   <div className="mt-2 flex items-center justify-end gap-2">
-                    <button className={tinyBtn} onClick={() => openDetail(r.id)} disabled={busy} type="button"><Eye size={13} /> {r.status === "committed" ? "Adatok" : "Folytatás"}</button>
+                    <button
+                            className={r.status === "committed" ? tinyIconBtn : tinyBtn}
+                            onClick={() => openDetail(r.id)}
+                            disabled={busy}
+                            type="button"
+                            title={r.status === "committed" ? "Adatok" : "Folytatás"}
+                            aria-label={r.status === "committed" ? "Adatok" : "Folytatás"}
+                          >
+                            <Eye size={13} />
+                            {r.status === "committed" ? null : "Folytatás"}
+                          </button>
                     <ReceptionActionsMenu
                       disabled={busy}
                       canDelete={Boolean(r.can_delete)}
