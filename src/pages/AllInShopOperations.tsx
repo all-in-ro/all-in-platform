@@ -528,7 +528,7 @@ function DailySaleDetailModal({
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-24 sm:p-5 sm:pb-28">
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-2xl border border-[#9be9e5]/28 bg-[#2a8d8b] px-4 py-3">
               <p className="text-[9px] uppercase tracking-[0.12em] text-[#dffffd]/72">Végösszeg</p>
@@ -692,7 +692,7 @@ function DailySaleDetailModal({
           ) : null}
         </div>
 
-        <footer className="flex items-center justify-end border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
+        <footer className="flex shrink-0 items-center justify-end border-t border-white/12 bg-[#293548] px-4 py-3.5 sm:px-5">
           <button type="button" onClick={onClose} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/16 bg-white/[0.05] px-4 text-sm text-white hover:bg-white/[0.09]">
             <X size={16} /> Bezárás
           </button>
