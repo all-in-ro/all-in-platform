@@ -776,6 +776,39 @@ function receptionResolvedColorName(row: any, draft: any, meta?: AifMeta | null)
   ).trim();
 }
 
+
+function receptionColorSwatch(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "#64748b";
+  if (/^#[0-9a-f]{3,8}$/i.test(raw)) return raw;
+  const key = receptionLookupKey(raw);
+  const palette: Record<string, string> = {
+    negru: "#111827", fekete: "#111827", black: "#111827",
+    alb: "#f8fafc", alba: "#f8fafc", feher: "#f8fafc", white: "#f8fafc",
+    rosu: "#ef4444", rosie: "#ef4444", piros: "#ef4444", red: "#ef4444",
+    albastru: "#3b82f6", kek: "#3b82f6", blue: "#3b82f6",
+    verde: "#22c55e", zold: "#22c55e", green: "#22c55e",
+    galben: "#facc15", sarga: "#facc15", yellow: "#facc15",
+    portocaliu: "#f97316", narancs: "#f97316", orange: "#f97316",
+    mov: "#8b5cf6", violet: "#8b5cf6", purple: "#8b5cf6", lila: "#8b5cf6",
+    roz: "#ec4899", pink: "#ec4899",
+    gri: "#94a3b8", szurke: "#94a3b8", gray: "#94a3b8", grey: "#94a3b8",
+    maro: "#92400e", barna: "#92400e", brown: "#92400e",
+    bej: "#d6c5a1", beige: "#d6c5a1",
+    bleumarin: "#172554", navy: "#172554",
+    turcoaz: "#14b8a6", turquoise: "#14b8a6",
+    auriu: "#d4af37", gold: "#d4af37",
+    argintiu: "#cbd5e1", silver: "#cbd5e1",
+    antracit: "#374151", anthracite: "#374151",
+    denim: "#496a9b",
+  };
+  if (palette[key]) return palette[key];
+  for (const [name, color] of Object.entries(palette)) {
+    if (key.includes(name)) return color;
+  }
+  return "#64748b";
+}
+
 function statusText(s?: string | null) {
   const v = String(s || "").toLowerCase();
   if (v === "draft") return "Vázlat";
@@ -2446,7 +2479,7 @@ export default function AllInReceptions(_props: Props) {
               </div>
             </header>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-[#2d394b] to-[#263143] p-3 sm:p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-[#2d394b] to-[#263143] p-3 sm:p-4 [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-track]:bg-[#1d2736] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#2a8d8b]" style={{ scrollbarColor: "#2a8d8b #1d2736", scrollbarWidth: "thin" }}>
               <section className="grid gap-3 lg:grid-cols-[1.35fr_0.8fr_0.72fr_0.82fr]">
                 <div className="relative overflow-hidden rounded-[24px] border border-[#a9f3ef]/36 bg-gradient-to-br from-[#2a8d8b] to-[#216e70] p-4 shadow-[0_16px_36px_rgba(42,141,139,0.20)]">
                   <div className="pointer-events-none absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/[0.08] blur-xl" />
@@ -2577,78 +2610,124 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="hidden xl:block">
-                  <div className="max-h-[54vh] overflow-y-auto overflow-x-hidden p-2">
-                    <div className="sticky top-0 z-10 grid grid-cols-[32px_54px_minmax(360px,1.9fr)_64px_150px_58px_118px_130px_104px] items-center gap-2 rounded-xl bg-[#202c3d]/98 px-3 py-2 text-[9px] uppercase tracking-[0.07em] text-white/48 shadow-[0_8px_22px_rgba(0,0,0,0.20)] backdrop-blur">
+                  <div className="p-2.5">
+                    <div className="sticky top-0 z-10 grid grid-cols-[38px_54px_minmax(500px,2.35fr)_68px_190px_68px_138px_150px_104px] items-center gap-2 rounded-[14px] border border-white/[0.06] bg-[#1e2939]/[0.985] px-3 py-2.5 text-[9px] uppercase tracking-[0.075em] text-white/46 shadow-[0_10px_28px_rgba(0,0,0,0.26)] backdrop-blur-xl">
                       <span className="text-center">✓</span>
                       <span className="text-center">Sor</span>
-                      <span>Termék / azonosítók</span>
+                      <span>Termék és azonosítók</span>
                       <span className="text-center">Méret</span>
-                      <span className="text-center">Szín</span>
+                      <span>Szín</span>
                       <span className="text-center">Db</span>
                       <span className="text-right">Vételár</span>
                       <span className="text-right">Eladási ár</span>
                       <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
 
-                    <div className="mt-1.5 space-y-1.5">
+                    <div className="mt-2 space-y-2">
                       {visibleRows.map((r) => {
                         const draft: any = rowDrafts[r.id] || r.normalized || {};
                         const editable = rowCanEdit(r);
                         const canCommitOrMove = rowCanWork(r);
                         const checked = canCommitOrMove && selectedRows.has(r.id);
                         const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
+                        const sourceCurrency = String(receptionDraft.currencyCode || detail.item.currency_code || "RON").toUpperCase() || "RON";
                         const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
+                        const showBuyConversion = sourceCurrency !== "RON" || Math.abs(exchangeRate - 1) > 0.0001;
                         const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
                         const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
                         const resolvedColorName = receptionResolvedColorName(r, draft, meta);
                         const resolvedColorCode = receptionRowColorCode(r, draft);
+                        const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
+                        const colorSwatch = receptionColorSwatch(displayColorName);
                         const rowTone = r.status === "committed"
-                          ? "border-[#7bd7d4]/12 bg-[#2a8d8b]/[0.055] hover:bg-[#2a8d8b]/[0.085]"
+                          ? "border-[#7bd7d4]/18 bg-gradient-to-r from-[#2a8d8b]/[0.075] to-[#344155]/48 hover:border-[#7bd7d4]/30 hover:bg-[#2a8d8b]/[0.10]"
                           : r.status === "ignored"
-                            ? "border-white/[0.04] bg-white/[0.02] opacity-65"
+                            ? "border-white/[0.05] bg-white/[0.018] opacity-65"
                             : hasRowError
-                              ? "border-rose-300/18 bg-rose-500/[0.065] hover:bg-rose-500/[0.095]"
+                              ? "border-rose-300/24 bg-gradient-to-r from-rose-500/[0.075] to-[#344155]/48 hover:border-rose-300/34"
                               : checked
-                                ? "border-[#7bd7d4]/20 bg-[#2a8d8b]/10 hover:bg-[#2a8d8b]/13"
-                                : "border-white/[0.055] bg-[#344155]/42 hover:border-white/[0.08] hover:bg-[#3a475a]/56";
+                                ? "border-[#7bd7d4]/28 bg-gradient-to-r from-[#2a8d8b]/12 to-[#344155]/54"
+                                : "border-white/[0.075] bg-gradient-to-r from-[#344155]/58 to-[#303c4f]/58 hover:border-white/[0.13] hover:from-[#39475b]/72 hover:to-[#344155]/68";
                         const statusDot = r.status === "committed" ? "bg-[#49c9bf]" : r.status === "ignored" ? "bg-slate-400" : hasRowError ? "bg-rose-400" : "bg-amber-300";
                         return (
-                          <div key={r.id} className={`grid grid-cols-[32px_54px_minmax(360px,1.9fr)_64px_150px_58px_118px_130px_104px] items-center gap-2 rounded-xl border px-3 py-2 transition ${rowTone}`}>
-                            <div className="flex justify-center"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} aria-label={`Sor ${r.row_no} kijelölése`} /></div>
+                          <article key={r.id} className={`relative grid grid-cols-[38px_54px_minmax(500px,2.35fr)_68px_190px_68px_138px_150px_104px] items-center gap-2 overflow-hidden rounded-[16px] border px-3 py-2.5 transition ${rowTone}`}>
+                            <span className={`absolute inset-y-0 left-0 w-[3px] ${r.status === "committed" ? "bg-[#2a8d8b]" : hasRowError ? "bg-rose-400" : checked ? "bg-[#7bd7d4]" : "bg-transparent"}`} />
+                            <div className="flex justify-center">
+                              <input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} aria-label={`Sor ${r.row_no} kijelölése`} />
+                            </div>
 
                             <div className="min-w-0 text-center">
-                              <div className="flex items-center justify-center gap-1.5"><span className={`h-2 w-2 rounded-full ${statusDot}`} /><span className="text-[11px] tabular-nums text-white/82">{r.row_no}</span></div>
-                              {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="mt-1 inline-flex rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[9px] text-rose-50">Hiba</button> : <span className="mt-0.5 block truncate text-[8px] text-white/30">{statusText(r.status)}</span>}
+                              <div className="flex items-center justify-center gap-1.5">
+                                <span className={`h-2 w-2 rounded-full ${statusDot}`} />
+                                <span className="text-[12px] tabular-nums text-white/90">{r.row_no}</span>
+                              </div>
+                              {hasRowError ? (
+                                <button type="button" onClick={() => setRowErrorTarget(r)} className="mt-1 rounded-full border border-rose-300/20 bg-rose-500/14 px-1.5 py-0.5 text-[9px] text-rose-50 hover:bg-rose-500/22">Hiba</button>
+                              ) : (
+                                <span className="mt-0.5 block truncate text-[8px] uppercase tracking-[0.05em] text-white/32">{statusText(r.status)}</span>
+                              )}
                             </div>
 
                             <div className="min-w-0">
-                              <input className={`${rowCompactInput} h-9 text-left text-[12px] font-medium`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} title={String(draft.titleRo ?? "")} placeholder="Terméknév" />
-                              <div className="mt-1 flex min-w-0 items-center gap-2 text-[9px] text-white/40">
-                                <label className="flex min-w-0 items-center gap-1"><span className="shrink-0 uppercase text-white/24">Kód</span><input className="min-w-0 w-[92px] bg-transparent text-white/58 outline-none disabled:text-white/44" value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
-                                <span className="text-white/16">•</span>
-                                <label className="flex min-w-0 items-center gap-1"><span className="shrink-0 uppercase text-white/24">S/N</span><input className="min-w-0 w-[76px] bg-transparent font-mono text-white/58 outline-none disabled:text-white/44" value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
-                                <span className="text-white/16">•</span>
-                                <label className="flex min-w-0 flex-1 items-center gap-1"><span className="shrink-0 uppercase text-white/24">EAN</span><input className="min-w-0 flex-1 bg-transparent font-mono text-[#cffffd]/58 outline-none disabled:text-[#cffffd]/42" value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
+                              <input
+                                className={`${rowCompactInput} h-9 rounded-[10px] bg-[#202c3d]/60 px-3 text-left text-[12px] font-medium text-white disabled:bg-transparent disabled:text-white/90`}
+                                value={String(draft.titleRo ?? "")}
+                                disabled={!editable}
+                                onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
+                                title={String(draft.titleRo ?? "")}
+                                placeholder="Terméknév"
+                              />
+                              <div className="mt-1.5 grid grid-cols-[0.82fr_0.72fr_1.25fr] gap-1.5">
+                                <label className="min-w-0 rounded-lg border border-white/[0.055] bg-[#1f2b3b]/70 px-2 py-1.5">
+                                  <span className="block text-[8px] uppercase tracking-[0.08em] text-[#8fe9e5]/48">Kód</span>
+                                  <input className="mt-0.5 w-full min-w-0 bg-transparent text-[10px] font-medium text-white/78 outline-none placeholder:text-white/22 disabled:text-white/64" value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} title={String(draft.supplierProductCode ?? "")} />
+                                </label>
+                                <label className="min-w-0 rounded-lg border border-white/[0.055] bg-[#1f2b3b]/70 px-2 py-1.5">
+                                  <span className="block text-[8px] uppercase tracking-[0.08em] text-[#8fe9e5]/48">S/N</span>
+                                  <input className="mt-0.5 w-full min-w-0 bg-transparent font-mono text-[10px] text-white/78 outline-none placeholder:text-white/22 disabled:text-white/64" value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} title={String(draft.snCod ?? draft.sn_cod ?? "")} />
+                                </label>
+                                <label className="min-w-0 rounded-lg border border-[#7bd7d4]/[0.08] bg-[#1d303d]/78 px-2 py-1.5">
+                                  <span className="block text-[8px] uppercase tracking-[0.08em] text-[#8fe9e5]/56">EAN</span>
+                                  <input className="mt-0.5 w-full min-w-0 bg-transparent font-mono text-[10px] tracking-[0.02em] text-[#d7fffd]/82 outline-none placeholder:text-white/22 disabled:text-[#d7fffd]/70" value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} />
+                                </label>
                               </div>
                             </div>
 
-                            <input className={`${rowCompactInput} h-9 px-1 text-center text-[12px]`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
-
-                            <div className="min-w-0 text-center">
-                              <input className={`${rowCompactInput} h-9 text-center text-[11px]`} value={String(draft.colorName || resolvedColorName || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} title={String(draft.colorName || resolvedColorName || "")} placeholder="Szín neve" />
-                              <div className="mt-1 text-[9px] text-white/34">kód <input className="w-[48px] bg-transparent text-center font-mono text-white/52 outline-none disabled:text-white/38" value={String(draft.colorCode || resolvedColorCode || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} /></div>
+                            <div className="flex justify-center">
+                              <input className={`${rowCompactInput} h-10 w-14 rounded-xl bg-[#202c3d]/68 px-1 text-center text-[13px] font-medium`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
                             </div>
 
-                            <input className={`${rowCompactInput} h-9 px-1 text-center text-[12px] tabular-nums`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
-
-                            <div className="min-w-0 text-right">
-                              <input className={`${rowCompactInput} h-9 text-right text-[12px] tabular-nums`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
-                              <p className="mt-1 pr-1 text-[9px] tabular-nums text-white/36">{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</p>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-[#202c3d]/62 px-2.5 py-2">
+                                <span className="h-4 w-4 shrink-0 rounded-full border border-white/35 shadow-[0_0_0_2px_rgba(255,255,255,0.05)]" style={{ backgroundColor: colorSwatch }} />
+                                <input className="min-w-0 flex-1 bg-transparent text-[11px] font-medium text-white/88 outline-none placeholder:text-white/30 disabled:text-white/80" value={displayColorName} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} title={displayColorName} placeholder="Nincs színnév" />
+                              </div>
+                              <div className="mt-1.5 flex items-center justify-between px-1 text-[9px]">
+                                <span className="uppercase tracking-[0.07em] text-white/30">Színkód</span>
+                                <input className="w-[66px] rounded-md bg-black/10 px-1.5 py-0.5 text-center font-mono text-[10px] text-white/64 outline-none disabled:text-white/48" value={String(draft.colorCode || resolvedColorCode || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
+                              </div>
                             </div>
 
-                            <div className="min-w-0 text-right">
-                              <input className={`${rowCompactInput} h-9 text-right text-[12px] tabular-nums ${editable ? "bg-[#2a8d8b]/10" : ""}`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} />
-                              <p className="mt-1 pr-1 text-[9px] tabular-nums text-[#cffffd]/48">{money(sellPriceRonPreview, "RON")} <span className="text-white/24">• {salesTvaShort(salesTvaSettings)}</span></p>
+                            <div className="flex justify-center">
+                              <input className={`${rowCompactInput} h-10 w-14 rounded-xl bg-[#202c3d]/68 px-1 text-center text-[13px] font-medium tabular-nums`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="relative">
+                                <input className={`${rowCompactInput} h-10 rounded-xl bg-[#202c3d]/68 pr-10 text-right text-[12px] font-medium tabular-nums`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
+                                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-[0.05em] text-white/32">{sourceCurrency}</span>
+                              </div>
+                              {showBuyConversion ? <p className="mt-1.5 text-right text-[9px] tabular-nums text-[#cffffd]/52">≈ {money(buyPriceRonPreview || r.buy_price_ron, "RON")}</p> : <p className="mt-1.5 text-right text-[9px] text-white/28">beszerzési ár</p>}
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="relative">
+                                <input className={`${rowCompactInput} h-10 rounded-xl border-[#7bd7d4]/[0.10] bg-[#2a8d8b]/10 pr-10 text-right text-[12px] font-medium tabular-nums`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} />
+                                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[8px] uppercase tracking-[0.05em] text-[#cffffd]/45">RON</span>
+                              </div>
+                              <div className="mt-1.5 flex items-center justify-end gap-1.5">
+                                <span className="rounded-full border border-[#7bd7d4]/18 bg-[#2a8d8b]/12 px-2 py-0.5 text-[8px] text-[#cffffd]/70">TVA {salesTvaShort(salesTvaSettings)}</span>
+                              </div>
                             </div>
 
                             <div className="flex items-center justify-center gap-1">
@@ -2656,7 +2735,7 @@ export default function AllInReceptions(_props: Props) {
                               <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés másik receptióba"><MoveRight size={14} /></button>
                               <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Sor kihagyása"><X size={14} /></button>
                             </div>
-                          </div>
+                          </article>
                         );
                       })}
                       {!visibleRows.length ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-white/42">Nincs sor ebben a nézetben.</div> : null}
@@ -2664,44 +2743,62 @@ export default function AllInReceptions(_props: Props) {
                   </div>
                 </div>
 
-                <div className="grid max-h-[54vh] gap-2 overflow-y-auto bg-[#263143] p-2 xl:hidden">
+                <div className="grid gap-2 bg-[#263143] p-2 xl:hidden">
                   {visibleRows.map((r) => {
                     const draft: any = rowDrafts[r.id] || r.normalized || {};
                     const editable = rowCanEdit(r);
                     const canCommitOrMove = rowCanWork(r);
                     const checked = canCommitOrMove && selectedRows.has(r.id);
                     const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
+                    const sourceCurrency = String(receptionDraft.currencyCode || detail.item.currency_code || "RON").toUpperCase() || "RON";
                     const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
-                    const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
+                    const showBuyConversion = sourceCurrency !== "RON" || Math.abs(exchangeRate - 1) > 0.0001;
                     const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
                     const resolvedColorName = receptionResolvedColorName(r, draft, meta);
                     const resolvedColorCode = receptionRowColorCode(r, draft);
+                    const displayColorName = String(draft.colorName || resolvedColorName || "").trim();
+                    const colorSwatch = receptionColorSwatch(displayColorName);
                     return (
-                      <article key={r.id} className={`rounded-[20px] border p-3 ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.07] bg-[#344155]/54"}`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <label className="inline-flex items-center gap-2 text-[11px] text-white/74"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} />Sor {r.row_no}</label>
-                          {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="rounded-full bg-rose-500/14 px-2 py-1 text-[10px] text-rose-50">Hiba részletei</button> : <span className="rounded-full bg-black/10 px-2 py-1 text-[10px] text-white/42">{statusText(r.status)}</span>}
+                      <article key={r.id} className={`overflow-hidden rounded-[20px] border ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.075] bg-[#344155]/54"}`}>
+                        <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-2.5">
+                          <label className="inline-flex items-center gap-2 text-[11px] text-white/80"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} /><span>Sor {r.row_no}</span></label>
+                          {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="rounded-full border border-rose-300/20 bg-rose-500/14 px-2 py-1 text-[10px] text-rose-50">Hiba részletei</button> : <span className="rounded-full bg-black/10 px-2 py-1 text-[10px] text-white/44">{statusText(r.status)}</span>}
                         </div>
-                        <input className={`${rowCompactInput} mt-2 h-10 text-[13px] font-medium`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
-                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                          <label className={rowLabel}>Termékkód<input className={rowCompactInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
-                          <label className={rowLabel}>S/N/COD<input className={rowCompactInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
-                          <label className={rowLabel}>EAN<input className={`${rowCompactInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
-                        </div>
-                        <div className="mt-2 grid grid-cols-3 gap-2">
-                          <label className={rowLabel}>Méret<input className={`${rowCompactInput} text-center`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
-                          <label className={rowLabel}>Szín<input className={`${rowCompactInput} text-center`} value={String(draft.colorName || resolvedColorName || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
-                          <label className={rowLabel}>Db<input className={`${rowCompactInput} text-center`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
-                        </div>
-                        <p className="mt-1 text-[9px] text-white/34">Színkód: <span className="font-mono text-white/52">{draft.colorCode || resolvedColorCode || "-"}</span></p>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <label className={rowLabel}>Vételár<input className={`${rowCompactInput} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="mt-1 text-right text-[9px] text-white/34">{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span></label>
-                          <label className={rowLabel}>Eladási ár<input className={`${rowCompactInput} text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="mt-1 text-right text-[9px] text-[#cffffd]/44">{money(sellPriceRonPreview, "RON")} • {salesTvaShort(salesTvaSettings)}</span></label>
-                        </div>
-                        <div className="mt-3 flex justify-end gap-1.5 border-t border-white/[0.06] pt-3">
-                          <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
-                          <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
-                          <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Kihagy"><X size={14} /></button>
+                        <div className="p-3">
+                          <input className={`${rowCompactInput} h-10 text-[13px] font-medium`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
+                          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                            {[
+                              ["Kód", String(draft.supplierProductCode ?? ""), "supplierProductCode", false],
+                              ["S/N", String(draft.snCod ?? draft.sn_cod ?? ""), "snCod", true],
+                              ["EAN", String(draft.barcode ?? receptionRowBarcode(r) ?? ""), "barcode", true],
+                            ].map(([labelText, fieldValue, key, mono]) => (
+                              <label key={String(key)} className="rounded-xl border border-white/[0.06] bg-[#202c3d]/58 px-2.5 py-2">
+                                <span className="text-[8px] uppercase tracking-[0.08em] text-[#8fe9e5]/48">{labelText}</span>
+                                <input className={`mt-1 w-full bg-transparent text-[11px] text-white/80 outline-none ${mono ? "font-mono" : ""}`} value={String(fieldValue)} disabled={!editable} onChange={(e) => updateRowDraft(r.id, String(key), e.target.value)} />
+                              </label>
+                            ))}
+                          </div>
+                          <div className="mt-2 grid grid-cols-[72px_minmax(0,1fr)_72px] gap-2">
+                            <label className={rowLabel}>Méret<input className={`${rowCompactInput} text-center`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
+                            <div>
+                              <span className="text-[9px] uppercase tracking-[0.05em] text-white/42">Szín</span>
+                              <div className="mt-1 flex items-center gap-2 rounded-xl border border-white/[0.06] bg-[#202c3d]/58 px-2.5 py-2">
+                                <span className="h-4 w-4 shrink-0 rounded-full border border-white/35" style={{ backgroundColor: colorSwatch }} />
+                                <input className="min-w-0 flex-1 bg-transparent text-[11px] text-white/82 outline-none" value={displayColorName} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} placeholder="Nincs színnév" />
+                                <input className="w-[54px] rounded-md bg-black/10 px-1.5 py-0.5 text-center font-mono text-[10px] text-white/58 outline-none" value={String(draft.colorCode || resolvedColorCode || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
+                              </div>
+                            </div>
+                            <label className={rowLabel}>Db<input className={`${rowCompactInput} text-center`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <label className={rowLabel}>Vételár<div className="relative mt-1"><input className={`${rowCompactInput} pr-10 text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-white/34">{sourceCurrency}</span></div>{showBuyConversion ? <span className="mt-1 text-right text-[9px] text-[#cffffd]/46">≈ {money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span> : null}</label>
+                            <label className={rowLabel}>Eladási ár<div className="relative mt-1"><input className={`${rowCompactInput} bg-[#2a8d8b]/10 pr-10 text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[8px] text-[#cffffd]/45">RON</span></div><span className="mt-1 text-right text-[9px] text-[#cffffd]/46">TVA {salesTvaShort(salesTvaSettings)}</span></label>
+                          </div>
+                          <div className="mt-3 flex justify-end gap-1.5 border-t border-white/[0.06] pt-3">
+                            <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
+                            <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
+                            <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Kihagy"><X size={14} /></button>
+                          </div>
                         </div>
                       </article>
                     );
