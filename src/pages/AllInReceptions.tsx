@@ -214,8 +214,10 @@ const rowActionBtn = "inline-flex h-8 w-8 items-center justify-center rounded-lg
 const rowPrimaryBtn = `${rowActionBtn} border-[#2a8d8b]/45 bg-[#2a8d8b] text-white hover:bg-[#319c99]`;
 const rowNeutralBtn = `${rowActionBtn} border-white/16 bg-white/[0.08] text-white/72 hover:bg-[#404a5b]/[0.12]`;
 const rowDangerBtn = `${rowActionBtn} border-red-500 bg-red-600 text-white hover:bg-red-500`;
-const receptionGridHeader = "grid min-w-[1360px] grid-cols-[34px_64px_118px_92px_118px_minmax(150px,1.25fr)_72px_86px_66px_56px_76px_90px_82px_96px_108px] items-center gap-1 border-b border-white/12 bg-[#293448] px-2 py-2 text-[9px] uppercase tracking-[0.06em] text-white/72";
-const receptionGridRow = "grid min-w-[1360px] grid-cols-[34px_64px_118px_92px_118px_minmax(150px,1.25fr)_72px_86px_66px_56px_76px_90px_82px_96px_108px] items-center gap-1 border-b border-white/10 px-2 py-1.5 transition-colors";
+const receptionGridHeader = "grid grid-cols-[30px_62px_minmax(300px,1.9fr)_82px_58px_126px_54px_112px_126px_96px] items-center gap-1.5 border-b border-white/10 bg-[#293448] px-2.5 py-2 text-[9px] uppercase tracking-[0.06em] text-white/72";
+const receptionGridRow = "grid grid-cols-[30px_62px_minmax(300px,1.9fr)_82px_58px_126px_54px_112px_126px_96px] items-center gap-1.5 border-b border-white/[0.07] px-2.5 py-1.5 transition-colors";
+const rowCompactInput = "h-8 w-full min-w-0 rounded-lg border border-transparent bg-white/[0.045] px-2 text-[11px] text-white caret-white outline-none transition placeholder:text-white/30 hover:bg-white/[0.065] focus:border-[#7bd7d4]/55 focus:bg-[#29374b] focus:ring-1 focus:ring-[#7bd7d4]/12 disabled:cursor-default disabled:bg-transparent disabled:text-white/72 disabled:opacity-100";
+const rowCompactRead = "flex min-h-5 items-center justify-end px-1 text-[9px] leading-tight tabular-nums text-white/45";
 
 
 type UiSelectOption = { value: string; label: string; disabled?: boolean };
@@ -684,6 +686,94 @@ function receptionNetInvoiceValue(item: any) {
   if (gross <= 0 || rate <= 0 || mode === "no_tva") return gross;
   const factor = 1 + rate / 100;
   return factor > 0 ? gross / factor : gross;
+}
+
+function receptionLookupKey(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function receptionRowColorCode(row: any, draft: any) {
+  return String(
+    draft?.colorCode || draft?.color_code || draft?.supplierColorCode || draft?.supplier_color_code ||
+    row?.supplier_color_code || row?.normalized?.colorCode || row?.normalized?.color_code ||
+    row?.normalized?.supplierColorCode || row?.normalized?.supplier_color_code || ""
+  ).trim();
+}
+
+function receptionRawColorName(row: any) {
+  const raw = row?.raw && typeof row.raw === "object" ? row.raw : {};
+  const wanted = new Set(["color", "colour", "culoare", "szin", "szin_nev", "color_name", "colour_name", "denumire_culoare"]);
+  for (const [key, value] of Object.entries(raw)) {
+    if (!wanted.has(receptionLookupKey(key))) continue;
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function receptionResolvedColorName(row: any, draft: any, meta?: AifMeta | null) {
+  const directCandidates = [
+    draft?.colorName, draft?.color_name, draft?.supplierColorName, draft?.supplier_color_name,
+    row?.normalized?.colorName, row?.normalized?.color_name,
+    row?.normalized?.supplierColorName, row?.normalized?.supplier_color_name,
+    receptionRawColorName(row),
+  ];
+  for (const candidate of directCandidates) {
+    const value = String(candidate ?? "").trim();
+    if (value) return value;
+  }
+
+  const colorCode = receptionRowColorCode(row, draft);
+  if (!colorCode || !meta) return "";
+  const colorKey = receptionLookupKey(colorCode);
+
+  const brandKeys = new Set(
+    [
+      draft?.brandId, draft?.brand_id, draft?.brandCode, draft?.brand_code, draft?.brandName, draft?.brand_name,
+      row?.normalized?.brandId, row?.normalized?.brand_id, row?.normalized?.brandCode, row?.normalized?.brand_code,
+      row?.normalized?.brandName, row?.normalized?.brand_name,
+    ]
+      .map(receptionLookupKey)
+      .filter(Boolean)
+  );
+
+  const mappings: any[] = ((meta as any)?.brandColorCodes || []).filter((mapping: any) =>
+    receptionLookupKey(mapping?.color_code ?? mapping?.colorCode) === colorKey
+  );
+
+  const mappingName = (mapping: any) => String(
+    mapping?.color_name_hu ?? mapping?.colorNameHu ??
+    mapping?.color_name_ro ?? mapping?.colorNameRo ??
+    mapping?.color_name_en ?? mapping?.colorNameEn ??
+    mapping?.color_name ?? mapping?.colorName ?? ""
+  ).trim();
+
+  if (brandKeys.size) {
+    const exact = mappings.find((mapping: any) => {
+      const keys = [mapping?.brand_id, mapping?.brandId, mapping?.brand_code, mapping?.brandCode, mapping?.brand_name, mapping?.brandName]
+        .map(receptionLookupKey)
+        .filter(Boolean);
+      return keys.some((key: string) => brandKeys.has(key));
+    });
+    const name = exact ? mappingName(exact) : "";
+    if (name) return name;
+  }
+
+  const uniqueNames = Array.from(new Set(mappings.map(mappingName).filter(Boolean)));
+  if (uniqueNames.length === 1) return uniqueNames[0];
+
+  const colorType = ((meta as any)?.colorTypes || []).find((item: any) =>
+    receptionLookupKey(item?.code) === colorKey
+  );
+  return String(
+    colorType?.name_hu ?? colorType?.nameHu ?? colorType?.name_ro ?? colorType?.nameRo ?? colorType?.name ?? ""
+  ).trim();
 }
 
 function statusText(s?: string | null) {
@@ -1644,9 +1734,9 @@ export default function AllInReceptions(_props: Props) {
         snCod: row.sn_cod || n.snCod || n.sn_cod || "",
         sn_cod: row.sn_cod || n.snCod || n.sn_cod || "",
         barcode: receptionRowBarcode(row),
-        titleRo: n.titleRo || "",
-        colorName: n.colorName || "",
-        colorCode: row.supplier_color_code || n.colorCode || "",
+        titleRo: n.titleRo || n.title_ro || "",
+        colorName: n.colorName || n.color_name || receptionResolvedColorName(row, n, meta) || "",
+        colorCode: row.supplier_color_code || n.colorCode || n.color_code || n.supplierColorCode || n.supplier_color_code || "",
         size: row.supplier_size || n.size || "",
         qty: row.qty ?? n.qty ?? "",
         buyPrice: row.buy_price ?? n.buyPrice ?? "",
@@ -1857,8 +1947,12 @@ export default function AllInReceptions(_props: Props) {
     const sellPrice = (draft as any).sellPrice ?? (draft as any).sellPriceGrossRon ?? "";
     const parsedRate = Number(String(salesTvaSettings.salesTvaRate || DEFAULT_SALES_TVA_SETTINGS.salesTvaRate || 0).replace(",", "."));
     const rate = Number.isFinite(parsedRate) ? parsedRate : Number(DEFAULT_SALES_TVA_SETTINGS.salesTvaRate || 21);
+    const resolvedColorName = receptionResolvedColorName(row, draft, meta);
+    const resolvedColorCode = receptionRowColorCode(row, draft);
     return {
       ...draft,
+      colorName: (draft as any).colorName || (draft as any).color_name || resolvedColorName || "",
+      colorCode: (draft as any).colorCode || (draft as any).color_code || resolvedColorCode || "",
       snCod: (draft as any).snCod ?? (draft as any).sn_cod ?? "",
       sn_cod: (draft as any).snCod ?? (draft as any).sn_cod ?? "",
       sellPrice,
@@ -2306,8 +2400,8 @@ export default function AllInReceptions(_props: Props) {
 
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 backdrop-blur-sm">
-          <div className="max-h-[94vh] w-full max-w-[96vw] overflow-auto rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
-            <div className="sticky top-0 z-20 flex items-center justify-between border-b border-white/12 bg-[#303a4c]/98 px-4 py-3 backdrop-blur">
+          <div className="flex max-h-[94vh] w-full max-w-[96vw] flex-col overflow-hidden rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
+            <div className="z-20 flex shrink-0 items-center justify-between border-b border-white/10 bg-[#303a4c]/98 px-4 py-3 backdrop-blur">
               <div>
                 <p className="text-xs uppercase tracking-[0.1em] text-white">Receptió részletei</p>
                 <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
@@ -2317,13 +2411,13 @@ export default function AllInReceptions(_props: Props) {
                   </p>
                 ) : null}
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
                 <button className={neutralBtn} onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button"><CheckCircle size={15} /> Ellenőrző PDF</button>
                 <button className={neutralBtn} onClick={() => exportReceptionPdf(detail.item.id)} disabled={busy} type="button"><FileText size={15} /> PDF</button>
                 <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
               </div>
             </div>
-            <div className="space-y-3 px-3 pt-3 pb-6">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-3 pb-6 pt-3">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">UIT kód</p><p className="mt-0.5 truncate font-mono text-xs text-[#cffffd]" title={String((detail.item as any).uit_code || (detail.item as any).uitCode || "")}>{cell((detail.item as any).uit_code || (detail.item as any).uitCode)}</p></div>
                 <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{supplierDisplayName(detail.item.supplier_name)}</p></div>
@@ -2427,7 +2521,7 @@ export default function AllInReceptions(_props: Props) {
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-white/14 bg-[#404a5b] text-white shadow-lg">
+              <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#404a5b] text-white shadow-lg">
                 <div className="flex flex-col gap-2 border-b border-white/12 bg-[#303a4c] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -2452,23 +2546,18 @@ export default function AllInReceptions(_props: Props) {
                 </div>
 
                 <div className="hidden xl:block">
-                  <div className="max-h-[54vh] overflow-auto">
+                  <div className="max-h-[54vh] overflow-y-auto overflow-x-hidden">
                     <div className={`${receptionGridHeader} sticky top-0 z-10`}>
                       <span className="text-center">✓</span>
-                      <span>Sor</span>
-                      <span>Termékkód</span>
-                      <span>S/N/COD</span>
-                      <span>Vonalkód</span>
-                      <span>Terméknév</span>
-                      <span>Méret</span>
-                      <span>Szín</span>
-                      <span>Színkód</span>
-                      <span className="text-right">Db</span>
+                      <span className="text-center">Sor</span>
+                      <span>Termék / azonosítók</span>
+                      <span className="text-center">S/N/COD</span>
+                      <span className="text-center">Méret</span>
+                      <span className="text-center">Szín</span>
+                      <span className="text-center">Db</span>
                       <span className="text-right">Vételár</span>
-                      <span className="text-right">Vételár RON</span>
                       <span className="text-right">{salesIncludesTvaOf(salesTvaSettings) ? "Eladási végár" : "Eladási nettó"}</span>
-                      <span className="text-right">Eladás / TVA</span>
-                      <span className="text-center">Művelet</span>
+                      <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
                     {visibleRows.map((r) => {
                       const draft: any = rowDrafts[r.id] || r.normalized || {};
@@ -2479,17 +2568,19 @@ export default function AllInReceptions(_props: Props) {
                       const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
                       const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
                       const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
+                      const resolvedColorName = receptionResolvedColorName(r, draft, meta);
+                      const resolvedColorCode = receptionRowColorCode(r, draft);
                       const rowTone = r.status === "committed"
-                        ? "bg-emerald-500/[0.08] hover:bg-emerald-500/[0.12]"
+                        ? "bg-[#2a8d8b]/[0.055] hover:bg-[#2a8d8b]/[0.09]"
                         : r.status === "ignored"
-                          ? "bg-white/[0.05] opacity-70"
+                          ? "bg-white/[0.025] opacity-70"
                           : hasRowError
-                            ? "bg-rose-500/[0.08] hover:bg-rose-500/[0.12]"
+                            ? "bg-rose-500/[0.07] hover:bg-rose-500/[0.11]"
                             : checked
-                              ? "bg-[#2a8d8b]/12 hover:bg-[#2a8d8b]/16"
-                              : "bg-[#404a5b] hover:bg-white/[0.04]";
+                              ? "bg-[#2a8d8b]/10 hover:bg-[#2a8d8b]/14"
+                              : "bg-transparent hover:bg-white/[0.025]";
                       const statusDot = r.status === "committed"
-                        ? "bg-emerald-500"
+                        ? "bg-[#3ec7bd]"
                         : r.status === "ignored"
                           ? "bg-slate-400"
                           : hasRowError
@@ -2500,37 +2591,125 @@ export default function AllInReceptions(_props: Props) {
                           <div className="flex justify-center">
                             <input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} aria-label={`Sor ${r.row_no} kijelölése`} />
                           </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5" title={statusText(r.status)}>
+
+                          <div className="min-w-0 text-center">
+                            <div className="flex items-center justify-center gap-1.5" title={statusText(r.status)}>
                               <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
-                              <span className="truncate text-[11px] tabular-nums text-white/82">Nr. {r.row_no}</span>
+                              <span className="truncate text-[11px] tabular-nums text-white/88">{r.row_no}</span>
                             </div>
                             {hasRowError ? (
                               <button
                                 type="button"
                                 onClick={() => setRowErrorTarget(r)}
-                                className="mt-0.5 inline-flex max-w-full items-center gap-1 rounded-full border border-rose-300/28 bg-rose-500/14 px-1.5 py-0.5 text-[9px] text-rose-50 hover:bg-rose-500/22"
+                                className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-rose-500/14 px-1.5 py-0.5 text-[9px] text-rose-50 hover:bg-rose-500/22"
                                 title="Hiba részletei"
                               >
                                 <AlertTriangle size={9} className="shrink-0" />
-                                <span className="truncate">Hiba • részletek</span>
+                                <span className="truncate">Hiba</span>
                               </button>
                             ) : (
-                              <span className="mt-0.5 block truncate text-[9px] text-white/40">{statusText(r.status)}</span>
+                              <span className="mt-0.5 block truncate text-[9px] text-white/38">{statusText(r.status)}</span>
                             )}
                           </div>
-                          <input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} title={String(draft.supplierProductCode ?? "")} />
-                          <input className={rowInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} title={String(draft.snCod ?? draft.sn_cod ?? "")} />
-                          <input className={`${rowInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} />
-                          <input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} title={String(draft.titleRo ?? "")} />
-                          <input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
-                          <input className={rowInput} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} title={String(draft.colorName ?? "")} />
-                          <input className={rowInput} value={String(draft.colorCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} />
-                          <input className={`${rowInput} text-right tabular-nums`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
-                          <input className={`${rowInput} text-right tabular-nums`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
-                          <span className={rowRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span>
-                          <input className={`${rowInput} text-right tabular-nums`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} />
-                          <span className={`${rowRead} flex-col items-end justify-center leading-tight`}><span>{money(sellPriceRonPreview, "RON")}</span><span className="text-[9px] text-white/40">{salesTvaShort(salesTvaSettings)}</span></span>
+
+                          <div className="min-w-0">
+                            <input
+                              className={`${rowCompactInput} text-left font-medium`}
+                              value={String(draft.titleRo ?? "")}
+                              disabled={!editable}
+                              onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
+                              title={String(draft.titleRo ?? "")}
+                              placeholder="Terméknév"
+                            />
+                            <div className="mt-1 grid min-w-0 grid-cols-[minmax(92px,0.8fr)_minmax(140px,1.2fr)] gap-1.5">
+                              <label className="flex h-6 min-w-0 items-center gap-1.5 rounded-md bg-black/10 px-1.5">
+                                <span className="shrink-0 text-[8px] uppercase tracking-[0.05em] text-white/30">Kód</span>
+                                <input
+                                  className="min-w-0 flex-1 bg-transparent text-[10px] text-white/68 outline-none placeholder:text-white/25 disabled:text-white/52"
+                                  value={String(draft.supplierProductCode ?? "")}
+                                  disabled={!editable}
+                                  onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)}
+                                  title={String(draft.supplierProductCode ?? "")}
+                                />
+                              </label>
+                              <label className="flex h-6 min-w-0 items-center gap-1.5 rounded-md bg-black/10 px-1.5">
+                                <span className="shrink-0 text-[8px] uppercase tracking-[0.05em] text-white/30">EAN</span>
+                                <input
+                                  className="min-w-0 flex-1 bg-transparent font-mono text-[10px] text-[#cffffd]/68 outline-none placeholder:text-white/25 disabled:text-[#cffffd]/48"
+                                  value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
+                                  disabled={!editable}
+                                  onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)}
+                                  title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
+                                />
+                              </label>
+                            </div>
+                          </div>
+
+                          <input
+                            className={`${rowCompactInput} text-center font-mono`}
+                            value={String(draft.snCod ?? draft.sn_cod ?? "")}
+                            disabled={!editable}
+                            onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)}
+                            title={String(draft.snCod ?? draft.sn_cod ?? "")}
+                          />
+
+                          <input
+                            className={`${rowCompactInput} px-1 text-center`}
+                            value={String(draft.size ?? "")}
+                            disabled={!editable}
+                            onChange={(e) => updateRowDraft(r.id, "size", e.target.value)}
+                          />
+
+                          <div className="min-w-0">
+                            <input
+                              className={`${rowCompactInput} text-center`}
+                              value={String(draft.colorName || resolvedColorName || "")}
+                              disabled={!editable}
+                              onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)}
+                              title={String(draft.colorName || resolvedColorName || "")}
+                              placeholder="Szín neve"
+                            />
+                            <label className="mt-1 flex h-6 min-w-0 items-center justify-center gap-1.5 rounded-md bg-black/10 px-1.5">
+                              <span className="shrink-0 text-[8px] uppercase tracking-[0.05em] text-white/30">Kód</span>
+                              <input
+                                className="min-w-0 flex-1 bg-transparent text-center font-mono text-[10px] text-white/58 outline-none placeholder:text-white/25 disabled:text-white/42"
+                                value={String(draft.colorCode || resolvedColorCode || "")}
+                                disabled={!editable}
+                                onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)}
+                              />
+                            </label>
+                          </div>
+
+                          <input
+                            className={`${rowCompactInput} px-1 text-center tabular-nums`}
+                            value={String(draft.qty ?? "")}
+                            disabled={!canCommitOrMove}
+                            onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)}
+                          />
+
+                          <div className="min-w-0">
+                            <input
+                              className={`${rowCompactInput} text-right tabular-nums`}
+                              value={String(draft.buyPrice ?? "")}
+                              disabled={!editable}
+                              onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)}
+                            />
+                            <span className={rowCompactRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span>
+                          </div>
+
+                          <div className="min-w-0">
+                            <input
+                              className={`${rowCompactInput} text-right tabular-nums`}
+                              value={String(draft.sellPrice ?? "")}
+                              disabled={!editable}
+                              onChange={(e) => updateRowSellPrice(r.id, e.target.value)}
+                            />
+                            <span className={`${rowCompactRead} gap-1`}>
+                              <span>{money(sellPriceRonPreview, "RON")}</span>
+                              <span className="text-white/28">• {salesTvaShort(salesTvaSettings)}</span>
+                            </span>
+                          </div>
+
                           <div className="flex items-center justify-center gap-1">
                             <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title={savingRowId === r.id ? "Mentés folyamatban" : "Sor mentése"}><Save size={14} /></button>
                             <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés másik receptióba"><MoveRight size={14} /></button>
@@ -2581,8 +2760,8 @@ export default function AllInReceptions(_props: Props) {
                           <label className={`${rowLabel} sm:col-span-2`}>Vonalkód<input className={`${rowInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
                           <label className={`${rowLabel} sm:col-span-2`}>Terméknév<input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} /></label>
                           <label className={rowLabel}>Méret<input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
-                          <label className={rowLabel}>Szín<input className={rowInput} value={String(draft.colorName ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
-                          <label className={rowLabel}>Színkód<input className={rowInput} value={String(draft.colorCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} /></label>
+                          <label className={rowLabel}>Szín<input className={rowInput} value={String(draft.colorName || receptionResolvedColorName(r, draft, meta) || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
+                          <label className={rowLabel}>Színkód<input className={rowInput} value={String(draft.colorCode || receptionRowColorCode(r, draft) || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} /></label>
                           <label className={rowLabel}>Darab<input className={`${rowInput} text-right`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
                           <label className={rowLabel}>Vételár<input className={`${rowInput} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /></label>
                           <label className={rowLabel}>Vételár RON<span className={rowRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span></label>
