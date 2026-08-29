@@ -2617,8 +2617,25 @@ function AllInIncomingReception(_props: Props) {
     : tvaMode === "with_tva"
       ? "A számla bruttó végösszege"
       : "A számla összege";
-  const receptionBaseValue = invoiceGrossProvided ? invoiceGrossValue : linePriceBasisTotal;
-  const receptionRonValue = isRonCurrency ? receptionBaseValue : receptionBaseValue * rateValue;
+  const invoiceFinancialPreviewReady = Boolean(invoiceGrossProvided && invoiceGrossValue > 0 && tvaMode);
+  const invoiceFinancialPreview = useMemo(
+    () => invoiceFinancialPreviewReady
+      ? calculateReceptionAmounts(
+          invoiceGoodsTarget(invoiceGrossValue, shippingValue),
+          shippingValue,
+          tvaMode,
+          vatRateValue
+        )
+      : { net: 0, vat: 0, gross: 0 },
+    [invoiceFinancialPreviewReady, invoiceGrossValue, shippingValue, tvaMode, vatRateValue]
+  );
+  const invoiceTvaPercentText = tvaMode === "no_tva"
+    ? "0%"
+    : `${vatRateValue.toLocaleString("ro-RO", { maximumFractionDigits: 2 })}%`;
+  const invoicePreviewRonRate = isRonCurrency ? 1 : rateValue > 0 ? rateValue : 0;
+  const receptionRonValue = invoiceFinancialPreviewReady && invoicePreviewRonRate > 0
+    ? invoiceFinancialPreview.gross * invoicePreviewRonRate
+    : 0;
   const receptionReady = Boolean(
     invoiceNumber.trim() &&
     invoiceDate &&
@@ -2646,7 +2663,7 @@ function AllInIncomingReception(_props: Props) {
     receptionHeaderMissing.exchangeRateToRon ? "RON árfolyam" : "",
     receptionHeaderMissing.tvaMode ? "TVA kezelés" : "",
     receptionHeaderMissing.tvaRate ? "TVA %" : "",
-    receptionHeaderMissing.invoiceGross ? "számla végösszeg" : "",
+    receptionHeaderMissing.invoiceGross ? invoiceAmountLabel.toLowerCase() : "",
   ].filter(Boolean);
   const requiredInput = (missing: boolean) => `${input} w-full ${missing ? "border-red-300/90 bg-[#c90d22]/22 text-white placeholder:text-red-100/60 shadow-[0_0_0_1px_rgba(201,13,34,0.22)] focus:border-red-200 focus:ring-1 focus:ring-red-200/35" : ""}`;
   const disabledExchangeRateInput = "h-11 w-full cursor-not-allowed rounded-[13px] border border-white/12 bg-gradient-to-b from-[#2b3647]/70 to-[#283344]/70 px-3 text-sm text-white/38 caret-transparent outline-none opacity-75 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] placeholder:text-transparent focus:border-white/12 focus:ring-0 font-normal";
@@ -3227,7 +3244,10 @@ function AllInIncomingReception(_props: Props) {
     setTvaMode((String(item.tva_mode || "") as any) || "");
     setTvaRate(String(item.tva_rate ?? ""));
     setShippingCost(String(item.shipping_cost ?? ""));
-    setInvoiceGross(String(item.invoice_gross ?? ""));
+    const storedInvoiceAmount = String(item.tva_mode || "").toLowerCase() === "without_tva"
+      ? (item.invoice_net ?? item.invoice_gross ?? "")
+      : (item.invoice_gross ?? item.invoice_net ?? "");
+    setInvoiceGross(String(storedInvoiceAmount));
     setNote(String((item as any).note || ""));
     const purchaseOrderId = String((item as any).purchase_order_id || "").trim();
     if (purchaseOrderId) {
@@ -3823,7 +3843,7 @@ function AllInIncomingReception(_props: Props) {
     const selectedCount = selectedRows.length;
     const localExcludedCount = Math.max(0, sourceRows.length - selectedCount);
     const localComputedReception = calculateReceptionAmounts(
-      savedReceptionGoodsValue + selectedGoodsValue,
+      invoiceGoodsTarget(invoiceGrossValue, shippingValue),
       shippingValue,
       tvaMode,
       vatRateValue
@@ -3874,7 +3894,7 @@ function AllInIncomingReception(_props: Props) {
           goodsValue: selectedGoodsValue,
           invoiceNet: localComputedReception.net,
           invoiceVat: localComputedReception.vat,
-          invoiceGross: invoiceGrossValue,
+          invoiceGross: localComputedReception.gross,
           lineCount: selectedCount,
           totalQty: selectedQty,
           note,
@@ -4350,6 +4370,13 @@ function AllInIncomingReception(_props: Props) {
       setMessage("A mentéshez töltsd ki a receptió kötelező mezőit. Külföldi pénznemnél az árfolyam is kell.");
       return;
     }
+    const headerInvoiceAmounts = calculateReceptionAmounts(
+      invoiceGoodsTarget(invoiceGrossValue, shippingValue),
+      shippingValue,
+      tvaMode,
+      vatRateValue
+    );
+
     setBusy(true);
     setMessage("");
     try {
@@ -4368,7 +4395,9 @@ function AllInIncomingReception(_props: Props) {
             tvaMode,
             tvaRate: tvaMode === "no_tva" ? 0 : vatRateValue,
             shippingCost: shippingValue,
-            invoiceGross: invoiceGrossValue,
+            invoiceNet: headerInvoiceAmounts.net,
+            invoiceVat: headerInvoiceAmounts.vat,
+            invoiceGross: headerInvoiceAmounts.gross,
             note,
             salesTvaRate: salesTvaRate.trim() ? toNumber(salesTvaRate) : 0,
             salesPriceIncludesTva,
@@ -4797,6 +4826,50 @@ function AllInIncomingReception(_props: Props) {
             </label>
           </div>
 
+          <div className="overflow-hidden rounded-2xl border border-[#9be9e5]/24 bg-gradient-to-r from-[#2d4053] via-[#30485a] to-[#28545a] shadow-[0_12px_28px_rgba(15,23,42,0.16)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3.5 py-2.5">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.12em] text-[#d8fffd]/70">Számla pénzügyi összesítő</p>
+                <p className="mt-0.5 text-xs text-white/62">Nettó, beszerzési TVA és bruttó egy helyen.</p>
+              </div>
+              <span className="rounded-full border border-[#9be9e5]/28 bg-[#208d8b]/18 px-2.5 py-1 text-[11px] text-[#e8fffd]">
+                TVA kulcs: {tvaMode ? invoiceTvaPercentText : "-"}
+              </span>
+            </div>
+            <div className="grid gap-px bg-white/10 md:grid-cols-3">
+              <div className="bg-[#344b5f] px-4 py-3.5">
+                <p className="text-[10px] uppercase tracking-[0.08em] text-white/56">Számla nettó értéke</p>
+                <p className="mt-1 text-xl tabular-nums text-white">
+                  {invoiceFinancialPreviewReady ? moneyText(invoiceFinancialPreview.net, currencyCode) : "-"}
+                </p>
+                {!isRonCurrency && invoiceFinancialPreviewReady && invoicePreviewRonRate > 0 && (
+                  <p className="mt-1 text-[11px] tabular-nums text-white/52">≈ {moneyText(invoiceFinancialPreview.net * invoicePreviewRonRate, "RON")}</p>
+                )}
+              </div>
+              <div className="bg-[#2f5960] px-4 py-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] uppercase tracking-[0.08em] text-[#d8fffd]/68">Beszerzési TVA</p>
+                  <span className="rounded-full border border-[#aaf5f1]/28 bg-[#208d8b]/24 px-2 py-0.5 text-[11px] text-[#eaffff]">{tvaMode ? invoiceTvaPercentText : "-"}</span>
+                </div>
+                <p className="mt-1 text-xl tabular-nums text-[#f0ffff]">
+                  {invoiceFinancialPreviewReady ? moneyText(invoiceFinancialPreview.vat, currencyCode) : "-"}
+                </p>
+                {!isRonCurrency && invoiceFinancialPreviewReady && invoicePreviewRonRate > 0 && (
+                  <p className="mt-1 text-[11px] tabular-nums text-[#d8fffd]/58">≈ {moneyText(invoiceFinancialPreview.vat * invoicePreviewRonRate, "RON")}</p>
+                )}
+              </div>
+              <div className="bg-[#35626a] px-4 py-3.5">
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[#eaffff]/72">Számla bruttó értéke</p>
+                <p className="mt-1 text-2xl tabular-nums text-white">
+                  {invoiceFinancialPreviewReady ? moneyText(invoiceFinancialPreview.gross, currencyCode) : "-"}
+                </p>
+                {!isRonCurrency && invoiceFinancialPreviewReady && invoicePreviewRonRate > 0 && (
+                  <p className="mt-1 text-[11px] tabular-nums text-[#eaffff]/62">≈ {moneyText(invoiceFinancialPreview.gross * invoicePreviewRonRate, "RON")}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="rounded-xl border border-[#67d4d1]/28 bg-[#208d8b]/10 px-3 py-2.5 text-sm text-white/82">
             <div className="grid gap-3 lg:grid-cols-[1fr_300px_auto] lg:items-end">
               <div>
@@ -4843,10 +4916,10 @@ function AllInIncomingReception(_props: Props) {
               <p className="mt-1 text-sm text-white">{moneyText(totalReceptionGoodsValue, currencyCode)}</p>
             </div>
             <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Számított számlaérték</p>
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Sorok értéke</p>
               <p className="mt-1 text-sm text-white">{moneyText(linePriceBasisTotal, currencyCode)}</p>
               {tvaMode === "without_tva" && computedReception.vat > 0 && (
-                <p className="mt-1 text-[11px] text-white/55">TVA-val számított bruttó: {moneyText(computedReception.gross, currencyCode)}</p>
+                <p className="mt-1 text-[11px] text-white/55">Sorok bruttója: {moneyText(computedReception.gross, currencyCode)}</p>
               )}
             </div>
             <div className={statCard}>
@@ -4854,9 +4927,9 @@ function AllInIncomingReception(_props: Props) {
               <p className={`mt-1 text-sm ${invoiceGrossProvided && Math.abs(invoiceDifference) > 0.01 ? "text-amber-100" : "text-white"}`}>{invoiceGrossProvided ? moneyText(invoiceDifference, currencyCode) : "-"}</p>
             </div>
             <div className={statCard}>
-              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Érték RON</p>
-              <p className="mt-1 text-sm text-white">{currencyCode && (!exchangeRateRequired || rateValue > 0) ? moneyText(receptionRonValue, "RON") : "-"}</p>
-              {computedReception.vat > 0 && <p className="mt-1 text-[11px] text-white/55">TVA: {moneyText(computedReception.vat, currencyCode)}</p>}
+              <p className="text-xs uppercase tracking-[0.06em] text-white/62">Bruttó érték RON</p>
+              <p className="mt-1 text-sm text-white">{invoiceFinancialPreviewReady && currencyCode && (!exchangeRateRequired || rateValue > 0) ? moneyText(receptionRonValue, "RON") : "-"}</p>
+              {invoiceFinancialPreviewReady && <p className="mt-1 text-[11px] text-white/55">TVA {invoiceTvaPercentText}: {moneyText(invoiceFinancialPreview.vat, currencyCode)}</p>}
             </div>
           </div>
 
