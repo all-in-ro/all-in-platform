@@ -2399,330 +2399,272 @@ export default function AllInReceptions(_props: Props) {
       </div>
 
       {detail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 backdrop-blur-sm">
-          <div className="flex max-h-[94vh] w-full max-w-[96vw] flex-col overflow-hidden rounded-2xl border border-white/18 bg-[#404a5b] shadow-2xl">
-            <div className="z-20 flex shrink-0 items-center justify-between border-b border-white/10 bg-[#303a4c]/98 px-4 py-3 backdrop-blur">
-              <div>
-                <p className="text-xs uppercase tracking-[0.1em] text-white">Receptió részletei</p>
-                <h2 className="text-base text-white font-normal">{cell(detail.item.invoice_number)}</h2>
-                {(detail.item as any).uit_code || (detail.item as any).uitCode ? (
-                  <p className="mt-0.5 font-mono text-[11px] tracking-[0.04em] text-[#cffffd]">
-                    UIT: {String((detail.item as any).uit_code || (detail.item as any).uitCode)}
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap justify-end gap-2">
-                <button className={neutralBtn} onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button"><CheckCircle size={15} /> Ellenőrző PDF</button>
-                <button className={neutralBtn} onClick={() => exportReceptionPdf(detail.item.id)} disabled={busy} type="button"><FileText size={15} /> PDF</button>
-                <button className={neutralBtn} onClick={() => setDetail(null)} type="button"><X size={15} /> Bezárás</button>
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-3 pb-6 pt-3">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">UIT kód</p><p className="mt-0.5 truncate font-mono text-xs text-[#cffffd]" title={String((detail.item as any).uit_code || (detail.item as any).uitCode || "")}>{cell((detail.item as any).uit_code || (detail.item as any).uitCode)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszállító</p><p className="mt-0.5 text-xs text-white">{supplierDisplayName(detail.item.supplier_name)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Beszerzési rendelés</p>{detail.item.purchase_order_id ? <button className="mt-1 rounded-full border border-orange-200/35 bg-orange-500/16 px-2 py-1 text-[10px] text-orange-50 hover:bg-orange-500/24" onClick={() => openLinkedPurchaseOrder(detail.item.purchase_order_id)} type="button">{detail.item.purchase_order_number || "Kapcsolt rendelés"}</button> : <p className="mt-0.5 text-xs text-white/40">-</p>}</div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Cél hely</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.location_name)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Pénznem</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.currency_code)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Árfolyam</p><p className="mt-0.5 text-xs text-white">{cell(detail.item.exchange_rate_to_ron)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Végösszeg</p><p className="mt-0.5 text-xs text-white">{money(detail.item.invoice_gross, detail.item.currency_code)}</p></div>
-                <div className={statCard}><p className="text-[11px] uppercase text-white/56">Eladási TVA</p><p className="mt-0.5 text-xs text-white">{salesTvaText}</p></div>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b111c]/82 p-2 backdrop-blur-[7px] sm:p-4">
+          <div className="flex max-h-[96vh] w-full max-w-[1480px] flex-col overflow-hidden rounded-[30px] border border-[#9be9e5]/28 bg-[#253143] text-white shadow-[0_34px_120px_rgba(0,0,0,0.72)] ring-1 ring-white/[0.04]">
+            <header className="relative shrink-0 overflow-hidden border-b border-white/10 bg-gradient-to-r from-[#203244] via-[#24525a] to-[#2a8d8b] px-4 py-4 sm:px-5">
+              <div className="pointer-events-none absolute -right-16 -top-24 h-56 w-56 rounded-full bg-white/[0.06] blur-2xl" />
+              <div className="relative flex flex-wrap items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/[0.09] text-[#dffffd] shadow-[0_10px_30px_rgba(0,0,0,0.16)]">
+                    <FileText size={23} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[9px] uppercase tracking-[0.18em] text-white/50">Receptió részletei</p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                      <h2 className="truncate text-xl font-medium tracking-tight text-white sm:text-2xl">{cell(detail.item.invoice_number)}</h2>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] ${receptionStatusBadgeClass(detail.item.status)}`}>
+                        {statusText(detail.item.status)}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/62">
+                      <span>{supplierDisplayName(detail.item.supplier_name)}</span>
+                      <span className="text-white/25">•</span>
+                      <span>{cell(detail.item.location_name)}</span>
+                      <span className="text-white/25">•</span>
+                      <span>{dateText(detail.item.reception_date)}</span>
+                      {((detail.item as any).uit_code || (detail.item as any).uitCode) ? (
+                        <>
+                          <span className="text-white/25">•</span>
+                          <span className="font-mono text-[#d7fffd]">UIT {String((detail.item as any).uit_code || (detail.item as any).uitCode)}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
 
-              {detailBalance && (
-                <div className={`rounded-xl border px-3 py-2 ${detailBalance.className}`}>
-                  <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex items-start gap-3">
-                      <div className="relative mt-0.5 shrink-0">
-                        {!detailBalance.isOk && !detailBalance.suggestedNoVat && <span className="absolute inset-0 rounded-full bg-red-400/55 blur-md animate-pulse" />}
-                        <span className={`relative block h-3.5 w-3.5 rounded-full ${detailBalance.ledClassName}`} />
-                      </div>
-                      <div>
-                        <p className={`text-[11px] uppercase tracking-[0.14em] ${detailBalance.labelClassName}`}>Számla egyeztetés</p>
-                        <div className="mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1">
-                          <p className={`text-base sm:text-lg ${detailBalance.amountClassName}`}>
-                            {detailBalance.suggestedNoVat ? (
-                              <>A sorok összege helyes: <span className="text-amber-50">{money(detailBalance.baseTotal, detail.item.currency_code)}</span></>
-                            ) : (
-                              <>Különbözet: <span className={!detailBalance.isOk ? "text-red-50 [text-shadow:0_0_14px_rgba(248,113,113,0.45)]" : ""}>{money(detailBalance.diff, detail.item.currency_code)}</span></>
-                            )}
-                          </p>
-                          {!detailBalance.isOk && !detailBalance.suggestedNoVat && (
-                            <span className="inline-flex items-center gap-1 rounded-full border border-red-200/35 bg-red-500/15 px-2 py-0.5 text-[11px] text-red-50 shadow-[0_0_14px_rgba(239,68,68,0.35)]">
-                              <span className="h-2 w-2 rounded-full bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.95)] animate-pulse" />
-                              Figyelem: a számla még nem talál
-                            </span>
-                          )}
-                          {detailBalance.suggestedNoVat && (
-                            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200/45 bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-50">
-                              A sorok összege pontosan egyezik a számlával. Csak a beszerzési TVA mód van rosszul beállítva.
-                            </span>
-                          )}
-                        </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-black/10 px-3 text-xs text-white/90 transition hover:bg-white/[0.09]" onClick={() => exportReceptionVerificationPdf(detail.item.id)} disabled={busy} type="button">
+                    <CheckCircle size={15} /> Ellenőrző PDF
+                  </button>
+                  <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/16 bg-black/10 px-3 text-xs text-white/90 transition hover:bg-white/[0.09]" onClick={() => exportReceptionPdf(detail.item.id)} disabled={busy} type="button">
+                    <FileText size={15} /> PDF
+                  </button>
+                  <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/20 bg-white/[0.08] px-3 text-xs text-white transition hover:bg-white/[0.13]" onClick={() => setDetail(null)} type="button">
+                    <X size={15} /> Bezárás
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-[#2d394b] to-[#263143] p-3 sm:p-4">
+              <section className="grid gap-3 lg:grid-cols-[1.35fr_0.8fr_0.72fr_0.82fr]">
+                <div className="relative overflow-hidden rounded-[24px] border border-[#a9f3ef]/36 bg-gradient-to-br from-[#2a8d8b] to-[#216e70] p-4 shadow-[0_16px_36px_rgba(42,141,139,0.20)]">
+                  <div className="pointer-events-none absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/[0.08] blur-xl" />
+                  <p className="relative text-[9px] uppercase tracking-[0.14em] text-[#eaffff]/64">Számla végösszeg</p>
+                  <p className="relative mt-1 text-3xl tracking-tight text-white sm:text-4xl">{money(detail.item.invoice_gross, detail.item.currency_code)}</p>
+                  <div className="relative mt-3 flex flex-wrap gap-2 text-[10px] text-white/72">
+                    <span className="rounded-full border border-white/15 bg-black/10 px-2.5 py-1">{cell(detail.item.currency_code)}</span>
+                    <span className="rounded-full border border-white/15 bg-black/10 px-2.5 py-1">Árfolyam {cell(detail.item.exchange_rate_to_ron)}</span>
+                    {detail.item.purchase_order_id ? (
+                      <button className="rounded-full border border-orange-100/25 bg-orange-300/12 px-2.5 py-1 text-orange-50 transition hover:bg-orange-300/18" onClick={() => openLinkedPurchaseOrder(detail.item.purchase_order_id)} type="button">
+                        {detail.item.purchase_order_number || "Kapcsolt rendelés"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-[24px] border border-white/10 bg-[#344155]/90 p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/40">Nettó érték</p>
+                  <p className="mt-2 text-2xl tracking-tight text-white">{money(receptionNetInvoiceValue(detail.item), detail.item.currency_code)}</p>
+                  <p className="mt-2 text-[10px] text-white/38">Beszerzési TVA alapján</p>
+                </div>
+
+                <div className="rounded-[24px] border border-white/10 bg-[#344155]/90 p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-white/40">Mennyiség</p>
+                  <div className="mt-2 flex items-end gap-2">
+                    <p className="text-3xl tracking-tight text-white">{detail.item.total_qty || 0}</p>
+                    <span className="pb-1 text-xs text-white/42">db</span>
+                  </div>
+                  <p className="mt-2 text-[10px] text-white/38">{detail.item.line_count || 0} terméksor</p>
+                </div>
+
+                <div className="rounded-[24px] border border-[#7bd7d4]/22 bg-[#29464f] p-4 shadow-[0_12px_28px_rgba(0,0,0,0.12)]">
+                  <p className="text-[9px] uppercase tracking-[0.14em] text-[#cffffd]/48">Eladási TVA</p>
+                  <p className="mt-2 text-2xl tracking-tight text-[#eaffff]">{salesTvaText}</p>
+                  <button className="mt-3 text-[10px] text-[#bdf8f5] underline decoration-[#7bd7d4]/30 underline-offset-4" onClick={() => setSalesTvaModalOpen(true)} disabled={salesTvaSettingsLoading} type="button">
+                    Központi beállítás
+                  </button>
+                </div>
+              </section>
+
+              {detailBalance ? (
+                <section className={`mt-3 overflow-hidden rounded-[20px] border ${detailBalance.isOk ? "border-[#7bd7d4]/22 bg-[#2a8d8b]/8" : detailBalance.suggestedNoVat ? "border-amber-200/28 bg-amber-400/8" : "border-rose-200/28 bg-rose-500/9"}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${detailBalance.ledClassName}`} />
+                      <div className="min-w-0">
+                        <p className="text-[9px] uppercase tracking-[0.14em] text-white/40">Számla egyeztetés</p>
+                        <p className="mt-0.5 text-sm text-white/84">
+                          {detailBalance.suggestedNoVat
+                            ? <>A sorok összege helyes: <strong className="font-normal text-amber-50">{money(detailBalance.baseTotal, detail.item.currency_code)}</strong></>
+                            : <>Különbözet: <strong className={`font-normal ${detailBalance.isOk ? "text-[#d7fffd]" : "text-rose-50"}`}>{money(detailBalance.diff, detail.item.currency_code)}</strong></>}
+                        </p>
                       </div>
                     </div>
-                    <span className={`self-start rounded-full border px-2.5 py-1 text-xs ${detailBalance.badgeClassName}`}>{detailBalance.status}</span>
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] text-white/52">
+                      <span>Sorok {money(detailBalance.rowsValue, detail.item.currency_code)}</span>
+                      <span className="text-white/20">•</span>
+                      <span>TVA {money(detailBalance.tvaValue, detail.item.currency_code)}</span>
+                      <span className="text-white/20">•</span>
+                      <span>Szállítás {money(detailBalance.shipping, detail.item.currency_code)}</span>
+                      <span className={`rounded-full border px-2.5 py-1 ${detailBalance.badgeClassName}`}>{detailBalance.status}</span>
+                    </div>
                   </div>
-                  <div className="mt-2 grid gap-2 text-xs sm:grid-cols-4">
-                    <div className={detailBalance.labelClassName}>Sorok: <span className="text-white">{money(detailBalance.rowsValue, detail.item.currency_code)}</span></div>
-                    <div className={detailBalance.labelClassName}>Beszerzési TVA: <span className="text-white">{money(detailBalance.tvaValue, detail.item.currency_code)}</span></div>
-                    <div className={detailBalance.labelClassName}>Szállítás: <span className="text-white">{money(detailBalance.shipping, detail.item.currency_code)}</span></div>
-                    <div className={detailBalance.labelClassName}>Számított számla: <span className="text-white">{money(detailBalance.calculatedTotal, detail.item.currency_code)}</span></div>
-                  </div>
-                  {detailBalance.suggestedNoVat && (
-                    <div className="mt-2 flex flex-col gap-2 rounded-xl border border-amber-200/35 bg-amber-500/[0.08] px-3 py-2 text-xs text-amber-50 sm:flex-row sm:items-center sm:justify-between">
-                      <span>
-                        {money(detailBalance.rowsValue, detail.item.currency_code)} termék + {money(detailBalance.shipping, detail.item.currency_code)} szállítás = {money(detailBalance.invoiceGross, detail.item.currency_code)} számla.
-                        A plusz {money(detailBalance.tvaValue, detail.item.currency_code)} csak a hibás beszerzési TVA-beállításból jön.
-                      </span>
-                      <button className={primaryBtn} onClick={() => void applyNoPurchaseVatAndSave()} disabled={savingHeader || busy} type="button">
-                        Nincs beszerzési TVA • javítás és mentés
+                  {detailBalance.suggestedNoVat ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-100/10 bg-black/8 px-4 py-2.5 text-xs text-amber-50/82">
+                      <span>A terméksorok találják a számlát, csak a beszerzési TVA mód hibás.</span>
+                      <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-100/24 bg-amber-300/12 px-3 text-xs text-amber-50 hover:bg-amber-300/18" onClick={() => void applyNoPurchaseVatAndSave()} disabled={savingHeader || busy} type="button">
+                        <Check size={14} /> Nincs beszerzési TVA • javítás
                       </button>
                     </div>
-                  )}
-                </div>
-              )}
+                  ) : null}
+                </section>
+              ) : null}
 
-              <div className="rounded-xl border border-[#2a8d8b]/35 bg-[#2a8d8b]/10 px-3 py-2 text-white shadow-lg shadow-slate-950/10">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <details className="group mt-3 overflow-hidden rounded-[20px] border border-white/9 bg-[#303c4f]/72" open={String(detail.item.status || "").toLowerCase() !== "committed"}>
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3.5 transition hover:bg-white/[0.025] [&::-webkit-details-marker]:hidden">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.1em] text-white/70">Eladási ár / TVA</p>
-                    <p className="mt-1 text-sm text-white">
-                      {salesIncludesTvaOf(salesTvaSettings)
-                        ? `A megadott eladási ár már végár, a ${salesTvaShort(salesTvaSettings)} TVA benne van.`
-                        : `A megadott eladási ár nettó, a rendszer hozzáadja a ${salesTvaShort(salesTvaSettings)} TVA-t.`}
-                    </p>
-                    {salesTvaUpdatedAt && <p className="mt-1 text-[11px] text-white/55">Utolsó központi mentés: {String(salesTvaUpdatedAt).slice(0, 16).replace("T", " ")}{salesTvaUpdatedBy ? ` • ${salesTvaUpdatedBy}` : ""}</p>}
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/38">Receptió fejadatai</p>
+                    <p className="mt-0.5 text-sm text-white/82">Számlaadatok és beszerzési beállítások</p>
                   </div>
-                  <button className={neutralBtn} onClick={() => setSalesTvaModalOpen(true)} disabled={salesTvaSettingsLoading} type="button">Beállítás</button>
-                </div>
-              </div>
-
-              <div className={lightPanel}>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.1em] text-white/52">Receptió fejadatai</p>
-                    <p className="mt-1 text-xs text-white/68">Számlaszám, árfolyam, beszerzési TVA és végösszeg javítása. Az eladási TVA külön, központi beállításként működik.</p>
+                  <div className="flex items-center gap-2">
+                    <button className="hidden h-9 items-center gap-2 rounded-xl border border-[#7bd7d4]/34 bg-[#2a8d8b]/16 px-3 text-xs text-[#d7fffd] hover:bg-[#2a8d8b]/24 sm:inline-flex" onClick={(event) => { event.preventDefault(); void saveReceptionHeader(); }} disabled={busy || savingHeader} type="button">
+                      <Save size={14} /> Mentés
+                    </button>
+                    <ChevronDown size={17} className="text-white/42 transition-transform group-open:rotate-180" />
                   </div>
-                  <button className={primaryBtn} onClick={saveReceptionHeader} disabled={busy || savingHeader} type="button"><Save size={15} /> Fejadatok mentése</button>
+                </summary>
+                <div className="border-t border-white/8 bg-[#2b3749]/76 p-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <label className={lightLabel}>Számlaszám<input className={lightInput} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
+                    <label className={lightLabel}>UIT kód<input className={`${lightInput} font-mono tracking-[0.04em]`} maxLength={64} value={receptionDraft.uitCode || ""} onChange={(e) => updateReceptionDraft("uitCode", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))} placeholder="UIT kód" /></label>
+                    <label className={lightLabel}>Számla dátuma<input className={lightInput} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
+                    <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
+                    <label className={lightLabel}>Pénznem<select className={lightSelect} value={receptionDraft.currencyCode || ""} onChange={(e) => updateReceptionDraft("currencyCode", e.target.value)}>{(meta?.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} - {c.name}</option>)}</select></label>
+                    <label className={lightLabel}>Árfolyam RON<input className={lightInput} value={receptionDraft.exchangeRateToRon || ""} onChange={(e) => updateReceptionDraft("exchangeRateToRon", e.target.value)} /></label>
+                    <label className={lightLabel}>Beszerzési TVA<select className={lightSelect} value={receptionDraft.tvaMode || "no_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="no_tva">Nincs beszerzési TVA</option><option value="without_tva">Nettó vételár + TVA</option><option value="with_tva">Bruttó vételár, TVA benne van</option></select></label>
+                    <label className={lightLabel}>TVA %<input className={lightInput} disabled={receptionDraft.tvaMode === "no_tva"} value={receptionDraft.tvaMode === "no_tva" ? "0" : (receptionDraft.tvaRate || "")} onChange={(e) => updateReceptionDraft("tvaRate", e.target.value)} /></label>
+                    <label className={lightLabel}>Szállítás<input className={lightInput} value={receptionDraft.shippingCost || ""} onChange={(e) => updateReceptionDraft("shippingCost", e.target.value)} /></label>
+                    <label className={lightLabel}>Számla végösszeg<input className={lightInput} value={receptionDraft.invoiceGross || ""} onChange={(e) => updateReceptionDraft("invoiceGross", e.target.value)} /></label>
+                    <label className={`${lightLabel} md:col-span-2 xl:col-span-4`}>Megjegyzés<input className={lightInput} value={receptionDraft.note || ""} onChange={(e) => updateReceptionDraft("note", e.target.value)} /></label>
+                    <div className="flex items-end sm:hidden"><button className={primaryBtn} onClick={saveReceptionHeader} disabled={busy || savingHeader} type="button"><Save size={14} /> Mentés</button></div>
+                  </div>
                 </div>
-                <div className="mt-3 grid gap-2 lg:grid-cols-4">
-                  <label className={lightLabel}>Számlaszám<input className={lightInput} value={receptionDraft.invoiceNumber || ""} onChange={(e) => updateReceptionDraft("invoiceNumber", e.target.value)} /></label>
-                  <label className={lightLabel}>UIT kód • ha van<input className={`${lightInput} font-mono tracking-[0.04em]`} maxLength={64} value={receptionDraft.uitCode || ""} onChange={(e) => updateReceptionDraft("uitCode", e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 64))} placeholder="UIT kód" /></label>
-                  <label className={lightLabel}>Számla dátuma<input className={lightInput} type="date" value={receptionDraft.invoiceDate || ""} onChange={(e) => updateReceptionDraft("invoiceDate", e.target.value)} /></label>
-                  <label className={lightLabel}>Receptió dátuma<input className={lightInput} type="date" value={receptionDraft.receptionDate || ""} onChange={(e) => updateReceptionDraft("receptionDate", e.target.value)} /></label>
-                  <label className={lightLabel}>Pénznem<select className={lightSelect} value={receptionDraft.currencyCode || ""} onChange={(e) => updateReceptionDraft("currencyCode", e.target.value)}>{(meta?.currencies || []).map((c) => <option key={c.code} value={c.code}>{c.code} - {c.name}</option>)}</select></label>
-                  <label className={lightLabel}>Árfolyam RON<input className={lightInput} value={receptionDraft.exchangeRateToRon || ""} onChange={(e) => updateReceptionDraft("exchangeRateToRon", e.target.value)} /></label>
-                  <label className={lightLabel}>Beszerzési TVA kezelése<select className={lightSelect} value={receptionDraft.tvaMode || "no_tva"} onChange={(e) => updateReceptionDraft("tvaMode", e.target.value)}><option value="no_tva">Nincs beszerzési TVA</option><option value="without_tva">Nettó vételár + TVA</option><option value="with_tva">Bruttó vételár, TVA benne van</option></select></label>
-                  <label className={lightLabel}>Beszerzési TVA %<input className={lightInput} disabled={receptionDraft.tvaMode === "no_tva"} value={receptionDraft.tvaMode === "no_tva" ? "0" : (receptionDraft.tvaRate || "")} onChange={(e) => updateReceptionDraft("tvaRate", e.target.value)} /></label>
-                  <label className={lightLabel}>Szállítás<input className={lightInput} value={receptionDraft.shippingCost || ""} onChange={(e) => updateReceptionDraft("shippingCost", e.target.value)} /></label>
-                  <label className={lightLabel}>Számla végösszeg<input className={lightInput} value={receptionDraft.invoiceGross || ""} onChange={(e) => updateReceptionDraft("invoiceGross", e.target.value)} /></label>
-                  <label className={`${lightLabel} lg:col-span-3`}>Megjegyzés<input className={lightInput} value={receptionDraft.note || ""} onChange={(e) => updateReceptionDraft("note", e.target.value)} /></label>
-                </div>
-              </div>
+              </details>
 
-              <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#404a5b] text-white shadow-lg">
-                <div className="flex flex-col gap-2 border-b border-white/12 bg-[#303a4c] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+              <section className="mt-3 overflow-hidden rounded-[24px] border border-[#7bd7d4]/14 bg-[#2b3749] shadow-[0_18px_46px_rgba(0,0,0,0.17)]">
+                <div className="flex flex-col gap-3 border-b border-white/8 bg-gradient-to-r from-[#28384b] to-[#2c5057] px-4 py-3.5 lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-xs uppercase tracking-[0.08em] text-white/82">Terméksorok</p>
-                      <span className="rounded-full border border-white/12 bg-[#404a5b] px-2 py-0.5 text-[10px] text-white/68">{visibleRows.length} sor</span>
-                      {selectedRows.size ? <span className="rounded-full border border-[#8edbd7] bg-[#effbf9] px-2 py-0.5 text-[10px] text-[#187876]">{selectedRows.size} kijelölve</span> : null}
+                      <p className="text-[10px] uppercase tracking-[0.15em] text-[#cffffd]/55">Terméksorok</p>
+                      <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[10px] text-white/58">{visibleRows.length} sor</span>
+                      {selectedRows.size ? <span className="rounded-full border border-[#9be9e5]/30 bg-[#2a8d8b]/18 px-2.5 py-1 text-[10px] text-[#d7fffd]">{selectedRows.size} kijelölve</span> : null}
                     </div>
-                    <p className="mt-0.5 text-[11px] text-white/52">Egy sor egy termékvariáns. A mezők egy vonalban maradnak, az állapot és a műveletek pedig nem foglalnak el fél képernyőt.</p>
+                    <p className="mt-1 text-sm text-white/78">Termék, azonosítók, szín, mennyiség és árak egyetlen átlátható sorban.</p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <select className={`${lightSelect} min-w-[180px]`} value={rowStatusFilter} onChange={(e) => setRowStatusFilter(e.target.value)}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select className={`${lightSelect} h-9 min-w-[178px]`} value={rowStatusFilter} onChange={(e) => setRowStatusFilter(e.target.value)}>
                       <option value="active">Még dolgozandó sorok</option>
                       <option value="all">Minden sor</option>
                       <option value="committed">Készletre vett</option>
                       <option value="error">Hibás</option>
                       <option value="ignored">Kihagyott</option>
                     </select>
-                    <button className={neutralBtn} onClick={selectReadyRows} disabled={busy || savingRows || committingRows} type="button">Kész sorok kijelölése</button>
-                    <button className={neutralBtn} onClick={saveRowEdits} disabled={busy || savingRows || committingRows} type="button"><Save size={13} /> Sorok mentése</button>
-                    <button className={primaryBtn} onClick={commitSelectedRows} disabled={busy || savingRows || committingRows || !selectedRows.size} type="button"><CheckCircle size={14} /> Kijelöltek készletre</button>
+                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-[11px] text-white/78 hover:bg-white/[0.08]" onClick={selectReadyRows} disabled={busy || savingRows || committingRows} type="button">Kész sorok kijelölése</button>
+                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-[11px] text-white/78 hover:bg-white/[0.08]" onClick={saveRowEdits} disabled={busy || savingRows || committingRows} type="button"><Save size={13} /> Sorok mentése</button>
+                    <button className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#9be9e5]/36 bg-[#2a8d8b] px-3 text-[11px] text-white shadow-[0_8px_20px_rgba(42,141,139,0.18)] hover:bg-[#319c99] disabled:opacity-40" onClick={commitSelectedRows} disabled={busy || savingRows || committingRows || !selectedRows.size} type="button"><CheckCircle size={14} /> Kijelöltek készletre</button>
                   </div>
                 </div>
 
                 <div className="hidden xl:block">
-                  <div className="max-h-[54vh] overflow-y-auto overflow-x-hidden">
-                    <div className={`${receptionGridHeader} sticky top-0 z-10`}>
+                  <div className="max-h-[54vh] overflow-y-auto overflow-x-hidden p-2">
+                    <div className="sticky top-0 z-10 grid grid-cols-[32px_54px_minmax(360px,1.9fr)_64px_150px_58px_118px_130px_104px] items-center gap-2 rounded-xl bg-[#202c3d]/98 px-3 py-2 text-[9px] uppercase tracking-[0.07em] text-white/48 shadow-[0_8px_22px_rgba(0,0,0,0.20)] backdrop-blur">
                       <span className="text-center">✓</span>
                       <span className="text-center">Sor</span>
                       <span>Termék / azonosítók</span>
-                      <span className="text-center">S/N/COD</span>
                       <span className="text-center">Méret</span>
                       <span className="text-center">Szín</span>
                       <span className="text-center">Db</span>
                       <span className="text-right">Vételár</span>
-                      <span className="text-right">{salesIncludesTvaOf(salesTvaSettings) ? "Eladási végár" : "Eladási nettó"}</span>
+                      <span className="text-right">Eladási ár</span>
                       <span className="text-center"><span className="sr-only">Műveletek</span></span>
                     </div>
-                    {visibleRows.map((r) => {
-                      const draft: any = rowDrafts[r.id] || r.normalized || {};
-                      const editable = rowCanEdit(r);
-                      const canCommitOrMove = rowCanWork(r);
-                      const checked = canCommitOrMove && selectedRows.has(r.id);
-                      const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
-                      const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
-                      const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
-                      const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
-                      const resolvedColorName = receptionResolvedColorName(r, draft, meta);
-                      const resolvedColorCode = receptionRowColorCode(r, draft);
-                      const rowTone = r.status === "committed"
-                        ? "bg-[#2a8d8b]/[0.055] hover:bg-[#2a8d8b]/[0.09]"
-                        : r.status === "ignored"
-                          ? "bg-white/[0.025] opacity-70"
-                          : hasRowError
-                            ? "bg-rose-500/[0.07] hover:bg-rose-500/[0.11]"
-                            : checked
-                              ? "bg-[#2a8d8b]/10 hover:bg-[#2a8d8b]/14"
-                              : "bg-transparent hover:bg-white/[0.025]";
-                      const statusDot = r.status === "committed"
-                        ? "bg-[#3ec7bd]"
-                        : r.status === "ignored"
-                          ? "bg-slate-400"
-                          : hasRowError
-                            ? "bg-rose-500"
-                            : "bg-amber-400";
-                      return (
-                        <div key={r.id} className={`${receptionGridRow} ${rowTone}`}>
-                          <div className="flex justify-center">
-                            <input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} aria-label={`Sor ${r.row_no} kijelölése`} />
-                          </div>
 
-                          <div className="min-w-0 text-center">
-                            <div className="flex items-center justify-center gap-1.5" title={statusText(r.status)}>
-                              <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
-                              <span className="truncate text-[11px] tabular-nums text-white/88">{r.row_no}</span>
+                    <div className="mt-1.5 space-y-1.5">
+                      {visibleRows.map((r) => {
+                        const draft: any = rowDrafts[r.id] || r.normalized || {};
+                        const editable = rowCanEdit(r);
+                        const canCommitOrMove = rowCanWork(r);
+                        const checked = canCommitOrMove && selectedRows.has(r.id);
+                        const exchangeRate = n(receptionDraft.exchangeRateToRon || detail.item.exchange_rate_to_ron) || 1;
+                        const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
+                        const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
+                        const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
+                        const resolvedColorName = receptionResolvedColorName(r, draft, meta);
+                        const resolvedColorCode = receptionRowColorCode(r, draft);
+                        const rowTone = r.status === "committed"
+                          ? "border-[#7bd7d4]/12 bg-[#2a8d8b]/[0.055] hover:bg-[#2a8d8b]/[0.085]"
+                          : r.status === "ignored"
+                            ? "border-white/[0.04] bg-white/[0.02] opacity-65"
+                            : hasRowError
+                              ? "border-rose-300/18 bg-rose-500/[0.065] hover:bg-rose-500/[0.095]"
+                              : checked
+                                ? "border-[#7bd7d4]/20 bg-[#2a8d8b]/10 hover:bg-[#2a8d8b]/13"
+                                : "border-white/[0.055] bg-[#344155]/42 hover:border-white/[0.08] hover:bg-[#3a475a]/56";
+                        const statusDot = r.status === "committed" ? "bg-[#49c9bf]" : r.status === "ignored" ? "bg-slate-400" : hasRowError ? "bg-rose-400" : "bg-amber-300";
+                        return (
+                          <div key={r.id} className={`grid grid-cols-[32px_54px_minmax(360px,1.9fr)_64px_150px_58px_118px_130px_104px] items-center gap-2 rounded-xl border px-3 py-2 transition ${rowTone}`}>
+                            <div className="flex justify-center"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} aria-label={`Sor ${r.row_no} kijelölése`} /></div>
+
+                            <div className="min-w-0 text-center">
+                              <div className="flex items-center justify-center gap-1.5"><span className={`h-2 w-2 rounded-full ${statusDot}`} /><span className="text-[11px] tabular-nums text-white/82">{r.row_no}</span></div>
+                              {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="mt-1 inline-flex rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[9px] text-rose-50">Hiba</button> : <span className="mt-0.5 block truncate text-[8px] text-white/30">{statusText(r.status)}</span>}
                             </div>
-                            {hasRowError ? (
-                              <button
-                                type="button"
-                                onClick={() => setRowErrorTarget(r)}
-                                className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-rose-500/14 px-1.5 py-0.5 text-[9px] text-rose-50 hover:bg-rose-500/22"
-                                title="Hiba részletei"
-                              >
-                                <AlertTriangle size={9} className="shrink-0" />
-                                <span className="truncate">Hiba</span>
-                              </button>
-                            ) : (
-                              <span className="mt-0.5 block truncate text-[9px] text-white/38">{statusText(r.status)}</span>
-                            )}
-                          </div>
 
-                          <div className="min-w-0">
-                            <input
-                              className={`${rowCompactInput} text-left font-medium`}
-                              value={String(draft.titleRo ?? "")}
-                              disabled={!editable}
-                              onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)}
-                              title={String(draft.titleRo ?? "")}
-                              placeholder="Terméknév"
-                            />
-                            <div className="mt-1 grid min-w-0 grid-cols-[minmax(92px,0.8fr)_minmax(140px,1.2fr)] gap-1.5">
-                              <label className="flex h-6 min-w-0 items-center gap-1.5 rounded-md bg-black/10 px-1.5">
-                                <span className="shrink-0 text-[8px] uppercase tracking-[0.05em] text-white/30">Kód</span>
-                                <input
-                                  className="min-w-0 flex-1 bg-transparent text-[10px] text-white/68 outline-none placeholder:text-white/25 disabled:text-white/52"
-                                  value={String(draft.supplierProductCode ?? "")}
-                                  disabled={!editable}
-                                  onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)}
-                                  title={String(draft.supplierProductCode ?? "")}
-                                />
-                              </label>
-                              <label className="flex h-6 min-w-0 items-center gap-1.5 rounded-md bg-black/10 px-1.5">
-                                <span className="shrink-0 text-[8px] uppercase tracking-[0.05em] text-white/30">EAN</span>
-                                <input
-                                  className="min-w-0 flex-1 bg-transparent font-mono text-[10px] text-[#cffffd]/68 outline-none placeholder:text-white/25 disabled:text-[#cffffd]/48"
-                                  value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
-                                  disabled={!editable}
-                                  onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)}
-                                  title={String(draft.barcode ?? receptionRowBarcode(r) ?? "")}
-                                />
-                              </label>
+                            <div className="min-w-0">
+                              <input className={`${rowCompactInput} h-9 text-left text-[12px] font-medium`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} title={String(draft.titleRo ?? "")} placeholder="Terméknév" />
+                              <div className="mt-1 flex min-w-0 items-center gap-2 text-[9px] text-white/40">
+                                <label className="flex min-w-0 items-center gap-1"><span className="shrink-0 uppercase text-white/24">Kód</span><input className="min-w-0 w-[92px] bg-transparent text-white/58 outline-none disabled:text-white/44" value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
+                                <span className="text-white/16">•</span>
+                                <label className="flex min-w-0 items-center gap-1"><span className="shrink-0 uppercase text-white/24">S/N</span><input className="min-w-0 w-[76px] bg-transparent font-mono text-white/58 outline-none disabled:text-white/44" value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
+                                <span className="text-white/16">•</span>
+                                <label className="flex min-w-0 flex-1 items-center gap-1"><span className="shrink-0 uppercase text-white/24">EAN</span><input className="min-w-0 flex-1 bg-transparent font-mono text-[#cffffd]/58 outline-none disabled:text-[#cffffd]/42" value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
+                              </div>
+                            </div>
+
+                            <input className={`${rowCompactInput} h-9 px-1 text-center text-[12px]`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} />
+
+                            <div className="min-w-0 text-center">
+                              <input className={`${rowCompactInput} h-9 text-center text-[11px]`} value={String(draft.colorName || resolvedColorName || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} title={String(draft.colorName || resolvedColorName || "")} placeholder="Szín neve" />
+                              <div className="mt-1 text-[9px] text-white/34">kód <input className="w-[48px] bg-transparent text-center font-mono text-white/52 outline-none disabled:text-white/38" value={String(draft.colorCode || resolvedColorCode || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} /></div>
+                            </div>
+
+                            <input className={`${rowCompactInput} h-9 px-1 text-center text-[12px] tabular-nums`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} />
+
+                            <div className="min-w-0 text-right">
+                              <input className={`${rowCompactInput} h-9 text-right text-[12px] tabular-nums`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} />
+                              <p className="mt-1 pr-1 text-[9px] tabular-nums text-white/36">{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</p>
+                            </div>
+
+                            <div className="min-w-0 text-right">
+                              <input className={`${rowCompactInput} h-9 text-right text-[12px] tabular-nums ${editable ? "bg-[#2a8d8b]/10" : ""}`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} />
+                              <p className="mt-1 pr-1 text-[9px] tabular-nums text-[#cffffd]/48">{money(sellPriceRonPreview, "RON")} <span className="text-white/24">• {salesTvaShort(salesTvaSettings)}</span></p>
+                            </div>
+
+                            <div className="flex items-center justify-center gap-1">
+                              <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title={savingRowId === r.id ? "Mentés folyamatban" : "Sor mentése"}><Save size={14} /></button>
+                              <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés másik receptióba"><MoveRight size={14} /></button>
+                              <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Sor kihagyása"><X size={14} /></button>
                             </div>
                           </div>
-
-                          <input
-                            className={`${rowCompactInput} text-center font-mono`}
-                            value={String(draft.snCod ?? draft.sn_cod ?? "")}
-                            disabled={!editable}
-                            onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)}
-                            title={String(draft.snCod ?? draft.sn_cod ?? "")}
-                          />
-
-                          <input
-                            className={`${rowCompactInput} px-1 text-center`}
-                            value={String(draft.size ?? "")}
-                            disabled={!editable}
-                            onChange={(e) => updateRowDraft(r.id, "size", e.target.value)}
-                          />
-
-                          <div className="min-w-0">
-                            <input
-                              className={`${rowCompactInput} text-center`}
-                              value={String(draft.colorName || resolvedColorName || "")}
-                              disabled={!editable}
-                              onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)}
-                              title={String(draft.colorName || resolvedColorName || "")}
-                              placeholder="Szín neve"
-                            />
-                            <label className="mt-1 flex h-6 min-w-0 items-center justify-center gap-1.5 rounded-md bg-black/10 px-1.5">
-                              <span className="shrink-0 text-[8px] uppercase tracking-[0.05em] text-white/30">Kód</span>
-                              <input
-                                className="min-w-0 flex-1 bg-transparent text-center font-mono text-[10px] text-white/58 outline-none placeholder:text-white/25 disabled:text-white/42"
-                                value={String(draft.colorCode || resolvedColorCode || "")}
-                                disabled={!editable}
-                                onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)}
-                              />
-                            </label>
-                          </div>
-
-                          <input
-                            className={`${rowCompactInput} px-1 text-center tabular-nums`}
-                            value={String(draft.qty ?? "")}
-                            disabled={!canCommitOrMove}
-                            onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)}
-                          />
-
-                          <div className="min-w-0">
-                            <input
-                              className={`${rowCompactInput} text-right tabular-nums`}
-                              value={String(draft.buyPrice ?? "")}
-                              disabled={!editable}
-                              onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)}
-                            />
-                            <span className={rowCompactRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span>
-                          </div>
-
-                          <div className="min-w-0">
-                            <input
-                              className={`${rowCompactInput} text-right tabular-nums`}
-                              value={String(draft.sellPrice ?? "")}
-                              disabled={!editable}
-                              onChange={(e) => updateRowSellPrice(r.id, e.target.value)}
-                            />
-                            <span className={`${rowCompactRead} gap-1`}>
-                              <span>{money(sellPriceRonPreview, "RON")}</span>
-                              <span className="text-white/28">• {salesTvaShort(salesTvaSettings)}</span>
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-center gap-1">
-                            <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title={savingRowId === r.id ? "Mentés folyamatban" : "Sor mentése"}><Save size={14} /></button>
-                            <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés másik receptióba"><MoveRight size={14} /></button>
-                            <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Sor kihagyása"><X size={14} /></button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {!visibleRows.length ? <div className="px-4 py-8 text-center text-sm text-white/52">Nincs sor ebben a nézetben.</div> : null}
+                        );
+                      })}
+                      {!visibleRows.length ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-white/42">Nincs sor ebben a nézetben.</div> : null}
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid max-h-[54vh] gap-2 overflow-y-auto bg-white/[0.04] p-2 xl:hidden">
+                <div className="grid max-h-[54vh] gap-2 overflow-y-auto bg-[#263143] p-2 xl:hidden">
                   {visibleRows.map((r) => {
                     const draft: any = rowDrafts[r.id] || r.normalized || {};
                     const editable = rowCanEdit(r);
@@ -2732,49 +2674,41 @@ export default function AllInReceptions(_props: Props) {
                     const buyPriceRonPreview = n(draft.buyPrice ?? r.buy_price) * exchangeRate;
                     const sellPriceRonPreview = rowSellGrossPriceRon(r, draft, salesTvaSettings);
                     const hasRowError = r.status === "error" || Boolean((r.error_messages || []).length);
+                    const resolvedColorName = receptionResolvedColorName(r, draft, meta);
+                    const resolvedColorCode = receptionRowColorCode(r, draft);
                     return (
-                      <div key={r.id} className={`rounded-xl border p-2.5 shadow-sm ${checked ? "border-[#7bd7d4]/45 bg-[#2a8d8b]/12" : hasRowError ? "border-rose-300/30 bg-rose-500/[0.08]" : "border-white/12 bg-white/[0.04]"}`}>
-                        <div className="flex items-center justify-between gap-2 border-b border-white/12 pb-2">
-                          <label className="inline-flex items-center gap-2 text-[11px] text-white/82"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} />Nr. {r.row_no}</label>
-                          {hasRowError ? (
-                            <button
-                              type="button"
-                              onClick={() => setRowErrorTarget(r)}
-                              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-rose-300/30 bg-rose-500/14 px-2 text-[10px] text-rose-50"
-                            >
-                              <AlertTriangle size={11} />
-                              Hiba részletei
-                            </button>
-                          ) : (
-                            <span className={rowStatusPill}>{statusText(r.status)}</span>
-                          )}
-                          <div className="ml-auto flex gap-1">
-                            <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
-                            <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
-                            <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Kihagy"><X size={14} /></button>
-                          </div>
+                      <article key={r.id} className={`rounded-[20px] border p-3 ${checked ? "border-[#7bd7d4]/28 bg-[#2a8d8b]/10" : hasRowError ? "border-rose-300/24 bg-rose-500/[0.07]" : "border-white/[0.07] bg-[#344155]/54"}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <label className="inline-flex items-center gap-2 text-[11px] text-white/74"><input type="checkbox" className="h-4 w-4 accent-[#2a8d8b]" checked={checked} disabled={!canCommitOrMove || hasRowError} onChange={() => toggleRow(r.id)} />Sor {r.row_no}</label>
+                          {hasRowError ? <button type="button" onClick={() => setRowErrorTarget(r)} className="rounded-full bg-rose-500/14 px-2 py-1 text-[10px] text-rose-50">Hiba részletei</button> : <span className="rounded-full bg-black/10 px-2 py-1 text-[10px] text-white/42">{statusText(r.status)}</span>}
                         </div>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                          <label className={rowLabel}>Termékkód<input className={rowInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
-                          <label className={rowLabel}>S/N/COD<input className={rowInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
-                          <label className={`${rowLabel} sm:col-span-2`}>Vonalkód<input className={`${rowInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
-                          <label className={`${rowLabel} sm:col-span-2`}>Terméknév<input className={rowInput} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} /></label>
-                          <label className={rowLabel}>Méret<input className={rowInput} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
-                          <label className={rowLabel}>Szín<input className={rowInput} value={String(draft.colorName || receptionResolvedColorName(r, draft, meta) || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
-                          <label className={rowLabel}>Színkód<input className={rowInput} value={String(draft.colorCode || receptionRowColorCode(r, draft) || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorCode", e.target.value)} /></label>
-                          <label className={rowLabel}>Darab<input className={`${rowInput} text-right`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
-                          <label className={rowLabel}>Vételár<input className={`${rowInput} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /></label>
-                          <label className={rowLabel}>Vételár RON<span className={rowRead}>{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span></label>
-                          <label className={rowLabel}>{salesIncludesTvaOf(salesTvaSettings) ? "Eladási végár RON" : "Eladási nettó RON"}<input className={`${rowInput} text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /></label>
-                          <label className={rowLabel}>Eladás / TVA<span className={rowRead}>{money(sellPriceRonPreview, "RON")} • {salesTvaShort(salesTvaSettings)}</span></label>
+                        <input className={`${rowCompactInput} mt-2 h-10 text-[13px] font-medium`} value={String(draft.titleRo ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "titleRo", e.target.value)} />
+                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                          <label className={rowLabel}>Termékkód<input className={rowCompactInput} value={String(draft.supplierProductCode ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "supplierProductCode", e.target.value)} /></label>
+                          <label className={rowLabel}>S/N/COD<input className={rowCompactInput} value={String(draft.snCod ?? draft.sn_cod ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "snCod", e.target.value)} /></label>
+                          <label className={rowLabel}>EAN<input className={`${rowCompactInput} font-mono`} value={String(draft.barcode ?? receptionRowBarcode(r) ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "barcode", e.target.value)} /></label>
                         </div>
-                      </div>
+                        <div className="mt-2 grid grid-cols-3 gap-2">
+                          <label className={rowLabel}>Méret<input className={`${rowCompactInput} text-center`} value={String(draft.size ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "size", e.target.value)} /></label>
+                          <label className={rowLabel}>Szín<input className={`${rowCompactInput} text-center`} value={String(draft.colorName || resolvedColorName || "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "colorName", e.target.value)} /></label>
+                          <label className={rowLabel}>Db<input className={`${rowCompactInput} text-center`} value={String(draft.qty ?? "")} disabled={!canCommitOrMove} onChange={(e) => updateRowDraft(r.id, "qty", e.target.value)} /></label>
+                        </div>
+                        <p className="mt-1 text-[9px] text-white/34">Színkód: <span className="font-mono text-white/52">{draft.colorCode || resolvedColorCode || "-"}</span></p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <label className={rowLabel}>Vételár<input className={`${rowCompactInput} text-right`} value={String(draft.buyPrice ?? "")} disabled={!editable} onChange={(e) => updateRowDraft(r.id, "buyPrice", e.target.value)} /><span className="mt-1 text-right text-[9px] text-white/34">{money(buyPriceRonPreview || r.buy_price_ron, "RON")}</span></label>
+                          <label className={rowLabel}>Eladási ár<input className={`${rowCompactInput} text-right`} value={String(draft.sellPrice ?? "")} disabled={!editable} onChange={(e) => updateRowSellPrice(r.id, e.target.value)} /><span className="mt-1 text-right text-[9px] text-[#cffffd]/44">{money(sellPriceRonPreview, "RON")} • {salesTvaShort(salesTvaSettings)}</span></label>
+                        </div>
+                        <div className="mt-3 flex justify-end gap-1.5 border-t border-white/[0.06] pt-3">
+                          <button className={rowPrimaryBtn} onClick={() => saveSingleRow(r.id)} disabled={!editable || busy || savingRows || committingRows || savingRowId === r.id} type="button" title="Sor mentése"><Save size={14} /></button>
+                          <button className={rowNeutralBtn} onClick={() => void openMoveReception(r)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Áthelyezés"><MoveRight size={14} /></button>
+                          <button className={rowDangerBtn} onClick={() => ignoreRow(r.id)} disabled={!canCommitOrMove || busy || savingRowId === r.id} type="button" title="Kihagy"><X size={14} /></button>
+                        </div>
+                      </article>
                     );
                   })}
-                  {!visibleRows.length ? <div className="rounded-xl border border-white/12 bg-[#404a5b] px-3 py-6 text-center text-sm text-white/52">Nincs sor ebben a nézetben.</div> : null}
+                  {!visibleRows.length ? <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-white/42">Nincs sor ebben a nézetben.</div> : null}
                 </div>
-              </div>
-
+              </section>
             </div>
           </div>
         </div>
